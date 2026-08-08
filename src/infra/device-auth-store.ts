@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
 `;
 
 function ensureOriginDeviceAuthSchema(env?: NodeJS.ProcessEnv): void {
+  assertNoLegacyDeviceAuth(env);
   const options = env ? { env } : {};
   const database = openOpenClawStateDatabase(options);
   if (ensuredOriginDatabases.has(database.db)) {

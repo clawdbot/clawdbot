@@ -257,6 +257,7 @@ describe("infra/device-auth-store", () => {
           "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
         )
         .run("device-1", "operator", "sqlite-token", "[]", 1);
+      openOpenClawStateDatabase({ env }).db.exec("DROP TABLE gateway_origin_device_tokens;");
 
       expect(() => loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toThrow(
         "openclaw doctor --fix",
@@ -269,6 +270,36 @@ describe("infra/device-auth-store", () => {
           env,
         }),
       ).toThrow("openclaw doctor --fix");
+      expect(() =>
+        loadOriginDeviceToken({
+          gatewayScope: "wss://one.example",
+          deviceId: "device-1",
+          role: "operator",
+          env,
+        }),
+      ).toThrow("openclaw doctor --fix");
+      expect(() =>
+        storeOriginDeviceToken({
+          gatewayScope: "wss://one.example",
+          deviceId: "device-1",
+          role: "operator",
+          token: "origin-token",
+          env,
+        }),
+      ).toThrow("openclaw doctor --fix");
+      expect(() =>
+        clearOriginDeviceToken({
+          gatewayScope: "wss://one.example",
+          deviceId: "device-1",
+          role: "operator",
+          env,
+        }),
+      ).toThrow("openclaw doctor --fix");
+      expect(
+        openOpenClawStateDatabase({ env })
+          .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get("gateway_origin_device_tokens"),
+      ).toBeUndefined();
     });
   });
 
