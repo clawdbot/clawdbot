@@ -657,7 +657,7 @@ describe("runReplyAgent active steering", () => {
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     expect(parkedSteer.consume).not.toHaveBeenCalled();
@@ -828,7 +828,7 @@ describe("runReplyAgent active steering", () => {
 
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalled();
-    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(onAdopted).not.toHaveBeenCalled();
