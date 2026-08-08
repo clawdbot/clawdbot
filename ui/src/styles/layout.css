@@ -1504,6 +1504,7 @@ html.openclaw-native-macos
   position: absolute;
   top: 50%;
   left: 1px;
+  z-index: 1;
   width: 4px;
   height: 18px;
   transform: translateY(-50%);
