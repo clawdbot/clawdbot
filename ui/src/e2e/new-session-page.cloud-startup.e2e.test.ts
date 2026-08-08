@@ -114,8 +114,10 @@ suite.define(() => {
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
-      await modelSelect.click();
-      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-select")).toBe("true");
+      const effortSelect = page.locator(
+        '.new-session-page__composer [data-chat-thinking-select="true"]',
+      );
+      await effortSelect.click();
       const thinkingSlider = page.locator(
         '.new-session-page__composer [data-chat-thinking-slider="true"]',
       );
@@ -126,11 +128,11 @@ suite.define(() => {
         .poll(() => page.locator(".new-session-page__composer [data-chat-speed-toggle]").count())
         .toBe(0);
       await thinkingSlider.press("End");
-      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
       await captureUiProof(page, "01-cloud-thinking-level.png");
-      await modelSelect.click();
+      await effortSelect.click();
       await expect
-        .poll(() => modelSelect.evaluate((element) => element.closest("details")?.open ?? false))
+        .poll(() => effortSelect.evaluate((element) => element.closest("details")?.open ?? false))
         .toBe(false);
 
       // Picking a Gateway repo keeps the cloud selection: that folder is what

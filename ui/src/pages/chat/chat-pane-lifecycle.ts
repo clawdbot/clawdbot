@@ -52,6 +52,7 @@ import { selectedChatSessionRow, canCreateChatSession } from "./chat-state-route
 import { resetChatViewState } from "./chat-view-state.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
+import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
 import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
@@ -406,6 +407,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       }
     }
 
+    clearChatModelSearchOnEscape(event);
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }

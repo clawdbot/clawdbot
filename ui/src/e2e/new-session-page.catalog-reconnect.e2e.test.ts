@@ -120,7 +120,6 @@ suite.define(() => {
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="openai"]').click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
