@@ -238,9 +238,28 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
       });
     const sessionEntry = loadedSession?.entry;
-    // A plugin may abort only runs on sessions it owns. `sessions.delete` and the
-    // session mutations already assert this; without the same check here a
-    // plugin-scoped caller could cancel another plugin's in-flight work.
+    // A plugin may abort only runs on sessions it owns.
+    //
+    // The shared ownership helper treats an ABSENT entry as permissible, which is
+    // right for delete/patch (mutating a missing row is a no-op) and WRONG here:
+    // an active run can exist with no persisted row — see "aborts an exact active
+    // run for an unconfigured agent without a store" — and this path dispatches
+    // under a synthetic admin client, which chat-abort authorizes without
+    // matching the controller owner. So an absent row would let a plugin cancel a
+    // run it does not own. Require a row for plugin callers, then fall through to
+    // the shared owner comparison.
+    const pluginCallerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+    if (pluginCallerId && !sessionEntry) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Plugin "${pluginCallerId}" cannot abort session "${canonicalKey}" because it did not create it.`,
+        ),
+      );
+      return;
+    }
     if (
       rejectPluginRuntimeSessionOwnershipMismatch({
         action: "abort",
