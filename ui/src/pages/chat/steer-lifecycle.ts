@@ -29,7 +29,7 @@ import {
   type ChatSendAck,
   type TerminalFailureChatSendAck,
 } from "./chat-send-ack.ts";
-import { resolveDisplayedTranscriptRevision } from "./chat-send-request.ts";
+import { resolveDisplayedTranscriptRevision } from "./chat-transcript-revision.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";

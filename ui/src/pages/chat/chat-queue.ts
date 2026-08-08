@@ -116,7 +116,7 @@ export function enqueueChatMessage(
 export function enqueuePendingRunMessage(
   host: ChatQueueScopedSessionHost,
   text: string,
-  pendingRunId: string,
+  targetRunId: string,
   attachments?: ChatAttachment[],
   sender?: SenderIdentity,
 ) {
@@ -125,15 +125,16 @@ export function enqueuePendingRunMessage(
   if (!trimmed && !hasAttachments) {
     return;
   }
-  // Local commands join an existing run without a wire chat.send, so this is
-  // intentionally a non-SteeredChip pending row with no fake sendRunId.
+  // Local commands join an exact existing run without a wire chat.send. Carry
+  // that target into both projection and retirement without a fake sendRunId.
   const item: ChatQueueItem = {
     id: generateUUID(),
     text: trimmed,
     createdAt: Date.now(),
     kind: "steered",
     attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
-    pendingRunId,
+    pendingRunId: targetRunId,
+    steerTargetRunId: targetRunId,
     ...(sender ? { sender } : {}),
   };
   keepVolatileQueuedMessage(host, host.sessionKey, item);

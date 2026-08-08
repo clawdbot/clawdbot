@@ -1447,7 +1447,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         false,
         undefined,
         expect.objectContaining({
-          message: "active branch changed; review and resend",
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "active branch changed; review and retry",
           details: { reason: "active-leaf-changed" },
         }),
       ]);

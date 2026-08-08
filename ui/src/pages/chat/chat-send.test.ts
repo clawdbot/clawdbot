@@ -4438,7 +4438,7 @@ describe("handleSendChat", () => {
     command.resolve({
       action: "refresh",
       content: "Model set to `gpt-5-mini`.",
-      pendingCurrentRun: true,
+      pendingCurrentRunId: "stale-command-run",
       sessionPatch: {
         modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
       },
@@ -7862,7 +7862,7 @@ describe("handleSendChat", () => {
           "chat.send": { status: "started", runId: "run-1", messageSeq: 2 },
         }),
       ),
-      chatRunId: "run-1",
+      chatRunId: "stale-pane-run",
       chatMessage: "/steer tighten the plan",
       sessionKey: "agent:main:main",
       sessionsResult: createSessionsResult([
@@ -7882,6 +7882,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
     expect(host.chatQueue[0]?.steerTargetRunId).toBe("run-1");
+    expect(host.chatRunId).toBe("stale-pane-run");
   });
 
   it("steers a queued message into the active run without replacing run tracking", async () => {

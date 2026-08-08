@@ -61,33 +61,6 @@ export async function requestChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-function resolveDisplayedLeafEntryId(
-  state: Pick<ChatState, "chatDisplayedLeafEntryId">,
-): string | null | undefined {
-  if (state.chatDisplayedLeafEntryId === null) {
-    return null;
-  }
-  const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
-  return leafEntryId || undefined;
-}
-
-export function resolveDisplayedTranscriptRevision(
-  state: Pick<ChatState, "chatDisplayedLeafEntryId" | "currentSessionId">,
-): ChatTranscriptRevision | undefined {
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
-  if (expectedLeafEntryId === undefined) {
-    return undefined;
-  }
-  const sessionId =
-    typeof state.currentSessionId === "string" && state.currentSessionId.trim()
-      ? state.currentSessionId.trim()
-      : undefined;
-  return {
-    expectedLeafEntryId,
-    ...(sessionId ? { sessionId } : {}),
-  };
-}
-
 const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {

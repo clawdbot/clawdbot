@@ -46,10 +46,10 @@ import {
   setChatError,
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
-import { resolveDisplayedTranscriptRevision } from "./chat-send-request.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { withChatSubmitGuard } from "./chat-submit-guard.ts";
+import { resolveDisplayedTranscriptRevision } from "./chat-transcript-revision.ts";
 import { resolveStoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   recordNonTranscriptInputHistory,

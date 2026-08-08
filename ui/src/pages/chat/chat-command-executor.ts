@@ -59,8 +59,8 @@ type SlashCommandResult = {
   };
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
-  /** When set, the caller should surface a visible pending item tied to the current run. */
-  pendingCurrentRun?: boolean;
+  /** Exact resolved run that should own a visible pending item in the current session. */
+  pendingCurrentRunId?: string;
   /** The command did not complete and a durable queued invocation may be retried. */
   failed?: boolean;
 };
@@ -879,6 +879,7 @@ async function executeSteer(
         content: t("chat.commandResults.steer.noActiveRun"),
       };
     }
+    const targetRunId = targetSession.activeRunIds[0];
     assertCurrentSlashCommand(context);
     const ackStatus = normalizeSteerChatSendAckStatus(
       await client.request("chat.send", {
@@ -887,7 +888,7 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
-        expectedRunId: targetSession.activeRunIds[0],
+        expectedRunId: targetRunId,
         ...(targetSession.activeLeafEntryId !== undefined
           ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
           : {}),
@@ -899,8 +900,8 @@ async function executeSteer(
       return { content: terminalAckContent };
     }
     const result: SlashCommandResult = { content: t("chat.commandResults.steer.succeeded") };
-    if (ackStatus === "started" || ackStatus === "in_flight") {
-      result.pendingCurrentRun = resolved.key === sessionKey;
+    if ((ackStatus === "started" || ackStatus === "in_flight") && resolved.key === sessionKey) {
+      result.pendingCurrentRunId = targetRunId;
     }
     return result;
   } catch (err) {

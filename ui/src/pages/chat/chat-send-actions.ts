@@ -26,11 +26,8 @@ import {
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
-import {
-  isActiveLeafChangedError,
-  requestChatSend,
-  resolveDisplayedTranscriptRevision,
-} from "./chat-send-request.ts";
+import { isActiveLeafChangedError, requestChatSend } from "./chat-send-request.ts";
+import { resolveDisplayedTranscriptRevision } from "./chat-transcript-revision.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";

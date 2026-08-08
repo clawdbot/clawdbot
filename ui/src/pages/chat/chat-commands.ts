@@ -466,11 +466,11 @@ export async function dispatchChatSlashCommand(
     host.chatSending = false;
   }
 
-  if (result.pendingCurrentRun && host.chatRunId && targetIsCurrent()) {
+  if (result.pendingCurrentRunId && targetIsCurrent()) {
     enqueuePendingRunMessage(
       host,
       `/${name} ${args}`.trim(),
-      host.chatRunId,
+      result.pendingCurrentRunId,
       undefined,
       resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
     );
