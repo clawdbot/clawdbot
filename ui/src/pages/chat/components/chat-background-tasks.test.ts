@@ -308,30 +308,52 @@ describe("background tasks rail state", () => {
     expect(createBackgroundTasksProps(host).view).toEqual({ kind: "detail", taskId: "task-1" });
   });
 
-  it("rejects a transcript response after leaving its rail view", async () => {
-    const task = makeTask({
-      id: "task-1",
-      runtime: "cli",
-      sessionKey: "agent:main:cli:late",
-    });
-    let resolveHistory: ((value: unknown) => void) | undefined;
-    const history = new Promise<unknown>((resolve) => {
-      resolveHistory = resolve;
-    });
-    const { host } = createHost({
-      request: (method) =>
-        method === "chat.history" ? history : Promise.resolve({ tasks: [task] }),
-    });
-    createBackgroundTasksProps(host);
-    await flushAsync();
+  it.each(["detail", "transcript"] as const)(
+    "returns a stale %s view to the list when refresh omits its task",
+    async (view) => {
+      const task = makeTask({
+        id: "task-1",
+        runtime: "cli",
+        sessionKey: "agent:main:cli:late",
+      });
+      let listCall = 0;
+      let resolveView: ((value: unknown) => void) | undefined;
+      const viewResponse = new Promise<unknown>((resolve) => {
+        resolveView = resolve;
+      });
+      const { host } = createHost({
+        request: (method) => {
+          if (method === "tasks.get" || method === "chat.history") {
+            return viewResponse;
+          }
+          listCall += 1;
+          return Promise.resolve({ tasks: listCall <= 2 ? [task] : [] });
+        },
+      });
+      createBackgroundTasksProps(host);
+      await flushAsync();
 
-    createBackgroundTasksProps(host).onOpenTranscript(task, "list");
-    createBackgroundTasksProps(host).onBack();
-    resolveHistory?.({ messages: [{ role: "assistant", content: "Late result" }] });
-    await flushAsync();
+      const props = createBackgroundTasksProps(host);
+      if (view === "detail") {
+        props.onSelectTask(task);
+      } else {
+        props.onOpenTranscript(task, "list");
+      }
+      createBackgroundTasksProps(host).onRefresh();
+      await flushAsync();
+      expect(createBackgroundTasksProps(host).tasks).toEqual([]);
+      expect(createBackgroundTasksProps(host).view).toEqual({ kind: "list" });
 
-    expect(createBackgroundTasksProps(host).view).toEqual({ kind: "list" });
-  });
+      resolveView?.(
+        view === "detail"
+          ? { task: { ...task, prompt: "Late task detail" } }
+          : { messages: [{ role: "assistant", content: "Late transcript" }] },
+      );
+      await flushAsync();
+
+      expect(createBackgroundTasksProps(host).view).toEqual({ kind: "list" });
+    },
+  );
 
   it("moves focus into task details and restores it to the selected row", async () => {
     const running = makeTask({ id: "task-1", progressSummary: "Reading files" });

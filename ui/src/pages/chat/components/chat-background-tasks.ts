@@ -182,6 +182,12 @@ function loadBackgroundTasks(
       current.tasks = sortTasks(
         merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
       );
+      const viewedTaskId = current.view.kind === "list" ? null : current.view.taskId;
+      // Detail and transcript navigation depend on the authoritative list;
+      // a bounded refresh may legitimately omit the previously viewed task.
+      if (viewedTaskId && !current.tasks.some((task) => task.id === viewedTaskId)) {
+        current.view = { kind: "list" };
+      }
       current.loadedClient = client;
     } catch (error) {
       const current = getBackgroundTasksState(host);
