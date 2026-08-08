@@ -11,6 +11,7 @@ import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_ARCHIVE_MANY_MAX_TARGETS,
   SessionsArchiveManyParamsSchema,
@@ -427,23 +428,6 @@ export const SessionsDescribeParamsSchema = closedObject({
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
 
-/** Resolves a session by key, raw session id, label, short URL id, or parent/agent scope. */
-export const SessionsResolveParamsSchema = closedObject({
-  key: Type.Optional(NonEmptyString),
-  sessionId: Type.Optional(NonEmptyString),
-  label: Type.Optional(SessionLabelString),
-  /** Bare 8-32 character hexadecimal prefix of a session key's trailing UUID. */
-  shortId: Type.Optional(NonEmptyString),
-  /** Optional display-name slug used only to narrow ambiguous shortId matches. */
-  slugHint: Type.Optional(NonEmptyString),
-  agentId: Type.Optional(NonEmptyString),
-  spawnedBy: Type.Optional(NonEmptyString),
-  includeGlobal: Type.Optional(Type.Boolean()),
-  includeUnknown: Type.Optional(Type.Boolean()),
-  /** Return a successful `{ ok: false }` response when the selector does not match a session. */
-  allowMissing: Type.Optional(Type.Boolean()),
-});
-
 export const SessionWorktreeInfoSchema = closedObject({
   id: NonEmptyString,
   path: NonEmptyString,
@@ -838,7 +822,6 @@ export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
-export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
 export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
 export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
