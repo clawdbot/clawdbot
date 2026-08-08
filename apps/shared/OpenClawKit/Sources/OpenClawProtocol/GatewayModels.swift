@@ -7790,6 +7790,38 @@ public struct SessionsPatchParams: Codable, Sendable {
     }
 }
 
+public struct SessionsArchiveManyParams: Codable, Sendable {
+    public let targets: [[String: AnyCodable]]
+    public let archived: Bool
+
+    public init(
+        targets: [[String: AnyCodable]],
+        archived: Bool)
+    {
+        self.targets = targets
+        self.archived = archived
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case targets
+        case archived
+    }
+}
+
+public struct SessionsArchiveManyResult: Codable, Sendable {
+    public let outcomes: [AnyCodable]
+
+    public init(
+        outcomes: [AnyCodable])
+    {
+        self.outcomes = outcomes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case outcomes
+    }
+}
+
 public struct SessionsPluginPatchParams: Codable, Sendable {
     public let key: String
     public let pluginid: String

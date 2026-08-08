@@ -339,10 +339,21 @@ describe("gateway method authorization", () => {
   });
 });
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("sessions.archiveMany orchestration", () => {
   it("starts canonical patches concurrently and preserves target order", async () => {
     const originalPatch = sessionMutationHandlers["sessions.patch"];
-    const releases = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+    if (!originalPatch) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const releases = Array.from({ length: 3 }, () => deferred<void>());
     const patch = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
       const index = Number(String(params.key).at(-1));
       await releases[index]?.promise;
@@ -391,6 +402,9 @@ describe("sessions.archiveMany orchestration", () => {
 
   it("rejects logical aliases before dispatch", async () => {
     const originalPatch = sessionMutationHandlers["sessions.patch"];
+    if (!originalPatch) {
+      throw new Error("sessions.patch handler is not registered");
+    }
     const patch = vi.fn<GatewayRequestHandler>();
     sessionMutationHandlers["sessions.patch"] = patch;
     const respond = vi.fn();
