@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import type {
   ResponseCompactionItemParam,
   ResponseOutputItem,
@@ -7,15 +7,20 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { shortHash } from "../utils/hash.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
-  OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA,
-  OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
   type OpenAIResponsesCompactionReplayState,
-  type OpenAIResponsesCompactionSuppressionState,
   type OpenAIResponsesReasoningReplayMetadata,
   type OpenAIResponsesReplayContext,
   type ReplayableResponseCompactionItem,
 } from "./openai-responses-contracts.js";
+
+const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
+const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA = "rejected";
+type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
+  type: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE;
+  data: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
+  baseUrlHash: string;
+};
 
 function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();

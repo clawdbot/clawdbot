@@ -1017,7 +1017,7 @@ describe("processResponsesStream", () => {
                       type: "response.completed",
                       sequence_number: 1,
                       response: { id: "resp_recovered", status: "completed", output: [] },
-                    } as ResponseStreamEvent,
+                    } as unknown as ResponseStreamEvent,
                   ]),
                   response: new Response(null, { status: 200 }),
                 };
@@ -1043,9 +1043,10 @@ describe("processResponsesStream", () => {
     expect(requests[0]?.input).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "compaction", id: "cmp_rejected" })]),
     );
-    expect(
-      (requests[1]?.input as Array<{ type?: string }>).some((item) => item.type === "compaction"),
-    ).toBe(false);
+    const retryInput = requests[1]?.input;
+    expect(Array.isArray(retryInput)).toBe(true);
+    const retryItems = Array.isArray(retryInput) ? retryInput : [];
+    expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
     expect(output.stopReason).toBe("stop");
     expect(output.providerReplay).toMatchObject({
       type: "openai-responses-compaction-suppression",
