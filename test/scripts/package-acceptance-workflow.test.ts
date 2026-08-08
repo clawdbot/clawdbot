@@ -3410,10 +3410,10 @@ describe("package artifact reuse", () => {
       "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.repo_live_suite_filter == '')",
+      "if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || needs.resolve_target.outputs.rerun_group == 'package'",
     );
     expect(workflow).toContain(
-      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.repo_live_suite_filter == ''",
+      "if: needs.resolve_target.outputs.docker_release_scheduled == 'true'",
     );
     expect(workflow).toContain(
       'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
@@ -5676,7 +5676,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("executes shared release candidate identity validation with its JSON input", () => {
     const selectedSha = "a".repeat(40);
     const candidate = {
-      packageArtifactName: "docker-e2e-package-123-1",
+      packageArtifactName: "docker-e2e-package-456-1",
       packageArtifactId: "123",
       packageArtifactDigest: "b".repeat(64),
       packageArtifactRunId: "456",
@@ -5697,13 +5697,40 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Validate shared release candidate identity",
     ).run;
     expect(validation).toBeDefined();
+    const binDir = resolve(tempDirs.make("release-candidate-validation-"), "bin");
+    mkdirSync(binDir, { recursive: true });
+    const ghPath = resolve(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+case "$2" in
+  */actions/artifacts/123)
+    printf '%s\n' '{"id":123,"name":"docker-e2e-package-456-1","expired":false,"digest":"sha256:${"b".repeat(64)}","workflow_run":{"id":456}}'
+    ;;
+  */actions/artifacts/790)
+    printf '%s\n' '{"id":790,"name":"docker-e2e-prepublish-plugin-registry-456-1","expired":false,"digest":"sha256:${"f".repeat(64)}","workflow_run":{"id":456}}'
+    ;;
+  */actions/runs/456/attempts/1)
+    printf '%s\n' '{"id":456,"run_attempt":1}'
+    ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const validationEnv = {
+      ...process.env,
+      GH_TOKEN: "test-token",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      SELECTED_SHA: selectedSha,
+    };
 
     const valid = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(valid.status, valid.stderr).toBe(0);
@@ -5720,9 +5747,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const validRegistry = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(registryCandidate),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(validRegistry.status, validRegistry.stderr).toBe(0);
@@ -5730,12 +5756,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const partialRegistry = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify({
           ...candidate,
           prepublishPluginRegistryArtifactId: "790",
         }),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(partialRegistry.status).not.toBe(0);
@@ -5743,12 +5768,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const mismatchedRegistryName = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify({
           ...registryCandidate,
           prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-999-1",
         }),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(mismatchedRegistryName.status).not.toBe(0);
@@ -5756,7 +5780,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
         SELECTED_SHA: "f".repeat(40),
       },
