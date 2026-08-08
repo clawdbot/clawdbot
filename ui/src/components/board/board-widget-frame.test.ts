@@ -7,7 +7,7 @@ import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
   sandboxOrigin: string;
-  sandboxHost: { dispose: () => void } | null;
+  sandboxHost: { dispose: () => void; setActive: (active: boolean) => void } | null;
   frameFailureKey: string;
   frameRefreshAttempts: number;
   refreshFailedFrame: (widget: BoardViewWidget) => void;
@@ -102,7 +102,7 @@ describe("board widget frame terminal failure message", () => {
 });
 
 describe("board widget frame ticket refresh", () => {
-  it("disconnects frame work while inactive and reconnects on activation", async () => {
+  it("suspends frame work while inactive and reconnects on activation", async () => {
     vi.useFakeTimers();
     let active = true;
     const refreshFrame = vi.fn(async () => undefined);
@@ -127,14 +127,17 @@ describe("board widget frame ticket refresh", () => {
     const removeWindowListener = vi.spyOn(window, "removeEventListener");
     const removeDocumentListener = vi.spyOn(document, "removeEventListener");
     const dispose = vi.fn();
+    const setActive = vi.fn();
 
     lifecycle.connect();
     lifecycle.update();
-    (lifecycle as unknown as LifecycleInternals).sandboxHost = { dispose };
+    (lifecycle as unknown as LifecycleInternals).sandboxHost = { dispose, setActive };
     active = false;
     lifecycle.activityChanged();
+    lifecycle.update();
 
-    expect(dispose).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+    expect(setActive).toHaveBeenCalledWith(false);
     expect(removeWindowListener).toHaveBeenCalledWith("message", expect.any(Function));
     expect(removeDocumentListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
     await vi.advanceTimersByTimeAsync(30_000);
@@ -142,12 +145,16 @@ describe("board widget frame ticket refresh", () => {
 
     active = true;
     lifecycle.activityChanged();
+    expect(setActive).toHaveBeenLastCalledWith(true);
+    (lifecycle as unknown as LifecycleInternals).sandboxHost = null;
     lifecycle.update();
     await vi.advanceTimersByTimeAsync(999);
     expect(refreshFrame).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(refreshFrame).toHaveBeenCalledOnce();
+    (lifecycle as unknown as LifecycleInternals).sandboxHost = { dispose, setActive };
     lifecycle.disconnect();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("pauses while hidden and re-arms when the document becomes visible", async () => {

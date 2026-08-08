@@ -157,21 +157,33 @@ export class BoardWidgetFrameLifecycle {
   }
 
   disconnect(): void {
+    this.stopWork();
+    this.sandboxHost?.dispose();
+    this.sandboxHost = null;
+  }
+
+  private suspend(): void {
+    this.stopWork();
+    this.sandboxHost?.setActive(false);
+  }
+
+  private stopWork(): void {
     if (this.listening) {
       window.removeEventListener("message", this.handleWindowMessage);
       document.removeEventListener("visibilitychange", this.handleVisibilityChange);
       this.listening = false;
     }
     this.ticketRefresh.reset();
-    this.sandboxHost?.dispose();
-    this.sandboxHost = null;
   }
 
   activityChanged(): void {
     if (this.host.active()) {
       this.connect();
+      this.sandboxHost?.setActive(true);
     } else {
-      this.disconnect();
+      // Hidden dashboard cells retain their iframe and sandbox handshake;
+      // terminal disconnect is the only lifecycle edge that disposes them.
+      this.suspend();
     }
   }
 
@@ -193,12 +205,17 @@ export class BoardWidgetFrameLifecycle {
 
   update(): void {
     if (!this.host.active()) {
-      this.disconnect();
+      this.suspend();
       return;
     }
+    this.resume();
+  }
+
+  private resume(): void {
     this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
+    this.sandboxHost?.setActive(true);
   }
 
   render(widget: BoardViewWidget): TemplateResult {
