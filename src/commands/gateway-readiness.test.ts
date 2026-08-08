@@ -302,7 +302,7 @@ describe("ensureGatewayReadyForOperation", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("uses structured connect details when the daemon error text is generic", async () => {
+  it("uses the projected connect failure when the daemon error text is generic", async () => {
     const status = createStatus({
       service: {
         label: "systemd user",
@@ -316,7 +316,7 @@ describe("ensureGatewayReadyForOperation", () => {
       rpc: {
         ok: false,
         error: "connect failed",
-        connectErrorDetails: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+        connectFailure: { kind: "pairing-required", detailCode: "PAIRING_REQUIRED" },
         url: "ws://127.0.0.1:18789",
       },
     });

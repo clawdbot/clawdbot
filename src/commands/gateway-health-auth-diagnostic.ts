@@ -27,12 +27,9 @@ export function gatewayProbeResultSawGateway(status: GatewayProbeReachabilityEvi
   if (server?.version || server?.connId) {
     return true;
   }
-  return (
-    classifyGatewayConnectFailure({
-      details: status.connectErrorDetails,
-      message: status.error,
-    }).kind !== "unreachable"
-  );
+  const failureKind =
+    status.connectFailure?.kind ?? classifyGatewayConnectFailure({ message: status.error }).kind;
+  return failureKind !== "unreachable";
 }
 
 /**
