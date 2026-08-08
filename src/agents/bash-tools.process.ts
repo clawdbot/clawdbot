@@ -72,6 +72,14 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
 
+/** Poll on an already-exited session returns the retained 2000-char tail; say so when it is a slice. */
+function finishedTailNote(tailText: string, aggregated: string) {
+  if (tailText.length >= aggregated.length) {
+    return "";
+  }
+  return `\n\n[showing last ${tailText.length} of ${aggregated.length} chars; pass offset/limit to action=log to page the full output]`;
+}
+
 const MAX_POLL_WAIT_MS = 30_000;
 
 type RunningSessionRuntime = {
@@ -400,6 +408,7 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
+                        finishedTailNote(scopedFinished.tail, scopedFinished.aggregated) +
                         `\n\nProcess exited with ${
                           scopedFinished.exitSignal
                             ? `signal ${scopedFinished.exitSignal}`
