@@ -71,8 +71,9 @@ The status headline sits above the progress lines. With
 
 For raw tool progress, the label appears once the agent starts meaningful work
 and stays busy for the initial delay.
-It sits at the top of the rolling progress-line list, so it scrolls away once
-enough concrete work lines appear. The implicit label is hidden while a status
+It sits at the top of the rolling progress-line list, so it normally scrolls away once
+enough concrete work lines appear. Mattermost pins the label as the first line
+when `streaming.progress.finalDelivery: "separate"` is enabled. The implicit label is hidden while a status
 headline is present unless you configure one explicitly. Plain text-only
 replies never show a progress draft; a line appears only for real work updates,
 for example `🛠️ Bash: run tests`, `🔎 Web Search: for "discord edit message"`,
@@ -402,14 +403,14 @@ authored text, plan milestones, and attention lines only.
 
 ## Channel behavior
 
-| Channel         | Progress transport                     | Notes                                                                                                                                                     |
-| --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                  |
-| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
-| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
-| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                          |
-| Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
-| Mattermost      | Editable draft post.                   | `block` mode rotates between completed text and tool-activity posts; other modes fold tool activity into the same draft-style post.                       |
+| Channel         | Progress transport                     | Notes                                                                                                                                                                   |
+| --------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord         | Send one message, then edit it.        | `progress` is explicit opt-in; the status draft is deleted after the final answer lands.                                                                                |
+| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                                           |
+| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                                         |
+| Slack           | Native stream or editable draft post.  | Card style is the default; `progress.style: "compact"` uses a temporary text draft, deleted after the final answer is delivered.                                      |
+| Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client.               |
+| Mattermost      | Editable draft post.                   | `progress.finalDelivery: "separate"` sends a fresh same-thread final and removes the typed progress post only after success; the default remains in-place finalization. |
 
 Channels without safe edit support fall back to typing indicators or
 final-only delivery. See [Streaming and chunking](/concepts/streaming) for the
@@ -421,13 +422,18 @@ When the final answer is ready, OpenClaw tries to keep the chat clean:
 
 - In `progress` mode on Discord, the final answer is sent as a fresh message
   and the status draft is deleted once that answer is delivered. Busy channels
-  keep no orphaned tool log above the reply; error finals keep the draft as the
-  visible record of the failed turn.
+  log above the reply; error finals keep the draft as the visible record of
+  the failed turn.
+- In `progress` mode on Mattermost, `progress.finalDelivery: "separate"`
+  creates a typed progress post that peer OpenClaw agents ignore, pins its label,
+  sends the final as a separate normal post in the same thread, and deletes the
+  progress post only after confirmed delivery. A failed run or failed final send
+  retains a sanitized status post. Omitting the option keeps in-place finalization.
 - If the draft can safely become the final answer (`partial`/`block` modes),
   OpenClaw edits it in place.
-- Slack's compact progress style posts the final answer as a new message and
-  deletes its temporary drafts after confirmed delivery. Failed delivery keeps
-  the draft visible.
+- Slack's compact progress style also posts the final answer as a new message
+  and deletes its temporary drafts after confirmed delivery. Failed delivery
+  keeps the draft visible.
 - If the channel uses native progress streaming, OpenClaw finalizes that
   stream when the native transport accepts the final text.
 - Otherwise (media, an approval prompt, an explicit reply target, too many

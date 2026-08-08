@@ -23,4 +23,8 @@ export const mattermostChannelConfigUiHints = {
     },
     progress: {},
   }),
+  "streaming.progress.finalDelivery": {
+    label: "Mattermost Progress Final Delivery",
+    help: 'Use "in-place" (default) to replace the progress post with the final answer, or "separate" to send a normal final post and delete the progress post only after delivery succeeds.',
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

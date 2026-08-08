@@ -14,7 +14,7 @@ import {
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import type { MattermostPost } from "./client.js";
+import { updateMattermostPost, type MattermostPost } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
@@ -22,7 +22,10 @@ import {
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
+  formatMattermostTerminalProgressText,
   resolveMattermostReplyRootId,
+  resolveMattermostProgressDeliveryPolicy,
+  pinMattermostProgressLabel,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
@@ -115,11 +118,18 @@ export async function dispatchMattermostInboundTurn(
     (account.streamingMode === "progress" || shouldUpdateMattermostDraftToolProgress(account));
   const suppressDefaultToolProgressMessages =
     draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
+  const {
+    separate: separateProgressFinalDelivery,
+    postType: progressPostType,
+    pinnedLabel: pinnedProgressLabel,
+    seed: progressSeed,
+  } = resolveMattermostProgressDeliveryPolicy(account, channelId);
   const draftStream = draftPreviewEnabled
     ? createMattermostDraftStream({
         client,
         channelId,
         rootId: effectiveReplyToId,
+        ...(progressPostType ? { postType: progressPostType } : {}),
         throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
@@ -131,6 +141,18 @@ export async function dispatchMattermostInboundTurn(
         warn: monitor.logVerboseMessage,
       })
     : createDisabledMattermostDraftStream();
+  const markSeparateProgressFailed = async () => {
+    if (!separateProgressFinalDelivery) {
+      return;
+    }
+    const progressPostId = draftStream.postId();
+    if (!progressPostId) {
+      return;
+    }
+    await updateMattermostPost(client, progressPostId, {
+      message: formatMattermostTerminalProgressText(pinnedProgressLabel),
+    });
+  };
   const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
     enabled: draftPreviewEnabled && account.streamingMode === "block",
     forceNewMessage: async () => {
@@ -147,9 +169,13 @@ export async function dispatchMattermostInboundTurn(
     entry: account.config,
     mode: account.streamingMode,
     active: draftPreviewEnabled,
-    seed: `${account.accountId}:${channelId}`,
+    seed: progressSeed,
     update: async (previewText, options) => {
-      draftStream.update(previewText);
+      draftStream.update(
+        separateProgressFinalDelivery
+          ? pinMattermostProgressLabel(previewText, pinnedProgressLabel)
+          : previewText,
+      );
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -293,6 +319,14 @@ export async function dispatchMattermostInboundTurn(
         // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
         await draftStream.settleBoundaries();
         progressDraft.markFinalReplyStarted();
+        if (separateProgressFinalDelivery && payloadEntry.isError) {
+          draftStream.update(formatMattermostTerminalProgressText(pinnedProgressLabel));
+          try {
+            await draftStream.flush();
+          } catch (err) {
+            monitor.logVerboseMessage(`mattermost terminal progress update failed: ${String(err)}`);
+          }
+        }
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
@@ -313,6 +347,8 @@ export async function dispatchMattermostInboundTurn(
         effectiveReplyToId,
         resolvePreviewFinalText,
         previewState,
+        separateProgressFinalDelivery,
+        markSeparateProgressFailed,
         logVerboseMessage: monitor.logVerboseMessage,
         recordThreadParticipation: markThreadParticipation,
         deliverPayload: async (payloadToDeliver) => {
@@ -571,6 +607,17 @@ export async function dispatchMattermostInboundTurn(
         }),
       },
     });
+  } catch (error: unknown) {
+    if (separateProgressFinalDelivery) {
+      try {
+        await markSeparateProgressFailed();
+      } catch (statusError: unknown) {
+        monitor.logVerboseMessage(
+          `mattermost terminal progress update failed: ${String(statusError)}`,
+        );
+      }
+    }
+    throw error;
   } finally {
     try {
       await draftStream.stop();

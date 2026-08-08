@@ -19,6 +19,7 @@ import type {
   MattermostAccountConfig,
   MattermostChatMode,
   MattermostChatTypeKey,
+  MattermostProgressFinalDelivery,
   MattermostReplyToMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
@@ -44,6 +45,7 @@ export type ResolvedMattermostAccount = {
   textChunkLimit?: number;
   chunkMode?: TextChunkMode;
   streamingMode: StreamingMode;
+  progressFinalDelivery: MattermostProgressFinalDelivery;
   blockStreaming?: boolean;
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
 };
@@ -131,6 +133,7 @@ function resolveMattermostAccountWithMode(params: {
     textChunkLimit: merged.textChunkLimit,
     chunkMode: resolveChannelStreamingChunkMode(merged),
     streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
+    progressFinalDelivery: merged.streaming?.progress?.finalDelivery ?? "in-place",
     blockStreaming: resolveChannelStreamingBlockEnabled(merged),
     blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };

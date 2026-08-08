@@ -221,6 +221,7 @@ const accountFixture: ResolvedMattermostAccount = {
   botTokenSource: "config",
   baseUrlSource: "config",
   streamingMode: "partial",
+  progressFinalDelivery: "in-place",
   config: {},
 };
 

@@ -49,6 +49,8 @@ type MattermostDraftPreviewDeliverParams = {
   effectiveReplyToId?: string;
   resolvePreviewFinalText: (text?: string) => MattermostPreviewFinalResolution | undefined;
   previewState: MattermostDraftPreviewState;
+  separateProgressFinalDelivery?: boolean;
+  markSeparateProgressFailed?: () => Promise<void> | void;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
   // Visible same-thread finals can be delivered by editing the draft preview in
@@ -106,6 +108,8 @@ export async function deliverMattermostReplyWithDraftPreview(
   let useConfirmedPreviewAsWholeFinal = false;
   let pendingPreviewFinalContent: string | undefined;
   let finalizedPreviewPost: MattermostPost | undefined;
+  const retainProgressAfterError =
+    params.separateProgressFinalDelivery === true && params.payload.isError === true;
   try {
     const finalization = await deliverWithFinalizableLivePreviewAdapter({
       kind: params.info.kind,
@@ -118,13 +122,16 @@ export async function deliverMattermostReplyWithDraftPreview(
           : {
               draft: {
                 flush: params.draftStream.flush,
-                clear: params.draftStream.clear,
+                clear: retainProgressAfterError ? async () => {} : params.draftStream.clear,
                 discardPending: params.draftStream.discardPending,
                 seal: params.draftStream.seal,
                 id: params.draftStream.postId,
               },
             }),
         buildFinalEdit: (payload) => {
+          if (params.separateProgressFinalDelivery) {
+            return undefined;
+          }
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
           const ttsSupplement = getReplyPayloadTtsSupplement(payload);
           const previewFinalResolution = params.resolvePreviewFinalText(
@@ -220,7 +227,20 @@ export async function deliverMattermostReplyWithDraftPreview(
               : payload.isError !== true && typeof resolvedDeliveryText === "string"
                 ? { ...payload, text: resolvedDeliveryText }
                 : payload;
-        normalDeliveryResult = await params.deliverPayload(deliveryPayload);
+        try {
+          normalDeliveryResult = await params.deliverPayload(deliveryPayload);
+        } catch (error: unknown) {
+          if (params.separateProgressFinalDelivery && params.payload.isError !== true) {
+            try {
+              await params.markSeparateProgressFailed?.();
+            } catch (statusError: unknown) {
+              params.logVerboseMessage(
+                `mattermost terminal progress update failed: ${String(statusError)}`,
+              );
+            }
+          }
+          throw error;
+        }
         return normalDeliveryResult.visibleReplySent;
       },
     });

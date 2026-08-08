@@ -371,6 +371,81 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 
+  it("sends a separate final before deleting the progress post", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = createDeliverFinalMock();
+
+    const result = await deliverDraftPreview({
+      payload: { text: "All good" } as never,
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      separateProgressFinalDelivery: true,
+      deliverPayload: deliverFinal,
+    });
+
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "All good" });
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverFinal.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(deliverFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(result).toMatchObject({
+      messageIds: ["delivered-post-1"],
+      visibleReplySent: true,
+      content: "All good",
+    });
+  });
+
+  it("retains separate progress when final delivery fails", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const markSeparateProgressFailed = vi.fn(async () => {});
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+
+    await expect(
+      deliverDraftPreview({
+        payload: { text: "Broken" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        markSeparateProgressFailed,
+        deliverPayload: deliverFinal,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    expect(markSeparateProgressFailed).toHaveBeenCalledTimes(1);
+    expect(deliverFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      markSeparateProgressFailed.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("retains sanitized separate progress after delivering a terminal error", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const deliverFinal = createDeliverFinalMock();
+
+    await deliverDraftPreview({
+      payload: { text: "Sensitive provider failure", isError: true } as never,
+      draftStream,
+      separateProgressFinalDelivery: true,
+      deliverPayload: deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+      text: "Sensitive provider failure",
+      isError: true,
+    });
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
   it("preserves a completed normal send when preview cleanup fails", async () => {
     const draftStream = createDraftStreamMock();
     draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));

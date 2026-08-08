@@ -1,10 +1,14 @@
 // Mattermost plugin module owns monitor routing and delivery context helpers.
-import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  formatChannelProgressDraftText,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
+import { MATTERMOST_PROGRESS_POST_TYPE } from "./draft-stream.js";
 import { resolveThreadSessionKeys } from "./monitor-helpers.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import {
@@ -13,6 +17,39 @@ import {
 } from "./no-visible-reply-diagnostic.js";
 import type { MattermostReplyDeliveryOutcome } from "./reply-delivery.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
+
+export function resolveMattermostProgressDeliveryPolicy(
+  account: Pick<
+    ResolvedMattermostAccount,
+    "accountId" | "config" | "progressFinalDelivery" | "streamingMode"
+  >,
+  channelId: string,
+) {
+  const separate =
+    account.streamingMode === "progress" && account.progressFinalDelivery === "separate";
+  const seed = `${account.accountId}:${channelId}`;
+  const pinnedLabel = separate
+    ? formatChannelProgressDraftText({ entry: account.config, lines: [], seed }).trim() || undefined
+    : undefined;
+  return {
+    separate,
+    postType: separate ? MATTERMOST_PROGRESS_POST_TYPE : undefined,
+    pinnedLabel,
+    seed,
+  };
+}
+
+export function pinMattermostProgressLabel(text: string, label: string | undefined): string {
+  const trimmed = text.trim();
+  if (!label || trimmed === label || trimmed.startsWith(`${label}\n`)) {
+    return trimmed;
+  }
+  return `${label}\n\n${trimmed}`;
+}
+
+export function formatMattermostTerminalProgressText(label: string | undefined): string {
+  return pinMattermostProgressLabel("Failed.", label);
+}
 
 export function shouldUpdateMattermostDraftToolProgress(
   account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,

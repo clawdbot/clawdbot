@@ -89,6 +89,27 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBe("post-1");
   });
 
+  it("creates typed progress posts in the initial request", async () => {
+    const { calls, stream } = createDraftStreamFixture({
+      rootId: "root-1",
+      postType: "custom_openclaw_progress",
+    });
+
+    stream.update("|\n\nWorking");
+    await stream.flush();
+    stream.update("|\n\nStill working");
+    await stream.flush();
+
+    expect(parseRequestJson(calls[0]?.init)).toMatchObject({
+      channel_id: "channel-1",
+      root_id: "root-1",
+      message: "|\n\nWorking",
+      type: "custom_openclaw_progress",
+    });
+    expect(calls[1]?.path).toBe("/posts/post-1");
+    expect(parseRequestJson(calls[1]?.init)).not.toHaveProperty("type");
+  });
+
   it("does not resend identical updates", async () => {
     const { calls, stream } = createDraftStreamFixture();
 

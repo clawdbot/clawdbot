@@ -977,6 +977,69 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
+  it("drops typed OpenClaw progress posts before inbound routing", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    const runtimeCore = createRuntimeCore(testConfig);
+    mockState.runtimeCore = runtimeCore;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "openclaw-progress-post",
+      message: "|\n\nWorking...",
+      senderId: "peer-openclaw-bot",
+      senderName: "peer-openclaw",
+      type: "custom_openclaw_progress",
+    });
+    abortController.abort();
+    await monitor;
+
+    expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
+    expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
+    expect(mockState.resolveChannelInfo).not.toHaveBeenCalled();
+    expect(mockState.resolveUserInfo).not.toHaveBeenCalled();
+  });
+
+  it("keeps human text beginning with the progress label actionable", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "human-progress-looking-post",
+      message: "| status?",
+    });
+    await monitor;
+
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    expect(mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx.BodyForAgent).toBe(
+      "| status?",
+    );
+  });
+
   it("formats current and pending-history timestamps in the configured user timezone", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
