@@ -24,14 +24,12 @@ import type {
   Usage,
 } from "../types.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
-import {
-  captureOpenAIResponsesCompaction,
-  encodeTextSignatureV1,
-} from "./openai-responses-replay-internal.js";
+import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {

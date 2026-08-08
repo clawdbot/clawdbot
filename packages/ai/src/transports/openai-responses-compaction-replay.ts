@@ -215,7 +215,7 @@ function prepareOpenAIResponsesCompactionForReplay(
   };
 }
 
-export function resolveNewestOpenAIResponsesCompactionReplay(
+function resolveNewestOpenAIResponsesCompactionReplay(
   messages: Context["messages"],
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
@@ -243,49 +243,41 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
   return undefined;
 }
 
-export function createOpenAIResponsesCompactionPrefixPruner(
-  compaction: { owner: AssistantMessage; replayIndex: number } | undefined,
-) {
-  let reachedOwner = compaction === undefined;
-  const retainedToolCalls = new Map<string, number>();
+export type OpenAIResponsesReplayMode = "checkpoint" | "full-history";
 
+type OpenAIResponsesCompactionReplayPlan = {
+  messages: Context["messages"];
+  compaction?: ResponseCompactionItemParam;
+  preserveUnframedToolResults: boolean;
+};
+
+export function buildOpenAIResponsesCompactionReplayPlan(
+  messages: Context["messages"],
+  model: Model,
+  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId"> & {
+    mode?: OpenAIResponsesReplayMode;
+  },
+): OpenAIResponsesCompactionReplayPlan {
+  if (options?.mode === "full-history") {
+    // Checkpoint rejection must rebuild from the untouched transcript; consulting
+    // providerReplay here would recreate the same rejected compaction window.
+    return { messages, preserveUnframedToolResults: false };
+  }
+  const compaction = resolveNewestOpenAIResponsesCompactionReplay(messages, model, options);
+  if (!compaction) {
+    return { messages, preserveUnframedToolResults: false };
+  }
+  const ownerIndex = messages.indexOf(compaction.owner);
+  const owner = {
+    ...compaction.owner,
+    content: compaction.owner.content.slice(compaction.replayIndex),
+  };
+  // Slice before transcript repair so compacted calls cannot synthesize outputs,
+  // while real results emitted after the checkpoint remain in chronological order.
   return {
-    shouldSkipMessage(message: Context["messages"][number]): boolean {
-      if (reachedOwner) {
-        return false;
-      }
-      if (message === compaction?.owner) {
-        reachedOwner = true;
-        return false;
-      }
-      return true;
-    },
-    shouldSkipAssistantBlock(message: AssistantMessage, contentIndex: number): boolean {
-      // Capture records output.content.length, so replayIndex is the normalized
-      // assistant-block boundary even when the provider emitted unsupported items.
-      return message === compaction?.owner && contentIndex < compaction.replayIndex;
-    },
-    recordToolCall(toolCallId: string): void {
-      if (!compaction) {
-        return;
-      }
-      retainedToolCalls.set(toolCallId, (retainedToolCalls.get(toolCallId) ?? 0) + 1);
-    },
-    shouldKeepToolResult(toolCallId: string): boolean {
-      if (!compaction) {
-        return true;
-      }
-      const remaining = retainedToolCalls.get(toolCallId) ?? 0;
-      if (remaining === 0) {
-        return false;
-      }
-      if (remaining === 1) {
-        retainedToolCalls.delete(toolCallId);
-      } else {
-        retainedToolCalls.set(toolCallId, remaining - 1);
-      }
-      return true;
-    },
+    messages: [owner, ...messages.slice(ownerIndex + 1)],
+    compaction: compaction.item,
+    preserveUnframedToolResults: true,
   };
 }
 

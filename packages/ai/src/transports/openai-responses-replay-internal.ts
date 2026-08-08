@@ -18,9 +18,9 @@ import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   buildOpenAIResponsesReplayContext,
-  createOpenAIResponsesCompactionPrefixPruner,
+  buildOpenAIResponsesCompactionReplayPlan,
   isSafeResponsesReplayItemId,
-  resolveNewestOpenAIResponsesCompactionReplay,
+  type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
@@ -40,14 +40,6 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
-
-export {
-  buildOpenAIResponsesReasoningReplayMetadata,
-  captureOpenAIResponsesCompaction,
-  createCompactionTracker,
-  createOpenAIResponsesCompactionPrefixPruner,
-  resolveNewestOpenAIResponsesCompactionReplay,
-} from "./openai-responses-compaction-replay.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
 
@@ -146,12 +138,13 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
   return input.length === request.input.length ? request : { ...request, input };
 }
 
-export function resolveNextResponsesEncryptedContentAttempt<
+export async function resolveNextResponsesEncryptedContentAttempt<
   TRequest extends ResponsesEncryptedContentRequest,
 >(
   attempt: ResponsesEncryptedContentAttempt<TRequest>,
   error: unknown,
-): ResponsesEncryptedContentAttempt<TRequest> | undefined {
+  options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
+): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
   if (!isInvalidEncryptedContentError(error) || attempt.kind === "compaction-stripped") {
     return undefined;
   }
@@ -161,10 +154,20 @@ export function resolveNextResponsesEncryptedContentAttempt<
       return { kind: "reasoning-stripped", request: reasoningStripped };
     }
   }
-  const compactionStripped = stripResponsesRequestCompaction(attempt.request);
-  return compactionStripped === attempt.request
-    ? undefined
-    : { kind: "compaction-stripped", request: compactionStripped };
+  const locallyStripped = stripResponsesRequestCompaction(attempt.request);
+  if (locallyStripped === attempt.request) {
+    return undefined;
+  }
+  // Filtering the already-pruned checkpoint request would leave a context-blind
+  // suffix. Rebuild full history lazily, then preserve any earlier reasoning strip.
+  let compactionStripped = options?.buildFullHistoryRequest
+    ? await options.buildFullHistoryRequest()
+    : locallyStripped;
+  compactionStripped = stripResponsesRequestCompaction(compactionStripped);
+  if (attempt.kind === "reasoning-stripped") {
+    compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
+  }
+  return { kind: "compaction-stripped", request: compactionStripped };
 }
 
 export function tagOpenAIResponsesReasoningReplayItem(
@@ -266,14 +269,13 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   onCompactionRejected?: () => void;
+  buildFullHistoryRequest?: () =>
+    | OpenAIResponsesRequestParams
+    | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
   const sendAttempt = async (
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
-    params.observePrompt?.(attempt.request, {
-      egress: "responses-sdk",
-      payloadVariant: attempt.kind,
-    });
     const { data, response } = await params.client.responses
       .create(attempt.request as never, params.requestOptions as never)
       .withResponse();
@@ -288,10 +290,16 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     request: params.request,
   };
   while (true) {
+    params.observePrompt?.(attempt.request, {
+      egress: "responses-sdk",
+      payloadVariant: attempt.kind,
+    });
     try {
       return await sendAttempt(attempt);
     } catch (error) {
-      const nextAttempt = resolveNextResponsesEncryptedContentAttempt(attempt, error);
+      const nextAttempt = await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
+        buildFullHistoryRequest: params.buildFullHistoryRequest,
+      });
       if (!nextAttempt) {
         throw error;
       }
@@ -378,6 +386,7 @@ export function convertResponsesMessages(
     replayResponsesItemIds?: boolean;
     sessionId?: string;
     authProfileId?: string;
+    replayMode?: OpenAIResponsesReplayMode;
   },
 ): ResponseInput {
   const messages: ResponseInput = [];
@@ -429,17 +438,20 @@ export function convertResponsesMessages(
     }
     return `${normalizedCallId}|${normalizedItemId}`;
   };
-  const transformedMessages = transformTransportMessages(
-    context.messages,
-    model,
-    normalizeToolCallId,
-    { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
-  );
-  const compaction = resolveNewestOpenAIResponsesCompactionReplay(transformedMessages, model, {
+  const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
+    mode: options?.replayMode,
   });
-  const compactionPruner = createOpenAIResponsesCompactionPrefixPruner(compaction);
+  const transformedMessages = transformTransportMessages(
+    replayPlan.messages,
+    model,
+    normalizeToolCallId,
+    {
+      normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
+      preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
+    },
+  );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
@@ -456,12 +468,11 @@ export function convertResponsesMessages(
       ),
     );
   }
+  if (replayPlan.compaction) {
+    messages.push(replayPlan.compaction);
+  }
   let msgIndex = 0;
   for (const msg of transformedMessages) {
-    if (compactionPruner.shouldSkipMessage(msg)) {
-      msgIndex += 1;
-      continue;
-    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push(
@@ -487,18 +498,11 @@ export function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
-      const assistantCompaction = msg === compaction?.owner ? compaction : undefined;
       let textFallbackOrdinal = 0;
       let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
-      for (const [contentIndex, block] of msg.content.entries()) {
-        if (compactionPruner.shouldSkipAssistantBlock(msg, contentIndex)) {
-          continue;
-        }
-        if (assistantCompaction && contentIndex === assistantCompaction.replayIndex) {
-          output.push(assistantCompaction.item);
-        }
+      for (const block of msg.content) {
         if (block.type === "thinking") {
           if (
             shouldReplayReasoningItems &&
@@ -563,7 +567,6 @@ export function convertResponsesMessages(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
-          compactionPruner.recordToolCall(block.id);
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
@@ -584,9 +587,6 @@ export function convertResponsesMessages(
           previousReplayItemWasReasoning = false;
         }
       }
-      if (assistantCompaction && assistantCompaction.replayIndex >= msg.content.length) {
-        output.push(assistantCompaction.item);
-      }
       if (output.length > 0) {
         messages.push(...output);
       }
@@ -596,10 +596,6 @@ export function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
-      if (!compactionPruner.shouldKeepToolResult(msg.toolCallId)) {
-        msgIndex += 1;
-        continue;
-      }
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
