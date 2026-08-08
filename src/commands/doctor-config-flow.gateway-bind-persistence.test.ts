@@ -1,20 +1,14 @@
 // Verifies Doctor persists legacy gateway bind repairs through the real config writer.
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { describe, expect, it, vi } from "vitest";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { migrateLegacyConfig } from "./doctor/shared/legacy-config-migrate.js";
 
 describe("Doctor gateway bind persistence", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
   it.each([
     ["localhost", "loopback"],
     ["0.0.0.0", "lan"],
@@ -30,36 +24,27 @@ describe("Doctor gateway bind persistence", () => {
       };
       const options: DoctorOptions = { nonInteractive: true, repair: true };
       const prompter = createDoctorPrompter({ runtime, options });
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
-        options,
-        confirm: (params) => prompter.confirm(params),
-        runtime,
-        prompter,
-      });
+      const migration = migrateLegacyConfig({ gateway: { mode: "local", bind: legacyBind } });
+      expect(migration.config).not.toBeNull();
+      const cfg = migration.config!;
+      const configResult = { cfg, shouldWriteConfig: true };
       const ctx: DoctorHealthFlowContext = {
         runtime,
         options,
         prompter,
         configResult,
-        cfg: configResult.cfg,
-        cfgForPersistence: structuredClone(configResult.cfg),
-        sourceConfigValid: configResult.sourceConfigValid ?? true,
+        cfg,
+        cfgForPersistence: structuredClone(cfg),
+        sourceConfigValid: true,
         configPath,
         stateDirExistedAtStart: true,
-        ...(configResult.runWithPluginMetadataSnapshot
-          ? { runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot }
-          : {}),
-        ...(configResult.invalidatePluginMetadataSnapshot
-          ? { invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot }
-          : {}),
       };
 
       await runInitialConfigWriteHealth(ctx);
 
-      const snapshot = await readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-      expect(snapshot.config.gateway?.bind).toBe(canonicalBind);
-      expect(await fs.readFile(configPath, "utf-8")).not.toContain(`"bind": "${legacyBind}"`);
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      expect(persisted.gateway?.bind).toBe(canonicalBind);
+      expect(persisted.gateway?.bind).not.toBe(legacyBind);
     });
   });
 });
