@@ -49,7 +49,11 @@ function decodeMatrixEnvAccountToken(token: string): string | undefined {
     if (hexEscape) {
       const hex = hexEscape[1];
       const codePoint = hex ? Number.parseInt(hex, 16) : Number.NaN;
-      if (!Number.isFinite(codePoint)) {
+      // String.fromCodePoint throws a RangeError above the Unicode max, so a
+      // finiteness check alone is not enough: an env var whose _X<hex>_ escape
+      // exceeds 0x10FFFF must be rejected like any other malformed token
+      // instead of crashing account discovery.
+      if (!Number.isInteger(codePoint) || codePoint > 0x10ffff) {
         return undefined;
       }
       const char = String.fromCodePoint(codePoint);
