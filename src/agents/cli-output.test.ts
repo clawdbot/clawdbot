@@ -2826,6 +2826,56 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
+  it("keeps an explicit empty streamed input over a populated start snapshot", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    // A no-argument invocation is serialized as an explicit `{}` delta. The
+    // streamed value is authoritative, so the start snapshot must not win.
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_2",
+              name: "Bash",
+              input: { command: "stale --from-start-block" },
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: "{}" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([{ toolCallId: "toolu_2", name: "Bash", kind: "tool_use", args: {} }]);
+  });
+
   it("frames coalesced Claude image and PDF lines before omitting retained binary bytes", () => {
     const results: CliToolResultDelta[] = [];
     const pluginLines: string[] = [];
