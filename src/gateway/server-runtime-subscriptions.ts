@@ -5,7 +5,11 @@ import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
+import {
+  onAgentAuditEvent,
+  onAgentRuntimeEvent,
+  type AgentEventRuntimePayload,
+} from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -36,13 +40,60 @@ function dispatchEventHandler<TEvent>(params: {
   log: SubsystemLogger;
   failureMessage: string;
   context: Record<string, unknown>;
+  onFailure?: (error: unknown) => void;
 }) {
   void params
     .loadHandler()
     .then((handler) => handler(params.event))
     .catch((error: unknown) => {
       params.log.warn(params.failureMessage, { ...params.context, error });
+      params.onFailure?.(error);
     });
+}
+
+function retainLiveTerminalReconciliationCandidate(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  runId: string;
+  clientRunId: string;
+  event: AgentEventRuntimePayload;
+}) {
+  const candidateRunIds =
+    params.runId === params.clientRunId ? [params.runId] : [params.runId, params.clientRunId];
+  const eventLifecycleGeneration = params.event.lifecycleGeneration?.trim();
+  for (const candidateRunId of candidateRunIds) {
+    const entry = params.chatAbortControllers.get(candidateRunId);
+    if (!entry) {
+      continue;
+    }
+    if (
+      eventLifecycleGeneration &&
+      entry.lifecycleGeneration &&
+      entry.lifecycleGeneration !== eventLifecycleGeneration
+    ) {
+      continue;
+    }
+    // Lazy dispatch lost the handler path; clear immortal pending and keep the
+    // exact terminal event for live maintenance reconciliation.
+    entry.projectSessionTerminalPending = false;
+    entry.projectSessionTerminalEvent = params.event;
+    entry.projectSessionActive = false;
+    const lifecycleGeneration = entry.lifecycleGeneration?.trim() || eventLifecycleGeneration;
+    const sessionKey = entry.sessionKey.trim() || params.event.sessionKey?.trim() || "";
+    const sessionId =
+      entry.sessionId.trim() ||
+      (typeof params.event.sessionId === "string" ? params.event.sessionId.trim() : "");
+    if (lifecycleGeneration && sessionKey && sessionId && entry.controlUiVisible !== false) {
+      params.restartRecoveryCandidates.set(candidateRunId, {
+        runId: candidateRunId,
+        lifecycleGeneration,
+        sessionKey,
+        sessionId,
+        observedAt: entry.projectSessionTerminalObservedAt,
+        event: params.event,
+      });
+    }
+  }
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
@@ -129,6 +180,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionActive = false;
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = false;
+                  entry.projectSessionTerminalEvent = undefined;
                   queueMicrotask(() => {
                     const current = params.chatAbortControllers.get(candidateRunId);
                     if (
@@ -155,6 +207,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = true;
                   entry.projectSessionTerminalPersistence = undefined;
+                  entry.projectSessionTerminalEvent = undefined;
                 }
               }
             },
@@ -200,6 +253,9 @@ export function startGatewayEventSubscriptions(params: {
                         sessionKey,
                         sessionId,
                         observedAt,
+                        ...(entry.projectSessionTerminalEvent
+                          ? { event: entry.projectSessionTerminalEvent }
+                          : {}),
                       });
                     });
                   }
@@ -285,12 +341,30 @@ export function startGatewayEventSubscriptions(params: {
             entry.lifecycleGeneration === eventLifecycleGeneration)
         ) {
           entry.projectSessionTerminalPending = true;
+          entry.projectSessionTerminalEvent = evt;
           entry.projectSessionTerminalObservedAt =
             typeof evt.data.endedAt === "number" && Number.isFinite(evt.data.endedAt)
               ? evt.data.endedAt
               : evt.ts;
         }
       }
+      dispatchEventHandler({
+        loadHandler: getAgentEventHandler,
+        event: evt,
+        log: params.log,
+        failureMessage: "Agent event dispatch failed",
+        context: { runId: evt.runId, stream: evt.stream },
+        onFailure: () => {
+          retainLiveTerminalReconciliationCandidate({
+            chatAbortControllers: params.chatAbortControllers,
+            restartRecoveryCandidates: params.restartRecoveryCandidates,
+            runId: evt.runId,
+            clientRunId,
+            event: evt,
+          });
+        },
+      });
+      return;
     } else if (lifecyclePhase === "start") {
       const chatLink = evt.contextClaimId
         ? undefined
@@ -308,6 +382,7 @@ export function startGatewayEventSubscriptions(params: {
         ) {
           entry.projectSessionTerminalPending = false;
           entry.projectSessionTerminalObservedAt = undefined;
+          entry.projectSessionTerminalEvent = undefined;
         }
       }
     }

@@ -2636,5 +2636,90 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
     }
   });
+
+  test("maintenance-shaped timeout lifecycle moves seeded running session to timeout once", async () => {
+    await withMainSessionStore(async (dir) => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-timeout-reconcile",
+            sessionFile: path.join(dir, "sess-timeout-reconcile.jsonl"),
+            updatedAt: 1_000,
+            status: "running",
+            startedAt: 900,
+          },
+        },
+      });
+
+      const runId = "run-maintenance-timeout";
+      await sessionLifecycleState.persistGatewaySessionLifecycleEvent({
+        sessionKey: "main",
+        event: {
+          runId,
+          ts: 2_000,
+          sessionId: "sess-timeout-reconcile",
+          data: {
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "timeout",
+            startedAt: 900,
+            endedAt: 2_000,
+          },
+        },
+      });
+
+      const stored = loadSessionEntry({
+        sessionKey: "main",
+        storePath: testState.sessionStorePath,
+      });
+      expect(stored).toMatchObject({
+        status: "timeout",
+        startedAt: 900,
+        endedAt: 2_000,
+      });
+
+      const { waitForAgentJob } = await import("./server-methods/agent-job.js");
+      vi.useFakeTimers();
+      try {
+        const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 900 },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            aborted: true,
+            stopReason: "timeout",
+            timeoutPhase: "provider",
+            providerStarted: true,
+            startedAt: 900,
+            endedAt: 2_000,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(6_000);
+        const waitRes = await waitPromise;
+        expect(waitRes).toMatchObject({
+          status: "timeout",
+          stopReason: "timeout",
+        });
+
+        // Publish the deferred hard-timeout snapshot, then prove idempotent wait.
+        await vi.advanceTimersByTimeAsync(15_000);
+        const waitAgain = await waitForAgentJob({ runId, timeoutMs: 0 });
+        expect(waitAgain).toMatchObject({
+          status: "timeout",
+          stopReason: "timeout",
+        });
+        expect(waitAgain).toEqual(waitRes);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

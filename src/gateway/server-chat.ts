@@ -808,11 +808,24 @@ export function createAgentEventHandler({
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
       if (!suppressRestartRecoveryProjection && projectSessionLifecycle) {
-        const persistence = persistGatewaySessionLifecycleEvent({
-          sessionKey,
-          agentId: sessionAgentId,
-          event: evt,
-        });
+        const persistTerminal = async () => {
+          try {
+            await persistGatewaySessionLifecycleEvent({
+              sessionKey,
+              agentId: sessionAgentId,
+              event: evt,
+            });
+          } catch {
+            // One bounded retry keeps the canonical writer as the owner while
+            // transient store failures cannot strand durable status on running.
+            await persistGatewaySessionLifecycleEvent({
+              sessionKey,
+              agentId: sessionAgentId,
+              event: evt,
+            });
+          }
+        };
+        const persistence = persistTerminal();
         trackTrackedRunTerminalPersistence?.({
           runId: evt.runId,
           clientRunId,

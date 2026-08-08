@@ -242,6 +242,64 @@ describe("startGatewayEventSubscriptions", () => {
     );
   });
 
+  it("clears stuck terminal pending and retains live reconciliation after lazy handler failure", async () => {
+    const { getAgentEventLifecycleGeneration } = await import("../infra/agent-events.js");
+    const params = createParams();
+    const runId = "run-terminal-lazy-fail";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const entry = {
+      controller: new AbortController(),
+      sessionId: "sess-terminal-lazy",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1_000,
+      expiresAtMs: Date.now() + 60_000,
+      lifecycleGeneration,
+      projectSessionActive: true,
+    };
+    params.chatAbortControllers.set(runId, entry);
+    unsubs = startGatewayEventSubscriptions(params);
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-terminal-lazy",
+      data: {
+        phase: "end",
+        status: "cancelled",
+        aborted: true,
+        stopReason: "timeout",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+    });
+
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
+    expect(warn).toHaveBeenCalledWith(
+      "Agent event dispatch failed",
+      expect.objectContaining({ runId, stream: "lifecycle" }),
+    );
+    // Lazy failure must not immortalize pending; keep a live recoverable attempt.
+    expect(entry.projectSessionTerminalPending).not.toBe(true);
+    expect(params.restartRecoveryCandidates.get(runId)).toEqual(
+      expect.objectContaining({
+        runId,
+        lifecycleGeneration,
+        sessionKey: "agent:main:main",
+        sessionId: "sess-terminal-lazy",
+      }),
+    );
+    expect(
+      (entry as { projectSessionTerminalEvent?: unknown }).projectSessionTerminalEvent,
+    ).toEqual(
+      expect.objectContaining({
+        runId,
+        stream: "lifecycle",
+        data: expect.objectContaining({ stopReason: "timeout" }),
+      }),
+    );
+  });
+
   it("disposes a loaded agent event handler on unsubscribe", async () => {
     const dispose = vi.fn();
     const handler = Object.assign(vi.fn(), { dispose });

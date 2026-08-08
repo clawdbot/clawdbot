@@ -59,6 +59,11 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPending?: boolean;
   /** Store timestamp expected from the observed terminal lifecycle event. */
   projectSessionTerminalObservedAt?: number;
+  /**
+   * Retained terminal lifecycle event until durable session persistence succeeds.
+   * Live reconciliation and lazy-dispatch recovery replay this exact event.
+   */
+  projectSessionTerminalEvent?: AgentEventPayload;
   /** In-flight terminal session-store update used by restart shutdown. */
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
@@ -84,6 +89,8 @@ export type RestartRecoveryCandidate = {
   sessionKey: string;
   sessionId: string;
   observedAt?: number;
+  /** Retained terminal event for live persistence reconciliation while Gateway stays up. */
+  event?: AgentEventPayload;
 };
 
 type InFlightRunSnapshot = {

@@ -43,6 +43,7 @@ import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-acti
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
@@ -252,11 +253,75 @@ export function startGatewayMaintenanceTimers(params: {
 
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
+    const reconcileLiveTerminalPersistence = (paramsForRun: {
+      runId: string;
+      entry: ChatAbortControllerEntry;
+      event: NonNullable<ChatAbortControllerEntry["projectSessionTerminalEvent"]>;
+    }) => {
+      const { runId, entry, event } = paramsForRun;
+      entry.projectSessionTerminalPending = false;
+      const persistence = persistGatewaySessionLifecycleEvent({
+        sessionKey: entry.sessionKey,
+        agentId: entry.agentId,
+        event,
+      });
+      entry.projectSessionTerminalPersistence = persistence;
+      void persistence
+        .then(() => {
+          if (params.chatAbortControllers.get(runId) !== entry) {
+            return;
+          }
+          entry.projectSessionTerminalPersisted = true;
+          entry.projectSessionTerminalPersistence = undefined;
+          entry.projectSessionTerminalEvent = undefined;
+          params.restartRecoveryCandidates.delete(runId);
+          removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+        })
+        .catch(() => {
+          if (params.chatAbortControllers.get(runId) !== entry) {
+            return;
+          }
+          entry.projectSessionTerminalPersistence = undefined;
+          const lifecycleGeneration = entry.lifecycleGeneration?.trim();
+          const sessionKey = entry.sessionKey.trim();
+          const sessionId = entry.sessionId.trim();
+          if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
+            params.restartRecoveryCandidates.set(runId, {
+              runId,
+              lifecycleGeneration,
+              sessionKey,
+              sessionId,
+              observedAt: entry.projectSessionTerminalObservedAt,
+              event,
+            });
+          }
+          removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+        });
+    };
+
     for (const [runId, entry] of params.chatAbortControllers) {
+      const expired = !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now });
+      const retainedTerminalEvent = entry.projectSessionTerminalEvent;
+      // Expired terminal observations must reconcile live while Gateway stays up.
+      // Pending-without-promise and stalled persistence both keep the retained event.
+      if (
+        expired &&
+        retainedTerminalEvent &&
+        entry.projectSessionTerminalPersisted !== true &&
+        (entry.projectSessionTerminalPending === true ||
+          entry.projectSessionTerminalPersistence !== undefined)
+      ) {
+        reconcileLiveTerminalPersistence({
+          runId,
+          entry,
+          event: retainedTerminalEvent,
+        });
+        continue;
+      }
       if (entry.projectSessionTerminalPending === true) {
         continue;
       }
-      if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+      if (!expired) {
         continue;
       }
       if (entry.projectSessionTerminalPersistence) {
@@ -270,6 +335,7 @@ export function startGatewayMaintenanceTimers(params: {
             sessionKey,
             sessionId,
             observedAt: entry.projectSessionTerminalObservedAt,
+            ...(retainedTerminalEvent ? { event: retainedTerminalEvent } : {}),
           });
         }
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
@@ -284,6 +350,23 @@ export function startGatewayMaintenanceTimers(params: {
         sessionKey: entry.sessionKey,
         stopReason: "timeout",
       });
+    }
+
+    for (const [runId, candidate] of params.restartRecoveryCandidates) {
+      if (!candidate.event || params.chatAbortControllers.has(runId)) {
+        continue;
+      }
+      const event = candidate.event;
+      void persistGatewaySessionLifecycleEvent({
+        sessionKey: candidate.sessionKey,
+        event,
+      })
+        .then(() => {
+          params.restartRecoveryCandidates.delete(runId);
+        })
+        .catch(() => {
+          // Keep the candidate for shutdown recovery when live write still fails.
+        });
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;

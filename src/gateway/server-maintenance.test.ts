@@ -927,6 +927,111 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("live-reconciles expired stalled terminal persistence instead of shutdown-only recovery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const sessionLifecycleState = await import("./session-lifecycle-state.js");
+    const persistSpy = vi
+      .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+      .mockResolvedValue(undefined);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-terminal-live-reconcile";
+    const terminalEvent = {
+      runId,
+      seq: 2,
+      stream: "lifecycle" as const,
+      ts: Date.now() - 500,
+      sessionKey: "main",
+      sessionId: "sess-1",
+      lifecycleGeneration: "generation-live-1",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "timeout",
+        startedAt: Date.now() - 5_000,
+        endedAt: Date.now() - 500,
+      },
+    };
+    const terminalRun = createActiveRun("main");
+    terminalRun.expiresAtMs = Date.now() - 1;
+    terminalRun.projectSessionActive = false;
+    terminalRun.lifecycleGeneration = "generation-live-1";
+    terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
+    Object.assign(terminalRun, { projectSessionTerminalEvent: terminalEvent });
+    terminalRun.projectSessionTerminalPersistence = new Promise<void>(() => {});
+    deps.chatAbortControllers.set(runId, terminalRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => {
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+    });
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "main",
+        event: expect.objectContaining({
+          runId,
+          data: expect.objectContaining({ stopReason: "timeout" }),
+        }),
+      }),
+    );
+    expect(terminalRun.projectSessionTerminalPersisted).toBe(true);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect(deps.restartRecoveryCandidates.has(runId)).toBe(false);
+    stopMaintenanceTimers(timers);
+    persistSpy.mockRestore();
+  });
+
+  it("live-reconciles expired pending terminal observations without an in-flight promise", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const sessionLifecycleState = await import("./session-lifecycle-state.js");
+    const persistSpy = vi
+      .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+      .mockResolvedValue(undefined);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-terminal-pending-expired";
+    const terminalEvent = {
+      runId,
+      seq: 3,
+      stream: "lifecycle" as const,
+      ts: Date.now() - 500,
+      sessionKey: "main",
+      sessionId: "sess-1",
+      lifecycleGeneration: "generation-pending-1",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "timeout",
+        startedAt: Date.now() - 5_000,
+        endedAt: Date.now() - 500,
+      },
+    };
+    const terminalRun = createActiveRun("main");
+    terminalRun.expiresAtMs = Date.now() - 1;
+    terminalRun.projectSessionActive = false;
+    terminalRun.lifecycleGeneration = "generation-pending-1";
+    terminalRun.projectSessionTerminalPending = true;
+    terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
+    Object.assign(terminalRun, { projectSessionTerminalEvent: terminalEvent });
+    deps.chatAbortControllers.set(runId, terminalRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => {
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+    });
+
+    expect(terminalRun.projectSessionTerminalPending).not.toBe(true);
+    expect(terminalRun.projectSessionTerminalPersisted).toBe(true);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    stopMaintenanceTimers(timers);
+    persistSpy.mockRestore();
+  });
+
   it("reaps expired inactive registrations without emitting a timeout abort", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));

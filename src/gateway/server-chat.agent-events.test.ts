@@ -2658,9 +2658,9 @@ describe("agent event handler", () => {
       startedAt: 1_000,
       abortedLastRun: false,
     });
-    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(
-      new Error("disk full sk-abcdefghijklmnopqrstuvwxyz123456"),
-    );
+    persistGatewaySessionLifecycleEventMock
+      .mockRejectedValueOnce(new Error("disk full sk-abcdefghijklmnopqrstuvwxyz123456"))
+      .mockRejectedValueOnce(new Error("disk full sk-abcdefghijklmnopqrstuvwxyz123456"));
     const markTrackedRunTerminalPersisted = vi.fn();
     const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
       resolveSessionKeyForRun: () => "session-failed-write",
@@ -2690,11 +2690,68 @@ describe("agent event handler", () => {
       updatedAt: 2_100,
       abortedLastRun: false,
     });
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(2);
     expect(logErrorMock).toHaveBeenCalledTimes(1);
     expect(logErrorMock).toHaveBeenCalledWith(
       "gateway: terminal session persistence failed session=session-failed-write run=run-failed-write error=Error: disk full sk-abc…3456",
     );
     expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
+  });
+
+  it("retries terminal persistence once and marks persisted without duplicate delivery", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-persist-retry",
+      kind: "direct",
+      sessionId: "session-persist-retry",
+      updatedAt: 2_000,
+      status: "running",
+      startedAt: 1_000,
+      abortedLastRun: false,
+    });
+    persistGatewaySessionLifecycleEventMock
+      .mockRejectedValueOnce(new Error("transient disk full"))
+      .mockResolvedValueOnce(undefined);
+    const markTrackedRunTerminalPersisted = vi.fn();
+    const trackTrackedRunTerminalPersistence = vi.fn();
+    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+      resolveSessionKeyForRun: () => "session-persist-retry",
+      lifecycleErrorRetryGraceMs: 0,
+      markTrackedRunTerminalPersisted,
+      trackTrackedRunTerminalPersistence,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    emitAgentEvent(
+      handler,
+      "run-persist-retry",
+      "lifecycle",
+      {
+        phase: "end",
+        endedAt: 2_100,
+        aborted: true,
+        stopReason: "timeout",
+      },
+      {
+        seq: 2,
+        sessionKey: "session-persist-retry",
+        sessionId: "session-persist-retry",
+        ts: 2_100,
+      },
+    );
+
+    await waitForFast(() => {
+      expect(markTrackedRunTerminalPersisted).toHaveBeenCalledTimes(1);
+    });
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(2);
+    expect(markTrackedRunTerminalPersisted).toHaveBeenCalledWith({
+      runId: "run-persist-retry",
+      clientRunId: "run-persist-retry",
+      sessionKey: "session-persist-retry",
+    });
+    expect(trackTrackedRunTerminalPersistence).toHaveBeenCalledTimes(1);
+    expect(
+      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+    ).toHaveLength(1);
   });
 
   it("does not clear a same-id retry when an old restart terminal arrives", () => {
