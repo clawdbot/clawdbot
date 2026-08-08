@@ -7,10 +7,10 @@ import type { BrowserContext, CDPSession, Page } from "playwright-core";
 import type { expect as VitestExpect } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import {
-  createRelayProof,
-  relayKeyIdFromHex,
-  type BrowserRelayProofFields,
-} from "../src/browser/extension-relay/auth-v2-crypto.js";
+  computeRelayAuthProof,
+  deriveRelayAuthKeyId,
+  type RelayAuthProofFields,
+} from "./modules/relay-auth-v2-crypto.js";
 
 type CopilotTurnIsolationGateway = {
   chatSends: Array<Record<string, unknown>>;
@@ -112,11 +112,11 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
       | { kind: "hello" }
       | {
           kind: "response";
-          fields: BrowserRelayProofFields;
+          fields: RelayAuthProofFields;
           clientProof?: string;
         }
       | { kind: "authenticated" } = { kind: "hello" };
-    socket.on("message", (data) => {
+    socket.on("message", async (data) => {
       const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
       if (authState.kind === "hello") {
         if (
@@ -128,13 +128,13 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
           socket.close(4001, "expected auth.hello");
           return;
         }
-        const keyId = relayKeyIdFromHex(token);
+        const keyId = await deriveRelayAuthKeyId(token);
         if (message.keyId !== keyId) {
           socket.close(4001, "keyId mismatch");
           return;
         }
         const issuedAtMs = Date.now();
-        const fields: BrowserRelayProofFields = {
+        const fields: RelayAuthProofFields = {
           keyId,
           instanceId: randomBytes(16).toString("base64url"),
           sessionId: randomBytes(16).toString("base64url"),
@@ -154,7 +154,7 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
             type: "auth.challenge",
             v: 2,
             ...fields,
-            serverProof: createRelayProof(token, "server", fields),
+            serverProof: await computeRelayAuthProof(token, "server", fields),
           }),
         );
         return;
@@ -170,7 +170,7 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
           return;
         }
         const fields = authState.fields;
-        const expectedClientProof = createRelayProof(token, "client", fields);
+        const expectedClientProof = await computeRelayAuthProof(token, "client", fields);
         if (message.clientProof !== expectedClientProof) {
           socket.close(4001, "clientProof mismatch");
           return;
@@ -182,7 +182,7 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
             type: "auth.ok",
             v: 2,
             sessionId: fields.sessionId,
-            acceptProof: createRelayProof(token, "accept", fields, message.clientProof),
+            acceptProof: await computeRelayAuthProof(token, "accept", fields, message.clientProof),
           }),
         );
         return;
