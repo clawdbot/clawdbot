@@ -386,7 +386,7 @@ describe("subagent registry lifecycle error grace", () => {
       });
   }
 
-  it("lets the delivered cleanup own a yielded batch after a stale wake loses generation", async () => {
+  it("lets requester settlement own a yielded batch while child delivery is in progress", async () => {
     const requesterTurnRunId = "run-requester-yield-race";
     const alphaSessionKey = "agent:main:subagent:yield-alpha";
     const betaSessionKey = "agent:main:subagent:yield-beta";
@@ -459,6 +459,7 @@ describe("subagent registry lifecycle error grace", () => {
       yieldedBatch.map((run) => ({
         runId: run.runId,
         delivery: run.delivery?.status,
+        disposition: run.delivery?.disposition,
         nextAttemptAt: run.requesterSettleWake?.nextAttemptAt,
         rearmGeneration: run.requesterSettleWake?.rearmGeneration,
       })),
@@ -466,14 +467,16 @@ describe("subagent registry lifecycle error grace", () => {
       {
         runId: "run-yield-alpha",
         delivery: "delivered",
+        disposition: "delivered",
         nextAttemptAt: undefined,
-        rearmGeneration: 1,
+        rearmGeneration: undefined,
       },
       {
         runId: "run-yield-beta",
         delivery: "in_progress",
+        disposition: "intentional_non_delivery",
         nextAttemptAt: undefined,
-        rearmGeneration: 1,
+        rearmGeneration: undefined,
       },
     ]);
     const requesterWakeCalls = () =>
@@ -485,11 +488,11 @@ describe("subagent registry lifecycle error grace", () => {
           idempotencyKey.startsWith("announce:requester-settle:")
         );
       });
-    expect(requesterWakeCalls()).toHaveLength(0);
+    await waitForAgentCallCount(3);
+    expect(requesterWakeCalls()).toHaveLength(1);
 
     agentCallGates.delete(betaSessionKey);
     releaseBetaDelivery?.();
-    await waitForAgentCallCount(3);
     await waitForDeliveredCleanup("run-yield-alpha");
     await waitForDeliveredCleanup("run-yield-beta");
 
