@@ -74,10 +74,33 @@ function visibleModelRows(menu: HTMLElement): HTMLButtonElement[] {
     );
 }
 
+function ensureModelPickerIds(menu: HTMLElement): void {
+  const details = menu.closest<HTMLDetailsElement>(".chat-controls__model-picker");
+  const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
+  const listbox = menu.querySelector<HTMLElement>("[data-chat-model-list]");
+  if (!details || !input || !listbox) {
+    return;
+  }
+  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${crypto.randomUUID()}`;
+  details.dataset.chatModelPickerId = prefix;
+  listbox.id = `${prefix}-listbox`;
+  menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
+    row.id = `${prefix}-option-${index}`;
+  });
+  input.setAttribute("aria-controls", listbox.id);
+  input.setAttribute("aria-expanded", details.open ? "true" : "false");
+}
+
 function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
     candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
   });
+  const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
+  if (row?.id) {
+    input?.setAttribute("aria-activedescendant", row.id);
+  } else {
+    input?.removeAttribute("aria-activedescendant");
+  }
 }
 
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
@@ -115,6 +138,7 @@ function updateModelSearch(input: HTMLInputElement): void {
   if (!menu) {
     return;
   }
+  ensureModelPickerIds(menu);
   const query = input.value.trim().toLocaleLowerCase();
   menu.toggleAttribute("data-chat-model-filtering", Boolean(query));
   const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
@@ -204,7 +228,7 @@ function handleModelSearchKeydown(event: KeyboardEvent): void {
   const offset = event.key === "ArrowDown" ? 1 : rows.length - 1;
   const nextIndex = currentIndex < 0 ? 0 : (currentIndex + offset) % rows.length;
   highlightModelRow(menu, rows[nextIndex]);
-  rows[nextIndex]?.scrollIntoView({ block: "nearest" });
+  rows[nextIndex]?.scrollIntoView?.({ block: "nearest" });
 }
 
 function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions: boolean) {
@@ -393,6 +417,8 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                   class="chat-controls__model-search"
                   data-chat-model-search="true"
                   type="search"
+                  role="combobox"
+                  aria-autocomplete="list"
                   autocomplete="off"
                   spellcheck="false"
                   placeholder=${t("chat.modelControls.searchModels")}
@@ -554,6 +580,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                   ).closest<HTMLDetailsElement>("details");
                                   if (details) {
                                     details.open = false;
+                                    details.querySelector<HTMLElement>("summary")?.focus();
                                   }
                                 }}
                               >
