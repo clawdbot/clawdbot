@@ -300,16 +300,21 @@ a polling loop just to wait for completion.
 A sub-agent can also yield on its own behalf to wait for external work, such
 as a remote job or a long-running task it does not drive itself. That pauses
 the child run instead of completing it, so the requester receives no
-completion event yet and keeps waiting. When a later follow-up targets the
-paused child session — for example a plugin calling `runtime.subagent.run`
-with the same `sessionKey` — it continues that same run rather than starting a
-sibling. The requester is announced once such a follow-up finishes normally;
-a follow-up that yields again leaves the run paused and the requester waiting.
+completion event yet and keeps waiting. A plugin can then continue that same run
+by calling `runtime.subagent.run` with the paused `sessionKey`, instead of
+starting a sibling. The requester is announced once such a follow-up finishes
+normally; a follow-up that yields again leaves the run paused and the requester
+waiting.
 
-Continuation applies to follow-ups that use default delivery. A follow-up that
-supplies its own requester or completion-delivery context is asking for its own
-audience, so it runs as a separate sibling and delivers there instead. The
-paused run stays resumable, and a later default follow-up still continues it.
+Continuation is specific to the plugin runtime API above. Follow-ups that reach
+the paused session by other routes are not tracked as sub-agent runs, so they
+neither continue the paused run nor announce its requester.
+
+Among plugin runtime follow-ups, continuation applies to those that use default
+delivery. A follow-up that supplies its own requester or completion-delivery
+context is asking for its own audience, so it runs as a separate sibling and
+delivers there instead. The paused run stays resumable, and a later default
+follow-up still continues it.
 
 When active children exist, OpenClaw injects a compact runtime-generated
 `Active Subagents` prompt block into normal turns so the requester can see
