@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
@@ -4319,7 +4320,7 @@ describe("createTelegramBot", () => {
           message_id: 9000,
           date: 1736380700,
           from: { id: 1, first_name: "Kesava" },
-          photo: [{ file_id: "root-photo-1" }],
+          photo: [{ file_id: "root-photo-1", file_unique_id: "root-photo-u1" }],
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "media/root.jpg" }),
@@ -4334,7 +4335,7 @@ describe("createTelegramBot", () => {
           from: { id: 2, first_name: "Ada" },
           reply_to_message: {
             message_id: 9000,
-            photo: [{ file_id: "root-photo-1" }],
+            photo: [{ file_id: "root-photo-1", file_unique_id: "root-photo-u1" }],
             from: { id: 1, first_name: "Kesava" },
           },
         },
@@ -4406,8 +4407,112 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
     expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
     expect(messagesById.get("9000")?.media_ref).toBeUndefined();
-    expect(getFileSpy).toHaveBeenCalledWith("root-photo-1", expect.any(AbortSignal));
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
+    // The quoted photo was already downloaded when message 9000 was ingested;
+    // hydrating the reply chain must reuse that local file, not re-fetch it.
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
+  });
+
+  it("re-downloads quoted media when the cached local file was pruned", async () => {
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 9100,
+          date: 1736380900,
+          from: { id: 1, first_name: "Kesava" },
+          photo: [{ file_id: "prune-photo-1", file_unique_id: "prune-photo-u1" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "media/prune.jpg" }),
+      });
+
+      replySpy.mockClear();
+      getFileSpy.mockClear();
+      mediaFetch.mockClear();
+
+      // First quote reuses the session download: no getFile, no fetch.
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 9101,
+          text: "first quote",
+          date: 1736380950,
+          from: { id: 2, first_name: "Ada" },
+          reply_to_message: {
+            message_id: 9100,
+            photo: [{ file_id: "prune-photo-1", file_unique_id: "prune-photo-u1" }],
+            from: { id: 1, first_name: "Kesava" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+      });
+
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(mediaFetch).not.toHaveBeenCalled();
+      const firstPayload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      ) as { ReplyChain?: Array<{ messageId?: string; mediaPath?: string }> };
+      const cachedPath = firstPayload.ReplyChain?.[0]?.mediaPath;
+      expect(firstPayload.ReplyChain?.[0]?.messageId).toBe("9100");
+      expect(cachedPath).toContain("/media/inbound/");
+
+      // Media TTL maintenance removed the file; the next quote must fall back
+      // to one fresh getFile + download instead of dispatching a dangling path.
+      fs.rmSync(cachedPath as string);
+      replySpy.mockClear();
+      getFileSpy.mockClear();
+      mediaFetch.mockClear();
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 9102,
+          text: "second quote",
+          date: 1736380999,
+          from: { id: 3, first_name: "Grace" },
+          reply_to_message: {
+            message_id: 9100,
+            photo: [{ file_id: "prune-photo-1", file_unique_id: "prune-photo-u1" }],
+            from: { id: 1, first_name: "Kesava" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+      });
+
+      expect(getFileSpy).toHaveBeenCalledWith("prune-photo-1", expect.any(AbortSignal));
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+      const secondPayload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      ) as { ReplyChain?: Array<{ mediaPath?: string }> };
+      expect(secondPayload.ReplyChain?.[0]?.mediaPath).toContain("/media/inbound/");
+      expect(secondPayload.ReplyChain?.[0]?.mediaPath).not.toBe(cachedPath);
+    } finally {
+      ssrfMock.mockRestore();
+    }
   });
 
   it.each([

@@ -17,6 +17,7 @@ import {
   sleepWithAbort,
 } from "./delivery.resolve-media.runtime.js";
 import { resolveTelegramPrimaryMedia, type TelegramMediaKind } from "./helpers.js";
+import { cacheTelegramMediaFile, getCachedTelegramMediaFile } from "./media-file-cache.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
@@ -505,6 +506,17 @@ export async function resolveMedia(params: {
     return null;
   }
 
+  // Reply-chain hydration re-resolves media that an earlier turn already
+  // downloaded; reuse the local file instead of another getFile + download.
+  const fileUniqueId = m.file_unique_id;
+  if (fileUniqueId) {
+    const cachedMedia = getCachedTelegramMediaFile(fileUniqueId);
+    if (cachedMedia) {
+      logVerbose(`telegram: media file cache hit for ${fileUniqueId}`);
+      return { ...cachedMedia };
+    }
+  }
+
   const file = await resolveTelegramFileWithRetry(ctx, abortSignal);
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
@@ -528,5 +540,13 @@ export async function resolveMedia(params: {
       : saved.contentType?.startsWith("audio/")
         ? "audio"
         : nativeKind;
-  return { path: saved.path, contentType: saved.contentType, kind };
+  const resolved = {
+    path: saved.path,
+    kind,
+    ...(saved.contentType ? { contentType: saved.contentType } : {}),
+  };
+  if (fileUniqueId) {
+    cacheTelegramMediaFile(fileUniqueId, resolved);
+  }
+  return resolved;
 }
