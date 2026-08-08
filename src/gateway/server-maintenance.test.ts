@@ -841,7 +841,7 @@ describe("startGatewayMaintenanceTimers", () => {
     release();
     expect(deps.dedupe.has(`agent:${runId}`)).toBe(false);
 
-    stopMaintenanceTimers(timers);
+    await stopMaintenanceTimers(timers);
   });
 
   it("keeps pending chat sends through ttl and overflow until their run expiry", async () => {
