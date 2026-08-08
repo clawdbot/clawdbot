@@ -225,6 +225,13 @@ export function resolveGatewayDisconnectState(
       remediation: failure.remediation,
     };
   }
+  if (failure.kind === "rate-limited") {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "gateway authentication temporarily rate-limited",
+      remediation: failure.remediation,
+    };
+  }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
     activityStatus: failure.remediation ? "gateway authentication needs attention" : "idle",

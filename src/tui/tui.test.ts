@@ -382,6 +382,17 @@ describe("resolveGatewayDisconnectState", () => {
     );
   });
 
+  it("shows wait-and-retry guidance for a temporary authentication lockout", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_RATE_LIMITED" },
+      reason: "unauthorized: too many failed authentication attempts (retry later)",
+    });
+    expect(state.activityStatus).toBe("gateway authentication temporarily rate-limited");
+    expect(state.remediation).toContain("temporary authentication lockout");
+    expect(state.remediation).not.toContain("gateway.remote.token");
+    expect(state.remediation).not.toContain("devices rotate");
+  });
+
   it("falls back to idle for generic disconnect reasons", () => {
     const state = resolveGatewayDisconnectState({ reason: "network timeout" });
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");

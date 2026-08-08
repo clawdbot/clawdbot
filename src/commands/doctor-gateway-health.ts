@@ -24,7 +24,10 @@ import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  GATEWAY_HEALTH_RATE_LIMITED_TITLE,
   gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
@@ -170,10 +173,14 @@ export async function checkGatewayHealth(params: {
         json: true,
       });
       if (gatewayProbeResultSawGateway(probe)) {
-        note(
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
-        );
+        if (gatewayProbeResultWasRateLimited(probe)) {
+          note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
+        } else {
+          note(
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+          );
+        }
         healthOk = true;
         return { healthOk, authenticated: false };
       }

@@ -4,7 +4,9 @@ import { GatewayClientRequestError } from "../../packages/gateway-client/src/ind
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
+  buildRateLimitedHealthDiagnostic,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   GATEWAY_HEALTH_REACHABLE_LINE,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatHealthCheckFailure } from "./health-format.js";
@@ -506,6 +508,39 @@ describe("healthCommand", () => {
           [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
         ]);
       }
+    },
+  );
+
+  it.each([
+    { json: true, expectedLogs: 1 },
+    { json: undefined, expectedLogs: 2 },
+  ])(
+    "reports temporary authentication lockouts without credential-change guidance",
+    async ({ json, expectedLogs }) => {
+      callGatewayMock.mockRejectedValueOnce(new Error());
+      isGatewayCredentialsRequiredErrorMock.mockReturnValueOnce(true);
+      probeGatewayStatusMock.mockResolvedValueOnce({
+        ok: false,
+        kind: "connect",
+        error: "connect failed",
+        connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+      });
+
+      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
+
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
+      if (json) {
+        expect(JSON.parse(requireFirstRuntimeLog())).toEqual(buildRateLimitedHealthDiagnostic());
+      } else {
+        expect(runtime.log.mock.calls).toEqual([
+          [GATEWAY_HEALTH_REACHABLE_LINE],
+          [GATEWAY_HEALTH_RATE_LIMITED_MESSAGE],
+        ]);
+      }
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).not.toContain("gateway.remote.token");
+      expect(output).not.toContain("devices rotate");
     },
   );
 

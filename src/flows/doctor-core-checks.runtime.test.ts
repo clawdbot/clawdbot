@@ -1,6 +1,7 @@
 // Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 
 const mocks = vi.hoisted(() => ({
@@ -588,6 +589,25 @@ describe("doctor gateway runtime checks", () => {
       target: "http://127.0.0.1:5829",
       fixHint:
         "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+    });
+  });
+
+  it("reports temporary Gateway authentication lockouts with wait-and-retry guidance", async () => {
+    mocks.probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      error: "connect failed",
+      connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+    });
+
+    await expect(
+      collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/gateway-health",
+      severity: "warning",
+      message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      path: "gateway.mode",
+      target: "http://127.0.0.1:5829",
+      fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
     });
   });
 

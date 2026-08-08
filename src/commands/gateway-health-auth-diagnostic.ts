@@ -1,5 +1,8 @@
 /** Gateway health auth diagnostic helpers for reachable-but-unauthenticated probes. */
-import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 
 type GatewayProbeReachabilityEvidence = NonNullable<DaemonStatus["rpc"]>;
@@ -8,6 +11,22 @@ export const GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE =
   "Gateway is reachable, but this CLI has no token/password or paired device token for read-scope health RPCs.";
 export const GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE = "Gateway credentials required";
 export const GATEWAY_HEALTH_REACHABLE_LINE = "Gateway: reachable";
+export const GATEWAY_HEALTH_RATE_LIMITED_MESSAGE =
+  "Gateway authentication is temporarily rate-limited. Wait for the temporary lockout to expire, then retry.";
+export const GATEWAY_HEALTH_RATE_LIMITED_TITLE = "Gateway authentication rate-limited";
+
+function gatewayProbeFailureKind(status: GatewayProbeReachabilityEvidence) {
+  return (
+    status.connectFailure?.kind ?? classifyGatewayConnectFailure({ message: status.error }).kind
+  );
+}
+
+/** Detects the temporary authentication lockout outcome from projected or legacy probe facts. */
+export function gatewayProbeResultWasRateLimited(
+  status: GatewayProbeReachabilityEvidence,
+): boolean {
+  return gatewayProbeFailureKind(status) === "rate-limited";
+}
 
 /**
  * Detects when a daemon probe reached the gateway even if read-scope auth failed.
@@ -27,9 +46,7 @@ export function gatewayProbeResultSawGateway(status: GatewayProbeReachabilityEvi
   if (server?.version || server?.connId) {
     return true;
   }
-  const failureKind =
-    status.connectFailure?.kind ?? classifyGatewayConnectFailure({ message: status.error }).kind;
-  return failureKind !== "unreachable";
+  return gatewayProbeFailureKind(status) !== "unreachable";
 }
 
 /**
@@ -41,6 +58,22 @@ export function buildCredentialsRequiredHealthDiagnostic() {
     error: {
       type: "gateway_credentials_required",
       message: GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+    },
+    gateway: {
+      reachable: true,
+    },
+  };
+}
+
+/** Builds the health diagnostic emitted for a temporary Gateway authentication lockout. */
+export function buildRateLimitedHealthDiagnostic() {
+  return {
+    ok: false,
+    error: {
+      type: "gateway_request_error",
+      code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+      message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      retryable: true,
     },
     gateway: {
       reachable: true,

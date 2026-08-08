@@ -95,6 +95,13 @@ describe("classifyGatewayConnectFailure", () => {
       remediation: "openclaw devices list",
     },
     {
+      name: "structured authentication rate limit",
+      input: { details: { code: "AUTH_RATE_LIMITED" }, message: "connect failed" },
+      kind: "rate-limited",
+      message: "connect failed",
+      remediation: "temporary authentication lockout",
+    },
+    {
       name: "shared token mismatch",
       input: { details: { code: "AUTH_TOKEN_MISMATCH" }, message: "gateway token mismatch" },
       kind: "auth-rejected",
@@ -178,6 +185,22 @@ describe("classifyGatewayConnectFailure", () => {
       input: { message: "gateway closed (1008): auth failed" },
       kind: "gateway-rejected",
       message: "gateway closed (1008): auth failed",
+      remediation: undefined,
+    },
+    {
+      name: "legacy authentication rate limit",
+      input: {
+        reason: "unauthorized: too many failed authentication attempts (retry later)",
+      },
+      kind: "rate-limited",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      remediation: "temporary authentication lockout",
+    },
+    {
+      name: "generic retry hint without the authentication lockout phrase",
+      input: { message: "connect failed; retry later" },
+      kind: "unreachable",
+      message: "connect failed; retry later",
       remediation: undefined,
     },
     {

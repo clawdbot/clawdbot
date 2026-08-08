@@ -180,6 +180,40 @@ describe("probeGatewayStatus", () => {
     expect(gatewayProbeResultSawGateway(result)).toBe(false);
   });
 
+  it("projects authentication rate limits as reachable temporary lockouts", async () => {
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "connect failed",
+      close: {
+        code: 1008,
+        reason: "unauthorized: too many failed authentication attempts (retry later)",
+      },
+      connectErrorDetails: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+        retryAfterMs: 60_000,
+      },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failed gateway probe");
+    }
+    expect(result.connectFailure).toEqual({
+      kind: "rate-limited",
+      detailCode: "AUTH_RATE_LIMITED",
+    });
+    expect(gatewayProbeResultSawGateway(result)).toBe(true);
+    expect(JSON.stringify(createDaemonStatus(result))).not.toContain("retryAfterMs");
+  });
+
   it("omits unknown detail codes from serialized daemon status", async () => {
     probeGatewayMock.mockResolvedValueOnce({
       ok: false,
