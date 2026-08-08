@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   validateJsonSchemaValue,
@@ -14,6 +15,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerHomeDir } from "./app-server/auth-start-options.js";
+import { resolveCodexAppServerUserHomeDir } from "./app-server/config.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
@@ -26,12 +29,13 @@ import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   requireCatalogEligibleThread,
+  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
-  createCodexSessionCatalogNodeHostCommands,
+  createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
 
@@ -51,7 +55,28 @@ const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
 const continueLocalCodexSession = codexSessionCatalogRuntime.continueLocal;
 const listCodexSessionCatalog = codexSessionCatalogRuntime.list;
 const readCodexSessionTranscript = codexSessionCatalogRuntime.readTranscript;
-const registerCodexSessionCatalog = codexSessionCatalogRuntime.register;
+const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
+
+function registerCodexSessionCatalog(
+  params: Omit<Parameters<typeof registerCodexSessionCatalogRuntime>[0], "getPluginConfig"> & {
+    getPluginConfig?: () => unknown;
+  },
+) {
+  return registerCodexSessionCatalogRuntime({
+    ...params,
+    getPluginConfig: params.getPluginConfig ?? (() => undefined),
+  });
+}
+
+function createCodexSessionCatalogNodeHostCommands(
+  control: CodexSessionCatalogControl,
+  configSources: CodexTerminalConfigSources = {
+    getPluginConfig: () => undefined,
+    getRuntimeConfig: () => config,
+  },
+) {
+  return createCodexSessionCatalogNodeHostCommandsRuntime(control, configSources);
+}
 
 const commandRpcMocks = vi.hoisted(() => ({
   codexControlRequest: vi.fn(),
@@ -1537,6 +1562,10 @@ describe("Codex supervision catalog", () => {
           ],
         })),
       }),
+      {
+        getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),
+        getRuntimeConfig: () => config,
+      },
     ).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
     if (!command || command.duplex !== true) {
       throw new Error("Codex terminal command was not registered as duplex");
@@ -1550,7 +1579,13 @@ describe("Codex supervision catalog", () => {
 
     expect(command.dangerous).toBe(false);
     expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ file: executable, cwd: "/node/catalog/cwd" }),
+      expect.objectContaining({
+        file: executable,
+        cwd: "/node/catalog/cwd",
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
+        },
+      }),
       expect.any(Object),
     );
   });
@@ -3760,10 +3795,12 @@ describe("Codex supervision actions", () => {
     };
     const { runtime } = createRuntime({ nodes: [node], invoke });
     const { api, getProvider } = createGatewayApi(runtime);
+    let pluginConfig: unknown = { appServer: { homeScope: "agent" } };
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
       control,
+      getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => config,
     });
 
@@ -3806,6 +3843,15 @@ describe("Codex supervision actions", () => {
       kind: "local",
       argv: [executable, "resume", threadId],
       cwd: "/workspace/local",
+      env: {
+        CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
+      },
+    });
+    pluginConfig = { appServer: { homeScope: "user" } };
+    await expect(
+      getProvider()?.openTerminal?.({ hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId }),
+    ).resolves.toMatchObject({
+      env: { CODEX_HOME: resolveCodexAppServerUserHomeDir(process.env) },
     });
     await expect(
       getProvider()?.openTerminal?.({ hostId: "node:devbox", threadId }),

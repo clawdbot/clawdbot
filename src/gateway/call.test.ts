@@ -39,6 +39,9 @@ const deviceIdentityState = vi.hoisted(() => ({
 const loadDeviceAuthTokenMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
 );
+const loadOriginDeviceTokenMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
 
 const eventLoopReadyState = vi.hoisted(() => ({
   calls: [] as Array<{ maxWaitMs?: number } | undefined>,
@@ -240,6 +243,7 @@ function resetGatewayCallMocks() {
       return deviceIdentityState.value;
     },
     loadDeviceAuthToken: loadDeviceAuthTokenMock,
+    loadOriginDeviceToken: loadOriginDeviceTokenMock,
     resolveGatewayPort: resolveGatewayPortForTests,
   });
   deviceIdentityState.throwOnLoad = false;
@@ -250,6 +254,8 @@ function resetGatewayCallMocks() {
     scopes: ["operator.read"],
     updatedAtMs: 123,
   });
+  loadOriginDeviceTokenMock.mockReset();
+  loadOriginDeviceTokenMock.mockReturnValue(null);
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -756,18 +762,18 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
-  it("does not replace explicit credentials with stored device auth", async () => {
+  it("keeps explicit credentials and diagnostic scopes ahead of stored device auth", async () => {
     setLocalLoopbackGatewayConfig();
 
-    await expect(
-      callGatewayCli({
-        method: "node.list",
-        token: "explicit-token",
-        useStoredDeviceAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+    await callGatewayCli({
+      method: "node.list",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+    });
 
-    expect(lastClientOptions).toBeNull();
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
   });
 
   it("prefers stored device auth over configured local credentials", async () => {
@@ -821,15 +827,59 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions).toBeNull();
   });
 
-  it("does not send stored device auth to configured remote gateways", async () => {
+  it("uses stored device auth for the exact configured remote gateway origin", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+    loadOriginDeviceTokenMock.mockReturnValue({
+      token: "remote-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+    expect(lastClientOptions?.deviceAuthScope).toBe("wss://remote.example:18789");
+    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://remote.example:18789",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+  });
+
+  it("explains how to pair when remote origin device auth is unavailable", async () => {
     getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
     setGatewayNetworkDefaults();
 
     await expect(
       callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
-    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+    ).rejects.toMatchObject({
+      name: "GatewayStoredDeviceAuthUnavailableError",
+      message: expect.stringMatching(/tui --url.*Settings -> Devices.*devices approve --latest/s),
+    });
 
     expect(lastClientOptions).toBeNull();
+  });
+
+  it("lets explicit url auth win while binding issued tokens to that origin", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({
+      method: "node.list",
+      url: "wss://other.example/rpc/?ignored=1",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+    });
+
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
   });
 
   it("fails before connecting when stored device auth is unavailable", async () => {

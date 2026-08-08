@@ -35,6 +35,7 @@ import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeFastMode,
   normalizeOptionalString,
@@ -112,10 +113,6 @@ type ChatSendAck = {
   runId?: unknown;
   status?: unknown;
 };
-
-function normalizedChatSendAckStatus(status: unknown): string {
-  return typeof status === "string" ? status.trim().toLowerCase() : "";
-}
 
 function isTerminalChatSendAckFailure(status: unknown): boolean {
   const normalized = normalizedChatSendAckStatus(status);

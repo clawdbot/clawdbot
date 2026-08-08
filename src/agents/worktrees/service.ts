@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { isMissingPathError } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -237,7 +238,7 @@ async function shouldPreserveOrphanCandidate(
     try {
       listedKey = await canonicalPathKey(entry.path);
     } catch (error) {
-      if (isMissingFileError(error)) {
+      if (isMissingPathError(error)) {
         continue;
       }
       throw error;
@@ -336,21 +337,17 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
   }
 }
 
-function isMissingFileError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
 /**
  * Sums file sizes without following symlinks, so a link cannot inflate or escape
- * the worktree. Only ENOENT is tolerated (cleanup races with removals); other
- * failures propagate so an unreadable tree is never measured as zero bytes.
+ * the worktree. Missing paths are tolerated because cleanup races with removals;
+ * other failures propagate so an unreadable tree is never measured as zero bytes.
  */
 async function directorySizeBytes(root: string): Promise<number> {
   let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return 0;
     }
     throw error;
@@ -364,7 +361,7 @@ async function directorySizeBytes(root: string): Promise<number> {
       try {
         total += (await fs.lstat(child)).size;
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
       }
@@ -378,7 +375,7 @@ async function containsGitMarker(root: string, checkoutRoot = false): Promise<bo
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return false;
     }
     throw error;
@@ -431,7 +428,7 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
     await fs.lstat(target);
     return true;
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return false;
     }
     throw error;
@@ -1283,7 +1280,7 @@ export class ManagedWorktreeService {
       try {
         managedPaths.add(await canonicalPathKey(record.path));
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
       }

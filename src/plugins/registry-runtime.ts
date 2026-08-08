@@ -54,7 +54,7 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.fork",
   "sessions.create",
   "sessions.delete",
-  "sessions.archiveMany",
+  "sessions.patchMany",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reset",
@@ -474,7 +474,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return;
       }
       const request = params ?? {};
-      if (method === "sessions.archiveMany" && Array.isArray(request.targets)) {
+      if (method === "sessions.patchMany" && Array.isArray(request.targets)) {
         for (const target of request.targets) {
           if (!isRecord(target)) {
             continue;

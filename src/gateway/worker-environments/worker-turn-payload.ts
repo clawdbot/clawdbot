@@ -22,12 +22,18 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
-import { toWorkerTranscriptMessage } from "../../worker/transcript-message.js";
+import {
+  toWorkerTranscriptMessage,
+  type WorkerProviderReplayOmission,
+} from "../../worker/transcript-message.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
 
-export function windowInitialMessages(messages: AgentMessage[]): WorkerTranscriptMessage[] {
+export function windowInitialMessages(
+  messages: AgentMessage[],
+  onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void,
+): WorkerTranscriptMessage[] {
   const projected = messages.flatMap((message) => {
-    const value = toWorkerTranscriptMessage(message);
+    const value = toWorkerTranscriptMessage(message, { onProviderReplayOmitted });
     return value ? [value] : [];
   });
   if (projected.length <= WORKER_INFERENCE_MAX_CONTEXT_MESSAGES) {

@@ -1,4 +1,5 @@
 /** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
+import { asFiniteNumber as asFiniteTimestamp } from "@openclaw/normalization-core/number-coercion";
 import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
@@ -460,10 +461,6 @@ type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> &
 export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
 
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
-
-function asFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;

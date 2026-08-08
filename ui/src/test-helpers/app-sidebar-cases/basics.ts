@@ -40,6 +40,7 @@ describe("AppSidebar update card wiring", () => {
       latestVersion: "2.0.0",
       channel: "stable",
     };
+    sidebar.canUpdate = true;
     sidebar.onUpdate = onUpdate;
     sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;
@@ -266,7 +267,7 @@ describe("AppSidebar brand actions", () => {
     expect(actions?.firstElementChild?.querySelector(".sidebar-brand__new-thread")).toBe(
       brandButton,
     );
-    expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(brandButton?.getAttribute("aria-label")).toBe("New session");
     expect(brandButton?.disabled).toBe(true);
     expect(actions?.querySelectorAll("button")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-search")).toBeNull();
@@ -281,7 +282,7 @@ describe("AppSidebar brand actions", () => {
     const headerButton = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
-    expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
+    expect(headerButton?.getAttribute("aria-label")).toBe("New session");
   });
 });
 

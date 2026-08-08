@@ -46,8 +46,8 @@ vi.mock("../../channels/plugins/helpers.js", () => ({
 }));
 vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: resolveMainSessionKeyMock,
-  resolveMainSessionKey: vi.fn(
-    (cfg?: { session?: { mainKey?: string } }) => `agent:main:${cfg?.session?.mainKey ?? "main"}`,
+  resolveMainSessionKey: vi.fn((cfg?: { session?: { mainKey?: string; scope?: string } }) =>
+    cfg?.session?.scope === "global" ? "global" : `agent:main:${cfg?.session?.mainKey ?? "main"}`,
   ),
   resolveAgentMainSessionKey: vi.fn(
     (params: { cfg?: { session?: { mainKey?: string } }; agentId: string }) =>
@@ -483,7 +483,7 @@ describe("dispatchAgentHook trust handling", () => {
       throw new Error("config exploded");
     });
 
-    const result = await dispatchAgentHook(buildAgentPayload("Config"));
+    const result = await dispatchAgentHook(buildAgentPayload("Config", "hooks"));
 
     expect(result).toMatchObject({
       ok: false,
@@ -497,6 +497,15 @@ describe("dispatchAgentHook trust handling", () => {
         { sessionKey: "main-session" },
       ),
     );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      sessionKey: "main-session",
+    });
+    expect(wake.agentId).toBeUndefined();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
@@ -780,5 +789,98 @@ describe("dispatchAgentHook trust handling", () => {
         },
       ),
     );
+  });
+
+  it("targets requestHeartbeat to the hook's agentId, not globally (#119808)", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      result: { summary: "done", text: "done" },
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Targeted", "hooks"),
+      deliver: true,
+      delivery: { mode: "announce" as const },
+    });
+
+    await waitForFast(() =>
+      expect(requestHeartbeatMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "hooks",
+        }),
+      ),
+    );
+  });
+
+  it("targets requestHeartbeat to the hook's agentId on error path (#119808)", async () => {
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    dispatchAgentHook(buildAgentPayload("Targeted error", "hooks"));
+
+    await waitForFast(() =>
+      expect(requestHeartbeatMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "hooks",
+        }),
+      ),
+    );
+  });
+
+  it("keeps global-scope announcement events and wakes on the selected agent", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: { entries: { main: { default: true }, hooks: {} } },
+      session: { scope: "global" },
+    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: false,
+      deliveryAttempted: false,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Global announce", "hooks"),
+      deliver: true,
+      delivery: { mode: "announce" as const },
+    });
+
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Global announce: done", {
+        sessionKey: "global",
+      }),
+    );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      agentId: "hooks",
+    });
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
+  });
+
+  it("keeps global-scope error events and wakes on the selected agent", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: { entries: { main: { default: true }, hooks: {} } },
+      session: { scope: "global" },
+    });
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    dispatchAgentHook(buildAgentPayload("Global error", "hooks"));
+
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Global error (error): Error: agent exploded",
+        { sessionKey: "global" },
+      ),
+    );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "hooks",
+    });
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
   });
 });

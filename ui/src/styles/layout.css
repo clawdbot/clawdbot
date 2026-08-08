@@ -1143,6 +1143,12 @@ openclaw-settings-save-indicator {
   margin: 12px 16px 0;
 }
 
+.sidebar-update-card__actions {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+}
+
 /* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
   width: min(360px, calc(100% - var(--shell-floating-update-card-left) - 16px));
@@ -1172,7 +1178,8 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action {
-  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   min-height: 34px;
   display: flex;
   align-items: center;
@@ -1196,14 +1203,47 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action:focus-visible,
+.sidebar-update-card__hold:focus-visible,
 .sidebar-update-card__dismiss:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
 }
 
-.sidebar-update-card__action:disabled {
+.sidebar-update-card__hold {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__hold:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__hold:disabled {
   cursor: wait;
   opacity: 0.66;
+}
+
+.sidebar-update-card__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__action--busy:disabled {
+  cursor: wait;
+}
+
+.sidebar-update-card__action--undismissable {
+  padding-right: 8px;
 }
 
 .sidebar-update-card__icon,

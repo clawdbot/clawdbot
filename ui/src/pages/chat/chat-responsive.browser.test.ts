@@ -285,7 +285,6 @@ function composerControlsHtml() {
           <details class="chat-controls__inline-select chat-controls__model-picker">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
             <span class="chat-controls__inline-select-label">GPT-5.6</span>
-            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__model-menu">
             <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
@@ -299,7 +298,6 @@ function composerControlsHtml() {
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">High</span>
-            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
             <div class="chat-controls__reasoning-panel">Effort</div>
@@ -473,7 +471,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
-                          <summary class="context-ring" role="status" aria-label="Thread context usage: 46k/200k (23%)">
+                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
                             <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                               <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>

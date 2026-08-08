@@ -24,7 +24,7 @@ vi.mock("../../gateway/net.js", () => ({
   resolveGatewayRequiredListenHosts: (bindHost: string) =>
     bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
 }));
-vi.mock("../../infra/ports.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
+vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
 vi.mock("../../infra/restart-sentinel.js", () => ({ readRestartSentinel: async () => null }));
 vi.mock("../../plugins/status.js", () => ({ buildPluginCompatibilityNotices: () => [] }));
 vi.mock("../../skills/discovery/status.js", () => ({ buildWorkspaceSkillStatus: () => null }));

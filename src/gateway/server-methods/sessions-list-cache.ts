@@ -90,9 +90,9 @@ function rememberCompletedSessionList(
 function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
   let expiresAt: number | undefined;
   for (const session of result.sessions) {
-    // Running durations tick continuously, and a retained child can sit outside
-    // this page, leaving no authoritative child expiration to cache safely.
-    if (session.hasActiveSubagentRun || session.childSessions?.length) {
+    // Live work can settle without a session/index mutation, running durations tick,
+    // and a retained child can sit outside this page. None has a safe cache deadline.
+    if (session.hasActiveRun || session.hasActiveSubagentRun || session.childSessions?.length) {
       return null;
     }
     const statusExpiration = session.agentStatus?.expiresAt;

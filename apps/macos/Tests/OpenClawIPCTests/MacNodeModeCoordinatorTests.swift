@@ -103,7 +103,7 @@ private actor CoordinatorDrainSnapshotProbe {
 private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     private var stopCount = 0
 
-    func start(command _: [String]) async throws -> MacNodeHostManifest {
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
     }
 

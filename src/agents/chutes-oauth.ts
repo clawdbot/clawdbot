@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { buildOAuthRequestSignal } from "../llm/utils/oauth/abort.js";
@@ -100,12 +101,6 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
     bufferMs: DEFAULT_EXPIRES_BUFFER_MS,
     minRemainingMs: 30_000,
   });
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 async function fetchChutesUserInfo(params: {

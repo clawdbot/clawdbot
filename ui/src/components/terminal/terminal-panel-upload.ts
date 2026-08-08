@@ -11,6 +11,7 @@ import {
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
 const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
+const DOCK_MAIN_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 2.5H2.5V6M10 2.5h3.5V6M6 13.5H2.5V10M10 13.5h3.5V10" /></svg>`;
 const UPLOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 8.1 9.8 3.5a2.5 2.5 0 0 1 3.5 3.5l-6 6a3.5 3.5 0 0 1-5-5l5.8-5.8" /><path d="m4.4 9 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.3 5.3a2.3 2.3 0 0 1-3.2-3.2l4.6-4.6" /></svg>`;
 
 type TerminalUploadTab = {
@@ -315,10 +316,10 @@ export class TerminalPanelUploadController {
 
 export function renderTerminalPanelActions(params: {
   fullscreen: boolean;
-  dock: "bottom" | "right";
+  dock: "bottom" | "right" | "main";
   upload: TerminalPanelUploadController;
   sessionPicker: unknown;
-  onDock: (dock: "bottom" | "right") => void;
+  onDock: (dock: "bottom" | "right" | "main") => void;
   onHide: () => void;
 }) {
   return html`<div class="tp-actions">
@@ -342,24 +343,37 @@ export function renderTerminalPanelActions(params: {
     </button>
     ${params.fullscreen
       ? nothing
-      : html`${params.sessionPicker}<button
-            class="tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
-            type="button"
-            title=${t("terminal.dockBottom")}
-            aria-label=${t("terminal.dockBottom")}
-            @click=${() => params.onDock("bottom")}
-          >
-            ${DOCK_BOTTOM_GLYPH}
-          </button>
-          <button
-            class="tp-icon ${params.dock === "right" ? "is-active" : ""}"
-            type="button"
-            title=${t("terminal.dockRight")}
-            aria-label=${t("terminal.dockRight")}
-            @click=${() => params.onDock("right")}
-          >
-            ${DOCK_RIGHT_GLYPH}
-          </button>
+      : html`${params.sessionPicker}<span
+            class="tp-dock-modes"
+            role="group"
+            aria-label=${t("terminal.dockMode")}
+            ><button
+              class="tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
+              type="button"
+              title=${t("terminal.dockBottom")}
+              aria-label=${t("terminal.dockBottom")}
+              @click=${() => params.onDock("bottom")}
+            >
+              ${DOCK_BOTTOM_GLYPH}
+            </button>
+            <button
+              class="tp-icon ${params.dock === "right" ? "is-active" : ""}"
+              type="button"
+              title=${t("terminal.dockRight")}
+              aria-label=${t("terminal.dockRight")}
+              @click=${() => params.onDock("right")}
+            >
+              ${DOCK_RIGHT_GLYPH}</button
+            ><button
+              class="tp-icon ${params.dock === "main" ? "is-active" : ""}"
+              type="button"
+              title=${t("terminal.dockMain")}
+              aria-label=${t("terminal.dockMain")}
+              @click=${() => params.onDock("main")}
+            >
+              ${DOCK_MAIN_GLYPH}
+            </button>
+          </span>
           <button
             class="tp-icon"
             type="button"

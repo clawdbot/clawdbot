@@ -225,6 +225,14 @@ export type PluginManifestSetup = {
   requiresRuntime?: boolean;
 };
 
+export type PluginManifestDoctorContract = {
+  legacyConfigRules?: boolean;
+  normalizeCompatibilityConfig?: boolean;
+  resolveSessionStoreAgentIds?: boolean;
+  sessionRouteStateOwners?: boolean;
+  stateMigrations?: boolean;
+};
+
 export type PluginManifestQaRunner = {
   /** Subcommand mounted beneath `openclaw qa`, for example `matrix`. */
   commandName: string;
@@ -384,6 +392,8 @@ export type PluginManifest = {
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;
+  /** Doctor contract surfaces available without loading the plugin artifact. */
+  doctorContract?: PluginManifestDoctorContract;
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */

@@ -111,6 +111,7 @@ function buildCommittedMessage(
     model: message.model,
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
+    ...(message.providerReplay ? { providerReplay: structuredClone(message.providerReplay) } : {}),
     ...(message.diagnostics
       ? {
           diagnostics: message.diagnostics.map((diagnostic) => ({

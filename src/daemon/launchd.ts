@@ -6,8 +6,9 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { formatPortDiagnostics } from "../infra/ports-format.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { sleep } from "../utils.js";
@@ -1325,7 +1326,7 @@ async function writeLaunchAgentPlist({
     warn,
   });
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({ env, description });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -1418,13 +1419,18 @@ async function rewriteLaunchAgentPlistForRestart({
 
   const serviceDescription = resolveGatewayServiceDescription({
     env,
-    environment: existing.environment,
   });
+  // Restart rewrites must retire install provenance from legacy plists instead
+  // of copying it into the next canonical definition.
+  const canonicalEnvironment = {
+    ...existing.environment,
+    OPENCLAW_SERVICE_VERSION: undefined,
+  };
   const prepared = await prepareLaunchAgentProgramArguments({
     env,
     label,
     programArguments: existing.programArguments,
-    environment: existing.environment,
+    environment: canonicalEnvironment,
     stdout,
     warn,
   });

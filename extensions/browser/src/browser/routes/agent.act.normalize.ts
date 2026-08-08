@@ -6,6 +6,7 @@
  */
 import {
   ACT_MAX_BATCH_ACTIONS,
+  ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
   ACT_MAX_VIEWPORT_DIMENSION,
   ACT_MAX_WAIT_TIME_MS,
@@ -87,11 +88,11 @@ function normalizeFields(rawFields: unknown): BrowserFormField[] {
     .filter((field): field is BrowserFormField => field !== null);
 }
 
-function normalizeBatchAction(value: unknown): BrowserActRequest {
+function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
-  return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
+  return normalizeActRequest(value as Record<string, unknown>, { source: "batch", depth });
 }
 
 function readActionNonNegativeInteger(
@@ -131,9 +132,10 @@ function readResizeDimension(body: Record<string, unknown>, key: "width" | "heig
 /** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
-  options?: { source?: "request" | "batch" },
+  options?: { source?: "request" | "batch"; depth?: number },
 ): BrowserActRequest {
   const source = options?.source ?? "request";
+  const depth = options?.depth ?? 0;
   const kind = normalizeActKind(body.kind);
 
   switch (kind) {
@@ -396,7 +398,15 @@ export function normalizeActRequest(
       };
     }
     case "batch": {
-      const actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
+      // Bound nesting before recursing: oversized bodies parse fine, but
+      // unbounded recursion overflows the stack before the count check runs.
+      // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
+      if (depth > ACT_MAX_BATCH_DEPTH) {
+        throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
+      }
+      const actions = Array.isArray(body.actions)
+        ? body.actions.map((action) => normalizeBatchAction(action, depth + 1))
+        : [];
       if (!actions.length) {
         throw new Error(source === "batch" ? "batch requires actions" : "actions are required");
       }

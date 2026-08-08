@@ -41,7 +41,12 @@ export async function sleepWithAbort(
       }
       timer = null;
       cleanup();
-      reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
+      // This leaf package cannot import the host abort helper; preserve its contract here.
+      const error = new Error("aborted", {
+        cause: abortSignal?.reason ?? new Error("aborted"),
+      });
+      error.name = "AbortError";
+      reject(error);
     };
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     if (abortSignal?.aborted) {

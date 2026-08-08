@@ -3,8 +3,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  type SessionsArchiveManyResult,
-  validateSessionsArchiveManyParams,
+  type SessionsPatchManyResult,
+  type SessionsPatchManyTarget,
+  validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
@@ -60,10 +61,10 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
-  "sessions.archiveMany": async (options) => {
+  "sessions.patchMany": async (options) => {
     const { params, respond, context } = options;
     if (
-      !assertValidParams(params, validateSessionsArchiveManyParams, "sessions.archiveMany", respond)
+      !assertValidParams(params, validateSessionsPatchManyParams, "sessions.patchMany", respond)
     ) {
       return;
     }
@@ -84,31 +85,72 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!patchHandler) {
       throw new Error("sessions.patch handler is not registered");
     }
-    const outcomes = await Promise.all(
-      params.targets.map(async (target) => {
-        const identity = {
-          key: target.key,
-          ...(target.agentId ? { agentId: target.agentId } : {}),
-        };
-        let outcome: SessionsArchiveManyResult["outcomes"][number] | undefined;
-        try {
-          await patchHandler({
-            ...options,
-            params: { ...target, archived: params.archived },
-            respond: (ok, _payload, error) => {
-              outcome = ok ? { ok: true, ...identity } : { ok: false, ...identity, error: error! };
-            },
-          });
-        } catch (error) {
-          if (!(error instanceof SessionMutationAuthorizationChangedError)) {
-            throw error;
+    const patchTarget = async (
+      target: SessionsPatchManyTarget,
+    ): Promise<SessionsPatchManyResult["outcomes"][number]> => {
+      const identity = {
+        key: target.key,
+        ...(target.agentId ? { agentId: target.agentId } : {}),
+      };
+      let outcome: SessionsPatchManyResult["outcomes"][number] | undefined;
+      const delegatedAuthorization = options.sessionMutationAuthorization
+        ? {
+            ...options.sessionMutationAuthorization,
+            // Initial authorization covers the whole batch. Commit-time checks are
+            // target-local so one raced row cannot poison unrelated siblings.
+            assertCurrent: () =>
+              options.sessionMutationAuthorization!.assertTargetCurrent({
+                sessionKey: target.key,
+                ...(target.agentId ? { agentId: target.agentId } : {}),
+              }),
           }
+        : undefined;
+      try {
+        const delegatedParams = Object.assign({}, target, params.patch);
+        await patchHandler({
+          ...options,
+          params: delegatedParams,
+          sessionMutationAuthorization: delegatedAuthorization,
+          respond: (ok, _payload, error) => {
+            outcome = ok ? { ok: true, ...identity } : { ok: false, ...identity, error: error! };
+          },
+        });
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
           outcome = { ok: false, ...identity, error: error.error };
+        } else {
+          sessionLog.warn(
+            `sessions.patchMany: delegated patch failed for ${target.key}: ${formatErrorMessage(error)}`,
+          );
+          outcome = {
+            ok: false,
+            ...identity,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "Session patch failed unexpectedly. Retry the request.",
+              { retryable: true },
+            ),
+          };
         }
-        return outcome!;
-      }),
-    );
-    respond(true, { outcomes } satisfies SessionsArchiveManyResult, undefined);
+      }
+      if (!outcome) {
+        sessionLog.warn(
+          `sessions.patchMany: delegated patch returned no outcome for ${target.key}`,
+        );
+        return {
+          ok: false,
+          ...identity,
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Session patch failed unexpectedly. Retry the request.",
+            { retryable: true },
+          ),
+        };
+      }
+      return outcome;
+    };
+    const outcomes = await Promise.all(params.targets.map(patchTarget));
+    respond(true, { outcomes } satisfies SessionsPatchManyResult, undefined);
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {

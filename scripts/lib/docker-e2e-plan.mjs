@@ -698,7 +698,6 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
       return (
         typeof entry.name === "string" &&
         configuredChannelIds.has(channelId) &&
-        install?.defaultChoice === "npm" &&
         install?.npmSpec === entry.name
       );
     })

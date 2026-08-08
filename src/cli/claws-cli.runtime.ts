@@ -609,6 +609,7 @@ export async function runClawsExportCommand(
     const result = await exportClawAgent(agentId, opts.out, {
       config: getRuntimeConfig(),
       sourceMcpServers: listedMcpServers.mcpServers,
+      ...(opts.bootstrap ? { bootstrapPath: opts.bootstrap } : {}),
     });
     if (opts.json) {
       writeRuntimeJson(runtime, result);
@@ -621,6 +622,7 @@ export async function runClawsExportCommand(
       `Workspace files: ${result.manifest.workspace.files.length + Object.keys(result.manifest.workspace.bootstrapFiles).length}`,
     );
     runtime.log(`Packages: ${result.manifest.packages.length}`);
+    runtime.log(`Bootstrap: ${result.filesWritten.includes("BOOTSTRAP.md") ? "included" : "none"}`);
   } catch (error) {
     const code = error instanceof ClawExportError ? error.code : "export_failed";
     const message = error instanceof Error ? error.message : String(error);
