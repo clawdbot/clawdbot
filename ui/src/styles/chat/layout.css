@@ -4572,6 +4572,12 @@ openclaw-chat-video-player {
   padding: 5px 8px;
 }
 
+/* display: flex above beats the UA [hidden] style; without this, filtered-out
+   rows keep rendering even though search marked them hidden. */
+.chat-controls__model-option[hidden] {
+  display: none;
+}
+
 .chat-controls__model-option[data-chat-model-highlighted] {
   border-color: color-mix(in srgb, var(--border) 76%, transparent);
   background: var(--bg-hover);
