@@ -180,27 +180,4 @@ struct GatewayModelsCompatibilityTests {
         #expect(decodedCleared.modelvalue?.value is NSNull)
         #expect(reencodedCleared["model"] is NSNull)
     }
-
-    @Test
-    func `node invoke session envelope preserves omitted null and value states`() throws {
-        let omitted = try JSONDecoder().decode(
-            NodeInvokeRequestEvent.self,
-            from: Data(#"{"id":"invoke-1","nodeId":"node-1","command":"debug.ping"}"#.utf8))
-        let cleared = try JSONDecoder().decode(
-            NodeInvokeRequestEvent.self,
-            from: Data(
-                #"{"id":"invoke-2","nodeId":"node-1","command":"debug.ping","sessionKey":null}"#.utf8))
-        let attributed = try JSONDecoder().decode(
-            NodeInvokeRequestEvent.self,
-            from: Data(
-                #"{"id":"invoke-3","nodeId":"node-1","command":"debug.ping","sessionKey":"agent:main:main"}"#.utf8))
-        let reencodedCleared = try #require(
-            JSONSerialization.jsonObject(with: JSONEncoder().encode(cleared))
-                as? [String: Any])
-
-        #expect(omitted.sessionkey == nil)
-        #expect(cleared.sessionkey?.value is NSNull)
-        #expect(attributed.sessionkey?.value as? String == "agent:main:main")
-        #expect(reencodedCleared["sessionKey"] is NSNull)
-    }
 }

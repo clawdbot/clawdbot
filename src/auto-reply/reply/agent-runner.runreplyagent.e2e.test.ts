@@ -50,7 +50,7 @@ import { createMockTypingController } from "./test-helpers.js";
 type AgentRunParams = {
   sessionId?: string;
   sessionFile?: string;
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string }) => Promise<boolean | void> | boolean | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: {
@@ -228,10 +228,6 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: (params: unknown) => state.runEmbeddedAgentMock(params),
-}));
-
 vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
@@ -321,7 +317,6 @@ function createMinimalRun(params?: {
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
   isRunActive?: () => boolean;
-  isStreaming?: boolean;
   shouldSteer?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
@@ -401,7 +396,6 @@ function createMinimalRun(params?: {
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
         isRunActive: params?.isRunActive,
-        isStreaming: params?.isStreaming ?? false,
         opts,
         typing,
         sessionEntry: params?.sessionEntry,
@@ -504,7 +498,6 @@ describe("runReplyAgent active steering", () => {
     bindReplyOperationTyping(active, taskTyping);
     const { run, typing } = createMinimalRun({
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
       sessionCtx: {
@@ -529,17 +522,16 @@ describe("runReplyAgent active steering", () => {
     expect(taskTyping.cleanup).toHaveBeenCalledOnce();
   });
 
-  it("dispatches a declined steer once with its source-turn identity", async () => {
+  it("injects a steer without claiming a new agent reply", async () => {
     const runState: ReplyOperationRunState = {};
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-    const { run, sourceTurnId } = createMinimalRun({
+    const { run } = createMinimalRun({
       opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
       sessionCtx: {
@@ -560,24 +552,7 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
-    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
-      { cleanedBody: "hello" },
-      expect.objectContaining({
-        runId: sourceTurnId,
-        agentId: "main",
-        sessionKey: "main",
-        sessionId: "session",
-        workspaceDir: "/tmp",
-        modelProviderId: "anthropic",
-        modelId: "claude",
-        trigger: "user",
-        channel: "discord",
-        channelId: "24680",
-        chatId: "24680",
-        senderId: "sender-42",
-      }),
-    );
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
       "session",
@@ -586,7 +561,7 @@ describe("runReplyAgent active steering", () => {
     );
   });
 
-  it("returns a claimed steer without disturbing the active run", async () => {
+  it("does not let before_agent_reply claim an accepted steer", async () => {
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -594,6 +569,7 @@ describe("runReplyAgent active steering", () => {
       handled: true,
       reply: { text: "claimed steer" },
     });
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
@@ -602,7 +578,6 @@ describe("runReplyAgent active steering", () => {
     active.setPhase("running");
     const { run } = createMinimalRun({
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
       sessionCtx: {
@@ -614,10 +589,10 @@ describe("runReplyAgent active steering", () => {
       runOverrides: { agentId: "main", messageProvider: "discord" },
     });
 
-    await expect(run()).resolves.toEqual([{ text: "claimed steer" }]);
+    await expect(run()).resolves.toBeUndefined();
 
-    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(active.phase).toBe("running");
     expect(active.result).toBeNull();
@@ -633,7 +608,6 @@ describe("runReplyAgent active steering", () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { run } = createMinimalRun({
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
       sessionCtx: {
@@ -652,6 +626,33 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
+  it("runs normal reply hooks once after Gateway already attempted injection", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { run } = createMinimalRun({
+      opts: { messageInjectionAttempted: true },
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "steer-pre-attempted",
+      },
+      runOverrides: { agentId: "main", messageProvider: "discord" },
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("carries the prepared user-turn recorder into the embedded queue", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const recorder = createUserTurnTranscriptRecorder({
@@ -663,7 +664,6 @@ describe("runReplyAgent active steering", () => {
     });
     const { followupRun, run } = createMinimalRun({
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
     });
@@ -699,7 +699,6 @@ describe("runReplyAgent active steering", () => {
     });
     const { run } = createMinimalRun({
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
       replyOperation: sourceReservation,
@@ -737,7 +736,6 @@ describe("runReplyAgent active steering", () => {
     const { run, typing } = createMinimalRun({
       opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
     });
@@ -779,7 +777,6 @@ describe("runReplyAgent active steering", () => {
     const { run } = createMinimalRun({
       opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       shouldFollowup: true,
       resolvedQueueMode: "steer",
@@ -827,7 +824,6 @@ describe("runReplyAgent active steering", () => {
     const { run, typing } = createMinimalRun({
       opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       shouldFollowup: true,
       resolvedQueueMode: "steer",
@@ -852,7 +848,6 @@ describe("runReplyAgent active steering", () => {
     const { followupRun, run, sourceTurnId } = createMinimalRun({
       opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
       sessionCtx: {
@@ -1078,7 +1073,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
       isActive: true,
-      isStreaming: true,
       shouldSteer: true,
       shouldFollowup: true,
       resolvedQueueMode: "collect",
@@ -1238,24 +1232,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it.each([
-    { label: "direct chat", sessionCtx: {} },
+    { label: "legacy void in a direct chat", callbackResult: undefined, sessionCtx: {} },
+    { label: "explicit acceptance in a direct chat", callbackResult: true, sessionCtx: {} },
+    { label: "explicit rejection in a direct chat", callbackResult: false, sessionCtx: {} },
     {
-      label: "group chat",
+      label: "legacy void in a group chat",
+      callbackResult: undefined,
       sessionCtx: {
         ChatType: "group" as const,
         SessionKey: "agent:test:telegram:group:-100123",
       },
     },
   ])(
-    "returns a terminal failure in a $label after a delivered partial with block streaming disabled",
-    async ({ sessionCtx }) => {
+    "preserves $label through terminal failure with block streaming disabled",
+    async ({ callbackResult, sessionCtx }) => {
       const accounting = await import("./session-run-accounting.js");
       const persistSpy = vi
         .spyOn(accounting, "persistRunSessionUsage")
         .mockRejectedValueOnce(new Error("persist exploded"));
-      const onPartialReply = vi.fn();
+      const onPartialReply = vi.fn(async () => callbackResult);
+      let observedCallbackResult: boolean | void = undefined;
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-        await params.onPartialReply?.({ text: "partial answer" });
+        observedCallbackResult = await params.onPartialReply?.({ text: "partial answer" });
         return {
           payloads: [{ text: "final answer" }],
           meta: { agentMeta: { usage: { input: 1, output: 1 } } },
@@ -1265,20 +1263,24 @@ describe("runReplyAgent heartbeat followup guard", () => {
       try {
         const { run } = createMinimalRun({
           blockStreamingEnabled: false,
-          opts: { onPartialReply },
+          opts: { onPartialReply, preserveProgressCallbackStartOrder: true },
           sessionCtx,
         });
-        const result = await run();
-        const payload = Array.isArray(result) ? result[0] : result;
-
+        if (callbackResult === false) {
+          await expect(run()).rejects.toThrow("persist exploded");
+        } else {
+          const result = await run();
+          const payload = Array.isArray(result) ? result[0] : result;
+          expect(payload).toMatchObject({
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            isError: true,
+          });
+        }
         expect(onPartialReply).toHaveBeenCalledWith({
           text: "partial answer",
           mediaUrls: undefined,
         });
-        expect(payload).toMatchObject({
-          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-          isError: true,
-        });
+        expect(observedCallbackResult).toBe(callbackResult);
       } finally {
         persistSpy.mockRestore();
       }

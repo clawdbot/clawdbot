@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../lib/sessions/catalog-project-grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import {
   formatSidebarTimestamp,
   type CatalogBackingSessionDisplay,

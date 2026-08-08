@@ -12,7 +12,6 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
-import { inheritToolExecutionAttribution } from "./agent-tools.before-tool-call.attribution.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
@@ -639,10 +638,10 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
     ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
   };
-  const hookContext = inheritToolExecutionAttribution(options?.beforeToolCallHookContext, {
+  const hookContext = {
     ...defaultHookContext,
     ...options?.beforeToolCallHookContext,
-  });
+  };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
   return allTools
     .map((tool) =>

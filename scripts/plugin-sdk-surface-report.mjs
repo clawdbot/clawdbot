@@ -224,7 +224,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: auth-profile preservation decision for native model pickers.
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
-      4851,
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      4852,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -276,7 +277,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: auth-profile preservation decision for native model pickers.
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
-      2916,
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      2917,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

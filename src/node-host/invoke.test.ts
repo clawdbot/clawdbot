@@ -793,11 +793,10 @@ describe("node host invoke", () => {
             id: "invoke-suppress-notify-prepare",
             nodeId: "node-1",
             command: "system.run.prepare",
-            sessionKey: "agent:main:main",
             paramsJSON: JSON.stringify({
               command: [process.execPath, scriptPath],
               cwd: tempHome,
-              sessionKey: "agent:forged:prepare",
+              sessionKey: "agent:main:main",
             }),
           },
           { request } as unknown as GatewayClient,
@@ -817,16 +816,12 @@ describe("node host invoke", () => {
             id: "invoke-suppress-notify",
             nodeId: "node-1",
             command: "system.run",
-            sessionKey: "agent:main:main",
             paramsJSON: JSON.stringify({
               command: prepared.plan?.argv,
               rawCommand: prepared.plan?.commandText,
               cwd: prepared.plan?.cwd,
-              sessionKey: "agent:forged:run",
-              systemRunPlan: {
-                ...prepared.plan,
-                sessionKey: "agent:forged:plan",
-              },
+              sessionKey: "agent:main:main",
+              systemRunPlan: prepared.plan,
               approved: true,
               approvalDecision: "allow-once",
               suppressNotifyOnExit: true,
@@ -842,7 +837,6 @@ describe("node host invoke", () => {
             (params as { event?: string } | undefined)?.event === "exec.finished",
         )?.[1] as { payloadJSON?: string | null } | undefined;
         expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-          sessionKey: "agent:main:main",
           suppressNotifyOnExit: true,
         });
       });
@@ -917,58 +911,5 @@ describe("node host invoke", () => {
       autoAllowSkills: false,
       allowlistRules: [],
     });
-  });
-
-  it("clears nested prepare correlation when the Gateway envelope is unattributed", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-unattributed-prepare",
-        nodeId: "node-1",
-        command: "system.run.prepare",
-        sessionKey: null,
-        paramsJSON: JSON.stringify({
-          command: ["echo", "ok"],
-          sessionKey: "agent:forged:prepare",
-        }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
-      payloadJSON?: string;
-    };
-    const payload = JSON.parse(result.payloadJSON ?? "{}") as {
-      plan?: { sessionKey?: string | null };
-    };
-    expect(payload.plan?.sessionKey).toBeNull();
-  });
-
-  it("preserves nested prepare correlation from a legacy Gateway", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-legacy-prepare",
-        nodeId: "node-1",
-        command: "system.run.prepare",
-        paramsJSON: JSON.stringify({
-          command: ["echo", "ok"],
-          sessionKey: "agent:legacy:prepare",
-        }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
-      payloadJSON?: string;
-    };
-    const payload = JSON.parse(result.payloadJSON ?? "{}") as {
-      plan?: { sessionKey?: string | null };
-    };
-    expect(payload.plan?.sessionKey).toBe("agent:legacy:prepare");
   });
 });

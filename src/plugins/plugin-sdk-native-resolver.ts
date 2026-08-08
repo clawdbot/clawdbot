@@ -48,7 +48,6 @@ type InstallOpenClawPluginSdkNativeResolverOptions = {
   moduleUrl?: string;
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  trustedInstalledPrivateSdkOwner?: string;
 };
 
 const moduleWithResolver = Module as ModuleWithResolver;
@@ -303,7 +302,6 @@ function listPluginSdkNativeAliases(
     // plugin loader itself is configured to prefer source imports.
     "dist",
     options.devSourceRoot,
-    options.trustedInstalledPrivateSdkOwner,
   );
   const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
   if (cached) {
@@ -311,13 +309,6 @@ function listPluginSdkNativeAliases(
   }
   const aliases = Object.entries(aliasMap)
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
-    // This capability is injected through the owner-scoped plugin loader.
-    // A process-global resolver cannot authenticate caller-supplied parent metadata.
-    .filter(
-      ([specifier]) =>
-        specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime" &&
-        specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime.js",
-    )
     .filter(([, target]) => isNativeLoadableSdkTarget(target))
     .flatMap(([specifier, target]) => {
       if (specifier.endsWith(".js")) {

@@ -67,8 +67,8 @@ vi.mock("../model-runtime-aliases.js", async () => {
   };
 });
 
-vi.mock("../embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: runEmbeddedAgentMock,
+vi.mock("../embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
 function makeEmbeddedResult(): EmbeddedAgentRunResult {

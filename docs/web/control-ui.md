@@ -524,11 +524,11 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
-When this browser already holds credentials (a configured token/password or an approved device
-token), first opens and reloads show a small animated OpenClaw mark while the connection is
-established instead of flashing the login gate. The login gate only appears when no credentials
-are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
-states that need your input rather than waiting.
+First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
+connection, including when authentication comes from a trusted proxy or Tailscale instead of a
+browser-stored credential. The login gate appears only after the initial connection fails or the
+Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
+pairing) — states that need your input rather than waiting.
 
 ## PWA install and web push
 

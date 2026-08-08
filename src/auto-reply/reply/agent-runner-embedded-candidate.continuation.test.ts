@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 
@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   runEmbeddedAgent: vi.fn(),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: mocks.runEmbeddedAgent,
+vi.mock("../../agents/embedded-agent.js", () => ({
+  runEmbeddedAgent: mocks.runEmbeddedAgent,
 }));
 
 vi.mock("../../agents/embedded-agent-runner/compact.queued.js", () => ({
@@ -183,40 +183,38 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
     mocks.compactEmbeddedAgentSession.mockClear();
     mocks.releaseQueuedCompactionTolerant.mockClear();
     const onCompactionCount = vi.fn();
-    mocks.runEmbeddedAgent.mockImplementationOnce(
-      async (options: RunEmbeddedAgentInternalParams) => {
-        options.continueWorkOpts?.requestContinuation({
-          reason: "continue after fallback",
-          delaySeconds: 5,
-        });
-        await options.requestCompactionOpts?.triggerCompaction({
-          sessionKey: "agent:main:fallback",
-          sessionId: "session-fallback",
-          runId: "run-fallback",
-          diagId: "diag-fallback",
-          trigger: "volitional",
-          reason: "test fallback compaction",
-          contextUsage: 0.75,
-          requestedAtMs: 1,
-          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
-        });
-        return {
-          payloads: [{ text: "done" }],
-          meta: {
-            durationMs: 1,
-            agentMeta: {
-              sessionId: "session-fallback",
-              provider: "openai",
-              model: "gpt-5.6-luna",
-              compactionCount: 7,
-            },
-            contextManagement: { lastTurnCompactions: 1 },
-            finalAssistantRawText:
-              "<final>done\n[[CONTINUE_DELEGATE: inspect wrapped fallback]]</final>",
+    mocks.runEmbeddedAgent.mockImplementationOnce(async (options: RunEmbeddedAgentParams) => {
+      options.continueWorkOpts?.requestContinuation({
+        reason: "continue after fallback",
+        delaySeconds: 5,
+      });
+      await options.requestCompactionOpts?.triggerCompaction({
+        sessionKey: "agent:main:fallback",
+        sessionId: "session-fallback",
+        runId: "run-fallback",
+        diagId: "diag-fallback",
+        trigger: "volitional",
+        reason: "test fallback compaction",
+        contextUsage: 0.75,
+        requestedAtMs: 1,
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+      });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "session-fallback",
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            compactionCount: 7,
           },
-        };
-      },
-    );
+          contextManagement: { lastTurnCompactions: 1 },
+          finalAssistantRawText:
+            "<final>done\n[[CONTINUE_DELEGATE: inspect wrapped fallback]]</final>",
+        },
+      };
+    });
 
     const result = await runCandidate(config, onCompactionCount);
 

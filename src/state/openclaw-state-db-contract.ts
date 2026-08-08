@@ -8,7 +8,6 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Feature-local tables remain absent even in fresh databases until their first
 // write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
-  "audit_event_source_adoptions",
   "execution_identity_contexts",
   "delegate_artifact_audit",
   "delegate_artifact_bindings",

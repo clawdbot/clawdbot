@@ -135,3 +135,4 @@ export const SessionRowSchema = Type.Object(
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionRunStatus = NonNullable<SessionRow["status"]>;

@@ -1,5 +1,6 @@
 // Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
@@ -13,7 +14,6 @@ import {
   completeFollowupRunLifecycle,
   type FollowupRun,
   type QueueDropPolicy,
-  type QueueMode,
   type QueueSettings,
 } from "./types.js";
 

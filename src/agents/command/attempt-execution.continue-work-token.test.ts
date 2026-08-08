@@ -47,8 +47,8 @@ vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (p: string) => p.trim().toLowerCase(),
 }));
-vi.mock("../embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: runEmbeddedAgentMock,
+vi.mock("../embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 // Intercept the hop-2 re-drive so the test is deterministic: the work
 // dispatcher calls getReplyFromConfig for the subagent session — that call IS

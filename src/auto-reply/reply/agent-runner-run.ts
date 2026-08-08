@@ -1,5 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -9,15 +7,6 @@ import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-rec
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-  withBeforeAgentReplyObserver,
-} from "../../plugins/before-agent-reply.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../plugins/hook-agent-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -56,7 +45,7 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, type FollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
@@ -69,7 +58,7 @@ import {
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyHookTrigger } from "./run-provenance.js";
-import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
+import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
   params: RunReplyAgentParams,
@@ -207,8 +196,7 @@ export async function runReplyAgent(
   });
 
   let shouldQueueAfterSteerRejection = false;
-  let beforeAgentReplyDispatchedForSteer = false;
-  if (effectiveShouldSteer && isActive) {
+  if (effectiveShouldSteer && isActive && opts?.messageInjectionAttempted !== true) {
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
     // carries a source-keyed reservation; steering by its stale sessionId
@@ -219,64 +207,6 @@ export async function runReplyAgent(
         ? providedReplyOperation
         : (registeredReplyOperation ?? providedReplyOperation);
     const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
-    // Channel dispatch normally stamps the route-scoped source id. Internal
-    // callers can derive the same per-message identity from the prepared turn.
-    const steerRunId = expectDefined(
-      restartRecoverySourceTurnId ??
-        buildChannelSourceTurnId({
-          provider:
-            followupRun.originatingChannel ??
-            followupRun.run.messageProvider ??
-            sessionCtx.Provider,
-          accountId:
-            followupRun.originatingAccountId ??
-            followupRun.run.agentAccountId ??
-            sessionCtx.AccountId,
-          conversationId:
-            followupRun.originatingTo ??
-            followupRun.originatingChatId ??
-            sessionKey ??
-            followupRun.run.sessionKey,
-          messageId: followupRun.messageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-        }) ??
-        normalizeOptionalString(opts?.runId),
-      "steered turn id",
-    );
-    const trigger = hookTrigger;
-    const hookResult = await runBeforeAgentReplyForTurn({
-      runId: steerRunId,
-      trigger,
-      event: { cleanedBody: followupRun.prompt },
-      context: {
-        runId: steerRunId,
-        agentId: followupRun.run.agentId,
-        sessionKey: sessionKey ?? followupRun.run.sessionKey,
-        sessionId: steerSessionId,
-        workspaceDir: followupRun.run.workspaceDir,
-        modelProviderId: followupRun.run.provider,
-        modelId: followupRun.run.model,
-        trigger,
-        ...buildAgentHookContextChannelFields({
-          sessionKey: sessionKey ?? followupRun.run.sessionKey,
-          messageChannel: followupRun.originatingChannel,
-          messageProvider: followupRun.run.messageProvider,
-          currentChannelId: followupRun.originatingChatId,
-          messageTo: followupRun.originatingTo,
-          senderId: followupRun.run.senderId,
-        }),
-        ...buildAgentHookContextIdentityFields({
-          trigger,
-          senderId: followupRun.run.senderId,
-          chatId: followupRun.originatingChatId,
-          channelContext: followupRun.run.channelContext,
-        }),
-      },
-    });
-    beforeAgentReplyDispatchedForSteer = true;
-    if (hookResult?.handled) {
-      typing.cleanup();
-      return buildHandledBeforeAgentReplyPayloads(hookResult.reply);
-    }
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
@@ -342,7 +272,7 @@ export async function runReplyAgent(
     resetTriggered: effectiveResetTriggered,
   });
 
-  const baseQueuedRunFollowupTurn = createFollowupRunner({
+  const queuedRunFollowupTurn = createFollowupRunner({
     opts,
     typing,
     typingMode,
@@ -354,19 +284,6 @@ export async function runReplyAgent(
     agentCfgContextTokens,
     toolProgressDetail,
   });
-  // A transcript-rejected steer can become this exact queued turn. Preserve its
-  // earlier hook decision without suppressing hooks for other queued messages.
-  const queuedRunFollowupTurn = (queued: FollowupRun) =>
-    beforeAgentReplyDispatchedForSteer && queued === followupRun
-      ? withBeforeAgentReplyObserver(
-          {
-            beforeDispatch: async () => false,
-            afterDispatch: async (result) => result,
-          },
-          () => baseQueuedRunFollowupTurn(queued),
-        )
-      : baseQueuedRunFollowupTurn(queued);
-
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
@@ -632,7 +549,6 @@ export async function runReplyAgent(
       admitUserTurn,
       agentCfgContextTokens,
       applyReplyToMode,
-      beforeAgentReplyDispatchedForSteer,
       beginBeforeAgentReply,
       blockReplyChunking,
       blockReplyPipeline,

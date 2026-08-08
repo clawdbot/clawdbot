@@ -465,6 +465,18 @@ function expectHydratedWindowsShell(run: ParsedWrapperRun, command: string): voi
   expect(run.remoteCommand).toContain(command);
 }
 
+const remotePosixHydratedModulesBootstrap =
+  'if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ] && [ -d "$PNPM_CONFIG_MODULES_DIR" ] && [ ! -e node_modules ]; then ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules; fi;';
+
+function expectHydratedPosixShell(
+  run: Pick<ParsedWrapperRun, "output" | "remoteCommand">,
+  command: string,
+): void {
+  expect(run.output.args).toContain("--shell");
+  expect(run.remoteCommand).toContain(remotePosixHydratedModulesBootstrap);
+  expect(run.remoteCommand).toContain(command);
+}
+
 function normalizeShellLineEndings(value: string): string {
   return value.replace(/\r\n/g, "\n");
 }
@@ -822,14 +834,14 @@ describe("scripts/crabbox-wrapper", () => {
       "name=proof",
       "--provider",
       "local-container",
+      "--shell",
       "--",
-      "echo",
-      "ok",
+      `${remotePosixHydratedModulesBootstrap} echo ok`,
     ]);
   });
 
   it("routes the provider-neutral changed gate without consuming its run option values", () => {
-    const { output, result } = runSuccessfulBrokerWrapper(
+    const { output, remoteCommand, result } = runSuccessfulBrokerWrapper(
       [
         "run",
         "--workload",
@@ -856,7 +868,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).not.toContain("blacksmith-testbox");
     expect(output.args).toContain("90m");
     expect(output.args).toContain("240m");
-    expect(output.args.slice(-3)).toEqual(["corepack", "pnpm", "check:changed"]);
+    expectHydratedPosixShell({ output, remoteCommand }, "corepack pnpm check:changed");
     expect(result.stderr).toContain("route workload=ci-fast selected=daytona");
   });
 
@@ -1403,10 +1415,9 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "--id",
       "tbx_owned",
+      "--shell",
       "--",
-      "env",
-      "CI=true",
-      "echo ok",
+      `export CI=true; ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
   });
 
@@ -1621,10 +1632,9 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "--id",
       "blue-hermit",
+      "--shell",
       "--",
-      "env",
-      "CI=true",
-      "echo ok",
+      `export CI=true; ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
   });
 
@@ -1644,7 +1654,7 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "--shell",
       "--",
-      "export CI=true; cd packages && pnpm install && pnpm build",
+      `export CI=true; ${remotePosixHydratedModulesBootstrap} cd packages && pnpm install && pnpm build`,
     ]);
   });
 
@@ -1676,8 +1686,9 @@ describe("scripts/crabbox-wrapper", () => {
       "macos",
       "--market",
       "on-demand",
+      "--shell",
       "--",
-      "echo ok",
+      `${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
   });
 
@@ -1955,8 +1966,9 @@ describe("scripts/crabbox-wrapper", () => {
       "--target=macos",
       "--market",
       "spot",
+      "--shell",
       "--",
-      "echo ok",
+      `${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
     expect(existingLease.status).toBe(0);
     expect(parseFakeCrabboxOutput(existingLease).args).toEqual([
@@ -1967,8 +1979,9 @@ describe("scripts/crabbox-wrapper", () => {
       "macos",
       "--id",
       "cbx_existing",
+      "--shell",
       "--",
-      "echo ok",
+      `${remotePosixHydratedModulesBootstrap} 'echo ok'`,
     ]);
   });
 
@@ -2073,7 +2086,9 @@ describe("scripts/crabbox-wrapper", () => {
       "bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'",
     );
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toBe("bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'");
+    expect(remoteCommand).toBe(
+      `${remotePosixHydratedModulesBootstrap} bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'`,
+    );
   });
 
   it("preserves sanitized env shell package scripts when JS tooling is needed", () => {
@@ -2224,8 +2239,11 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not preflight Swift for raw AWS macOS commands that only mention package scripts", () => {
-    const { output } = runSuccessfulMacosCommand(["echo", "scripts/package-mac-app.sh"]);
-    expect(output.args).not.toContain("--shell");
+    const { output, remoteCommand } = runSuccessfulMacosCommand([
+      "echo",
+      "scripts/package-mac-app.sh",
+    ]);
+    expect(remoteCommand).not.toContain("openclaw_crabbox_require_macos_swift_62");
     expect(output.args).toEqual([
       "run",
       "--provider",
@@ -2234,9 +2252,9 @@ describe("scripts/crabbox-wrapper", () => {
       "macos",
       "--market",
       "on-demand",
+      "--shell",
       "--",
-      "echo",
-      "scripts/package-mac-app.sh",
+      `${remotePosixHydratedModulesBootstrap} echo scripts/package-mac-app.sh`,
     ]);
   });
 
@@ -2391,7 +2409,7 @@ describe("scripts/crabbox-wrapper", () => {
       "--version",
     ]);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(output.args).not.toContain("--shell");
+    expectHydratedPosixShell({ output, remoteCommand }, "./tools/env -i pnpm --version");
   });
 
   it("does not bootstrap env ignore-environment commands that bypass shell functions", () => {
@@ -2405,7 +2423,10 @@ describe("scripts/crabbox-wrapper", () => {
         "--version",
       ]);
       expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(output.args).not.toContain("--shell");
+      expectHydratedPosixShell(
+        { output, remoteCommand },
+        `${prefix} env -i PATH=/usr/bin:/bin pnpm --version`,
+      );
     }
   });
 
@@ -2439,7 +2460,7 @@ describe("scripts/crabbox-wrapper", () => {
       "pnpm --version",
     ]);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(output.args).not.toContain("--shell");
+    expectHydratedPosixShell({ output, remoteCommand }, "env -i -S 'pnpm --version'");
   });
 
   it("bootstraps Corepack for raw AWS macOS env split-string pnpm commands", () => {
@@ -2759,7 +2780,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not bootstrap non-macOS AWS JavaScript commands", () => {
-    const { output } = runSuccessfulDefaultWrapper([
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper([
       "run",
       "--provider",
       "aws",
@@ -2769,23 +2790,23 @@ describe("scripts/crabbox-wrapper", () => {
       "pnpm",
       "--version",
     ]);
+    expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.args).toEqual([
       "run",
       "--provider",
       "aws",
       "--target",
       "linux",
+      "--shell",
       "--",
-      "pnpm",
-      "--version",
+      `${remotePosixHydratedModulesBootstrap} pnpm --version`,
     ]);
   });
 
   it("restores hydrated node_modules before AWS native Windows shell commands", () => {
-    expectHydratedWindowsShell(
-      runSuccessfulNativeWindows("aws", ["corepack pnpm check:changed"], true),
-      "corepack pnpm check:changed",
-    );
+    const run = runSuccessfulNativeWindows("aws", ["corepack pnpm check:changed"], true);
+    expectHydratedWindowsShell(run, "corepack pnpm check:changed");
+    expect(run.remoteCommand).not.toContain('ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules');
   });
 
   it("restores hydrated node_modules before Azure native Windows shell commands", () => {
@@ -2805,6 +2826,13 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
     expect(remoteCommand).toContain("pnpm --filter '@openclaw/discord' test");
+  });
+
+  it("restores hydrated node_modules before POSIX run commands", () => {
+    expectHydratedPosixShell(
+      runSuccessfulDefaultWrapper(["run", "--provider", "aws", "--", "echo", "ok"]),
+      "echo ok",
+    );
   });
 
   const itWithPosixLinkedWorktreeFixture = process.platform === "win32" ? it.skip : it;
@@ -3065,6 +3093,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
     expect(output.args).toContain("--shell");
     expectChangedGateGitBootstrap(remoteCommand);
+    expectHydratedPosixShell({ output, remoteCommand }, "corepack pnpm check:changed");
     expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,

@@ -913,7 +913,6 @@ describe("runPreparedReply media-only handling", () => {
       shouldSteer: true,
       shouldFollowup: true,
       isActive: true,
-      isStreaming: true,
       resolvedQueue: expect.objectContaining({ mode: "steer" }),
     });
     expect(call?.followupRun.run.messageProvider).toBe(channel);
@@ -1999,7 +1998,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(true);
     expect(call?.isActive).toBe(true);
-    expect(call?.isStreaming).toBe(true);
   });
 
   it.each([
@@ -2055,7 +2053,6 @@ describe("runPreparedReply media-only handling", () => {
       expect(call.shouldSteer).toBe(false);
       expect(call.shouldFollowup).toBe(true);
       expect(call.isActive).toBe(true);
-      expect(call.isStreaming).toBe(true);
       expect(call.followupRun.originatingThreadId).toBe("501.000");
     },
   );
@@ -2108,7 +2105,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.shouldSteer).toBe(true);
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
-    expect(call.isStreaming).toBe(true);
     expect(call.followupRun.originatingThreadId).toBe(43);
   });
 

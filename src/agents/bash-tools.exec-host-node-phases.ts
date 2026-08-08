@@ -384,7 +384,6 @@ export function buildNodeSystemRunInvoke(params: {
     // the node program timer. Without this the Gateway falls back to a fixed 30s
     // pending-invoke timer and discards a later node result as `ignored`.
     timeoutMs: params.target.invokeDeadlineMs,
-    sessionKey: params.sessionKey,
     params: {
       command: params.command,
       rawCommand: params.rawCommand,
@@ -467,7 +466,6 @@ export async function prepareNodeSystemRun(params: {
     {
       nodeId: params.target.nodeId,
       command: "system.run.prepare",
-      sessionKey: params.request.sessionKey,
       params: {
         command: params.target.argv,
         rawCommand: params.request.command,
@@ -484,26 +482,14 @@ export async function prepareNodeSystemRun(params: {
   if (!prepared) {
     throw new Error("invalid system.run.prepare response");
   }
-  const {
-    agentId: _preparedAgentId,
-    sessionKey: _preparedSessionKey,
-    ...preparedPlan
-  } = prepared.plan;
-  // The node may normalize execution details, but it cannot redefine the
-  // Gateway-owned agent or session that requested preparation.
-  const plan: SystemRunApprovalPlan = {
-    ...preparedPlan,
-    agentId: params.request.agentId ?? null,
-    sessionKey: params.request.sessionKey ?? null,
-  };
   return {
-    plan,
-    argv: plan.argv,
-    rawCommand: plan.commandText,
-    transportRawCommand: plan.commandText,
-    cwd: plan.cwd ?? params.request.workdir,
-    agentId: params.request.agentId,
-    sessionKey: params.request.sessionKey,
+    plan: prepared.plan,
+    argv: prepared.plan.argv,
+    rawCommand: prepared.plan.commandText,
+    transportRawCommand: prepared.plan.commandText,
+    cwd: prepared.plan.cwd ?? params.request.workdir,
+    agentId: prepared.plan.agentId ?? params.request.agentId,
+    sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
     ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
     allowAlwaysCoverage: prepared.allowAlwaysCoverage,
   };
