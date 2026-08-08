@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
-  diagnosticMocks,
   mocks,
   noAbortResult,
   resetPluginTtsAndThreadMocks,

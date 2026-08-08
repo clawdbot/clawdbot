@@ -4,7 +4,6 @@ import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js"
 import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
-  diagnosticMocks,
   mocks,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
