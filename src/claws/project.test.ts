@@ -158,6 +158,83 @@ describe("Claw projects", () => {
     expect(entries).not.toContain("package/not-packed.txt");
   });
 
+  it("preserves the canonical metadata-selected OpenClaw profile path", async () => {
+    const project = tempDirs.make("openclaw-claw-custom-profile-");
+    const output = join(tempDirs.make("openclaw-claw-custom-profile-output-"), "claw.tgz");
+    await writeRichProject(project);
+    await rename(
+      join(project, "profiles", "openclaw.yml"),
+      join(project, "profiles", "custom.yaml"),
+    );
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace(
+        "agent:\n  id: demo-claw",
+        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
+      ),
+    );
+
+    const validation = await validateClawProject(project);
+    const result = await buildClawProject(project, output);
+    const entries: string[] = [];
+    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+
+    expect(validation).toMatchObject({ ok: true });
+    if (validation.ok) {
+      expect(validation.claw.snapshot.openClawProfile?.sourcePath).toBe("profiles/custom.yaml");
+      expect(validation.excludedPaths).not.toContain("profiles/custom.yaml");
+    }
+    expect(result.files).toContain("profiles/custom.yaml");
+    expect(entries).toContain("package/profiles/custom.yaml");
+    expect(entries).not.toContain("package/profiles/openclaw.yml");
+  });
+
+  it("packages a leading-at workspace source as an ordinary file", async () => {
+    const project = tempDirs.make("openclaw-claw-leading-at-");
+    const output = join(tempDirs.make("openclaw-claw-leading-at-output-"), "claw.tgz");
+    await writeRichProject(project);
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace("workspace/reference.md", '"@notes.md"'),
+    );
+    await writeFile(join(project, "@notes.md"), "# Notes\n");
+
+    const result = await buildClawProject(project, output);
+    const entries: string[] = [];
+    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+
+    expect(result.files).toContain("@notes.md");
+    expect(entries).toContain("package/@notes.md");
+  });
+
+  it("preserves long workspace source paths deterministically", async () => {
+    const project = tempDirs.make("openclaw-claw-long-path-");
+    const output = tempDirs.make("openclaw-claw-long-path-output-");
+    await writeRichProject(project);
+    const longName = `${"a".repeat(140)}.md`;
+    const longSource = `workspace/${longName}`;
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace("workspace/reference.md", longSource),
+    );
+    await writeFile(join(project, longSource), "# Long path\n");
+
+    const firstPath = join(output, "first.tgz");
+    const secondPath = join(output, "second.tgz");
+    const first = await buildClawProject(project, firstPath);
+    const second = await buildClawProject(project, secondPath);
+    const entries: string[] = [];
+    await tar.t({ file: firstPath, onentry: (entry) => entries.push(entry.path) });
+
+    expect(await readFile(firstPath)).toEqual(await readFile(secondPath));
+    expect(first.integrity).toBe(second.integrity);
+    expect(first.files).toContain(longSource);
+    expect(entries).toContain(`package/${longSource}`);
+  });
+
   it.runIf(process.platform === "win32")(
     "does not report a differently cased selected file as excluded",
     async () => {

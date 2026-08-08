@@ -156,9 +156,9 @@ export async function buildClawProject(
           "Validated OpenClaw profile is missing its source snapshot.",
         );
       }
-      const profile = await readSelectedProjectFile(project.root, "profiles/openclaw.yml");
-      assertValidatedBytes("profiles/openclaw.yml", profile, profileSnapshot);
-      files.set("profiles/openclaw.yml", profile);
+      const profile = await readSelectedProjectFile(project.root, profileSnapshot.sourcePath);
+      assertValidatedBytes(profileSnapshot.sourcePath, profile, profileSnapshot);
+      files.set(profileSnapshot.sourcePath, profile);
     }
     for (const source of project.claw.snapshot.workspaceSources) {
       const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
@@ -172,6 +172,9 @@ export async function buildClawProject(
     for (const fileName of fileNames) {
       await writeStagedFile(stagingRoot, fileName, files.get(fileName) as Buffer | string);
     }
+    const tarInputNames = fileNames.map((fileName) =>
+      fileName.startsWith("@") ? `./${fileName}` : fileName,
+    );
 
     await tar.c(
       {
@@ -179,11 +182,10 @@ export async function buildClawProject(
         file: temporaryArtifact,
         gzip: { level: 9, portable: true },
         mtime: new Date(0),
-        noPax: true,
         portable: true,
         prefix: "package",
       },
-      fileNames,
+      tarInputNames,
     );
 
     const archiveEntries: Array<{ path: string; type: string }> = [];

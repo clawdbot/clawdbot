@@ -366,7 +366,7 @@ export async function validateClawProject(
     "package.json",
     "CLAW.md",
     ...(claw.packageBootstrap ? ["BOOTSTRAP.md"] : []),
-    ...(claw.openClawProfile ? ["profiles/openclaw.yml"] : []),
+    ...(claw.snapshot.openClawProfile ? [claw.snapshot.openClawProfile.sourcePath] : []),
     ...claw.snapshot.workspaceSources.map((source) => source.sourcePath),
   ]);
   let excludedPaths: string[];

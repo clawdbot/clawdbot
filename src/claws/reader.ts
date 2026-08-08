@@ -102,7 +102,7 @@ async function buildDevelopmentSnapshot(params: {
       integrity: string;
       byteLength: number;
       manifest: { byteLength: number; digest: string };
-      openClawProfile?: { byteLength: number; digest: string };
+      openClawProfile?: { sourcePath: string; byteLength: number; digest: string };
       workspaceSources: ClawWorkspaceSourceSnapshot[];
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
     }
@@ -120,7 +120,10 @@ async function buildDevelopmentSnapshot(params: {
   });
   const manifest = snapshotFile(params.manifestRaw);
   const openClawProfile = params.openClawProfile
-    ? snapshotFile(params.openClawProfile.raw)
+    ? {
+        sourcePath: params.openClawProfile.path.replaceAll("\\", "/"),
+        ...snapshotFile(params.openClawProfile.raw),
+      }
     : undefined;
   add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
   add("manifest", params.manifestRaw);
