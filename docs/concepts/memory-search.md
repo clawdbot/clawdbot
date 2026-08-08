@@ -153,7 +153,7 @@ different daily notes.
 
 ## Multimodal memory
 
-With `gemini-embedding-2-preview`, you can index images and audio alongside
+With `gemini-embedding-2`, you can index images and audio alongside
 Markdown. This only applies to files under `memory.search.extraPaths`; default
 memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
