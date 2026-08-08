@@ -281,20 +281,31 @@ function composerControlsHtml() {
         </wa-dropdown>
       </div>
       <div class="chat-composer-model-control">
-        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+        <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+          <details class="chat-controls__inline-select chat-controls__model-picker">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">Default model · Off</span>
+            <span class="chat-controls__inline-select-label">GPT-5.6</span>
             <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
-            <div class="chat-controls__combined-model-list">
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
+            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
+            <div class="chat-controls__model-options">
+              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
             </div>
-            <div class="chat-controls__reasoning-panel">Reasoning</div>
           </div>
-        </details>
+          </details>
+          <details class="chat-controls__inline-select chat-controls__effort-picker">
+          <summary class="chat-controls__inline-select-trigger" data-chat-composer-effort="true" aria-label="Effort">
+            <span class="chat-controls__inline-select-label">High</span>
+            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
+            <div class="chat-controls__reasoning-panel">Effort</div>
+          </div>
+          </details>
+        </div>
       </div>
     </div>
   `;
@@ -487,7 +498,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                           </section>
                         </details>
                       </div>
-                      <span class="agent-chat__token-count">8</span>
                     </div>
                   </div>
                 </div>
@@ -1939,13 +1949,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
-        await page.locator('[data-chat-composer-model="true"]').click();
-        const menu = await getBoundingBox(page, ".chat-controls__inline-select-menu--combined");
-        const reasoning = await getBoundingBox(page, ".chat-controls__reasoning-panel");
+        await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
+          node.parentElement?.setAttribute("open", "");
+        });
+        const menu = await getBoundingBox(page, ".chat-controls__model-menu");
         expect(menu.x).toBeGreaterThanOrEqual(0);
         expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
-        expect(reasoning.x).toBeGreaterThanOrEqual(0);
-        expect(reasoning.x + reasoning.width).toBeLessThanOrEqual(width + 1);
       } finally {
         await closeBrowserPage(page);
       }
@@ -2484,15 +2493,19 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openFixture(width, height);
       try {
         const modelTrigger = page.locator('[data-chat-composer-model="true"]');
-        await modelTrigger.click();
+        await modelTrigger.evaluate((node) => {
+          node.parentElement?.setAttribute("open", "");
+        });
 
-        const modelMenu = await getRect(page, ".chat-controls__inline-select-menu--combined");
+        const modelMenu = await getRect(page, ".chat-controls__model-menu");
         expect(modelMenu.left).toBeGreaterThanOrEqual(0);
         expect(modelMenu.right).toBeLessThanOrEqual(width);
         expect(modelMenu.top).toBeGreaterThanOrEqual(0);
         expect(modelMenu.bottom).toBeLessThanOrEqual(height);
 
-        await modelTrigger.click();
+        await modelTrigger.evaluate((node) => {
+          node.parentElement?.removeAttribute("open");
+        });
         await page.locator(".chat-view-menu").evaluate((node) => {
           node.setAttribute("open", "");
         });

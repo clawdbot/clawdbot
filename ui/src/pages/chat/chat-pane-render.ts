@@ -60,6 +60,7 @@ import {
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
@@ -465,6 +466,8 @@ export class ChatPane extends ChatPaneHeader {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
+      // Metadata can resize a committed row; re-enter the scroll owner so the follow lock wins.
+      onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,

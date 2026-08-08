@@ -24,7 +24,6 @@ import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
-import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
@@ -40,6 +39,7 @@ import {
   renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import { renderChatTerminalButton } from "./components/chat-terminal-button.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import {
@@ -166,7 +166,11 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
+      terminalAction: renderChatTerminalButton(
+        this.state,
+        this.catalogSession,
+        sessionWorkspace.onToggleTerminal,
+      ),
       discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),

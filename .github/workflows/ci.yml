@@ -252,7 +252,9 @@ jobs:
       - name: Resolve exact diff base
         id: diff_base
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           RELEASE_GATE: ${{ inputs.release_gate }}
         run: |
@@ -264,6 +266,18 @@ jobs:
             # commit's first parent is the exact target tree for this run.
             base_sha="$(node scripts/lib/merge-head-diff-base.mjs \
               --base "$base_sha" --head HEAD --prefer-first-parent)"
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" != "true" ]; then
+            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1}')"
+            if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve the default branch head for the manual target." >&2
+              exit 1
+            fi
+            base_sha="$(
+              gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}" \
+                --jq '.merge_base_commit.sha'
+            )"
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" = "true" ]; then
             merge_ref="refs/remotes/origin/release-gate-merge"
@@ -278,6 +292,10 @@ jobs:
             fi
             base_sha="$(git rev-parse "${merge_ref}^1")"
             head_sha="$(git rev-parse "$merge_ref")"
+          fi
+          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve an exact diff base for ${GITHUB_EVENT_NAME}." >&2
+            exit 1
           fi
           echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
@@ -1030,10 +1048,15 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
+            fetch_refs=("+${CHECKOUT_SHA}:refs/remotes/origin/ci-target")
+            if [ -n "${CHECKOUT_BASE_SHA:-}" ]; then
+              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")
+            fi
+
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+              "${fetch_refs[@]}" || return 1
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
@@ -1533,6 +1556,8 @@ jobs:
       fail-fast: false
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
+    env:
+      CHECKOUT_BASE_SHA: ${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
       - name: Prepare release-gate max-lines merge tree
@@ -1577,7 +1602,7 @@ jobs:
             exit 1
           fi
           git checkout --detach "$merge_sha"
-          echo "RATCHET_RELEASE_BASE_SHA=${frozen_base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
@@ -1590,41 +1615,10 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Resolve manual protocol base
-        id: protocol_manual_base
-        if: matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
-          if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve the default branch head for the manual protocol target." >&2
-            exit 1
-          fi
-          merge_base_sha="$(
-            gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}" \
-              --jq '.merge_base_commit.sha'
-          )"
-          if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve the manual protocol target merge base." >&2
-            exit 1
-          fi
-          echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"
-
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
-          GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
-          PROTOCOL_MANUAL_BASE_SHA: ${{ steps.protocol_manual_base.outputs.sha }}
           PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
-          RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
-          RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
@@ -1636,41 +1630,11 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
-          resolve_manual_merge_base() {
-            local default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-            local default_sha
-            local merge_base_sha
-            default_sha="$(git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }')"
-            if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Could not resolve the default branch head for the manual target." >&2
-              return 1
-            fi
-            merge_base_sha="$(
-              gh api --method GET \
-                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
-                --jq '.merge_base_commit.sha'
-            )"
-            if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Could not resolve the manual target merge base." >&2
-              return 1
-            fi
-            printf '%s\n' "$merge_base_sha"
-          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
-              if [[ -n "${PROTOCOL_SINCE_BASE_SHA:-}" ]]; then
-                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
-              elif [[ -n "${PROTOCOL_MANUAL_BASE_SHA:-}" ]]; then
-                PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"
-                export PROTOCOL_SINCE_BASE_SHA
-                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
-              else
-                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                  "+refs/heads/main:refs/remotes/origin/main"
-              fi
+              git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
@@ -1685,37 +1649,23 @@ jobs:
                 echo "Current CI targets must provide check:max-lines-ratchet." >&2
                 exit 1
               fi
-              base_sha="${RATCHET_EVENT_BASE_SHA:-${RATCHET_RELEASE_BASE_SHA:-}}"
-              if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
-                base_sha=""
+              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"
+              if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
+                echo "Prepared max-lines base ${base_ref} is unavailable." >&2
+                exit 1
               fi
-              base_ref=""
               if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
                 mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
                 if [[ "${#merge_parents[@]}" != "2" || "${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA" ]]; then
                   echo "Pull request checkout is not the expected two-parent merge tree." >&2
                   exit 1
                 fi
-                merge_base="${merge_parents[0]}"
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
-              elif [[ -n "$base_sha" ]]; then
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
-              elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
-                merge_base_sha="$(resolve_manual_merge_base)"
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
-              else
-                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
+                prepared_base="$(git rev-parse "$base_ref")"
+                if [[ "${merge_parents[0]}" != "$prepared_base" ]]; then
+                  echo "Pull request merge base does not match the prepared preflight base." >&2
+                  exit 1
+                fi
               fi
-              unset GH_TOKEN
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
                 node scripts/run-oxlint.mjs src ui/src packages extensions

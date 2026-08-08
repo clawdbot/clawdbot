@@ -423,7 +423,7 @@ Notes:
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
-- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. It listens for the registered loopback redirect and completes the exchange automatically; `--code` remains the manual fallback.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
@@ -731,11 +731,11 @@ When a remote MCP service is already backed by a separate OpenClaw refresh-capab
     openclaw mcp login docs
     ```
 
-    OpenClaw starts the registered loopback callback listener before printing the authorization URL. After browser approval, it validates the returned state, exchanges the code, saves the credentials, and closes the listener automatically.
+    OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
 
   </Step>
   <Step title="Use the manual fallback when needed">
-    The login output also prints a manual command for headless, remote, busy-port, or timed-out callback flows. After browser approval, copy the returned code into that command.
+    If the browser runs on another machine or cannot reach the printed loopback address, copy the returned code and pass it back to OpenClaw.
 
     ```bash
     openclaw mcp login docs --code abc123
