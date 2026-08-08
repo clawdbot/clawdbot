@@ -56,7 +56,15 @@ function waitForStage(
     const finish = (error?: unknown) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      error === undefined ? resolve() : reject(error);
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("steering receipt wait failed", { cause: error }),
+        );
+      }
     };
     const timer = setTimeout(() => finish(new ReceiptWaitError(timeoutMessage)), remainingMs);
     timer.unref?.();

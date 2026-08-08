@@ -9,8 +9,8 @@ export type AgentSessionSteerReceipt = {
 
 type QueueReceipt = { cancel(): boolean };
 type SteeringItem = {
-  accepted?: Deferred<void>;
-  committed?: Deferred<void>;
+  accepted?: Deferred;
+  committed?: Deferred;
   enqueue?: () => QueueReceipt;
   message?: AgentMessage;
   queueReceipt?: QueueReceipt;
@@ -76,7 +76,7 @@ export class AgentSessionSteering {
   clear(): string[] {
     const cleared: string[] = [];
     let changed = false;
-    for (const item of [...this.pending]) {
+    for (const item of this.pending.slice()) {
       if (item.queueReceipt && !item.queueReceipt.cancel()) {
         this.removePending(item);
         changed = true;
@@ -114,13 +114,21 @@ export class AgentSessionSteering {
     }
     const notify = this.removePending(item);
     this.byMessage.delete(message);
-    error === undefined ? item.committed?.resolve(undefined) : item.committed?.reject(error);
-    if (notify) this.onChange();
+    if (error === undefined) {
+      item.committed?.resolve(undefined);
+    } else {
+      item.committed?.reject(error);
+    }
+    if (notify) {
+      this.onChange();
+    }
   }
 
   private removePending(item: SteeringItem): boolean {
     const index = this.pending.indexOf(item);
-    if (index < 0) return false;
+    if (index < 0) {
+      return false;
+    }
     this.pending.splice(index, 1);
     return true;
   }

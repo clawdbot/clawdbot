@@ -91,7 +91,11 @@ export function createCodexSteeringQueue(params: {
         try {
           releaseClaim?.();
         } catch {}
-        error === undefined ? resolveGate() : rejectGate(error);
+        if (error === undefined) {
+          resolveGate();
+        } else {
+          rejectGate(error);
+        }
       },
     };
     batches.add(batch);
@@ -113,7 +117,11 @@ export function createCodexSteeringQueue(params: {
           )
         : error;
     for (const item of batch.items) {
-      deliveryError === undefined ? item.resolve({ kind: "steered" }) : item.reject(deliveryError);
+      if (deliveryError === undefined) {
+        item.resolve({ kind: "steered" });
+      } else {
+        item.reject(deliveryError);
+      }
     }
     batch.releaseGate(error);
     return true;
@@ -127,7 +135,7 @@ export function createCodexSteeringQueue(params: {
     params.signal.removeEventListener("abort", abort);
     clearTimer();
     pendingBatch = undefined;
-    for (const batch of [...batches]) {
+    for (const batch of batches) {
       finish(batch, error);
     }
   };
@@ -223,7 +231,7 @@ export function createCodexSteeringQueue(params: {
       const { item, delivery } = createItem(text, options?.images);
       if (pendingInput && options?.images?.length) {
         void flush().catch(() => {});
-        const batch = createBatch(pendingInput.cancel);
+        const batch = createBatch(() => pendingInput.cancel());
         batch.items.push(item);
         void enqueue(batch).catch(() => {});
       } else {
@@ -240,7 +248,9 @@ export function createCodexSteeringQueue(params: {
       return await delivery;
     },
     async flushPending() {
-      if (!closedError) await flush().catch(() => {});
+      if (!closedError) {
+        await flush().catch(() => {});
+      }
     },
     confirmConsumed(clientId: string) {
       const batch = batchesByClientId.get(clientId);

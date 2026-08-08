@@ -12,13 +12,9 @@ import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import {
@@ -1312,7 +1308,7 @@ describe("exportTrajectoryBundle", () => {
     });
     await runtimeRecorder.flush();
 
-    const bundle = await exportTrajectoryBundle({
+    await exportTrajectoryBundle({
       outputDir,
       sessionTarget: transcriptScope,
       sessionId,
