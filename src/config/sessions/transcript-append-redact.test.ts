@@ -4,7 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -460,11 +463,14 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     const sessionKey = "test-channel:test-provider-replay";
     await seedSessionEntry({ sessionId, sessionKey, storePath });
 
-    const result = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config: {},
-      message: {
+    const publicUpdates: Array<{ message?: unknown }> = [];
+    const internalUpdates: Array<{ message?: unknown }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
+    const unsubscribeInternal = onInternalSessionTranscriptUpdate((update) =>
+      internalUpdates.push(update),
+    );
+    const message: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["message"] =
+      {
         role: "assistant",
         content: [{ type: "text", text: "visible" }],
         api: "openai-responses",
@@ -493,8 +499,19 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
         },
         stopReason: "stop",
         timestamp: Date.now(),
-      },
-    });
+      };
+    let result: Awaited<ReturnType<typeof appendExactAssistantMessageToSessionTranscript>>;
+    try {
+      result = await appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath,
+        config: {},
+        message,
+      });
+    } finally {
+      unsubscribe();
+      unsubscribeInternal();
+    }
 
     expect(result.ok).toBe(true);
     const [stored] = (await readStoredMessages({ sessionId, sessionKey, storePath })) as Array<{
@@ -505,6 +522,11 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       sessionHash: "171dzdv17gum5g",
       authProfileHash: "oe8bkr3r8947",
     });
+    expect(publicUpdates).toHaveLength(1);
+    expect(publicUpdates[0]?.message).not.toHaveProperty("providerReplay");
+    expect(internalUpdates).toHaveLength(1);
+    expect(internalUpdates[0]?.message).toEqual(stored);
+    expect(internalUpdates[0]?.message).toHaveProperty("providerReplay.data", OPAQUE_COMPACTION);
   });
 
   it("always redacts exact assistant transcript appends", async () => {

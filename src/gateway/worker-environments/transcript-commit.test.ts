@@ -303,6 +303,7 @@ describe("worker transcript commit application", () => {
         }),
       ),
     );
+    expect(updates[1]?.message).not.toHaveProperty("providerReplay");
   });
 
   it("durably materializes a user-only commit", async () => {
