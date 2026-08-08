@@ -179,7 +179,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           provider: trajectoryAttribution.provider,
           modelId: trajectoryAttribution.modelId,
           modelApi: trajectoryAttribution.modelApi,
-          inputProvenance: params.inputProvenance,
           workspaceDir,
         })
       : undefined;

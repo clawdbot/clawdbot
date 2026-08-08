@@ -1,4 +1,3 @@
-import type { AgentToolExecutionPrivateState } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexDynamicToolCallResponse,
@@ -11,7 +10,6 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   executedArguments?: Record<string, unknown>;
   transcriptDetails?: { mcpAppPreview: unknown };
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
-  privateState?: AgentToolExecutionPrivateState;
 };
 
 /** Retains the host-owned app preview without adding it to Codex's response payload. */

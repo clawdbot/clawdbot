@@ -22,7 +22,6 @@ type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryR
 const tempDirs: string[] = [];
 const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
 const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
-const PROVENANCE_TEXT_HASH_DOMAIN = "openclaw:trajectory:provenance-text:v1";
 
 function expectedSessionHash(domain: string, value: string): string {
   return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
@@ -263,113 +262,6 @@ describe("trajectory runtime", () => {
     expect(eventJson).toContain(expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey));
   });
 
-  it("scrubs seeded provenance echoes from every live SQLite event before flush", async () => {
-    const tempDir = makeTempDir();
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:main";
-    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
-    const inputProvenance = {
-      kind: "inter_session" as const,
-      sourceSessionKey: rawSessionKey,
-      sourceTool: "sessions_send",
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const recorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionKey,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "session-1",
-        storePath,
-      }),
-      inputProvenance,
-    });
-    const contextData = {
-      prompt: `context before prompt ${rawSessionKey}`,
-      [rawSessionKey]: "object-key echo",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: `assistant echo ${rawSessionKey}` }],
-        },
-      ],
-    };
-    const promptData = {
-      prompt: `initial native or Codex prompt ${rawSessionKey}`,
-      origin: inputProvenance,
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: rawSessionKey }],
-          provenance: inputProvenance,
-        },
-      ],
-    };
-    const completionData = {
-      assistantTexts: [`completed ${rawSessionKey}`],
-      messagesSnapshot: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: `content block ${rawSessionKey}` }],
-        },
-      ],
-    };
-    const artifactsData = {
-      finalPromptText: `artifact prompt ${rawSessionKey}`,
-      snapshot: { assistantEcho: rawSessionKey },
-    };
-    const sourceSnapshot = structuredClone({
-      contextData,
-      promptData,
-      completionData,
-      artifactsData,
-    });
-
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("context.compiled", contextData);
-    runtimeRecorder.recordEvent("prompt.submitted", promptData);
-    runtimeRecorder.recordEvent("model.completed", completionData);
-    runtimeRecorder.recordEvent("trace.artifacts", artifactsData);
-    await runtimeRecorder.flush();
-
-    expect({ contextData, promptData, completionData, artifactsData }).toEqual(sourceSnapshot);
-    const events = await loadSqliteTrajectoryRuntimeEvents({
-      sessionId: "session-1",
-      storePath,
-    });
-    const serializedEvents = JSON.stringify(events);
-    const sourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey);
-    const textHash = expectedSessionHash(PROVENANCE_TEXT_HASH_DOMAIN, rawSessionKey);
-    expect(events).toHaveLength(4);
-    expect(events[0]?.data?.prompt).toBe(`context before prompt ${textHash}`);
-    expect(events[1]?.data?.origin).toEqual({
-      kind: "inter_session",
-      sourceSessionHash: sourceHash,
-      sourceTool: "sessions_send",
-    });
-    expect(
-      (
-        events[1]?.data?.messages as Array<{ provenance?: Record<string, unknown> }> | undefined
-      )?.[0]?.provenance,
-    ).toEqual({
-      kind: "inter_session",
-      sourceSessionHash: sourceHash,
-      sourceTool: "sessions_send",
-    });
-    expect(serializedEvents).toContain(textHash);
-    expect(serializedEvents).not.toContain(rawSessionKey);
-
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-    const rows = database.db
-      .prepare(
-        "SELECT event_json FROM trajectory_runtime_events WHERE session_id = ? ORDER BY seq ASC",
-      )
-      .all("session-1") as Array<{ event_json: string }>;
-    const sqliteRawKeyPresent = rows.some((row) => row.event_json.includes(rawSessionKey));
-    expect(sqliteRawKeyPresent).toBe(false);
-  });
-
   it("rejects a legacy SQLite marker for another session", () => {
     const storePath = path.join(makeTempDir(), "sessions.json");
 
@@ -586,6 +478,10 @@ describe("trajectory runtime", () => {
       origin: { kind: "inter_session", sourceSessionKey: distinctSessionKey },
     });
     runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "hash-shaped-raw",
+      origin: { kind: "inter_session", sourceSessionKey: spoofedHash },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
       prompt: "spoofed-hash-only",
       origin: { kind: "inter_session", sourceSessionHash: spoofedHash },
     });
@@ -613,9 +509,13 @@ describe("trajectory runtime", () => {
       kind: "inter_session",
       sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, distinctSessionKey),
     });
-    expect(events[3]?.data.origin).toEqual({ kind: "inter_session" });
-    expect(events[4]?.data.origin).toBeUndefined();
+    expect(events[3]?.data.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, spoofedHash),
+    });
+    expect(events[4]?.data.origin).toEqual({ kind: "inter_session" });
     expect(events[5]?.data.origin).toBeUndefined();
+    expect(events[6]?.data.origin).toBeUndefined();
     expect(expectedSourceHash).not.toBe(expectedOriginHash);
     expect(events[2]?.data.origin).not.toEqual(events[0]?.data.origin);
     expect(writes.join("\n")).not.toContain(rawSessionKey);

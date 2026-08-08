@@ -14,10 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import {
-  applyInputProvenanceToUserMessage,
-  type InputProvenance,
-} from "../sessions/input-provenance.js";
+import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -38,7 +35,6 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
 const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
 const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
-const PROVENANCE_TEXT_HASH_DOMAIN = "openclaw:trajectory:provenance-text:v1";
 
 function expectedSessionHash(domain: string, value: string): string {
   return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
@@ -965,7 +961,7 @@ describe("exportTrajectoryBundle", () => {
     expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
   });
 
-  it("pseudonymizes legacy prompt provenance at the export boundary", async () => {
+  it("projects structured provenance while retaining transcript content and leaf identity", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
@@ -974,15 +970,11 @@ describe("exportTrajectoryBundle", () => {
     const spoofedHash = `sha256:v1:${"f".repeat(64)}`;
     const canonicalSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "canonical-source");
     const canonicalOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, "canonical-origin");
-    const canonicalTargetHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "target-session");
     writeSimpleSessionFile(sessionFile, {
-      userMessage: applyInputProvenanceToUserMessage(
-        userMessage(`transcript echo ${rawSessionKey}`),
-        {
-          kind: "inter_session",
-          sourceSessionKey: rawSessionKey,
-        },
-      ),
+      userMessage: applyInputProvenanceToUserMessage(userMessage("delegated request"), {
+        kind: "inter_session",
+        sourceSessionKey: rawSessionKey,
+      }),
     });
     const origins: unknown[] = [
       {
@@ -1024,12 +1016,11 @@ describe("exportTrajectoryBundle", () => {
         sourceSeq: 1,
         sessionId: "session-1",
         data: {
-          prompt: `earlier echo ${rawSessionKey}`,
+          prompt: "compile the request",
           dynamicToolArgs: {
             sessionKey: "legacy-opaque-session-credential",
             sourceSessionKey: "legacy-opaque-source-session-credential",
           },
-          targetSessionHash: canonicalTargetHash,
         },
       },
       {
@@ -1044,9 +1035,7 @@ describe("exportTrajectoryBundle", () => {
         sessionId: "session-1",
         data: {
           toolCallId: "call-target",
-          targetSessionHash: canonicalTargetHash,
           result: {
-            targetSessionHash: canonicalTargetHash,
             sessionKey: "legacy-target-session-credential",
           },
         },
@@ -1082,14 +1071,10 @@ describe("exportTrajectoryBundle", () => {
       (event) => event.source === "runtime" && event.type === "prompt.submitted",
     );
     expect(bundle.events.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
-      `earlier echo ${expectedSessionHash(PROVENANCE_TEXT_HASH_DOMAIN, rawSessionKey)}`,
+      "compile the request",
     );
-    expect(
-      bundle.events.find((event) => event.type === "context.compiled")?.data?.targetSessionHash,
-    ).toBeUndefined();
     expect(bundle.events.find((event) => event.type === "tool.result")?.data).toEqual({
       toolCallId: "call-target",
-      targetSessionHash: canonicalTargetHash,
       result: {},
     });
     expect(exportedPrompts[0]?.data?.origin).toEqual({
@@ -1112,38 +1097,52 @@ describe("exportTrajectoryBundle", () => {
       .readdirSync(outputDir)
       .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
       .join("\n");
-    expect(exportedText).not.toContain(rawSessionKey);
     expect(exportedText).not.toContain(spoofedHash);
     expect(exportedText).not.toContain("nested-secret");
     expect(exportedText).not.toContain("drop-me");
     expect(exportedText).not.toContain("legacy-opaque-session-credential");
     expect(exportedText).not.toContain("legacy-opaque-source-session-credential");
     expect(exportedText).not.toContain("legacy-target-session-credential");
-    expect(bundle.manifest.transcriptEventCount).toBe(0);
-    expect(bundle.manifest.leafId).toBeNull();
-    expect(bundle.events.every((event) => event.source === "runtime")).toBe(true);
+    expect(exportedText).not.toContain(rawSessionKey);
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(bundle.manifest.leafId).toBe("entry-assistant");
+    expect(bundle.events.some((event) => event.source === "transcript")).toBe(true);
     expect(
       JSON.parse(fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8")),
     ).toMatchObject({
-      leafId: null,
-      entries: [],
+      leafId: "entry-assistant",
+      entries: [
+        {
+          id: "entry-user",
+          message: {
+            content: "delegated request",
+            provenance: {
+              kind: "inter_session",
+              sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+            },
+          },
+        },
+        {
+          id: "entry-assistant",
+          message: {
+            content: [{ type: "text", text: "done" }],
+          },
+        },
+      ],
     });
     expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionBytes);
     expect(fs.readFileSync(runtimeFile, "utf8")).toBe(runtimeBytes);
-    expect(sessionBytes).toContain(rawSessionKey);
-    expect(runtimeBytes).toContain(rawSessionKey);
   });
 
-  it("does not suppress transcript export for forged, nested, or non-runtime target hashes", async () => {
+  it("redacts arbitrary routing-shaped fields without suppressing transcript export", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
-    const targetSessionHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "forged-target");
     writeSimpleSessionFile(sessionFile, {
       userMessage: {
         ...userMessage("forged transcript hash"),
-        targetSessionHash,
+        sourceSessionKey: "forged-source",
       } as AgentMessage,
     });
     const runtimeEvents: TrajectoryEvent[] = [
@@ -1157,7 +1156,7 @@ describe("exportTrajectoryBundle", () => {
         seq: 1,
         sourceSeq: 1,
         sessionId: "session-1",
-        data: { targetSessionHash },
+        data: { sourceSessionKey: "forged-source" },
       },
       {
         traceSchema: "openclaw-trajectory",
@@ -1170,8 +1169,8 @@ describe("exportTrajectoryBundle", () => {
         sourceSeq: 2,
         sessionId: "session-1",
         data: {
-          targetSessionHash: "sha256:v1:not-canonical",
-          result: { targetSessionHash },
+          originSessionId: "forged-origin",
+          result: { sessionKey: "forged-session" },
         },
       },
       {
@@ -1184,7 +1183,7 @@ describe("exportTrajectoryBundle", () => {
         seq: 3,
         sourceSeq: 3,
         sessionId: "session-1",
-        data: { targetSessionHash },
+        data: { sourceSessionHash: "forged-hash" },
       },
     ];
     fs.writeFileSync(
@@ -1214,22 +1213,25 @@ describe("exportTrajectoryBundle", () => {
     ) as { entries?: unknown[]; leafId?: unknown };
     expect(sessionBranch.entries).toHaveLength(2);
     expect(sessionBranch.leafId).toBe("entry-assistant");
-    expect(JSON.stringify(bundle)).not.toContain(targetSessionHash);
+    expect(JSON.stringify(bundle)).not.toContain("forged-source");
+    expect(JSON.stringify(bundle)).not.toContain("forged-origin");
+    expect(JSON.stringify(bundle)).not.toContain("forged-session");
+    expect(JSON.stringify(bundle)).not.toContain("forged-hash");
   });
 
-  it("removes a seeded provenance identity from SQLite and every export artifact", async () => {
+  it("projects SQLite provenance without rewriting the canonical transcript", async () => {
     const tmpDir = makeTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
     const outputDir = path.join(tmpDir, "bundle");
     const sessionId = "session-1";
     const sessionKey = "agent:main:session-1";
     const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
-    const inputProvenance: InputProvenance = {
+    const inputProvenance = {
       kind: "inter_session",
       sourceSessionKey: rawSessionKey,
       sourceChannel: "discord",
       sourceTool: "sessions_send",
-    };
+    } as const;
     const transcriptScope = {
       agentId: "main",
       sessionId,
@@ -1250,7 +1252,7 @@ describe("exportTrajectoryBundle", () => {
         parentId: null,
         timestamp: "2026-04-01T05:46:40.000Z",
         message: applyInputProvenanceToUserMessage(
-          userMessage(`canonical transcript ${rawSessionKey}`),
+          userMessage("canonical transcript"),
           inputProvenance,
         ),
       },
@@ -1259,9 +1261,7 @@ describe("exportTrajectoryBundle", () => {
         id: "entry-assistant",
         parentId: "entry-user",
         timestamp: "2026-04-01T05:46:41.000Z",
-        message: assistantMessage([
-          { type: "text", text: `canonical assistant echo ${rawSessionKey}` },
-        ]),
+        message: assistantMessage([{ type: "text", text: "canonical assistant reply" }]),
       },
     ]);
     const transcriptBefore = await loadTranscriptEvents(transcriptScope);
@@ -1270,58 +1270,47 @@ describe("exportTrajectoryBundle", () => {
       sessionId,
       sessionKey,
       sessionTarget: transcriptScope,
-      inputProvenance,
       workspaceDir: tmpDir,
     });
     const runtimeRecorder = expectDefined(recorder, "SQLite trajectory recorder");
     runtimeRecorder.recordEvent("context.compiled", {
-      systemPrompt: `system ${rawSessionKey}`,
-      prompt: `compiled before prompt ${rawSessionKey}`,
-      tools: [{ name: "read", description: `tool ${rawSessionKey}` }],
+      systemPrompt: "system",
+      prompt: "compiled prompt",
+      tools: [{ name: "read", description: "read a file" }],
       messages: [
         {
           role: "assistant",
-          content: [{ type: "text", text: `snapshot ${rawSessionKey}` }],
+          content: [{ type: "text", text: "snapshot" }],
         },
       ],
     });
     runtimeRecorder.recordEvent("trace.metadata", {
       harness: { type: "openclaw" },
       prompting: {
-        skillsPrompt: `skills ${rawSessionKey}`,
-        userPromptPrefixText: `prefix ${rawSessionKey}`,
+        skillsPrompt: "skills",
+        userPromptPrefixText: "prefix",
       },
     });
     runtimeRecorder.recordEvent("model.completed", {
-      assistantTexts: [`assistant ${rawSessionKey}`],
+      assistantTexts: ["assistant"],
       messagesSnapshot: [
         {
           role: "assistant",
-          content: [{ type: "text", text: `content block ${rawSessionKey}` }],
+          content: [{ type: "text", text: "content block" }],
         },
       ],
     });
     runtimeRecorder.recordEvent("trace.artifacts", {
       finalStatus: "completed",
-      finalPromptText: `final prompt ${rawSessionKey}`,
-      assistantTexts: [`artifact ${rawSessionKey}`],
-      snapshot: { [rawSessionKey]: rawSessionKey },
+      finalPromptText: "final prompt",
+      assistantTexts: ["artifact"],
+      snapshot: { status: "complete" },
     });
     runtimeRecorder.recordEvent("prompt.submitted", {
-      prompt: `submitted ${rawSessionKey}`,
+      prompt: "submitted prompt",
       origin: inputProvenance,
     });
     await runtimeRecorder.flush();
-
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-    const rows = database.db
-      .prepare(
-        "SELECT event_json FROM trajectory_runtime_events WHERE session_id = ? ORDER BY seq ASC",
-      )
-      .all(sessionId) as Array<{ event_json: string }>;
-    const sqliteRawKeyPresent = rows.some((row) => row.event_json.includes(rawSessionKey));
-    expect(sqliteRawKeyPresent).toBe(false);
 
     const bundle = await exportTrajectoryBundle({
       outputDir,
@@ -1342,14 +1331,6 @@ describe("exportTrajectoryBundle", () => {
       "system-prompt.txt",
       "tools.json",
     ]);
-    for (const file of bundleFiles) {
-      expect(fs.readFileSync(path.join(outputDir, file), "utf8"), file).not.toContain(
-        rawSessionKey,
-      );
-    }
-    expect(JSON.stringify(bundle.events)).not.toContain(rawSessionKey);
-    const textHash = expectedSessionHash(PROVENANCE_TEXT_HASH_DOMAIN, rawSessionKey);
-    expect(JSON.stringify(bundle.events)).toContain(textHash);
     const sessionBranch = JSON.parse(
       fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
     ) as {
@@ -1363,34 +1344,18 @@ describe("exportTrajectoryBundle", () => {
     });
     const transcriptAfter = await loadTranscriptEvents(transcriptScope);
     expect(JSON.stringify(transcriptAfter)).toBe(transcriptBytesBefore);
-    expect(JSON.stringify(transcriptAfter)).toContain(rawSessionKey);
   });
 
-  it.each([
-    {
-      name: "short identity",
-      identities: ["short"],
-      error: /identity shorter than 8 characters/u,
-    },
-    {
-      name: "oversized identity",
-      identities: ["x".repeat(4097)],
-      error: /identity longer than 4096 characters/u,
-    },
-    {
-      name: "identity count overflow",
-      identities: Array.from(
-        { length: 65 },
-        (_value, index) => `export-identity-${index.toString().padStart(3, "0")}`,
-      ),
-      error: /more than 64 identities/u,
-    },
-  ])("refuses $name before creating export files", async ({ identities, error }) => {
+  it("projects each provenance record independently without an identity limit", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
     writeSimpleSessionFile(sessionFile);
+    const identities = Array.from(
+      { length: 65 },
+      (_value, index) => `export-identity-${index.toString().padStart(3, "0")}`,
+    );
     const runtimeEvents = identities.map(
       (identity, index): TrajectoryEvent => ({
         traceSchema: "openclaw-trajectory",
@@ -1416,16 +1381,20 @@ describe("exportTrajectoryBundle", () => {
       "utf8",
     );
 
-    await expect(
-      exportTrajectoryBundle({
-        outputDir,
-        sessionFile,
-        sessionId: "session-1",
-        workspaceDir: tmpDir,
-        runtimeFile,
-      }),
-    ).rejects.toThrow(error);
-    expect(fs.existsSync(outputDir)).toBe(false);
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    const prompts = bundle.events.filter((event) => event.type === "prompt.submitted");
+    expect(prompts).toHaveLength(65);
+    expect(prompts[64]?.data?.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "export-identity-064"),
+    });
   });
 
   it("rejects oversized runtime trajectory files", async () => {

@@ -18,12 +18,6 @@ import {
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
 import {
-  createAgentToolExecutionPrivateState,
-  runWithAgentToolExecutionPrivateState,
-  snapshotAgentToolExecutionPrivateState,
-  type AgentToolExecutionPrivateState,
-} from "./tool-execution-private-state.js";
-import {
   appendInterruptedTurnMessage,
   createFailureMessage,
   createInterruptedTurnMessage,
@@ -989,7 +983,6 @@ type ExecutedToolCallOutcome = {
   isError: boolean;
   executionStarted: boolean;
   callerCancelled?: true;
-  privateState?: AgentToolExecutionPrivateState;
 };
 
 type FinalizedToolCallOutcome = {
@@ -1000,7 +993,6 @@ type FinalizedToolCallOutcome = {
   errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
-  privateState?: AgentToolExecutionPrivateState;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -1243,56 +1235,45 @@ async function executePreparedToolCall(
 
   const updateEvents: Promise<void>[] = [];
   let acceptingUpdates = true;
-  const privateState = createAgentToolExecutionPrivateState();
 
   try {
-    const result = await runWithAgentToolExecutionPrivateState(privateState, () =>
-      runWithAgentToolExecutionContext(executionContext, () =>
-        prepared.tool.execute(
-          prepared.toolCall.id,
-          prepared.args as never,
-          signal,
-          (partialResult) => {
-            if (!acceptingUpdates) {
-              return;
-            }
-            updateEvents.push(
-              Promise.resolve(
-                emit({
-                  type: "tool_execution_update",
-                  toolCallId: prepared.toolCall.id,
-                  toolName: prepared.toolCall.name,
-                  args: prepared.toolCall.arguments,
-                  partialResult,
-                  ...(prepared.tool.hideFromChannelProgress === true
-                    ? { hideFromChannelProgress: true }
-                    : {}),
-                }),
-              ),
-            );
-          },
-        ),
+    const result = await runWithAgentToolExecutionContext(executionContext, () =>
+      prepared.tool.execute(
+        prepared.toolCall.id,
+        prepared.args as never,
+        signal,
+        (partialResult) => {
+          if (!acceptingUpdates) {
+            return;
+          }
+          updateEvents.push(
+            Promise.resolve(
+              emit({
+                type: "tool_execution_update",
+                toolCallId: prepared.toolCall.id,
+                toolName: prepared.toolCall.name,
+                args: prepared.toolCall.arguments,
+                partialResult,
+                ...(prepared.tool.hideFromChannelProgress === true
+                  ? { hideFromChannelProgress: true }
+                  : {}),
+              }),
+            ),
+          );
+        },
       ),
     );
     acceptingUpdates = false;
     await Promise.all(updateEvents);
-    const privateStateSnapshot = snapshotAgentToolExecutionPrivateState(privateState);
-    return {
-      result,
-      isError: false,
-      executionStarted: true,
-      ...(privateStateSnapshot ? { privateState: privateStateSnapshot } : {}),
-    };
+    return { result, isError: false, executionStarted: true };
   } catch (error) {
     acceptingUpdates = false;
     await Promise.all(updateEvents);
-    const privateStateSnapshot = snapshotAgentToolExecutionPrivateState(privateState);
     return {
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
       executionStarted: true,
       ...(signal?.aborted && error === signal.reason ? { callerCancelled: true } : {}),
-      ...(privateStateSnapshot ? { privateState: privateStateSnapshot } : {}),
     };
   } finally {
     acceptingUpdates = false;
@@ -1352,7 +1333,6 @@ async function finalizeExecutedToolCall(
       prepared.tool.resultContentSource
         ? { resultContentSource: prepared.tool.resultContentSource }
         : {}),
-      ...(executed.privateState ? { privateState: executed.privateState } : {}),
     },
     prepared.args,
     config,
@@ -1545,7 +1525,7 @@ async function emitToolExecutionEnd(
   finalized: FinalizedToolCallOutcome,
   emit: AgentEventSink,
 ): Promise<void> {
-  const event: Extract<AgentEvent, { type: "tool_execution_end" }> = {
+  await emit({
     type: "tool_execution_end",
     toolCallId: finalized.toolCall.id,
     toolName: finalized.toolCall.name,
@@ -1554,13 +1534,7 @@ async function emitToolExecutionEnd(
     executionStarted: finalized.executionStarted,
     ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
     ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-  };
-  if (finalized.privateState) {
-    // Keep execution-owned facts available to the in-process subscriber without
-    // making them enumerable to protocol/event serializers.
-    Object.defineProperty(event, "privateState", { value: finalized.privateState });
-  }
-  await emit(event);
+  });
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {

@@ -3,13 +3,7 @@
  * tool-call responses.
  */
 import { createHash } from "node:crypto";
-import {
-  createAgentToolExecutionPrivateState,
-  runWithAgentToolExecutionPrivateState,
-  snapshotAgentToolExecutionPrivateState,
-  type AgentToolExecutionPrivateState,
-  type AgentToolResult,
-} from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -375,13 +369,9 @@ export type CodexDynamicToolBridge = {
     },
   ) => Promise<CodexDynamicToolRuntimeResponse>;
   /** Consume exact boundary evidence retained while post-execution processing is incomplete. */
-  consumeToolExecutionSnapshot?: (toolCallId: string) =>
-    | {
-        executedArguments?: Record<string, unknown>;
-        executionStarted?: boolean;
-        privateState?: AgentToolExecutionPrivateState;
-      }
-    | undefined;
+  consumeToolExecutionSnapshot?: (
+    toolCallId: string,
+  ) => { executedArguments: Record<string, unknown>; executionStarted: boolean } | undefined;
   /** Bind the authenticated app-server client once remote thread startup completes. */
   setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
   telemetry: {
@@ -535,14 +525,12 @@ export function createCodexDynamicToolBridge(params: {
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   type ExecutionSnapshot = {
-    executedArguments?: Record<string, unknown>;
-    executionStarted?: boolean;
-    privateState?: AgentToolExecutionPrivateState;
+    executedArguments: Record<string, unknown>;
+    executionStarted: boolean;
   };
   type ExecutionSnapshotState = {
     consumed: boolean;
     retainAfterCompletion: boolean;
-    privateStateSource: AgentToolExecutionPrivateState;
     snapshot?: ExecutionSnapshot;
   };
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
@@ -573,18 +561,7 @@ export function createCodexDynamicToolBridge(params: {
       if (state) {
         state.consumed = true;
       }
-      const livePrivateState = state
-        ? snapshotAgentToolExecutionPrivateState(state.privateStateSource)
-        : undefined;
-      if (!state?.snapshot && !livePrivateState) {
-        return undefined;
-      }
-      return {
-        ...state?.snapshot,
-        ...(state?.snapshot?.privateState || !livePrivateState
-          ? {}
-          : { privateState: livePrivateState }),
-      };
+      return state?.snapshot;
     },
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
@@ -621,11 +598,9 @@ export function createCodexDynamicToolBridge(params: {
       let didDispatchExecution = false;
       let executionPrevented = false;
       let executedArgs = structuredClone(args);
-      const privateStateSource = createAgentToolExecutionPrivateState();
       const executionSnapshotState: ExecutionSnapshotState = {
         consumed: false,
         retainAfterCompletion: options?.retainExecutionSnapshot === true,
-        privateStateSource,
       };
       executionSnapshotStates.set(call.callId, executionSnapshotState);
       const captureExecutionBoundary = () => {
@@ -643,13 +618,9 @@ export function createCodexDynamicToolBridge(params: {
         // Consumption detaches this invocation from the bridge map immediately. The
         // closure-local flag prevents late completion from republishing stale evidence.
         if (!executionSnapshotState.consumed) {
-          const privateState =
-            executionSnapshotState.snapshot?.privateState ??
-            snapshotAgentToolExecutionPrivateState(privateStateSource);
           executionSnapshotState.snapshot = {
             executedArguments: structuredClone(executedArgs),
             executionStarted: didStartExecution && !executionPrevented,
-            ...(privateState ? { privateState } : {}),
           };
         }
       };
@@ -679,9 +650,7 @@ export function createCodexDynamicToolBridge(params: {
             : undefined,
         };
         didDispatchExecution = true;
-        const rawResult = await runWithAgentToolExecutionPrivateState(privateStateSource, () =>
-          tool.execute(call.callId, preparedArgs, signal),
-        );
+        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         captureExecutionBoundary();
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);

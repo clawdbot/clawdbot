@@ -257,18 +257,15 @@ export function createCodexAttemptServerRequestController(
           });
         }
         const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
-        trajectoryRecorder?.recordToolResult(
-          {
-            threadId: call.threadId,
-            turnId: call.turnId,
-            toolCallId: call.callId,
-            name: call.tool,
-            isError: !protocolResponse.success,
-            success: protocolResponse.success,
-            contentItems: protocolResponse.contentItems,
-          },
-          response.privateState,
-        );
+        trajectoryRecorder?.recordToolResult({
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          name: call.tool,
+          isError: !protocolResponse.success,
+          success: protocolResponse.success,
+          contentItems: protocolResponse.contentItems,
+        });
         recordCodexDynamicToolResult(projector, call, response, protocolResponse);
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);

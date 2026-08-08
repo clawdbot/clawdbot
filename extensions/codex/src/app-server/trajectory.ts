@@ -2,7 +2,6 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
-import type { AgentToolExecutionPrivateState } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -19,10 +18,7 @@ type CodexPromptSubmittedData = {
 /** Runtime trajectory recorder used by Codex run attempts and event projectors. */
 export type CodexTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  recordToolResult: (
-    data: Record<string, unknown>,
-    privateState?: AgentToolExecutionPrivateState,
-  ) => void;
+  recordToolResult: (data: Record<string, unknown>) => void;
   recordPromptSubmitted: (
     data: CodexPromptSubmittedData,
     origin?: NonNullable<EmbeddedRunAttemptParams["inputProvenance"]>,
@@ -54,25 +50,18 @@ const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
   "toolCallId",
   "isError",
   "success",
-  "targetSessionHash",
   ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
 ] as const;
 
 type CodexTrajectorySink = {
   flush: () => Promise<void>;
-  recordToolResult: (
-    data: Record<string, unknown>,
-    privateState?: AgentToolExecutionPrivateState,
-  ) => void;
+  recordToolResult: (data: Record<string, unknown>) => void;
   write: (event: CodexTrajectoryEvent) => void;
 };
 
 export type CodexHostTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  recordToolResult: (
-    data: Record<string, unknown>,
-    privateState?: AgentToolExecutionPrivateState,
-  ) => void;
+  recordToolResult: (data: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
 
@@ -154,8 +143,8 @@ function createCodexHostTrajectorySink(params: {
     flush: async () => {
       await params.recorder.flush();
     },
-    recordToolResult: (data, privateState) => {
-      params.recorder.recordToolResult(data, privateState);
+    recordToolResult: (data) => {
+      params.recorder.recordToolResult(data);
     },
   };
 }
@@ -222,14 +211,14 @@ export function createCodexTrajectoryRecorder(
         sink.write(event);
       }
     },
-    recordToolResult: (data, privateState) => {
+    recordToolResult: (data) => {
       const event = buildSanitizedEvent(
         "tool.result",
         sanitizeValue(data) as Record<string, unknown>,
         TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
       );
       if (event?.data) {
-        sink.recordToolResult(event.data, privateState);
+        sink.recordToolResult(event.data);
       }
     },
     recordPromptSubmitted: (data, origin) => {

@@ -161,14 +161,13 @@ redacts sensitive values before writing export files:
 - workspace paths, replaced with `$WORKSPACE_DIR`
 - home directory paths, where detected
 
-Session identifiers learned from recognized prompt and message provenance are
-deterministically pseudonymized with domain-separated SHA-256 values before
-trajectory persistence. Known identifiers are also replaced in diagnostic text
-and object keys. Export sanitizes cloned data and does not rewrite the canonical
-session transcript. Matching identifiers remain correlatable across events.
-This is pseudonymization, not anonymity, so treat the hashes as sensitive
-metadata. Capture and export fail closed when provenance contains too many
-identifiers or identifiers that are unsafe for deterministic text replacement.
+Session identifiers in recognized prompt and message provenance are
+independently pseudonymized with domain-separated SHA-256 values before
+trajectory persistence. Arbitrary routing-shaped fields outside those
+validated provenance paths are omitted. Export sanitizes cloned data without
+rewriting or suppressing the canonical transcript, branch, or leaf. Matching
+structured identifiers remain correlatable across events. This is
+pseudonymization, not anonymity, so treat the hashes as sensitive metadata.
 
 The exporter also bounds input size:
 

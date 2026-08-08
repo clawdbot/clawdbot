@@ -89,7 +89,6 @@ const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TRAJECTORY_WARNING_ROWS = 20;
-const CANONICAL_SESSION_HASH_RE = /^sha256:v1:[0-9a-f]{64}$/u;
 
 function normalizeCompleteSessionTarget(
   target: SessionTranscriptRuntimeTarget | undefined,
@@ -1161,6 +1160,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
   const runtimeFile = runtimeParse.runtimeFile;
   const runtimeEvents = runtimeParse.events;
+  assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
   const provenanceSanitizer = new TrajectoryProvenanceSanitizer({ mode: "export" });
   const transformExportText = (value: string) =>
     redactToolPayloadText(maybeRedactPathString(value, redaction));
@@ -1168,52 +1168,34 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     transformKey: transformExportText,
     transformString: transformExportText,
   };
+  const transcriptEvents = buildTranscriptEvents({
+    entries: branchEntries,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    traceId: params.sessionId,
+  });
   const {
-    runtimeEvents: sanitizedRuntimeEvents,
+    runtimeEvents: sanitizedEvents,
     branchEntries: sanitizedBranchEntries,
     header: sanitizedHeader,
   } = provenanceSanitizer.sanitizeExportSnapshot({
-    runtimeEvents,
+    runtimeEvents: [...runtimeEvents, ...transcriptEvents],
     branchEntries,
     header,
     ...projectionTransforms,
   });
-  assertCanonicalTrajectoryInputs(sanitizedBranchEntries, sanitizedRuntimeEvents);
-  const suppressTranscriptExport = sanitizedRuntimeEvents.some(
-    (event) =>
-      event.source === "runtime" &&
-      event.type === "tool.result" &&
-      typeof event.data?.targetSessionHash === "string" &&
-      CANONICAL_SESSION_HASH_RE.test(event.data.targetSessionHash),
-  );
-  // The hash proves a raw target may remain in transcript text but cannot recover
-  // that identity. Omit transcript projections instead of exporting it.
-  const exportedBranchEntries = suppressTranscriptExport ? [] : sanitizedBranchEntries;
-  const exportedLeafId = suppressTranscriptExport
-    ? null
-    : provenanceSanitizer.sanitizeExportValue(leafId, projectionTransforms);
-  const projectedSessionId = provenanceSanitizer.sanitizeExportValue(
-    params.sessionId,
-    projectionTransforms,
-  );
-  const transcriptEvents = buildTranscriptEvents({
-    entries: exportedBranchEntries,
-    sessionId: projectedSessionId,
-    sessionKey: provenanceSanitizer.sanitizeExportValue(params.sessionKey, projectionTransforms),
-    workspaceDir: provenanceSanitizer.sanitizeExportValue(
-      params.workspaceDir,
-      projectionTransforms,
-    ),
-    traceId: projectedSessionId,
-  }).map((event) => provenanceSanitizer.sanitizeExportValue(event, projectionTransforms));
+  const sanitizedRuntimeEvents = sanitizedEvents.slice(0, runtimeEvents.length);
+  const sanitizedTranscriptEvents = sanitizedEvents.slice(runtimeEvents.length);
+  const exportedLeafId = provenanceSanitizer.sanitizeExportValue(leafId, projectionTransforms);
   const maxTotalEvents = params.maxTotalEvents ?? MAX_TRAJECTORY_TOTAL_EVENTS;
-  const totalEventCount = sanitizedRuntimeEvents.length + transcriptEvents.length;
+  const totalEventCount = sanitizedEvents.length;
   if (totalEventCount > maxTotalEvents) {
     throw new Error(
       `Trajectory export has too many events (${totalEventCount}; limit ${maxTotalEvents})`,
     );
   }
-  const events = sortTrajectoryEvents([...sanitizedRuntimeEvents, ...transcriptEvents]);
+  const events = sortTrajectoryEvents(sanitizedEvents);
   const warnings = summarizeJsonlWarnings([...sessionWarnings, ...runtimeParse.warnings]);
   const manifest = provenanceSanitizer.sanitizeExportValue<TrajectoryBundleManifest>(
     {
@@ -1227,7 +1209,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       leafId: exportedLeafId,
       eventCount: events.length,
       runtimeEventCount: sanitizedRuntimeEvents.length,
-      transcriptEventCount: transcriptEvents.length,
+      transcriptEventCount: sanitizedTranscriptEvents.length,
       sourceFiles: {
         session: maybeRedactPathString(
           sessionTarget?.sessionKey ?? params.sessionFile ?? params.sessionId,
@@ -1279,7 +1261,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     jsonSupportBundleFile("session-branch.json", {
       header: sanitizedHeader,
       leafId: exportedLeafId,
-      entries: exportedBranchEntries,
+      entries: sanitizedBranchEntries,
     }),
   );
   if (bundleRuntimeContext.systemPrompt) {

@@ -179,15 +179,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
       outcome: response.success ? "success" : "failure",
       ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
     });
-    const finalized = withDynamicToolTerminalResolution(response, terminalResolution);
-    if (executionSnapshot?.privateState) {
-      Object.defineProperty(finalized, "privateState", {
-        configurable: true,
-        enumerable: false,
-        value: executionSnapshot.privateState,
-      });
-    }
-    return finalized;
+    return withDynamicToolTerminalResolution(response, terminalResolution);
   };
   // The host observer replaces these conservative facts with exact boundary evidence.
   // Direct/older callers without one must still treat a raced terminal as dispatched.

@@ -310,12 +310,8 @@ describe("Codex trajectory recorder", () => {
     expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
   });
 
-  it("preserves tool identity and forwards private state through oversized results", () => {
-    const recorded: Array<{
-      data: Record<string, unknown>;
-      privateState?: unknown;
-    }> = [];
-    const privateState = Object.freeze({}) as never;
+  it("preserves tool identity and outcome through oversized results", () => {
+    const recorded: Array<Record<string, unknown>> = [];
     const recorder = expectTrajectoryRecorder(
       createCodexTrajectoryRecorder({
         cwd: makeTempDir(),
@@ -329,37 +325,33 @@ describe("Codex trajectory recorder", () => {
         } as never,
         trajectoryRecorder: {
           recordEvent: vi.fn(),
-          recordToolResult: (data, state) => recorded.push({ data, privateState: state }),
+          recordToolResult: (data) => recorded.push(data),
           flush: async () => undefined,
         },
         env: {},
       }),
     );
 
-    recorder.recordToolResult(
-      {
-        name: "sessions_send",
-        toolCallId: "call-oversized",
-        isError: true,
-        success: false,
-        contentItems: Array.from({ length: 64 }, () => ({
-          type: "inputText",
-          text: "x".repeat(8_000),
-        })),
-      },
-      privateState,
-    );
+    recorder.recordToolResult({
+      name: "sessions_send",
+      toolCallId: "call-oversized",
+      isError: true,
+      success: false,
+      contentItems: Array.from({ length: 64 }, () => ({
+        type: "inputText",
+        text: "x".repeat(8_000),
+      })),
+    });
 
     expect(recorded).toHaveLength(1);
-    expect(recorded[0]?.data).toMatchObject({
+    expect(recorded[0]).toMatchObject({
       truncated: true,
       name: "sessions_send",
       toolCallId: "call-oversized",
       isError: true,
       success: false,
     });
-    expect(recorded[0]?.data.contentItems).toBeUndefined();
-    expect(recorded[0]?.privateState).toBe(privateState);
+    expect(recorded[0]?.contentItems).toBeUndefined();
   });
 
   it("projects trusted prompt origin for the host when truncating an oversized prompt event", async () => {

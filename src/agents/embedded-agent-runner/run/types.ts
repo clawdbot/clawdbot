@@ -1,7 +1,6 @@
 /**
  * Shared result and attempt types for embedded-agent run internals.
  */
-import type { AgentToolExecutionPrivateState } from "../../../../packages/agent-core/src/tool-execution-private-state.js";
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -92,10 +91,7 @@ type EmbeddedRunAttemptToolTerminalObserver = (
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  recordToolResult: (
-    data: Record<string, unknown>,
-    privateState?: AgentToolExecutionPrivateState,
-  ) => void;
+  recordToolResult: (data: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
 
