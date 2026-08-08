@@ -835,6 +835,23 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Reply to message"]')).toBeNull();
   });
 
+  it("renders reasoning-only assistant messages through the thinking preference", () => {
+    const container = document.createElement("div");
+    const message = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Checking the evidence carefully" }],
+      timestamp: 1000,
+    };
+
+    renderAssistantMessage(container, message, { showReasoning: true });
+    expect(container.querySelector(".chat-thinking")?.textContent).toContain(
+      "Checking the evidence carefully",
+    );
+
+    renderAssistantMessage(container, message, { showReasoning: false });
+    expect(container.querySelector(".chat-thinking")).toBeNull();
+  });
+
   it("does not replay an arrival animation when a message row mounts", () => {
     const container = document.createElement("div");
     renderAssistantMessage(

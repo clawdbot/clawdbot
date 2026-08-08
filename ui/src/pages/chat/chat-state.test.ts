@@ -1347,6 +1347,24 @@ describe("route composer fallback", () => {
     expect(state.imageLightbox).toBeNull();
   });
 
+  it("does not restore transient live thinking after switching sessions", () => {
+    const { state } = createRouteState("");
+    const message = { role: "assistant", content: [{ type: "text", text: "Durable answer" }] };
+    state.chatMessages = [
+      message,
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Transient reasoning" }],
+        __openclaw: { kind: "live-thinking", runId: "run-1" },
+      },
+    ];
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+    resetChatStateForRouteSession(state, "agent:main:first");
+
+    expect(state.chatMessages).toEqual([message]);
+  });
+
   it("retires realtime Talk before adopting the next route", () => {
     const { state } = createRouteState("");
     const previousSessionKey = state.sessionKey;

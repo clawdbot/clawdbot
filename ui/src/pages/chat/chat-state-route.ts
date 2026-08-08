@@ -45,6 +45,7 @@ import {
 } from "./session-message-cache.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { clearAuthoritativeTerminal } from "./terminal-message-identity.ts";
+import { removeLiveThinkingMessages } from "./tool-stream.ts";
 
 type ChatComposerRouteResetResult = {
   restoredFallback: boolean;
@@ -113,7 +114,7 @@ function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
       ...(state.chatDisplayedLeafEntryId !== undefined
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
-      messages: state.chatMessages,
+      messages: removeLiveThinkingMessages(state.chatMessages),
       pagination: state.chatHistoryPagination ?? { hasMore: false },
       sessionId: state.currentSessionId ?? null,
     },

@@ -14,6 +14,7 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -246,6 +247,58 @@ function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
 }
 
 describe("handleChatGatewayEvent", () => {
+  it("projects live thinking before the final answer without duplicating final content", () => {
+    const state = createState({ chatRunId: "run-1" });
+
+    handleAgentEvent(state as never, {
+      runId: "run-1",
+      seq: 1,
+      stream: "thinking",
+      ts: 100,
+      sessionKey: "main",
+      data: { text: "Checking the evidence", delta: "Checking the evidence" },
+    });
+    handleAgentEvent(state as never, {
+      runId: "run-1",
+      seq: 2,
+      stream: "thinking",
+      ts: 110,
+      sessionKey: "main",
+      data: { text: "Checking the evidence carefully", delta: " carefully" },
+    });
+
+    expect(state.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking the evidence carefully" }],
+        timestamp: 100,
+        __openclaw: { kind: "live-thinking", runId: "run-1" },
+      },
+    ]);
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Final answer.",
+      }),
+    ).toBe("delta");
+    expect(state.chatStream).toBe("Final answer.");
+    expect(state.chatMessages).toHaveLength(1);
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: createTextChatMessage("assistant", "Final answer."),
+      }),
+    ).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Final answer.");
+  });
+
   it("returns null when payload is missing", () => {
     const state = createState();
     expect(handleChatGatewayEvent(state, undefined)).toBe(null);

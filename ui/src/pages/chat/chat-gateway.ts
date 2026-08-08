@@ -36,6 +36,7 @@ import {
   authoritativeHistoryAppliedForRun,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import { removeLiveThinkingMessages } from "./tool-stream.ts";
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
@@ -328,6 +329,15 @@ function handleChatEvent(
   }
 
   const terminalRunId = payload.runId ?? state.chatRunId;
+  if (
+    (payload.state === "final" || payload.state === "aborted" || payload.state === "error") &&
+    terminalRunId
+  ) {
+    const messages = removeLiveThinkingMessages(state.chatMessages, terminalRunId);
+    if (messages !== state.chatMessages) {
+      state.chatMessages = messages;
+    }
+  }
   const materializeVisibleStream = (
     materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
   ) =>

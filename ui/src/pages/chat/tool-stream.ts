@@ -58,6 +58,7 @@ type ToolStreamHost = {
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
   chatRunUsageById?: Map<string, number>;
+  chatMessages?: unknown[];
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
@@ -74,6 +75,8 @@ type ToolStreamHost = {
   requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
+
+const LIVE_THINKING_MESSAGE_KIND = "live-thinking";
 
 function toTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -216,6 +219,22 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
+function liveThinkingMessageRunId(message: unknown): string | null {
+  const marker = readRecord(readRecord(message)?.["__openclaw"]);
+  return marker?.kind === LIVE_THINKING_MESSAGE_KIND ? toTrimmedString(marker.runId) : null;
+}
+
+export function removeLiveThinkingMessages(messages: unknown[], runId?: string): unknown[] {
+  let removed = false;
+  const filtered = messages.filter((message) => {
+    const messageRunId = liveThinkingMessageRunId(message);
+    const keep = messageRunId === null || (runId !== undefined && messageRunId !== runId);
+    removed ||= !keep;
+    return keep;
+  });
+  return removed ? filtered : messages;
+}
+
 function resolveSessionStatusModelOverride(result: unknown): string | null | undefined {
   const details = readRecord(readRecord(result)?.details);
   if (!details || details.changedModel !== true) {
@@ -331,6 +350,12 @@ export function resetToolStream(host: ToolStreamHost) {
   host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  if (host.chatMessages) {
+    const messages = removeLiveThinkingMessages(host.chatMessages);
+    if (messages !== host.chatMessages) {
+      host.chatMessages = messages;
+    }
+  }
   host.planStatus = null;
   host.knownAgentRunIds?.clear();
   host.waitingApprovalStatuses?.clear();
@@ -943,6 +968,43 @@ function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   host.requestUpdate?.();
 }
 
+function handleThinkingEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "thinking") {
+    return false;
+  }
+  if (!resolveAcceptedSession(host, payload).accepted) {
+    return true;
+  }
+  const text = toTrimmedString(payload.data?.text);
+  if (!text) {
+    return true;
+  }
+  if (!host.chatMessages) {
+    return true;
+  }
+  const current = host.chatMessages.find(
+    (message) => liveThinkingMessageRunId(message) === payload.runId,
+  );
+  const currentTimestamp = readRecord(current)?.timestamp;
+  host.chatMessages = [
+    ...removeLiveThinkingMessages(host.chatMessages),
+    {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: text }],
+      timestamp:
+        typeof currentTimestamp === "number"
+          ? currentTimestamp
+          : typeof payload.ts === "number"
+            ? payload.ts
+            : Date.now(),
+      __openclaw: { kind: LIVE_THINKING_MESSAGE_KIND, runId: payload.runId },
+    },
+  ];
+  host.chatRunStartup = { state: "activity", runId: payload.runId };
+  host.requestUpdate?.();
+  return true;
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -1002,6 +1064,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handlePreambleProgressEvent(host, payload)) {
+    return;
+  }
+
+  if (handleThinkingEvent(host, payload)) {
     return;
   }
 
