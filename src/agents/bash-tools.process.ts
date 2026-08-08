@@ -452,7 +452,7 @@ export function createProcessTool(
               await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
-          const { stdout, stderr } = drainSession(scopedSession);
+          const { stdout, stderr, outputDropped } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
@@ -473,6 +473,9 @@ export function createProcessTool(
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const retainedOutputNote = outputDropped
+            ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
+            : "";
           const hasNewOutput = output.length > 0;
           const retryInMs = exited
             ? undefined
@@ -487,6 +490,7 @@ export function createProcessTool(
                 type: "text",
                 text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
+                    retainedOutputNote +
                     (exited
                       ? `\n\nProcess exited with ${
                           exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`

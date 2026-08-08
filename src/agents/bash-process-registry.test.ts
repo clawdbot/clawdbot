@@ -83,8 +83,10 @@ describe("bash process registry", () => {
 
     const drained = drainSession(session);
     expect(drained.stdout).toBe("b".repeat(20_000));
+    expect(drained.outputDropped).toBe(true);
     expect(session.pendingStdout).toHaveLength(0);
     expect(session.pendingStdoutChars).toBe(0);
+    expect(drainSession(session).outputDropped).toBe(false);
     expect(session.truncated).toBe(true);
   });
 

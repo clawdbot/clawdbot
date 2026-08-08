@@ -77,6 +77,8 @@ export interface ProcessSession {
   pendingStderr: string[];
   pendingStdoutChars: number;
   pendingStderrChars: number;
+  /** Output was dropped from the pending poll buffers since their last drain. */
+  pendingOutputDropped: boolean;
   aggregated: string;
   tail: string;
   exitCode?: number | null;
@@ -196,6 +198,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   let pendingChars = bufferChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
+    session.pendingOutputDropped = true;
     pendingChars = capPendingBuffer(buffer, pendingChars, pendingCap);
   }
   if (stream === "stdout") {
@@ -215,11 +218,13 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 export function drainSession(session: ProcessSession) {
   const stdout = session.pendingStdout.join("");
   const stderr = session.pendingStderr.join("");
+  const outputDropped = session.pendingOutputDropped;
   session.pendingStdout = [];
   session.pendingStderr = [];
   session.pendingStdoutChars = 0;
   session.pendingStderrChars = 0;
-  return { stdout, stderr };
+  session.pendingOutputDropped = false;
+  return { stdout, stderr, outputDropped };
 }
 
 /** Moves a session to finished state and records exit metadata. */

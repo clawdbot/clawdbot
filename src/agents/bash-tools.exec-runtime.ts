@@ -648,6 +648,7 @@ export async function runExecProcess(opts: {
     pendingStderr: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
+    pendingOutputDropped: false,
     aggregated: "",
     tail: "",
     exited: false,
