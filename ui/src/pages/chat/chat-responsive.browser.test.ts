@@ -967,12 +967,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
       await waitForLayoutSettled(page);
       const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
-        const header = element as HTMLElement;
-        header.style.containerType = "normal";
-        header.style.width = "0px";
-        const width = header.scrollWidth;
-        header.style.removeProperty("width");
-        header.style.removeProperty("container-type");
+        const headerElement = element as HTMLElement;
+        headerElement.style.containerType = "normal";
+        headerElement.style.width = "0px";
+        const width = headerElement.scrollWidth;
+        headerElement.style.removeProperty("width");
+        headerElement.style.removeProperty("container-type");
         return width;
       });
       await setHeaderContentWidth(721);
