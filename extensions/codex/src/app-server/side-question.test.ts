@@ -1,5 +1,6 @@
 // Codex tests cover side question plugin behavior.
 import {
+  callGatewayTool,
   nativeHookRelayTesting,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -20,6 +21,7 @@ import {
 } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import { requestPluginApproval } from "./plugin-approval-roundtrip.js";
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import {
   createCodexTestBindingStore,
@@ -34,6 +36,7 @@ const refreshCodexAppServerAuthTokensMock = vi.fn();
 const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
+const handleCodexAppServerElicitationRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 type SelectionRetryParams = {
   lease: { client?: unknown };
@@ -66,6 +69,11 @@ vi.mock("./session-binding.js", async (importOriginal) => ({
     isCodexAppServerNativeAuthProfileMock(...args),
 }));
 
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  callGatewayTool: vi.fn(),
+}));
+
 vi.mock("./shared-client.js", () => ({
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
@@ -90,6 +98,11 @@ vi.mock("./approval-bridge.js", () => ({
     handleCodexAppServerApprovalRequestMock(...args),
 }));
 
+vi.mock("./elicitation-bridge.js", () => ({
+  handleCodexAppServerElicitationRequest: (...args: unknown[]) =>
+    handleCodexAppServerElicitationRequestMock(...args),
+}));
+
 vi.mock("./provider-capabilities.js", () => ({
   resolveCodexProviderWebSearchSupportForClient: (...args: unknown[]) =>
     resolveCodexProviderWebSearchSupportForClientMock(...args),
@@ -101,6 +114,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
 
 const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
   await import("./side-question.js");
+const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const baseBindingStore = createCodexTestBindingStore();
 const bindingStore: CodexAppServerBindingStore = {
   ...baseBindingStore,
@@ -476,6 +490,13 @@ describe("runCodexAppServerSideQuestion", () => {
     createOpenClawCodingToolsMock.mockReset();
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
+    handleCodexAppServerElicitationRequestMock.mockReset();
+    handleCodexAppServerElicitationRequestMock.mockResolvedValue({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    mockCallGatewayTool.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
@@ -691,6 +712,98 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("gives side-thread tool suggestions a signal-bound app-server request adapter", async () => {
+    const client = createFakeClient();
+    let elicitationResponse: unknown;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void (async () => {
+            elicitationResponse = await client.handleRequest({
+              id: 43,
+              method: "mcpServer/elicitation/request",
+              params: {
+                ...codexTestTurnIds("side-thread"),
+                serverName: "codex_apps",
+                mode: "form",
+                requestedSchema: { type: "object", properties: {} },
+              },
+            });
+            client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+          })();
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "plugin/list") {
+        return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method} ${JSON.stringify(requestParams)}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          messageChannel: "discord",
+          messageProvider: "discord",
+          chatType: "direct",
+          sessionKey: "agent:main:discord:direct:user-1",
+          agentAccountId: "discord-account-1",
+          messageTo: "user:user-1",
+          messageThreadId: "thread-42",
+        }),
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(elicitationResponse).toEqual({ action: "decline", content: null, _meta: null });
+    const bridgeParams = handleCodexAppServerElicitationRequestMock.mock.calls[0]?.[0] as
+      | {
+          appServerRequest?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+          paramsForRun?: Parameters<typeof requestPluginApproval>[0]["paramsForRun"];
+          pluginAppCacheKey?: string;
+        }
+      | undefined;
+    expect(bridgeParams?.appServerRequest).toBeTypeOf("function");
+    expect(bridgeParams?.pluginAppCacheKey).toBeTypeOf("string");
+    await bridgeParams?.appServerRequest?.("plugin/list", { forceRefetch: true });
+    expect(client.request).toHaveBeenCalledWith(
+      "plugin/list",
+      { forceRefetch: true },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+
+    mockCallGatewayTool.mockResolvedValueOnce({ id: "plugin:side-question-route" });
+    await requestPluginApproval({
+      paramsForRun: bridgeParams!.paramsForRun!,
+      title: "Install calendar connector",
+      description: "Install the suggested connector",
+      severity: "warning",
+      toolName: "request_plugin_install",
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:direct:user-1",
+        turnSourceChannel: "discord",
+        turnSourceTo: "user:user-1",
+        turnSourceAccountId: "discord-account-1",
+        turnSourceThreadId: "thread-42",
+        twoPhase: true,
+      }),
+      { expectFinal: false },
+    );
   });
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {

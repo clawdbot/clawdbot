@@ -108,6 +108,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       spawnedBy: params.spawnedBy,
     });
     state.client = startupResult.client;
+    state.pluginAppCacheKey = startupResult.pluginAppCacheKey;
     toolBridge.setRemoteWorkspaceFileReader?.(
       ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
         readBoundedCodexRemoteWorkspaceFile({

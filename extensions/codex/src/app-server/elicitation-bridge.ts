@@ -6,21 +6,20 @@ import {
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
-  approvalRequestExplicitlyUnavailable,
-  mapExecDecisionToOutcome,
-  requestPluginApproval,
+  requestPluginApprovalOutcome,
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
   type AppServerApprovalOutcome,
   type ExecApprovalDecision,
-  waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
+import type { CodexPluginRuntimeRequest } from "./plugin-inventory.js";
 import type {
   CodexAppPolicyContextEntry,
   PluginAppPolicyContext,
   PluginAppPolicyContextEntry,
 } from "./plugin-thread-config.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import { handleCodexAppServerToolSuggestion } from "./tool-suggestion-bridge.js";
 
 type ApprovalPropertyContext = {
   name: string;
@@ -76,6 +75,8 @@ export async function handleCodexAppServerElicitationRequest(params: {
   threadId: string;
   turnId: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
+  appServerRequest?: CodexPluginRuntimeRequest;
+  pluginAppCacheKey?: string;
   computerUseMcpServerName?: string;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
@@ -86,6 +87,17 @@ export async function handleCodexAppServerElicitationRequest(params: {
   const requestTurnId = requestParams.turnId;
   if (requestTurnId !== null && requestTurnId !== undefined && requestTurnId !== params.turnId) {
     return undefined;
+  }
+  const toolSuggestionResponse = await handleCodexAppServerToolSuggestion({
+    requestParams,
+    paramsForRun: params.paramsForRun,
+    activeTurnId: params.turnId,
+    appServerRequest: params.appServerRequest,
+    pluginAppCacheKey: params.pluginAppCacheKey,
+    signal: params.signal,
+  });
+  if (toolSuggestionResponse) {
+    return toolSuggestionResponse;
   }
   const pluginResolution = resolvePluginElicitation({
     requestParams,
@@ -119,6 +131,7 @@ export async function handleCodexAppServerElicitationRequest(params: {
     paramsForRun: params.paramsForRun,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
+    toolName: "codex_mcp_tool_approval",
     allowedDecisions: approvalPrompt.allowedDecisions,
     signal: params.signal,
   });
@@ -299,6 +312,7 @@ async function buildPluginPolicyElicitationResponse(params: {
       paramsForRun: params.paramsForRun,
       title: approvalPrompt.title,
       description: approvalPrompt.description,
+      toolName: "codex_mcp_tool_approval",
       allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
       signal: params.signal,
     });
@@ -637,37 +651,6 @@ function sanitizeDisplayText(value: string): string {
   });
   const escaped = sanitized ? formatCodexDisplayText(sanitized) : "";
   return clipped && escaped ? `${escaped}...` : escaped;
-}
-
-async function requestPluginApprovalOutcome(params: {
-  paramsForRun: EmbeddedRunAttemptParams;
-  title: string;
-  description: string;
-  allowedDecisions?: ExecApprovalDecision[];
-  signal?: AbortSignal;
-}): Promise<AppServerApprovalOutcome> {
-  try {
-    const requestResult = await requestPluginApproval({
-      paramsForRun: params.paramsForRun,
-      title: params.title,
-      description: params.description,
-      severity: "warning",
-      toolName: "codex_mcp_tool_approval",
-      allowedDecisions: params.allowedDecisions,
-    });
-
-    const approvalId = requestResult?.id;
-    if (!approvalId) {
-      return "unavailable";
-    }
-
-    const decision = approvalRequestExplicitlyUnavailable(requestResult)
-      ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
-    return mapExecDecisionToOutcome(decision);
-  } catch {
-    return params.signal?.aborted ? "cancelled" : "denied";
-  }
 }
 
 function buildElicitationResponse(

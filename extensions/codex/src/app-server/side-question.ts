@@ -25,7 +25,12 @@ import {
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
+import {
+  resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
+  resolveCodexAppServerPreparedAuthHandoff,
+} from "./auth-bridge.js";
 import {
   requireCodexSupervisionModelSelection,
   resolveCodexBindingAppServerConnection,
@@ -77,6 +82,7 @@ import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
+import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
@@ -307,7 +313,36 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     ...(params.opts?.abortSignal ? { abandonSignal: params.opts.abortSignal } : {}),
   } satisfies CodexAppServerClientOptions;
+  const pluginAuthAccountCacheKey = usesSupervisionConnection
+    ? undefined
+    : startupPreparedAuth?.kind === "api-key"
+      ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
+      : startupPreparedAuth?.kind === "profile"
+        ? startupPreparedAuth.snapshot?.secretFreeCacheKey
+        : await resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId: connection.requestAuthProfileId,
+            authProfileStore: preparedRuntimeAuth.authProfileStore,
+            agentDir: params.agentDir,
+            config: params.cfg,
+          });
+  const pluginEnvApiKeyCacheKey =
+    usesSupervisionConnection || startupPreparedAuth || connection.requestAuthProfileId
+      ? undefined
+      : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+  const buildPluginAppCacheKey = (targetClient: CodexAppServerClient) =>
+    buildCodexPluginAppCacheKey({
+      appServer,
+      agentDir: params.agentDir,
+      authProfileId:
+        startupPreparedAuth?.kind === "profile"
+          ? startupPreparedAuth.profileId
+          : connection.requestAuthProfileId,
+      accountId: pluginAuthAccountCacheKey,
+      envApiKeyFingerprint: pluginEnvApiKeyCacheKey,
+      appServerVersion: targetClient.getServerVersion(),
+      runtimeIdentity: targetClient.getRuntimeIdentity(),
+    });
   const clientLease: CodexAppServerClientLease = { client };
   const collector = new CodexSideQuestionCollector(params, () => readRecentCodexRateLimits(client));
   const runAbortController = new AbortController();
@@ -450,6 +485,9 @@ export async function runCodexAppServerSideQuestion(
             threadId: childThreadId,
             turnId,
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
+            appServerRequest: (method, requestParams) =>
+              targetClient.request(method, requestParams, { signal: runAbortController.signal }),
+            pluginAppCacheKey: buildPluginAppCacheKey(targetClient),
             signal: runAbortController.signal,
           });
         }
@@ -875,8 +913,15 @@ function buildSideRunAttemptParams(
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
     ...(params.chatType ? { chatType: params.chatType } : {}),
     ...(params.agentAccountId ? { agentAccountId: params.agentAccountId } : {}),
-    ...(params.messageTo ? { messageTo: params.messageTo } : {}),
-    ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
+    ...(params.messageTo
+      ? { messageTo: params.messageTo, currentMessagingTarget: params.messageTo }
+      : {}),
+    ...(params.messageThreadId !== undefined
+      ? {
+          messageThreadId: params.messageThreadId,
+          currentThreadTs: String(params.messageThreadId),
+        }
+      : {}),
     ...(params.chatId ? { chatId: params.chatId } : {}),
     ...(params.messageActionTurnCapability
       ? { messageActionTurnCapability: params.messageActionTurnCapability }

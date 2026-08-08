@@ -4517,14 +4517,12 @@ describe("runCodexAppServerAttempt", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: readCodexPluginConfig(pluginConfig),
     });
-    await primeGoogleCalendarAppInventory(
-      buildCodexPluginAppCacheKey({
-        appServer,
-        agentDir,
-        runtimeIdentity: getMockRuntimeIdentity(),
-      }),
-      true,
-    );
+    const pluginAppCacheKey = buildCodexPluginAppCacheKey({
+      appServer,
+      agentDir,
+      runtimeIdentity: getMockRuntimeIdentity(),
+    });
+    await primeGoogleCalendarAppInventory(pluginAppCacheKey, true);
     const bridgeSpy = vi
       .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
       .mockResolvedValue({
@@ -4562,12 +4560,16 @@ describe("runCodexAppServerAttempt", () => {
         pluginAppPolicyContext?: {
           apps?: Record<string, { mcpServerNames?: string[]; pluginName?: string }>;
         };
+        appServerRequest?: unknown;
+        pluginAppCacheKey?: string;
         threadId?: string;
         turnId?: string;
       },
     ];
     expect(bridgeCall.threadId).toBe("thread-1");
     expect(bridgeCall.turnId).toBe("turn-1");
+    expect(bridgeCall.appServerRequest).toBeTypeOf("function");
+    expect(bridgeCall.pluginAppCacheKey).toBe(pluginAppCacheKey);
     const calendarPolicy = bridgeCall.pluginAppPolicyContext?.apps?.["google-calendar-app"];
     expect(calendarPolicy?.pluginName).toBe("google-calendar");
     expect(calendarPolicy?.mcpServerNames).toEqual(["google-calendar"]);

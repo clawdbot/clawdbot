@@ -206,6 +206,101 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(target).toBeNull();
   });
 
+  it("routes an authorized owner DM back to that owner's approver DM", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+    const request = {
+      id: "plugin:owner-dm",
+      request: {
+        title: "Plugin approval",
+        description: "Install the requested plugin",
+        sessionKey: "agent:main:discord:direct:555555555",
+        turnSourceChannel: "discord",
+        turnSourceTo: "user:555555555",
+        turnSourceAccountId: "main",
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    };
+
+    const originTarget = await adapter.native?.resolveOriginTarget?.({
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request,
+    });
+    const approverDmTargets = await adapter.native?.resolveApproverDmTargets?.({
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request,
+    });
+
+    expect(originTarget).toBeNull();
+    expect(approverDmTargets).toEqual([{ to: "555555555" }]);
+    expect(
+      adapter.auth?.authorizeActorAction?.({
+        cfg: NATIVE_DELIVERY_CFG as never,
+        accountId: "main",
+        senderId: "555555555",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+  });
+
+  it("routes a non-approver DM source only to configured approver DMs", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+    const cfg = {
+      channels: {
+        discord: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["discord:555555555", "user:666666666"],
+          },
+        },
+      },
+    } as const;
+    const request = {
+      id: "plugin:non-approver-dm",
+      request: {
+        title: "Plugin approval",
+        description: "Install the requested plugin",
+        sessionKey: "agent:main:discord:direct:999999999",
+        turnSourceChannel: "discord",
+        turnSourceTo: "user:999999999",
+        turnSourceAccountId: "main",
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    };
+
+    const originTarget = await adapter.native?.resolveOriginTarget?.({
+      cfg: cfg as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request,
+    });
+    const approverDmTargets = await adapter.native?.resolveApproverDmTargets?.({
+      cfg: cfg as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request,
+    });
+
+    expect(originTarget).toBeNull();
+    expect(approverDmTargets).toEqual([{ to: "555555555" }, { to: "666666666" }]);
+    expect(approverDmTargets).not.toContainEqual({ to: "999999999" });
+    expect(
+      adapter.auth?.authorizeActorAction?.({
+        cfg: cfg as never,
+        accountId: "main",
+        senderId: "999999999",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toMatchObject({ authorized: false });
+  });
+
   it("falls back to approver DMs for account-scoped Discord direct sessions", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
 

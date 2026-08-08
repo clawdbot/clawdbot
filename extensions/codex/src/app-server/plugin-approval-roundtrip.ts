@@ -72,7 +72,8 @@ export async function requestPluginApproval(params: {
       agentId: params.paramsForRun.agentId,
       sessionKey: params.paramsForRun.sessionKey,
       turnSourceChannel: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider,
-      turnSourceTo: params.paramsForRun.currentChannelId,
+      turnSourceTo:
+        params.paramsForRun.currentMessagingTarget ?? params.paramsForRun.currentChannelId,
       turnSourceAccountId: params.paramsForRun.agentAccountId,
       turnSourceThreadId: params.paramsForRun.currentThreadTs,
       timeoutMs,
@@ -154,6 +155,39 @@ export function mapExecDecisionToOutcome(
     return "unavailable";
   }
   return "denied";
+}
+
+/** Runs a complete channel-bound approval round trip and fails closed on routing errors. */
+export async function requestPluginApprovalOutcome(params: {
+  paramsForRun: EmbeddedRunAttemptParams;
+  title: string;
+  description: string;
+  toolName: string;
+  allowedDecisions?: ExecApprovalDecision[];
+  signal?: AbortSignal;
+}): Promise<AppServerApprovalOutcome> {
+  try {
+    const requestResult = await requestPluginApproval({
+      paramsForRun: params.paramsForRun,
+      title: params.title,
+      description: params.description,
+      severity: "warning",
+      toolName: params.toolName,
+      allowedDecisions: params.allowedDecisions,
+    });
+
+    const approvalId = requestResult?.id;
+    if (!approvalId) {
+      return "unavailable";
+    }
+
+    const decision = approvalRequestExplicitlyUnavailable(requestResult)
+      ? null
+      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
+    return mapExecDecisionToOutcome(decision);
+  } catch {
+    return params.signal?.aborted ? "cancelled" : "denied";
+  }
 }
 
 export function truncateCodexApprovalDisplayText(value: string, maxLength: number): string {

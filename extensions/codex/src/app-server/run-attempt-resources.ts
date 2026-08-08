@@ -60,6 +60,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   });
   const state = {
     client: undefined as unknown as CodexAppServerClient,
+    pluginAppCacheKey: undefined as string | undefined,
     thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
     runtimeArtifact: undefined as AgentHarnessRuntimeArtifactBinding | undefined,
     turnRouter: undefined as unknown as CodexAppServerTurnRouter,

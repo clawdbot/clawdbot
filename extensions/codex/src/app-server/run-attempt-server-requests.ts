@@ -103,6 +103,9 @@ export function createCodexAttemptServerRequestController(
           threadId: resourceState.thread.threadId,
           turnId,
           pluginAppPolicyContext: resourceState.thread.pluginAppPolicyContext,
+          appServerRequest: (method, requestParams) =>
+            resourceState.client.request(method, requestParams, { signal }),
+          pluginAppCacheKey: resourceState.pluginAppCacheKey,
           ...(computerUseConfig.enabled
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
             : {}),

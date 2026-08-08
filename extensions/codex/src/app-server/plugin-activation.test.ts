@@ -6,7 +6,10 @@ import {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
-import { ensureCodexPluginActivation } from "./plugin-activation.js";
+import {
+  ensureCodexPluginActivation,
+  refreshCodexPluginAppInventoryState,
+} from "./plugin-activation.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
@@ -200,6 +203,49 @@ describe("Codex plugin activation", () => {
       },
     ]);
     expect(appCache.getRevision()).toBeGreaterThan(0);
+  });
+
+  it("can defer app inventory refresh until plugin app authorization completes", async () => {
+    const calls: string[] = [];
+    const appCache = new CodexAppInventoryCache();
+    const request = vi.fn(async (method: string) => {
+      calls.push(method);
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: false, enabled: false })]);
+      }
+      if (method === "plugin/install") {
+        return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+      }
+      if (method === "skills/list") {
+        return { data: [] } satisfies v2.SkillsListResponse;
+      }
+      if (method === "hooks/list") {
+        return { data: [] } satisfies v2.HooksListResponse;
+      }
+      if (method === "config/mcpServer/reload") {
+        return {};
+      }
+      if (method === "app/installed") {
+        return { apps: [] } satisfies v2.AppsInstalledResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      appCache,
+      appCacheKey: "runtime",
+      deferAppInventoryRefresh: true,
+      request,
+    });
+
+    expect(calls).not.toContain("app/installed");
+    await refreshCodexPluginAppInventoryState({
+      request,
+      appCache,
+      appCacheKey: "runtime",
+    });
+    expect(calls.at(-1)).toBe("app/installed");
   });
 
   it("reports post-install runtime refresh failures without hiding the install attempt", async () => {

@@ -113,6 +113,7 @@ type StartCodexAttemptThreadResult = {
   turnRoute: CodexThreadRouteReservation;
   thread: CodexAppServerThreadLifecycleBinding;
   pluginAppServer: CodexAppServerRuntimeOptions;
+  pluginAppCacheKey: string;
   sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
   environmentSelection: CodexTurnEnvironmentParams[] | undefined;
   executionCwd: string;
@@ -528,6 +529,7 @@ export async function startCodexAttemptThread(params: {
               startupAttemptSucceeded = true;
               return {
                 client: activeStartupClient,
+                pluginAppCacheKey,
                 turnRouter,
                 turnRoute: startupRoute,
                 thread: startupThread,
