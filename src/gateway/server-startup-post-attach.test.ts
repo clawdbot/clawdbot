@@ -256,7 +256,7 @@ vi.mock("./server-tailscale.js", () => ({
 
 const {
   startGatewayPostAttachRuntime: startGatewayPostAttachRuntimeImpl,
-  startGatewaySidecars,
+  startGatewaySidecars: startGatewaySidecarsImpl,
   testing,
 } = await import("./server-startup-post-attach.js");
 const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
@@ -268,20 +268,98 @@ type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntimeImpl>[1]>;
 type SidecarPublisher = NonNullable<PostAttachParams["onGatewayLifetimeSidecars"]>;
 type SidecarHandle = Parameters<SidecarPublisher>[0][number];
+type GatewaySidecarsResult = Awaited<ReturnType<typeof startGatewaySidecarsImpl>>;
 
 const publishedGatewayLifetimeSidecars = new Set<SidecarHandle>();
 const publishedPostReadySidecars = new Set<SidecarHandle>();
+const transferredSidecars = new Set<SidecarHandle>();
 
-function composeSidecarPublisher(
+function adoptSidecars(target: Set<SidecarHandle>, sidecars: ReadonlyArray<SidecarHandle>): void {
+  for (const sidecar of sidecars) {
+    if (!transferredSidecars.has(sidecar)) {
+      target.add(sidecar);
+    }
+  }
+}
+
+function composeTrackedPublisher(
   publishedSidecars: Set<SidecarHandle>,
   publisher: SidecarPublisher | undefined,
 ): SidecarPublisher {
   return (sidecars) => {
-    for (const sidecar of sidecars) {
-      publishedSidecars.add(sidecar);
-    }
+    adoptSidecars(publishedSidecars, sidecars);
     publisher?.(sidecars);
   };
+}
+
+function adoptPostReadyResult(result: GatewaySidecarsResult): GatewaySidecarsResult {
+  adoptSidecars(publishedPostReadySidecars, result.postReadySidecars);
+  return result;
+}
+
+async function startGatewaySidecars(
+  ...args: Parameters<typeof startGatewaySidecarsImpl>
+): Promise<GatewaySidecarsResult> {
+  return adoptPostReadyResult(await startGatewaySidecarsImpl(...args));
+}
+
+function transferBeforeStop(sidecar: SidecarHandle): void {
+  publishedGatewayLifetimeSidecars.delete(sidecar);
+  publishedPostReadySidecars.delete(sidecar);
+  transferredSidecars.add(sidecar);
+}
+
+async function stopTrackedSidecar(sidecar: SidecarHandle): Promise<void> {
+  transferBeforeStop(sidecar);
+  await sidecar.stop();
+}
+
+function stopTrackedPostReadySidecarsAfterCloseStarted(
+  params: Parameters<typeof testing.stopPostReadySidecarsAfterCloseStarted>[0],
+): void {
+  if (params.closeStarted) {
+    for (const sidecar of params.postReadySidecars) {
+      transferBeforeStop(sidecar);
+    }
+  }
+  testing.stopPostReadySidecarsAfterCloseStarted(params);
+}
+
+async function cleanupGatewayTestState(): Promise<void> {
+  let firstError: unknown;
+  const cleanup = async (run: () => void | Promise<void>) => {
+    try {
+      await run();
+    } catch (error) {
+      firstError ??= error;
+    }
+  };
+
+  const lifetimeSidecars = [...publishedGatewayLifetimeSidecars];
+  publishedGatewayLifetimeSidecars.clear();
+  const postReadySidecars = [...publishedPostReadySidecars];
+  publishedPostReadySidecars.clear();
+
+  for (const sidecar of lifetimeSidecars) {
+    transferredSidecars.add(sidecar);
+    await cleanup(() => sidecar.stop());
+  }
+  for (const sidecar of postReadySidecars) {
+    transferredSidecars.add(sidecar);
+    await cleanup(() => sidecar.stop());
+  }
+
+  publishedGatewayLifetimeSidecars.clear();
+  publishedPostReadySidecars.clear();
+  transferredSidecars.clear();
+  await cleanup(() => resetGatewayWorkAdmission());
+  await cleanup(() => closeOpenClawStateDatabaseForTest());
+  await cleanup(() => vi.useRealTimers());
+  await cleanup(() => vi.unstubAllEnvs());
+
+  if (firstError !== undefined) {
+    throw firstError;
+  }
 }
 
 function startGatewayPostAttachRuntime(
@@ -291,11 +369,11 @@ function startGatewayPostAttachRuntime(
   return startGatewayPostAttachRuntimeImpl(
     {
       ...params,
-      onGatewayLifetimeSidecars: composeSidecarPublisher(
+      onGatewayLifetimeSidecars: composeTrackedPublisher(
         publishedGatewayLifetimeSidecars,
         params.onGatewayLifetimeSidecars,
       ),
-      onPostReadySidecars: composeSidecarPublisher(
+      onPostReadySidecars: composeTrackedPublisher(
         publishedPostReadySidecars,
         params.onPostReadySidecars,
       ),
@@ -422,19 +500,45 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(async () => {
-    // Match Gateway shutdown order so lifetime work cannot outlive post-ready cleanup.
-    for (const sidecar of publishedGatewayLifetimeSidecars) {
-      await sidecar.stop();
-    }
-    publishedGatewayLifetimeSidecars.clear();
-    for (const sidecar of publishedPostReadySidecars) {
-      await sidecar.stop();
-    }
-    publishedPostReadySidecars.clear();
-    resetGatewayWorkAdmission();
-    closeOpenClawStateDatabaseForTest();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+    await cleanupGatewayTestState();
+  });
+
+  it("drains tracked sidecars and resets fixture state after the first cleanup failure", async () => {
+    const firstError = new Error("first cleanup failure");
+    const stopOrder: string[] = [];
+    const firstLifetimeSidecar = {
+      stop: vi.fn(async () => {
+        stopOrder.push("lifetime:first");
+        throw firstError;
+      }),
+    };
+    const secondLifetimeSidecar = {
+      stop: vi.fn(async () => {
+        stopOrder.push("lifetime:second");
+      }),
+    };
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        stopOrder.push("post-ready");
+      }),
+    };
+    const originalCleanupEnv = process.env.OPENCLAW_CLEANUP_TEST;
+
+    adoptSidecars(publishedGatewayLifetimeSidecars, [firstLifetimeSidecar, secondLifetimeSidecar]);
+    adoptSidecars(publishedPostReadySidecars, [postReadySidecar]);
+    vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_CLEANUP_TEST", "dirty");
+    expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
+
+    await expect(cleanupGatewayTestState()).rejects.toBe(firstError);
+
+    expect(stopOrder).toEqual(["lifetime:first", "lifetime:second", "post-ready"]);
+    expect(publishedGatewayLifetimeSidecars.size).toBe(0);
+    expect(publishedPostReadySidecars.size).toBe(0);
+    expect(transferredSidecars.size).toBe(0);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(vi.isFakeTimers()).toBe(false);
+    expect(process.env.OPENCLAW_CLEANUP_TEST).toBe(originalCleanupEnv);
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
@@ -565,7 +669,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(lifetimeSidecars).toContain(recoverySidecar);
 
     for (const sidecar of lifetimeSidecars ?? []) {
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
     }
     expect(recoverySidecar.stop).toHaveBeenCalledOnce();
   });
@@ -685,7 +789,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await waitForGatewayTestState(() => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
-    await sidecar.stop();
+    await stopTrackedSidecar(sidecar);
   });
 
   it("cancels delayed restart sentinel recovery when the gateway closes", async () => {
@@ -695,7 +799,7 @@ describe("startGatewayPostAttachRuntime", () => {
       log: { warn: vi.fn() },
     });
 
-    await sidecar.stop();
+    await stopTrackedSidecar(sidecar);
     await vi.advanceTimersByTimeAsync(750);
 
     expect(hoisted.scheduleRestartSentinelWake).not.toHaveBeenCalled();
@@ -994,7 +1098,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsPending).not.toHaveBeenCalled();
     expect(buildSignal?.aborted).toBe(false);
 
-    await earlySidecar.stop();
+    await stopTrackedSidecar(earlySidecar);
     expect(buildSignal?.aborted).toBe(true);
     expect(stopControlUiBuild).toHaveBeenCalledOnce();
 
@@ -1004,6 +1108,10 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledTimes(2);
     expect(onGatewayLifetimeSidecars.mock.calls[1]?.[0]).toContain(earlySidecar);
     expect(startControlUiBuild).toHaveBeenCalledOnce();
+    expect(publishedGatewayLifetimeSidecars).not.toContain(earlySidecar);
+    await cleanupGatewayTestState();
+    expect(stopControlUiBuild).toHaveBeenCalledOnce();
+    expect(publishedGatewayLifetimeSidecars).not.toContain(earlySidecar);
   });
 
   it("loads startup plugins after bind and before channel sidecars", async () => {
@@ -1338,7 +1446,7 @@ describe("startGatewayPostAttachRuntime", () => {
       });
     } finally {
       admission.release();
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
     }
   });
 
@@ -1349,7 +1457,7 @@ describe("startGatewayPostAttachRuntime", () => {
       log: { warn: vi.fn() },
     });
 
-    await sidecar.stop();
+    await stopTrackedSidecar(sidecar);
     await vi.runAllTimersAsync();
     expect(hoisted.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
   });
@@ -1400,7 +1508,7 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(lifetimeSidecars).toHaveLength(4);
 
       for (const sidecar of gmailSidecars ?? []) {
-        sidecar.stop();
+        await stopTrackedSidecar(sidecar);
       }
       await vi.dynamicImportSettled();
       await waitForGatewayTestState(() => {
@@ -1466,12 +1574,12 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     for (const sidecar of gmailSidecars ?? []) {
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
     }
     expect(hoisted.transcriptsAutoStartService.stop).not.toHaveBeenCalled();
 
     for (const sidecar of lifetimeSidecars ?? []) {
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
     }
     expect(hoisted.transcriptsAutoStartService.stop).toHaveBeenCalledTimes(1);
   });
@@ -1492,7 +1600,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
       });
 
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
@@ -2109,24 +2217,28 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("stops post-ready sidecars registered after close started", () => {
     const postReadySidecar = { stop: vi.fn() };
+    adoptSidecars(publishedPostReadySidecars, [postReadySidecar]);
 
-    testing.stopPostReadySidecarsAfterCloseStarted({
+    stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: true,
     });
 
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
+    expect(publishedPostReadySidecars).not.toContain(postReadySidecar);
   });
 
   it("keeps post-ready sidecars running when close has not started", () => {
     const postReadySidecar = { stop: vi.fn() };
+    adoptSidecars(publishedPostReadySidecars, [postReadySidecar]);
 
-    testing.stopPostReadySidecarsAfterCloseStarted({
+    stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: false,
     });
 
     expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    expect(publishedPostReadySidecars).toContain(postReadySidecar);
   });
 
   it("runs Gmail watcher after sidecars are ready", async () => {
@@ -2178,7 +2290,7 @@ describe("startGatewayPostAttachRuntime", () => {
       throw new Error("Expected gmail watcher resolver to be initialized");
     }
     for (const sidecar of result.postReadySidecars) {
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
     }
     expect(watcherSignal?.aborted).toBe(true);
     resolveWatcher();
@@ -2239,7 +2351,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(result.postReadySidecars).toHaveLength(2);
     for (const sidecar of result.postReadySidecars) {
-      await sidecar.stop();
+      await stopTrackedSidecar(sidecar);
     }
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -2263,31 +2375,33 @@ describe("startGatewayPostAttachRuntime", () => {
       const { startGatewaySidecars: startGatewaySidecarsWithDelayedImport } =
         await import("./server-startup-post-attach.js");
 
-      const result = await startGatewaySidecarsWithDelayedImport({
-        cfg: {
-          hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-        } as never,
-        pluginRegistry: createPostAttachParams().pluginRegistry,
-        defaultWorkspaceDir: "/tmp/openclaw-workspace",
-        deps: {} as never,
-        startChannels: vi.fn(async () => {}),
-        log: { warn: vi.fn() },
-        logHooks: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-        logChannels: {
-          info: vi.fn(),
-          error: vi.fn(),
-        },
-      });
+      const result = adoptPostReadyResult(
+        await startGatewaySidecarsWithDelayedImport({
+          cfg: {
+            hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+          } as never,
+          pluginRegistry: createPostAttachParams().pluginRegistry,
+          defaultWorkspaceDir: "/tmp/openclaw-workspace",
+          deps: {} as never,
+          startChannels: vi.fn(async () => {}),
+          log: { warn: vi.fn() },
+          logHooks: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+          logChannels: {
+            info: vi.fn(),
+            error: vi.fn(),
+          },
+        }),
+      );
 
       await waitForGatewayTestState(() => {
         expect(releaseImport).toBeDefined();
       });
       for (const sidecar of result.postReadySidecars) {
-        await sidecar.stop();
+        await stopTrackedSidecar(sidecar);
       }
       releaseImport?.();
       await new Promise<void>((resolve) => {
@@ -2660,7 +2774,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(result.postReadySidecars).toHaveLength(2);
-    testing.stopPostReadySidecarsAfterCloseStarted({
+    stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: result.postReadySidecars,
       closeStarted: true,
     });
