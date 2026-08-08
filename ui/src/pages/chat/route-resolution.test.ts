@@ -85,7 +85,7 @@ function installShortResolver(
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
-  (context.gateway.snapshot.client as { request: typeof request }).request = request;
+  (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
   return request;
 }
 
