@@ -681,7 +681,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test.each(["", "?cursor=", "?cursor=%20"])("returns session history for query %j", async (query) => {
+  test.each(["", "?cursor=", "?cursor=%20"])("returns history for query %j", async (query) => {
     await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {
       const body = await readSessionHistoryBody(harness.port, "agent:main:main", { query });
