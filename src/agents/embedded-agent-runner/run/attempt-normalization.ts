@@ -163,9 +163,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
   const callUsage = resolveLatestCallUsage({
+    // Latest assistant provenance, including unavailable, must precede carried retry totals
+    // so an older numeric context cannot revive across the unavailable barrier.
     currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
-    // The latest assistant sentinel must invalidate stale carried usage; reversing this order
-    // would resurrect a prior exact value after the runtime reports context as unavailable.
     carriedCandidates: [lastAssistantUsage, input.lastRunPromptUsage],
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;

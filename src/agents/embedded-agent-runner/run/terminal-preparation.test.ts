@@ -108,6 +108,57 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect(prepared.finalAssistantRawText).toBeUndefined();
     },
   );
+
+  it("preserves unavailable context usage from a legacy CLI assistant", async () => {
+    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const assistant = {
+      ...assistantMessage("stop"),
+      api: "cli",
+      usage: {
+        input: 128_814,
+        output: 3_000,
+        cacheRead: 992_953,
+        cacheWrite: 0,
+        totalTokens: 1_124_767,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    } satisfies AssistantMessage;
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        sessionId: "session-1",
+        runId: "run-1",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "hi",
+        trigger: "user",
+        timeoutMs: 60_000,
+      },
+      attempt: attemptResult({
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+      }),
+      currentAttemptCompletedAssistant: assistant,
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-1",
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: { contextUsage: { state: "unavailable" } },
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.agentMeta.lastCallUsage).toEqual({
+      contextUsage: { state: "unavailable" },
+    });
+    expect(prepared.agentMeta.promptTokens).toBeUndefined();
+  });
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {

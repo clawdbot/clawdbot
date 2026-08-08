@@ -2003,7 +2003,18 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).not.toContain("Usage:");
   });
 
-  it("uses Codex OAuth context overrides for openai models running on the Codex harness", async () => {
+  it.each([
+    {
+      name: "uses trusted versioned totals",
+      usage: { totalTokens: 25_000, totalTokensFresh: true, totalTokensVersion: 1 as const },
+      expectedContext: "25k/1.0m",
+    },
+    {
+      name: "ignores stale unversioned totals",
+      usage: { totalTokens: 25_000 },
+      expectedContext: "?/1.0m",
+    },
+  ])("$name for Codex OAuth context overrides", async ({ usage, expectedContext }) => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -2026,9 +2037,7 @@ describe("buildStatusReply subagent summary", () => {
       sessionEntry: {
         sessionId: "sess-status-codex-context",
         updatedAt: 0,
-        totalTokens: 25_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...usage,
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2048,7 +2057,7 @@ describe("buildStatusReply subagent summary", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: openai/gpt-5.5");
-    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).toContain(`Context: ${expectedContext}`);
   });
 
   it("caps stale persisted /status context limits with the active Codex runtime window", async () => {

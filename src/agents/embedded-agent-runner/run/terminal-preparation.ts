@@ -4,13 +4,14 @@ import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
-import type { NormalizedUsage, UsageLike } from "../../usage.js";
+import type { NormalizedUsage } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { UsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   buildUsageAgentMetaFields,
+  normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -70,7 +71,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
+    lastAssistantUsage: normalizeAssistantUsageForContext(terminalAssistant),
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   const resolvedModelRef = resolveReportedModelRef({
