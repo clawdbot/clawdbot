@@ -88,6 +88,52 @@ describe("doctor-contract-registry module loader", () => {
     expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootContractTypeScript);
   });
 
+  it.each([
+    {
+      name: "declared false skips loading",
+      doctorContract: { legacyConfigRules: false },
+      expectedRuleCount: 0,
+      expectedLoadCount: 0,
+    },
+    {
+      name: "absent declaration preserves loading",
+      doctorContract: undefined,
+      expectedRuleCount: 1,
+      expectedLoadCount: 1,
+    },
+    {
+      name: "declared true loads the authoritative module",
+      doctorContract: { legacyConfigRules: true },
+      expectedRuleCount: 1,
+      expectedLoadCount: 1,
+    },
+  ])("gates doctor contract artifacts by surface: $name", (testCase) => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      legacyConfigRules: [{ path: ["plugins", "entries", "demo"], message: "demo rule" }],
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "test-plugin",
+          rootDir: pluginRoot,
+          manifest: {
+            id: "test-plugin",
+            configSchema: { type: "object" },
+            ...(testCase.doctorContract ? { doctorContract: testCase.doctorContract } : {}),
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: pluginRoot, env: {} })).toHaveLength(
+      testCase.expectedRuleCount,
+    );
+    expect(mocks.createJiti).toHaveBeenCalledTimes(testCase.expectedLoadCount);
+  });
+
   it("uses native require on Windows for compatible JavaScript contract-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(

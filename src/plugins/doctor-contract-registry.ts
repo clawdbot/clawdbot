@@ -12,6 +12,7 @@ import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artif
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
@@ -22,6 +23,8 @@ type PluginDoctorContractModule = {
   sessionRouteStateOwners?: unknown;
   stateMigrations?: unknown;
 };
+
+type PluginDoctorContractSurface = keyof PluginManifestDoctorContract;
 
 type PluginDoctorCompatibilityMutation = {
   config: OpenClawConfig;
@@ -206,6 +209,33 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
   }));
 }
 
+export function summarizePluginDoctorContractModule(
+  mod: PluginDoctorContractModule,
+): Record<PluginDoctorContractSurface, boolean> {
+  const defaultExport = (mod as { default?: PluginDoctorContractModule }).default;
+  return {
+    legacyConfigRules:
+      coerceLegacyConfigRules(defaultExport?.legacyConfigRules ?? mod.legacyConfigRules).length > 0,
+    normalizeCompatibilityConfig: Boolean(
+      coerceNormalizeCompatibilityConfig(
+        mod.normalizeCompatibilityConfig ?? defaultExport?.normalizeCompatibilityConfig,
+      ),
+    ),
+    resolveSessionStoreAgentIds: Boolean(
+      coerceSessionStoreAgentIdsResolver(
+        mod.resolveSessionStoreAgentIds ?? defaultExport?.resolveSessionStoreAgentIds,
+      ),
+    ),
+    sessionRouteStateOwners:
+      coerceDoctorSessionRouteStateOwners(
+        mod.sessionRouteStateOwners ?? defaultExport?.sessionRouteStateOwners,
+      ).length > 0,
+    stateMigrations:
+      coercePluginDoctorStateMigrations(mod.stateMigrations ?? defaultExport?.stateMigrations)
+        .length > 0,
+  };
+}
+
 function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
   const talk = asNullableRecord(asNullableRecord(raw)?.talk);
   if (!talk) {
@@ -380,7 +410,8 @@ function loadPluginDoctorContractEntry(
   };
 }
 
-function resolvePluginDoctorContracts(params?: {
+function resolvePluginDoctorContracts(params: {
+  surface: PluginDoctorContractSurface;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -411,6 +442,11 @@ function resolvePluginDoctorContracts(params?: {
     ) {
       continue;
     }
+    const declaration = record.manifest?.doctorContract;
+    // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
+    if (declaration && declaration[params.surface] !== true) {
+      continue;
+    }
     const entry = loadPluginDoctorContractEntry(record);
     if (entry) {
       entries.push(entry);
@@ -425,7 +461,10 @@ export function listPluginDoctorLegacyConfigRules(params?: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): LegacyConfigRule[] {
-  return resolvePluginDoctorContracts(params).flatMap((entry) => entry.rules);
+  return resolvePluginDoctorContracts({
+    ...params,
+    surface: "legacyConfigRules",
+  }).flatMap((entry) => entry.rules);
 }
 
 export function listPluginDoctorSessionRouteStateOwners(params?: {
@@ -435,9 +474,10 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
   pluginIds?: readonly string[];
 }): DoctorSessionRouteStateOwner[] {
   const owners = new Map<string, DoctorSessionRouteStateOwner>();
-  for (const owner of resolvePluginDoctorContracts(params).flatMap(
-    (entry) => entry.sessionRouteStateOwners,
-  )) {
+  for (const owner of resolvePluginDoctorContracts({
+    ...params,
+    surface: "sessionRouteStateOwners",
+  }).flatMap((entry) => entry.sessionRouteStateOwners)) {
     if (!owners.has(owner.id)) {
       owners.set(owner.id, owner);
     }
@@ -454,7 +494,10 @@ export function listPluginDoctorSessionStoreAgentIds(params?: {
 }): string[] {
   const cfg = params?.config ?? {};
   const agentIds = new Set<string>();
-  for (const entry of resolvePluginDoctorContracts(params)) {
+  for (const entry of resolvePluginDoctorContracts({
+    ...params,
+    surface: "resolveSessionStoreAgentIds",
+  })) {
     let resolved: readonly string[] | undefined;
     try {
       resolved = entry.resolveSessionStoreAgentIds?.({ cfg });
@@ -475,7 +518,7 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginDoctorStateMigrationEntry[] {
-  return resolvePluginDoctorContracts(params).flatMap((entry) =>
+  return resolvePluginDoctorContracts({ ...params, surface: "stateMigrations" }).flatMap((entry) =>
     entry.stateMigrations.map((migration) => ({
       pluginId: entry.pluginId,
       migration,
@@ -497,7 +540,10 @@ export function applyPluginDoctorCompatibilityMigrations(
 } {
   let nextCfg = cfg;
   const changes: string[] = [];
-  for (const entry of resolvePluginDoctorContracts(params)) {
+  for (const entry of resolvePluginDoctorContracts({
+    ...params,
+    surface: "normalizeCompatibilityConfig",
+  })) {
     const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
       continue;

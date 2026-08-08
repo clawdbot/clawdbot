@@ -1,5 +1,8 @@
 {
   "id": "google",
+  "doctorContract": {
+    "sessionRouteStateOwners": true
+  },
   "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
