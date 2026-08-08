@@ -7,8 +7,11 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { shortHash } from "../utils/hash.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
+  OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA,
+  OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
   type OpenAIResponsesCompactionReplayState,
+  type OpenAIResponsesCompactionSuppressionState,
   type OpenAIResponsesReasoningReplayMetadata,
   type OpenAIResponsesReplayContext,
   type ReplayableResponseCompactionItem,
@@ -48,6 +51,26 @@ function isOpenAIResponsesCompactionReplayState(
     (state.id === undefined || typeof state.id === "string") &&
     (state.replayIndex === undefined ||
       (Number.isSafeInteger(state.replayIndex) && (state.replayIndex as number) >= 0)) &&
+    typeof state.provider === "string" &&
+    typeof state.api === "string" &&
+    typeof state.model === "string" &&
+    typeof state.baseUrlHash === "string" &&
+    (state.sessionHash === undefined || typeof state.sessionHash === "string") &&
+    (state.authProfileHash === undefined || typeof state.authProfileHash === "string")
+  );
+}
+
+function isOpenAIResponsesCompactionSuppressionState(
+  value: unknown,
+): value is OpenAIResponsesCompactionSuppressionState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const state = value as Record<string, unknown>;
+  return (
+    state.v === 1 &&
+    state.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE &&
+    state.data === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA &&
     typeof state.provider === "string" &&
     typeof state.api === "string" &&
     typeof state.model === "string" &&
@@ -101,6 +124,24 @@ export function captureOpenAIResponsesCompaction(
     baseUrlHash: metadata.baseUrlHash,
     ...(metadata.sessionHash ? { sessionHash: metadata.sessionHash } : {}),
     ...(metadata.authProfileHash ? { authProfileHash: metadata.authProfileHash } : {}),
+  };
+}
+
+export function suppressOpenAIResponsesCompaction(
+  output: Pick<AssistantMessage, "providerReplay">,
+  model: Model,
+  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
+): void {
+  const context = buildOpenAIResponsesReplayContext(model, options);
+  if (!context.baseUrlHash) {
+    return;
+  }
+  output.providerReplay = {
+    v: 1,
+    type: OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE,
+    data: OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA,
+    ...context,
+    baseUrlHash: context.baseUrlHash,
   };
 }
 
@@ -181,10 +222,15 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
 ): { owner: AssistantMessage; item: ResponseCompactionItemParam; replayIndex: number } | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (
-      message?.role !== "assistant" ||
-      message.providerReplay?.type !== OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE
-    ) {
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    if (isOpenAIResponsesCompactionSuppressionState(message.providerReplay)) {
+      // A successful encrypted-content fallback records this provider-owned
+      // tombstone so later turns never retry an already rejected compaction.
+      return undefined;
+    }
+    if (message.providerReplay?.type !== OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE) {
       continue;
     }
     const replay = prepareOpenAIResponsesCompactionForReplay(

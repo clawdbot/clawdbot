@@ -274,24 +274,35 @@ const OPENAI_REASONING_REPLAY_METADATA_KEYS = new Set([
 ]);
 const OPENAI_REASONING_REPLAY_METADATA_KEY = "__openclaw_replay";
 const OPENAI_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+const OPENAI_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
+const OPENAI_COMPACTION_SUPPRESSION_DATA = "rejected";
 
 function sanitizeOpenAICompactionReplayState(
   value: unknown,
   route: TranscriptAssistantRoute | undefined,
 ): Record<string, unknown> | undefined {
+  const replayType =
+    value && typeof value === "object" && isPlainTranscriptObject(value) ? value.type : undefined;
+  const isSuppression = replayType === OPENAI_COMPACTION_SUPPRESSION_TYPE;
   if (
     !value ||
     typeof value !== "object" ||
     !isPlainTranscriptObject(value) ||
     !isOpenAIResponsesRoute(route) ||
     value.v !== 1 ||
-    value.type !== OPENAI_COMPACTION_REPLAY_TYPE ||
+    (replayType !== OPENAI_COMPACTION_REPLAY_TYPE && !isSuppression) ||
     typeof value.data !== "string" ||
-    !isStructurallyValidOpaqueReplayToken(value.data) ||
+    (isSuppression
+      ? value.data !== OPENAI_COMPACTION_SUPPRESSION_DATA
+      : !isStructurallyValidOpaqueReplayToken(value.data)) ||
     (value.id !== undefined &&
-      (typeof value.id !== "string" || !isOpenAIResponseItemId(value.id, route))) ||
+      (isSuppression ||
+        typeof value.id !== "string" ||
+        !isOpenAIResponseItemId(value.id, route))) ||
     (value.replayIndex !== undefined &&
-      (!Number.isSafeInteger(value.replayIndex) || (value.replayIndex as number) < 0)) ||
+      (isSuppression ||
+        !Number.isSafeInteger(value.replayIndex) ||
+        (value.replayIndex as number) < 0)) ||
     value.provider !== route?.provider ||
     typeof value.api !== "string" ||
     !OPENAI_RESPONSES_APIS.has(value.api) ||
@@ -304,7 +315,7 @@ function sanitizeOpenAICompactionReplayState(
   }
   return {
     v: 1,
-    type: OPENAI_COMPACTION_REPLAY_TYPE,
+    type: replayType,
     ...(value.id !== undefined ? { id: value.id } : {}),
     data: value.data,
     ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),

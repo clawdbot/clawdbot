@@ -18,6 +18,7 @@ import {
   createOpenAIResponsesCompactionPrefixPruner,
   createResponsesStreamWithEncryptedContentRetry,
   resolveNewestOpenAIResponsesCompactionReplay,
+  suppressOpenAIResponsesCompaction,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
@@ -622,6 +623,11 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
           signal: firstEventAbort.signal,
         },
         model,
+        onCompactionRejected: () =>
+          suppressOpenAIResponsesCompaction(output, model, {
+            sessionId: options?.sessionId,
+            authProfileId: options?.authProfileId,
+          }),
       },
     );
     await options?.onResponse?.(

@@ -47,6 +47,7 @@ export {
   createCompactionTracker,
   createOpenAIResponsesCompactionPrefixPruner,
   resolveNewestOpenAIResponsesCompactionReplay,
+  suppressOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
@@ -118,6 +119,19 @@ export function stripResponsesRequestEncryptedContent(
     ...params,
     input: stripped.value as ResponseInput,
   };
+}
+
+function requestContainsEncryptedCompaction(params: OpenAIResponsesRequestParams): boolean {
+  return (
+    Array.isArray(params.input) &&
+    params.input.some(
+      (item) =>
+        item !== null &&
+        typeof item === "object" &&
+        (item as { type?: unknown }).type === "compaction" &&
+        "encrypted_content" in item,
+    )
+  );
 }
 
 export function tagOpenAIResponsesReasoningReplayItem(
@@ -218,6 +232,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
+  onCompactionRejected?: () => void;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
   try {
     params.observePrompt?.(params.request, {
@@ -232,6 +247,9 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     const retryRequest = stripResponsesRequestEncryptedContent(params.request);
     if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
       throw error;
+    }
+    if (requestContainsEncryptedCompaction(params.request)) {
+      params.onCompactionRejected?.();
     }
     log.warn(
       `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +

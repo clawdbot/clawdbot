@@ -274,6 +274,45 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("preserves validated OpenAI compaction suppression state", () => {
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction-suppression",
+        data: "rejected",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-abcdef1234567890xyz",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+  });
+
   it("handles configured providers without explicit models", () => {
     const msg = {
       role: "assistant",

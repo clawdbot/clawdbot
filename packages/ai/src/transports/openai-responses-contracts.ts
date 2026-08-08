@@ -22,6 +22,9 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+export const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE =
+  "openai-responses-compaction-suppression";
+export const OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA = "rejected";
 
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
@@ -41,6 +44,11 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
 };
 export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
   type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE;
+  baseUrlHash: string;
+};
+export type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
+  type: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE;
+  data: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
   baseUrlHash: string;
 };
 

@@ -35,6 +35,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
+  suppressOpenAIResponsesCompaction,
 } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
@@ -219,6 +220,11 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           requestOptions,
           model,
           observePrompt,
+          onCompactionRejected: () =>
+            suppressOpenAIResponsesCompaction(output, model, {
+              sessionId: options?.sessionId,
+              authProfileId: responsesOptions?.authProfileId,
+            }),
         });
         await options?.onResponse?.(
           { status: response.status, headers: headersToRecord(response.headers) },
