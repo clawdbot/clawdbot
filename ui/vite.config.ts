@@ -14,6 +14,7 @@ import type { ControlUiBuildInfo } from "./src/build-info.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const outDir = path.resolve(here, "../dist/control-ui");
+const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
 type ControlUiViteAlias = {
@@ -105,6 +106,7 @@ function readGitCommit(): string | null {
     const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
     });
     return raw.trim() || null;
   } catch {
@@ -117,6 +119,7 @@ function readGitBranch(): string | null {
     const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
     });
     return raw.trim() || null;
   } catch {
@@ -129,6 +132,7 @@ function readGitCommitTimestamp(commit: string): string | null {
     const raw = execFileSync("git", ["-C", repoRoot, "show", "-s", "--format=%ct", commit], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
     });
     const seconds = Number.parseInt(raw.trim(), 10);
     const date = new Date(seconds * 1000);
@@ -143,6 +147,7 @@ function readGitDirty(): boolean | null {
     const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
     });
     return Boolean(raw.trim());
   } catch {
@@ -206,9 +211,14 @@ export function resolveControlUiBuildInfo(
   // Commit time is advisory identity like branch/dirty: read from the local
   // object store for the exact embedded commit, null when no checkout has it
   // (e.g. GITHUB_SHA-only builds). It must never block a build.
+  const readCommitTimestamp =
+    sources.readGitCommitTimestamp ??
+    // A caller-provided commit reader can return synthetic or remote identity.
+    // Do not combine it with a filesystem-bound reader from this checkout.
+    (sources.readGitCommit ? () => null : readGitCommitTimestamp);
   const commitAt = commit
     ? normalizeControlUiBuildInfo({
-        commitAt: (sources.readGitCommitTimestamp ?? readGitCommitTimestamp)(commit),
+        commitAt: readCommitTimestamp(commit),
       }).commitAt
     : null;
   const builtAt = normalizeBuildTimestamp(

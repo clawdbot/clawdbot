@@ -134,8 +134,8 @@ describe("Control UI Vite config", () => {
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit,
         readPackageVersion: () => null,
-      }).commit,
-    ).toBe("c".repeat(40));
+      }),
+    ).toMatchObject({ commit: "c".repeat(40), commitAt: null });
     expect(readGitCommit).toHaveBeenCalledOnce();
     expect(
       resolveControlUiBuildInfo({
