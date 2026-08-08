@@ -109,9 +109,15 @@ function appendQueueItem(params: {
   params.queue.lastRun = params.run.run;
   params.run.queueAbortSignal = params.queue.abortController.signal;
   params.queue.items[params.front ? "unshift" : "push"](params.run);
-  if (params.recentMessageIdKey) recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
-  if (params.runFollowup) rememberFollowupDrainCallback(params.key, params.runFollowup);
-  if (params.restartIfIdle && !params.queue.draining) kickFollowupDrainIfIdle(params.key);
+  if (params.recentMessageIdKey) {
+    recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
+  }
+  if (params.runFollowup) {
+    rememberFollowupDrainCallback(params.key, params.runFollowup);
+  }
+  if (params.restartIfIdle && !params.queue.draining) {
+    kickFollowupDrainIfIdle(params.key);
+  }
 }
 
 export function enqueueFollowupRun(
