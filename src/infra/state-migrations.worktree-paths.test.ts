@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
@@ -12,6 +12,22 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
+
+vi.mock("../channels/plugins/bundled.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/bundled.js")>();
+  return {
+    ...actual,
+    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => []),
+  };
+});
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorStateMigrationEntries: vi.fn(() => []),
+  };
+});
 
 describe("managed worktree path state migrations", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
