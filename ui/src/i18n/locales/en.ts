@@ -402,6 +402,8 @@ export const en: TranslationMap = {
       automaticUpdates: "Automatic updates",
       automaticUpdatesDescription:
         "Schedule available updates automatically. Dev auto-updates apply to git checkouts.",
+      devPackageAutomaticHint:
+        "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:
         "Extended stable reports available releases but never installs them automatically.",
       statusTitle: "Update status",

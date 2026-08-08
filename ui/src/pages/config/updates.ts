@@ -174,6 +174,8 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
     });
   }
   const automaticUpdatesSupported = settings.channel !== "extended-stable";
+  const devPackageInstall =
+    settings.channel === "dev" && props.schedule?.install?.kind === "package";
   const campaign = props.schedule?.campaign;
   const holdActive =
     campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > (props.nowMs ?? Date.now());
@@ -200,11 +202,13 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
     }),
     renderSettingsToggleRow({
       title: t("updates.page.automaticUpdates"),
-      description: automaticUpdatesSupported
-        ? t("updates.page.automaticUpdatesDescription")
-        : t("updates.page.extendedStableAutomaticHint"),
+      description: !automaticUpdatesSupported
+        ? t("updates.page.extendedStableAutomaticHint")
+        : devPackageInstall
+          ? t("updates.page.devPackageAutomaticHint")
+          : t("updates.page.automaticUpdatesDescription"),
       checked: automaticUpdatesSupported && settings.autoEnabled,
-      disabled: props.configBusy || !automaticUpdatesSupported,
+      disabled: props.configBusy || !automaticUpdatesSupported || devPackageInstall,
       onChange: props.onAutomaticUpdatesChange,
     }),
   ];

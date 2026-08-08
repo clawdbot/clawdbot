@@ -51,6 +51,18 @@ function row(title: string): HTMLElement {
   return match;
 }
 
+function automaticUpdatesControl(): {
+  row: HTMLElement;
+  toggle: HTMLElement;
+} {
+  const automaticRow = row("Automatic updates");
+  const toggle = automaticRow.querySelector<HTMLElement>("wa-switch");
+  if (!toggle) {
+    throw new Error("Missing automatic updates control");
+  }
+  return { row: automaticRow, toggle };
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -118,6 +130,65 @@ describe("renderUpdates", () => {
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
     expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "disables dev package installs",
+      channel: "dev",
+      installKind: "package",
+      disabled: true,
+      description:
+        "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
+    },
+    {
+      name: "allows dev git installs",
+      channel: "dev",
+      installKind: "git",
+      disabled: false,
+      description: undefined,
+    },
+    {
+      name: "allows dev installs with unknown metadata",
+      channel: "dev",
+      installKind: "unknown",
+      disabled: false,
+      description: undefined,
+    },
+    {
+      name: "allows stable package installs",
+      channel: "stable",
+      installKind: "package",
+      disabled: false,
+      description: undefined,
+    },
+    {
+      name: "allows beta package installs",
+      channel: "beta",
+      installKind: "package",
+      disabled: false,
+      description: undefined,
+    },
+  ] as const)("$name", ({ channel, installKind, disabled, description }) => {
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { channel, auto: { enabled: false } } },
+          schedule: {
+            channel,
+            autoEnabled: false,
+            install: { kind: installKind },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const automatic = automaticUpdatesControl();
+    expect(automatic.toggle.hasAttribute("disabled")).toBe(disabled);
+    if (description) {
+      expect(automatic.row.textContent).toContain(description);
+    }
   });
 
   it("renders the authoritative waiting countdown as a quiet timer", () => {
