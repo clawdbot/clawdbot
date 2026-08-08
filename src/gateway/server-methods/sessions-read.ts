@@ -662,6 +662,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false }, undefined);
       return;
     }
+    if ("ambiguous" in resolved) {
+      respond(true, { ok: false, candidates: resolved.candidates }, undefined);
+      return;
+    }
     respond(true, { ok: true, key: resolved.key }, undefined);
   },
   "sessions.get": async ({ params, respond, context }) => {

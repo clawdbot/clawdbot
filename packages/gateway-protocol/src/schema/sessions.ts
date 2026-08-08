@@ -427,11 +427,15 @@ export const SessionsDescribeParamsSchema = closedObject({
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
 
-/** Resolves a session by key, raw session id, label, or parent/agent scope. */
+/** Resolves a session by key, raw session id, label, short URL id, or parent/agent scope. */
 export const SessionsResolveParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  /** Bare 8-32 character hexadecimal prefix of a session key's trailing UUID. */
+  shortId: Type.Optional(NonEmptyString),
+  /** Optional display-name slug used only to narrow ambiguous shortId matches. */
+  slugHint: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),
   includeGlobal: Type.Optional(Type.Boolean()),

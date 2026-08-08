@@ -223,6 +223,9 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if ("missing" in resolved) {
     return { ok: false };
   }
+  if ("ambiguous" in resolved) {
+    return { ok: false, candidates: resolved.candidates };
+  }
   return { ok: true, key: resolved.key };
 }
 

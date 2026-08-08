@@ -89,6 +89,57 @@ test("sessions.resolve can probe a missing selector without returning an RPC err
   expect(resolved.payload).toEqual({ ok: false });
 });
 
+test("sessions.resolve returns short-id ambiguity as a protocol-success result", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:thread:12345678-0aaa-4000-8000-000000000001": {
+        sessionId: "sess-short-newer",
+        displayName: "Newer",
+        updatedAt: 20,
+      },
+      "agent:main:thread:12345678-0bbb-4000-8000-000000000002": {
+        sessionId: "sess-short-older",
+        displayName: "Older",
+        updatedAt: 10,
+      },
+    },
+  });
+
+  const resolved = await directSessionReq<{
+    ok: false;
+    candidates: Array<{ key: string; displayName?: string }>;
+  }>("sessions.resolve", { shortId: "12345678" });
+
+  expect(resolved.ok).toBe(true);
+  expect(resolved.payload).toEqual({
+    ok: false,
+    candidates: [
+      {
+        key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
+        displayName: "Newer",
+      },
+      {
+        key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
+        displayName: "Older",
+      },
+    ],
+  });
+});
+
+test.each([
+  { params: { shortId: "xyz" }, message: "shortId must be 8-32 hexadecimal characters" },
+  { params: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
+])("sessions.resolve rejects invalid short-ref params: $message", async ({ params, message }) => {
+  await createSessionStoreDir();
+
+  const resolved = await directSessionReq("sessions.resolve", params);
+
+  expect(resolved.ok).toBe(false);
+  expect(resolved.error?.code).toBe("INVALID_REQUEST");
+  expect(resolved.error?.message).toBe(message);
+});
+
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
   await createSessionStoreDir();
   const now = Date.now();

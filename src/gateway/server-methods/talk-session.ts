@@ -232,6 +232,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           respondInvalidRequest(respond, `No session found: ${params.sessionKey}`);
           return;
         }
+        if ("ambiguous" in resolvedSession) {
+          respondInvalidRequest(respond, `Multiple sessions found: ${params.sessionKey}`);
+          return;
+        }
         const handoff = createTalkHandoff({
           sessionKey: resolvedSession.key,
           provider: normalizeOptionalString(params.provider),
