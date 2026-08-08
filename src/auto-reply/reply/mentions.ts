@@ -46,6 +46,20 @@ const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // Deriving a bare mark run as the token would both require decoration nobody
 // types and match every unrelated emoji carrying the same mark.
 const NAME_TOKEN_SPLIT = new RegExp(`([${NAME_IDENTITY_CHARS}][${NAME_TOKEN_CHARS}]*)`, "gu");
+// Decoration is what a member may leave out when typing the name: symbol and
+// mark code points (emoji, flags, dingbats), the skin-tone modifiers, and the
+// invisible format characters normalization strips. Everything else a name
+// spells stays literal -- punctuation such as "-", "/", or "." separates, it
+// does not decorate, and making it omittable would hand every existing name
+// like "foo-bar" a new bare spelling and with it a new implicit trigger.
+const DECORATION_CHAR = new RegExp(
+  String.raw`[\p{So}\p{M}\u{1F3FB}-\u{1F3FF}\u200B-\u200F\u202A-\u202E\u2060-\u206F]`,
+  "u",
+);
+// U+FE0F requests emoji presentation and U+20E3 encloses a keycap: a character
+// carrying either is typed as a pictograph even when, like the "#" in a
+// keycap, it is punctuation on its own.
+const EMOJI_PRESENTATION_MARKS = new Set(["\uFE0F", "\u20E3"]);
 
 type DerivedNameParts = {
   leading: string;
@@ -80,17 +94,21 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   return parts.map(escapeRegExp).join(JOINER_SPACING);
 }
 
-// A name reads as word runs with decoration around and between them. It is
-// parsed into those units once and each unit is then encoded for the position
-// it sits in, so what decoration means is stated once: it is optional, and it
-// is taken at most one time, in the order the name spells it. Encoding the
-// positions independently is what let a member's repeated decoration count as
-// part of the mention -- and be stripped away with it -- at one position while
+// A name reads as word runs with decoration or separators around and between
+// them. It is parsed into those units once and each unit is then encoded for
+// the position it sits in, so what decoration means is stated once: it is
+// optional, and it is taken at most one time, in the order the name spells it.
+// A separator -- any gap carrying a character that is not decoration -- stays
+// required exactly as the name spells it. Encoding the positions
+// independently is what let a member's repeated decoration count as part of
+// the mention -- and be stripped away with it -- at one position while
 // another already refused it.
 type NameUnit =
   | { kind: "token"; literal: string }
+  | { kind: "separator"; literal: string }
   | { kind: "decoration"; marks: string[]; spaced: boolean };
 type DecorationUnit = Extract<NameUnit, { kind: "decoration" }>;
+type SeparatorUnit = Extract<NameUnit, { kind: "separator" }>;
 
 function parseNameUnits(name: string): NameUnit[] {
   const units: NameUnit[] = [];
@@ -104,30 +122,64 @@ function parseNameUnits(name: string): NameUnit[] {
       continue;
     }
     const marks: string[] = [];
+    let decorative = true;
+    // A non-decoration character is decoration after all when the character
+    // following it requests emoji presentation, so its verdict stays pending
+    // until the next character either excuses it or confirms it.
+    let pending = false;
     for (const char of segment) {
       // Whitespace is spacing, and joiners do not survive normalization: what a
       // typed mention has to carry is the decoration left between them.
       if (/\s/u.test(char) || JOINER_RUN.test(char)) {
         continue;
       }
+      if (pending && !EMOJI_PRESENTATION_MARKS.has(char)) {
+        decorative = false;
+      }
+      pending = !DECORATION_CHAR.test(char);
       marks.push(escapeRegExp(char));
     }
-    units.push({ kind: "decoration", marks, spaced: /\s/u.test(segment) });
+    units.push(
+      decorative && !pending
+        ? { kind: "decoration", marks, spaced: /\s/u.test(segment) }
+        : { kind: "separator", literal: segment },
+    );
   }
   return units;
 }
 
-// Decoration at the name's edge. It is offered to the boundary assertions and
-// to the match as the sequence the name spells, once, and it never reaches for
-// the whitespace beside it: with no word run on the far side, that whitespace
-// is the member's own text rather than part of the name.
-function encodeEdgeDecoration(unit: NameUnit | undefined): string {
-  return unit?.kind === "decoration" ? unit.marks.join(JOINER_SPACING) : "";
+// A separator is typed as the name spells it. Whitespace inside it stays
+// width-flexible, as the literal derivation always read it, and the joiners
+// raw text still carries for stripping stay reachable without being required.
+function encodeSeparator(unit: SeparatorUnit): string {
+  return unit.literal
+    .split(/(\s+)/u)
+    .filter(Boolean)
+    .map((piece) => (/^\s+$/u.test(piece) ? String.raw`\s+` : escapeJoinerTolerantLiteral(piece)))
+    .join(JOINER_SPACING);
 }
 
-// Decoration between two word runs (emoji, flags, symbols, punctuation) may be
-// typed as shown, spaced apart, replaced by whitespace, or omitted -- and, like
-// an edge, is taken at most once. A class repeating over it swallowed whatever
+// Decoration at the name's edge. It is offered to the boundary assertions and
+// to the match as the sequence the name spells, once, together with the
+// spacing that sits between it and the word runs: left out, the bare core
+// matches while the decoration stands and stripping takes the name but leaves
+// its decoration behind in the command text. The edge never reaches for the
+// whitespace on its far side: with no word run there, that whitespace is the
+// member's own text rather than part of the name.
+function encodeEdgeDecoration(unit: NameUnit | undefined, side: "leading" | "trailing"): string {
+  if (unit?.kind !== "decoration") {
+    return "";
+  }
+  const spelled = unit.marks.join(JOINER_SPACING);
+  if (!spelled) {
+    return "";
+  }
+  return side === "leading" ? `${spelled}${DECORATION_SPACING}` : `${DECORATION_SPACING}${spelled}`;
+}
+
+// Decoration between two word runs (emoji, flags, symbols) may be typed as
+// shown, spaced apart, replaced by whitespace, or omitted -- and, like an
+// edge, is taken at most once. A class repeating over it swallowed whatever
 // extra decoration a member typed inside the name and stripping removed that
 // too. Only code points the name itself carries are accepted, so neither path
 // ever consumes unrelated punctuation beside a mention.
@@ -148,22 +200,29 @@ function encodeInteriorDecoration(unit: DecorationUnit): string {
 
 function deriveNameParts(name: string): DerivedNameParts {
   const units = parseNameUnits(name);
-  const firstToken = units.findIndex((unit) => unit.kind === "token");
-  if (firstToken < 0) {
-    // Decoration-only name (e.g. a bare emoji): match it literally.
+  if (!units.some((unit) => unit.kind === "token")) {
+    // No word run at all (e.g. a bare emoji or a punctuation string): match
+    // the name literally.
     return { leading: "", core: escapeJoinerTolerantLiteral(name), trailing: "" };
   }
-  const lastToken = units.findLastIndex((unit) => unit.kind === "token");
+  // Only optional decoration outside the word runs is an edge; a separator
+  // there is something a member types, so it stays in the core. The encoders
+  // read a token at either end as no decoration at all.
+  const start = units[0]?.kind === "decoration" ? 1 : 0;
+  const end = units.at(-1)?.kind === "decoration" ? units.length - 1 : units.length;
   let core = "";
-  for (const unit of units.slice(firstToken, lastToken + 1)) {
-    core += unit.kind === "token" ? escapeRegExp(unit.literal) : encodeInteriorDecoration(unit);
+  for (const unit of units.slice(start, end)) {
+    core +=
+      unit.kind === "token"
+        ? escapeRegExp(unit.literal)
+        : unit.kind === "separator"
+          ? encodeSeparator(unit)
+          : encodeInteriorDecoration(unit);
   }
-  // Only a unit outside the word runs is an edge; on a name that starts or ends
-  // with one, the encoder reads a token as no decoration at all.
   return {
-    leading: encodeEdgeDecoration(units[0]),
+    leading: encodeEdgeDecoration(units[0], "leading"),
     core,
-    trailing: encodeEdgeDecoration(units.at(-1)),
+    trailing: encodeEdgeDecoration(units.at(-1), "trailing"),
   };
 }
 

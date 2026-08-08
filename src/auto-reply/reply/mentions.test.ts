@@ -153,8 +153,8 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("PapillonBot help", regexes)).toBe(true);
   });
 
-  it("treats flags, symbols, and punctuation as omissible decoration too", () => {
-    // 🇹🇼 is a Regional_Indicator pair, ★ and ・ are plain symbols — none are
+  it("treats flags and symbols as omissible decoration too", () => {
+    // 🇹🇼 is a Regional_Indicator pair and ★ is a plain symbol — neither is
     // Extended_Pictographic, so a class limited to emoji would miss them.
     expect(
       matchesMentionPatterns(
@@ -168,12 +168,39 @@ describe("derived mention matching with decorated identity names", () => {
         buildMentionRegexes(configForName("小蝶★"), "decorated-agent"),
       ),
     ).toBe(true);
-    expect(
-      matchesMentionPatterns(
-        "小蝶 BOT 幫我查一下",
-        buildMentionRegexes(configForName("小蝶・BOT"), "decorated-agent"),
-      ),
-    ).toBe(true);
+  });
+
+  it.each(["-", "/", ".", "・"])(
+    "keeps identifier punctuation %s required, not omissible decoration",
+    (separator) => {
+      const cfg = configForName(`foo${separator}bar`);
+      const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+      expect(matchesMentionPatterns(`foo${separator}bar status`, regexes)).toBe(true);
+      expect(matchesMentionPatterns("foobar status", regexes)).toBe(false);
+      expect(matchesMentionPatterns("foo bar status", regexes)).toBe(false);
+      expect(stripMentions("foobar /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+        "foobar /status",
+      );
+      expect(
+        stripMentions(`foo${separator}bar /status`, {} as MsgContext, cfg, "decorated-agent"),
+      ).toBe("/status");
+    },
+  );
+
+  it("keeps edge punctuation required, unlike edge decoration", () => {
+    const regexes = buildMentionRegexes(configForName("Bot!"), "decorated-agent");
+
+    expect(matchesMentionPatterns("bot! status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("bot status", regexes)).toBe(false);
+  });
+
+  it("keeps a gap required when punctuation shares it with decoration", () => {
+    const regexes = buildMentionRegexes(configForName("Clawd ・🦋 Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("clawd ・🦋 bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawd bot status", regexes)).toBe(false);
+    expect(matchesMentionPatterns("clawd🦋bot status", regexes)).toBe(false);
   });
 
   it("matches an Indic name typed without its ZWJ (text normalization strips it)", () => {
@@ -357,7 +384,7 @@ describe("derived mention matching with decorated identity names", () => {
       (typed: string) => `Clawd${typed}Bot`,
     ],
   ])("leaves decoration beyond the name's own in place (%s)", (_label, toName, toTyped) => {
-    for (const decoration of ["🦋", "❤️", "👩‍👧", "🇹🇼", "・★"]) {
+    for (const decoration of ["🦋", "❤️", "👩‍👧", "🇹🇼", "✨★"]) {
       const cfg = configForName(toName(decoration));
       const regexes = buildMentionRegexes(cfg, "decorated-agent");
       const message = `${toTyped(decoration.repeat(2))} /status`;
@@ -454,6 +481,30 @@ describe("derived mention matching with decorated identity names", () => {
 
     expect(matchesMentionPatterns("bot 早安", regexes)).toBe(true);
     expect(matchesMentionPatterns("🦋 bot 早安", regexes)).toBe(true);
+  });
+
+  it("strips spaced edge decoration together with its spacing", () => {
+    // Matching resumes at the bare core either way; if the strip pattern left
+    // the edge's inner space out, the emoji would survive in front of the
+    // command and "/status" would no longer start the text.
+    const leading = configForName("🦋 Bot");
+    const trailing = configForName("Bot 🦋");
+
+    expect(stripMentions("🦋 Bot /status", {} as MsgContext, leading, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("🦋Bot /status", {} as MsgContext, leading, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("Bot /status", {} as MsgContext, leading, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("Bot 🦋 /status", {} as MsgContext, trailing, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("Bot /status", {} as MsgContext, trailing, "decorated-agent")).toBe(
+      "/status",
+    );
   });
 
   it("keeps whitespace between plain words required (unchanged contract)", () => {
