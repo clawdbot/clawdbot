@@ -45,7 +45,6 @@ function createSilentIdleArgv(): string[] {
 
 function createStubChildAdapter(options?: {
   pid?: number;
-  oomScoreWrapperSelected?: boolean;
   onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
 }): StubChildAdapter {
   const stdoutListeners: Array<(chunk: string) => void> = [];
@@ -63,7 +62,6 @@ function createStubChildAdapter(options?: {
   const adapter: StubChildAdapter = {
     pid: options?.pid ?? 1234,
     stdin: undefined,
-    oomScoreWrapperSelected: options?.oomScoreWrapperSelected,
     onStdout: (listener) => {
       stdoutListeners.push(listener);
     },
@@ -116,24 +114,6 @@ describe("process supervisor", () => {
     vi.useRealTimers();
   });
 
-  it("carries the adapter OOM-score wrapper-selection fact into the run exit", async () => {
-    const adapter = createStubChildAdapter({ oomScoreWrapperSelected: true });
-    createChildAdapterMock.mockResolvedValue(adapter);
-    const supervisor = createProcessSupervisor();
-    const run = await spawnChild(supervisor, {
-      sessionId: "s-oom-adjusted",
-      argv: createSilentIdleArgv(),
-    });
-
-    adapter.settle(null, "SIGKILL");
-
-    await expect(run.wait()).resolves.toMatchObject({
-      reason: "signal",
-      exitSignal: "SIGKILL",
-      oomScoreWrapperSelected: true,
-    });
-  });
-
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -141,6 +121,7 @@ describe("process supervisor", () => {
 
   it("spawns child runs and captures output", async () => {
     const adapter = createStubChildAdapter();
+    adapter.oomScoreWrapperSelected = true;
     createChildAdapterMock.mockResolvedValue(adapter);
 
     const supervisor = createProcessSupervisor();
@@ -158,6 +139,7 @@ describe("process supervisor", () => {
     expect(exit.reason).toBe("exit");
     expect(exit.exitCode).toBe(0);
     expect(exit.stdout).toBe("ok");
+    expect(exit.oomScoreWrapperSelected).toBe(true);
     expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
   });
 

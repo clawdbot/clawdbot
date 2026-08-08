@@ -145,6 +145,7 @@ export type ExecProcessOutcome =
       timedOut: boolean;
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
       reason: string;
     };
 
@@ -442,16 +443,10 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
-function isSigkillSignal(signal: NodeJS.Signals | number | null): boolean {
-  return signal === "SIGKILL" || signal === 9;
-}
-
 /** Formats a user-facing reason for a failed exec process exit. */
 function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
-  exitReason: TerminationReason;
   exitSignal: NodeJS.Signals | number | null;
-  oomScoreWrapperSelected?: boolean;
   timeoutSec: number | null | undefined;
 }): string {
   switch (params.failureKind) {
@@ -471,24 +466,8 @@ function formatExecFailureReason(params: {
         "Command timed out waiting for output.",
         params.failureKind,
       );
-    case "signal": {
-      const signalReason = `Command aborted by signal ${params.exitSignal}`;
-      if (
-        params.exitReason !== "signal" ||
-        !params.oomScoreWrapperSelected ||
-        !isSigkillSignal(params.exitSignal)
-      ) {
-        return signalReason;
-      }
-      return (
-        `${signalReason}\n\n` +
-        "OpenClaw selected its Linux OOM-score wrapper, which attempts to set this child's oom_score_adj to 1000. " +
-        "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
-        "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits. " +
-        "Only if those checks show no OOM evidence and you need a controlled comparison, retry with OPENCLAW_CHILD_OOM_SCORE_ADJ=0. " +
-        "This removes the child-first OOM preference and can make the Gateway more likely to be killed under real memory pressure."
-      );
-    }
+    case "signal":
+      return `Command aborted by signal ${params.exitSignal}`;
     case "aborted":
       return "Command aborted before exit code was captured";
   }
@@ -528,9 +507,7 @@ function buildExecExitOutcome(params: {
   });
   const reason = formatExecFailureReason({
     failureKind,
-    exitReason: params.exit.reason,
     exitSignal: params.exit.exitSignal,
-    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     timeoutSec: params.timeoutSec,
   });
   return {
@@ -543,6 +520,7 @@ function buildExecExitOutcome(params: {
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
+    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
 }
