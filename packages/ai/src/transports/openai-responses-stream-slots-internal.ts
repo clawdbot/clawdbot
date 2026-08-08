@@ -39,8 +39,8 @@ export function createResponsesOutputContentIndex() {
     if ((item.type === "reasoning" || item.type === "message") && item.id) {
       return `${item.type}:${item.id}`;
     }
-    return item.type === "function_call" && item.call_id
-      ? `function_call:${item.call_id}`
+    return item.type === "function_call"
+      ? `function_call:${item.call_id ?? item.id ?? ""}`
       : undefined;
   };
   return {
