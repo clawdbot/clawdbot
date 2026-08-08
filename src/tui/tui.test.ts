@@ -355,6 +355,8 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
     expect(state.remediation).toContain("openclaw devices approve --latest");
     expect(state.remediation).toContain("openclaw devices approve <requestId>");
+    expect(state.remediation).toContain("--url");
+    expect(state.remediation).toContain("--token/--password");
     // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
     expect(state.remediation).not.toContain("openclaw pairing");
   });

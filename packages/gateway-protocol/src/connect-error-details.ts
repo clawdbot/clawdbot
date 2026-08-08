@@ -475,7 +475,8 @@ export function readConnectPairingRequiredMessage(
 
 const PAIRING_APPROVAL_REMEDIATION =
   "Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed " +
-  "`openclaw devices approve <requestId>` command and reconnect.";
+  "`openclaw devices approve <requestId>` command and reconnect (pass the same --url and " +
+  "--token/--password flags if you connected with explicit credentials).";
 const DEVICE_TOKEN_REMEDIATION =
   "Rotate the paired-device token with `openclaw devices rotate --device <deviceId> --role operator`, then reconnect.";
 const SHARED_TOKEN_REMEDIATION =

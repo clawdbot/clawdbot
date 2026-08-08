@@ -148,6 +148,10 @@ describe("classifyGatewayConnectFailure", () => {
     } else {
       expect(result.remediation).toBeUndefined();
     }
+    if (kind === "pairing-required") {
+      expect(result.remediation).toContain("--url");
+      expect(result.remediation).toContain("--token/--password");
+    }
   });
 });
 
