@@ -88,7 +88,11 @@ async function sendMessageTelegramWithContext(
     try {
       await assertBusinessConnectionCanRead(businessConnectionId);
       await api.readBusinessMessage(businessConnectionId, Number(chatId), markReadMessageId);
-      await clearBusinessChatUnread({ accountId: account.accountId, chatId });
+      await clearBusinessChatUnread({
+        accountId: account.accountId,
+        chatId,
+        expectedMessageId: markReadMessageId,
+      });
     } catch (err) {
       // Never let a failed read-receipt block the actual reply from sending.
       logVerbose(`telegram: readBusinessMessage failed: ${formatErrorMessage(err)}`);

@@ -197,6 +197,13 @@ export async function resolveBusinessChatRoute(params: {
 export async function clearBusinessChatUnread(params: {
   accountId?: string;
   chatId: number | string;
+  /**
+   * Only clear if the route's marker still points at this message id. A
+   * second business message can arrive (and bump the marker forward) while
+   * an earlier message's read-receipt call is still in flight; clearing
+   * unconditionally would drop that newer message's pending read-receipt.
+   */
+  expectedMessageId: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const store = openBusinessChatRouteStore(params.env);
@@ -205,7 +212,7 @@ export async function clearBusinessChatUnread(params: {
   }
   const key = buildBusinessChatRouteKey(params.accountId, params.chatId);
   await store.update(key, (current) => {
-    if (!current) {
+    if (!current || current.latestUnreadMessageId !== params.expectedMessageId) {
       return current;
     }
     // The plugin state store rejects literal `undefined` property values as

@@ -132,7 +132,11 @@ describe("business chat route store: per-account scoping", () => {
         messageId: 2,
       });
 
-      await clearBusinessChatUnread({ accountId: "account-a", chatId: SHARED_CHAT_ID });
+      await clearBusinessChatUnread({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+        expectedMessageId: 1,
+      });
 
       const routeA = await resolveBusinessChatRoute({
         accountId: "account-a",
@@ -147,6 +151,51 @@ describe("business chat route store: per-account scoping", () => {
       expect(routeA?.businessConnectionId).toBe("conn-a");
       expect(routeB?.latestUnreadMessageId).toBe(2);
       expect(routeB?.businessConnectionId).toBe("conn-b");
+    }));
+
+  it("does not drop a newer unread message's read-receipt when an older read-receipt clears late", async () =>
+    withBusinessTestEnv(async () => {
+      // Message 1 arrives; a reply/read-receipt turn for it starts.
+      await recordBusinessChatMessage({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+        businessConnectionId: "conn-a",
+        messageId: 1,
+      });
+
+      // Message 2 arrives before message 1's read-receipt call resolves,
+      // bumping the route's marker forward.
+      await recordBusinessChatMessage({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+        businessConnectionId: "conn-a",
+        messageId: 2,
+      });
+
+      // Message 1's (now stale) read-receipt clear finally lands. It must
+      // not clear message 2's still-pending marker.
+      await clearBusinessChatUnread({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+        expectedMessageId: 1,
+      });
+      const afterStaleClear = await resolveBusinessChatRoute({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+      });
+      expect(afterStaleClear?.latestUnreadMessageId).toBe(2);
+
+      // Message 2's own read-receipt then clears it normally.
+      await clearBusinessChatUnread({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+        expectedMessageId: 2,
+      });
+      const afterCurrentClear = await resolveBusinessChatRoute({
+        accountId: "account-a",
+        chatId: SHARED_CHAT_ID,
+      });
+      expect(afterCurrentClear?.latestUnreadMessageId).toBeUndefined();
     }));
 
   it("falls back to a shared default-account bucket when accountId is omitted, matching prior single-account behavior", async () =>
