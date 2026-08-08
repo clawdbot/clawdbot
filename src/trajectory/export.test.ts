@@ -82,6 +82,24 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
   return events.map((event) => event.type);
 }
 
+function runtimeAttemptEvents(
+  rows: ReadonlyArray<readonly [type: string, runId: string, data?: Record<string, unknown>]>,
+): TrajectoryEvent[] {
+  return rows.map(([type, runId, data], index) => ({
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    traceId: "session-1",
+    source: "runtime",
+    type,
+    ts: "2026-04-22T08:00:00.000Z",
+    seq: index + 1,
+    sourceSeq: index + 1,
+    sessionId: "session-1",
+    runId,
+    ...(data ? { data } : {}),
+  }));
+}
+
 function writeSimpleSessionFile(
   sessionFile: string,
   params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
@@ -112,6 +130,32 @@ function writeSimpleSessionFile(
     `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf8",
   );
+}
+
+async function exportRuntimeArtifacts(
+  runtimeEvents: readonly TrajectoryEvent[],
+): Promise<Record<string, unknown>> {
+  const tmpDir = makeTempDir();
+  const sessionFile = path.join(tmpDir, "session.jsonl");
+  const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+  const outputDir = path.join(tmpDir, "bundle");
+  writeSimpleSessionFile(sessionFile);
+  fs.writeFileSync(
+    runtimeFile,
+    `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    "utf8",
+  );
+  await exportTrajectoryBundle({
+    outputDir,
+    sessionFile,
+    sessionId: "session-1",
+    workspaceDir: tmpDir,
+    runtimeFile,
+  });
+  return JSON.parse(fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
 }
 
 function writeToolCallOnlySessionFile(sessionFile: string): void {
@@ -571,6 +615,69 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts.usage).toEqual(usage);
     expect(artifacts.promptCache).toEqual(promptCache);
     expect(artifacts.stopReason).toBe("stop_sequence");
+  });
+
+  const staleCompletion = {
+    usage: { totalTokens: 10 },
+    assistantTexts: ["stale completion"],
+    stopReason: "length",
+  };
+  const currentCompletion = {
+    usage: { totalTokens: 2 },
+    assistantTexts: ["current completion"],
+  };
+  const staleArtifacts = {
+    finalStatus: "error",
+    stopReason: "length",
+    itemLifecycle: { startedCount: 9, completedCount: 1, activeCount: 8 },
+    lastToolError: { message: "stale tool failure" },
+  };
+
+  it.each([
+    {
+      name: "successive attempts that reuse a run id",
+      runtimeEvents: runtimeAttemptEvents([
+        ["session.started", "shared-run"],
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error" }],
+        ["session.started", "shared-run"],
+        ["model.completed", "shared-run", currentCompletion],
+        ["session.ended", "shared-run", { status: "success" }],
+      ]),
+    },
+    {
+      name: "distinct run ids with a delayed older artifact",
+      runtimeEvents: runtimeAttemptEvents([
+        ["session.started", "old-run"],
+        ["model.completed", "old-run", staleCompletion],
+        ["session.ended", "old-run", { status: "error" }],
+        ["session.started", "new-run"],
+        ["model.completed", "new-run", currentCompletion],
+        ["trace.artifacts", "old-run", staleArtifacts],
+        ["session.ended", "new-run", { status: "success" }],
+      ]),
+    },
+  ])("scopes artifacts to $name", async ({ runtimeEvents }) => {
+    const artifacts = await exportRuntimeArtifacts(runtimeEvents);
+    expect(artifacts).toMatchObject({
+      finalStatus: "success",
+      usage: { totalTokens: 2 },
+      assistantTexts: ["current completion"],
+    });
+    expect(artifacts).not.toHaveProperty("stopReason");
+    expect(artifacts).not.toHaveProperty("itemLifecycle");
+    expect(artifacts).not.toHaveProperty("lastToolError");
+  });
+
+  it("exports a partial capture with one terminal event", async () => {
+    const artifacts = await exportRuntimeArtifacts(
+      runtimeAttemptEvents([["session.ended", "partial-run", { status: "interrupted" }]]),
+    );
+
+    expect(artifacts).toMatchObject({ finalStatus: "interrupted" });
+    expect(artifacts).not.toHaveProperty("stopReason");
+    expect(artifacts).not.toHaveProperty("usage");
   });
 
   it("preserves numeric transcript timestamps", async () => {

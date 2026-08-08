@@ -6,6 +6,7 @@ import {
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
+import { resolveEmbeddedRunAttemptTerminalOutcome } from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type FinalizeEmbeddedAttemptParams = {
@@ -23,10 +24,16 @@ export function finalizeEmbeddedAttempt(
 ): EmbeddedRunAttemptResult {
   const { result, trajectoryRecorder } = params;
   const terminalState = projectAgentRunAttemptTerminal(result.terminal);
+  const completionAssistant =
+    result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant;
+  const completionStopReason = resolveEmbeddedRunAttemptTerminalOutcome({
+    attempt: result,
+    assistant: completionAssistant,
+  }).stopReason;
   const terminalAssistantTexts = resolveTerminalAssistantTexts({
     assistantTexts: result.assistantTexts,
-    lastAssistantStopReason: result.lastAssistant?.stopReason,
-    lastAssistantVisibleText: resolveFinalAssistantVisibleText(result.lastAssistant),
+    lastAssistantStopReason: completionStopReason,
+    lastAssistantVisibleText: resolveFinalAssistantVisibleText(completionAssistant),
   });
   const terminal = resolveAttemptTrajectoryTerminal({
     failed: terminalState.failed,
@@ -47,7 +54,7 @@ export function finalizeEmbeddedAttempt(
     lastToolError: result.lastToolError,
     silentExpected: params.silentExpected,
     emptyAssistantReplyIsSilent: params.emptyAssistantReplyIsSilent,
-    lastAssistantStopReason: result.lastAssistant?.stopReason,
+    lastAssistantStopReason: completionStopReason,
     hasTerminalOutput: params.hasTerminalOutput,
   });
   const promptError = terminalState.promptError
@@ -69,7 +76,7 @@ export function finalizeEmbeddedAttempt(
     promptCache: result.promptCache,
     compactionCount: result.compactionCount,
     assistantTexts: result.assistantTexts,
-    stopReason: result.lastAssistant?.stopReason,
+    stopReason: completionStopReason,
     finalPromptText: result.finalPromptText,
     messagesSnapshot: result.messagesSnapshot,
   });
@@ -91,7 +98,7 @@ export function finalizeEmbeddedAttempt(
       promptCache: result.promptCache,
       compactionCount: result.compactionCount ?? 0,
       assistantTexts: result.assistantTexts,
-      stopReason: result.lastAssistant?.stopReason,
+      stopReason: completionStopReason,
       finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,

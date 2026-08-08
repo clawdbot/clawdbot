@@ -60,10 +60,10 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
   "systemPrompt",
 ] as const;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = [
+  "stopReason",
   "usage",
   "promptCache",
   "prompt",
-  "stopReason",
 ] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;

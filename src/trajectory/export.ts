@@ -1079,9 +1079,25 @@ function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
 }): JsonRecord | undefined {
-  const runtimeArtifacts = resolveLatestRuntimeEventData(params.runtimeEvents, "trace.artifacts");
-  const runtimeCompletion = resolveLatestRuntimeEventData(params.runtimeEvents, "model.completed");
-  const runtimeEnd = resolveLatestRuntimeEventData(params.runtimeEvents, "session.ended");
+  const terminalTypes = new Set(["trace.artifacts", "model.completed", "session.ended"]);
+  const anchorIndex = params.runtimeEvents.findLastIndex((event) => terminalTypes.has(event.type));
+  if (anchorIndex < 0) {
+    return undefined;
+  }
+  const anchor = params.runtimeEvents[anchorIndex]!;
+  const cohortStart = params.runtimeEvents
+    .slice(0, anchorIndex)
+    .findLastIndex(
+      (event) =>
+        event.type === "session.started" &&
+        (anchor.runId === undefined || event.runId === anchor.runId),
+    );
+  const cohort = params.runtimeEvents
+    .slice(cohortStart < 0 ? 0 : cohortStart, anchorIndex + 1)
+    .filter((event) => anchor.runId === undefined || event.runId === anchor.runId);
+  const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
+  const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
+  const runtimeEnd = resolveLatestRuntimeEventData(cohort, "session.ended");
   if (!runtimeArtifacts && !runtimeCompletion && !runtimeEnd) {
     return undefined;
   }

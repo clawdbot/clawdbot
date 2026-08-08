@@ -31,11 +31,7 @@ const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
-const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = [
-  "usage",
-  "promptCache",
-  "stopReason",
-] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
 
 type CodexTrajectorySink = {
   flush: () => Promise<void>;
@@ -219,7 +215,6 @@ export function recordCodexTrajectoryCompletion(
     promptError: normalizeCodexTrajectoryError(terminal.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
-    stopReason: params.result.lastAssistant?.stopReason,
     messagesSnapshot: params.result.messagesSnapshot,
   });
 }
