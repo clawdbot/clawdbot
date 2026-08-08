@@ -1196,7 +1196,9 @@ jobs:
       - name: Verify built Doctor plugin index persistence
         run: |
           if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
-            node scripts/run-vitest.mjs run \
+            # Cold hosted runners can spend over five minutes in E2E setup before
+            # this proof's own bounded test can report a result.
+            env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
               --config test/vitest/vitest.e2e.config.ts \
               test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
           else
@@ -2611,7 +2613,9 @@ jobs:
               if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
                 echo "[skip] SQLite sessions/transcripts flip proof is not present in this checkout"
               else
-                run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
+                # This lane owns a 420-second E2E case plus cold hosted-runner setup;
+                # keep the global watchdog strict and scope compatibility headroom here.
+                run_check "sqlite sessions/transcripts flip proof" env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
               fi
               ;;
             extension-package-boundary)
