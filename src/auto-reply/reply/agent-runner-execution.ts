@@ -9,6 +9,7 @@ import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
@@ -107,6 +108,7 @@ async function executeAgentTurnInternalWithRetryState(
   commitTerminalOutcome: () => void,
   overloadRetryState: OverloadRetryState,
   commitMcpAppModelContext: () => void,
+  preparedRunAdmission: PreparedAgentRunAdmission,
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -214,19 +216,6 @@ async function executeAgentTurnInternalWithRetryState(
     clearAgentRunContext(runId, lifecycleGeneration);
     throw error;
   }
-  const preparedRunAdmission = prepareAgentRunAdmission({
-    cfg: runtimeConfig,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: params.followupRun.run.agentId,
-      ingress: {
-        kind: "channel",
-        boundary: "auto-reply.agent-runner",
-        state: "present",
-      },
-    },
-  });
   let didNotifyAgentRunStart = false;
   let lastRunStartupPhase: ReturnType<typeof resolveRunStartupPhase>;
   const notifyAgentRunStart = () => {
@@ -502,14 +491,30 @@ async function executeAgentTurnInternal(
     noticeSent: false,
     completed: false,
   };
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const preparedRunAdmission = prepareAgentRunAdmission({
+    cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      runId,
+      agentId: params.followupRun.run.agentId,
+      ingress: {
+        kind: "channel",
+        boundary: "auto-reply.agent-runner",
+        state: "present",
+      },
+    },
+  });
   try {
     return await executeAgentTurnInternalWithRetryState(
       params,
       commitTerminalOutcome,
       overloadRetryState,
       commitMcpAppModelContext,
+      preparedRunAdmission,
     );
   } finally {
+    preparedRunAdmission.close();
     await cancelOverloadRetryNotice(overloadRetryState);
   }
 }

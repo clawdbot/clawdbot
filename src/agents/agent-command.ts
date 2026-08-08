@@ -177,6 +177,7 @@ async function agentCommandInternal(
   }
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let preparedRunAdmission: ReturnType<typeof executionIdentity.prepare> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     const sessionStoreRuntime =
@@ -227,14 +228,16 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
-      const preparedRunAdmission = executionIdentity.prepare({
+      preparedRunAdmission = executionIdentity.prepare({
         admission: opts.executionIdentityAdmission,
         agentId: sessionAgentId,
         cfg,
         ingress: admissionIngress,
-        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        operationalRunInstance:
+          opts.operationalRunInstance ?? createOperationalRunInstanceRef(runId),
         runId,
         onAdmitted: async (admittedRunContext) => {
+          await opts.onAdmittedRunContext?.(admittedRunContext);
           if (
             opts.mainRestartRecoveryAdmitted !== true ||
             !opts.mainRestartRecoveryOwnerLease ||
@@ -553,6 +556,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    preparedRunAdmission?.close();
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned
@@ -703,7 +707,12 @@ export async function agentCommandFromIngress(
   // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
   // boundary at runtime so extra or inherited properties cannot author audit identity.
   return await agentCommandFromIngressInternal(
-    { ...opts, executionIdentityAdmission: undefined },
+    {
+      ...opts,
+      executionIdentityAdmission: undefined,
+      operationalRunInstance: undefined,
+      onAdmittedRunContext: undefined,
+    },
     runtime,
     deps,
   );

@@ -29,9 +29,26 @@ function executionIdentity() {
   };
 }
 
+function identityWithoutExecution(): AgentRuntimeIdentity {
+  const operationalRunInstance = { instanceId: "instance-run-1", runId: "run-1" };
+  return {
+    kind: "agentRuntime",
+    agentId: "main",
+    sessionKey: "agent:main:session-1",
+    operationalRunInstance,
+    delegatedAuthority: {
+      kind: "local",
+      operationalRunInstance,
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-1",
+    },
+  };
+}
+
 function requestOptions(params: {
   request: Record<string, unknown>;
   identity: AgentRuntimeIdentity;
+  validateAuthority?: () => boolean;
 }): GatewayRequestHandlerOptions {
   return {
     req: { method: "plugin.approval.request", params: params.request, id: "req-1" },
@@ -47,6 +64,7 @@ function requestOptions(params: {
       broadcast: vi.fn(),
       logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       hasExecApprovalClients: () => true,
+      validateAgentRuntimeApprovalAuthority: params.validateAuthority ?? (() => true),
     },
   } as unknown as GatewayRequestHandlerOptions;
 }
@@ -67,9 +85,56 @@ afterEach(() => {
 });
 
 describe("plugin approval signed agent runtime", () => {
+  it("rejects closed authority before creating a plugin approval", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      approvalKind: "plugin",
+      validateAgentRuntimeDelegatedAuthority: () => false,
+    });
+    const opts = requestOptions({
+      request: { title: "Sensitive action", description: "D" },
+      identity: {
+        ...identityWithoutExecution(),
+        approvalOwnerPluginId: "codex",
+      },
+      validateAuthority: () => false,
+    });
+
+    await requestHandler(manager)(opts);
+
+    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+      message: expect.stringContaining("no longer active"),
+    });
+  });
+
+  it("cancels a plugin approval when authority closes after the handshake", async () => {
+    let active = true;
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      approvalKind: "plugin",
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    const opts = requestOptions({
+      request: { title: "Sensitive action", description: "D", twoPhase: true },
+      identity: {
+        ...identityWithoutExecution(),
+        approvalOwnerPluginId: "codex",
+      },
+      validateAuthority: () => active,
+    });
+    const pending = requestHandler(manager)(opts);
+    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+    const record = manager.listPendingRecords()[0]!;
+    active = false;
+
+    await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
+    await pending;
+    expect(manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
+  });
+
   it("rejects a signed runtime without a host-resolved approval owner", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
       approvalKind: "plugin",
+      validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const opts = requestOptions({
       request: { pluginId: "forged", title: "Sensitive action", description: "D" },
@@ -78,6 +143,12 @@ describe("plugin approval signed agent runtime", () => {
         agentId: "main",
         sessionKey: "agent:main:session-1",
         operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+          lifecycleGeneration: "generation-1",
+          claimId: "claim-1",
+        },
       },
     });
 
@@ -93,6 +164,7 @@ describe("plugin approval signed agent runtime", () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
       approvalKind: "plugin",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
+      validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const opts = requestOptions({
       request: {
@@ -108,6 +180,12 @@ describe("plugin approval signed agent runtime", () => {
       identity: {
         kind: "agentRuntime",
         operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+          lifecycleGeneration: "generation-1",
+          claimId: "claim-1",
+        },
         executionIdentity: executionIdentity(),
         approvalOwnerPluginId: "codex",
         agentId: "main",
@@ -154,12 +232,19 @@ describe("plugin approval signed agent runtime", () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
       approvalKind: "plugin",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
+      validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const opts = requestOptions({
       request: { title: "Sensitive action", description: "D", twoPhase: true },
       identity: {
         kind: "agentRuntime",
         operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+          lifecycleGeneration: "generation-1",
+          claimId: "claim-1",
+        },
         approvalOwnerPluginId: "codex",
         agentId: "main",
         sessionKey: "agent:main:session-1",

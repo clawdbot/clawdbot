@@ -651,42 +651,44 @@ async function runCliBtwSideQuestion(params: {
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
   });
   const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
-  const prepared = await prepareCliRunContext({
-    preparedRunAdmission: prepareSystemAgentRunAdmission(
-      params.cfg,
-      runId,
-      params.sessionAgentId,
-      "btw.side-question",
-    ),
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    agentId: params.sessionAgentId,
-    trigger: "user",
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    config: params.cfg,
-    prompt: buildBtwCliPrompt({
-      messages: params.messages,
-      question: params.question,
-      inFlightPrompt: params.inFlightPrompt,
-    }),
-    extraSystemPrompt: buildBtwSystemPrompt(),
-    executionMode: "side-question",
-    provider: params.cliProvider,
-    model: params.model,
-    thinkLevel: params.resolvedThinkLevel,
-    disableTools: true,
-    timeoutMs,
-    runTimeoutOverrideMs: timeoutMs,
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.cfg,
     runId,
-    authProfileId: params.authProfileId,
-    abortSignal: params.opts?.abortSignal,
-    messageChannel: params.messageChannel,
-    messageProvider: params.messageProvider,
-    currentChannelId: params.currentChannelId,
-  });
+    params.sessionAgentId,
+    "btw.side-question",
+  );
+  let prepared: Awaited<ReturnType<typeof prepareCliRunContext>> | undefined;
   try {
+    prepared = await prepareCliRunContext({
+      preparedRunAdmission,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      agentId: params.sessionAgentId,
+      trigger: "user",
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      prompt: buildBtwCliPrompt({
+        messages: params.messages,
+        question: params.question,
+        inFlightPrompt: params.inFlightPrompt,
+      }),
+      extraSystemPrompt: buildBtwSystemPrompt(),
+      executionMode: "side-question",
+      provider: params.cliProvider,
+      model: params.model,
+      thinkLevel: params.resolvedThinkLevel,
+      disableTools: true,
+      timeoutMs,
+      runTimeoutOverrideMs: timeoutMs,
+      runId,
+      authProfileId: params.authProfileId,
+      abortSignal: params.opts?.abortSignal,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: params.currentChannelId,
+    });
     const output = await executePreparedCliRun(prepared);
     const text = output.text.trim();
     if (!text) {
@@ -694,7 +696,8 @@ async function runCliBtwSideQuestion(params: {
     }
     return { text };
   } finally {
-    await prepared.preparedBackend.cleanup?.();
+    await prepared?.preparedBackend.cleanup?.();
+    preparedRunAdmission.close();
   }
 }
 
@@ -980,76 +983,81 @@ export async function runBtwSideQuestion(
       sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
       workspaceDir,
     });
-    const admittedRunContext = await prepareSystemAgentRunAdmission(
+    const preparedRunAdmission = prepareSystemAgentRunAdmission(
       params.cfg,
       sideRunId,
       sessionAgentId,
       "btw.side-question",
-    ).admit("plugin-harness");
-    const { model: _sideModel, ...hostAttempt } = params;
-    const host = createAgentHarnessHostCapabilities({
-      attempt: {
-        ...hostAttempt,
-        admittedRunContext,
-        config: params.cfg,
-        agentId: sessionAgentId,
-        sessionId,
-        sessionKey: params.sessionKey,
-        sandbox,
-        workspaceDir,
-        runId: sideRunId,
-        currentMessagingTarget: params.messageTo,
-        currentThreadTs:
-          params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
-      },
-      pluginId: selectedHarness.pluginId ?? selectedHarness.id,
-    });
-    const sideParams = {
-      ...params,
-      hostCapabilities: host.capabilities,
-      sandbox,
-      provider: runtimeModel.provider,
-      model: runtimeModel.id,
-      runtimeModel,
-      preparedRuntimeAuth: {
-        plan: runtimeAuthPlan,
-        authProfileStore: scopeAuthProfileStoreToPreparedPlan(
-          selectedAuthProfileStore,
-          runtimeAuthPlan,
-        ),
-        authStorage: runtime.authStorage,
-        modelRegistry: runtime.modelRegistry,
-        ...(resolvedApiKey
-          ? {
-              resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
-                resolvedApiKey,
-                "BTW harness handoff",
-              ),
-            }
-          : {}),
-      },
-      sessionId,
-      sessionFile,
-      agentId: sessionAgentId,
-      workspaceDir,
-      ...(toolsAllow ? { toolsAllow } : {}),
-      authProfileId:
-        runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
-          ? undefined
-          : runtimeAuthPlan.forwardedAuthProfileId,
-      opts: { ...params.opts, runId: sideRunId },
-      authProfileIdSource:
-        runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
-          ? undefined
-          : runtimeAuthPlan.forwardedAuthProfileSource,
-    };
-    let result: Awaited<ReturnType<NonNullable<AgentHarness["runSideQuestion"]>>>;
+    );
+    const admittedRunContext = await preparedRunAdmission.admit("plugin-harness");
     try {
-      result = await selectedHarness.runSideQuestion(sideParams);
+      const { model: _sideModel, ...hostAttempt } = params;
+      const host = createAgentHarnessHostCapabilities({
+        attempt: {
+          ...hostAttempt,
+          admittedRunContext,
+          config: params.cfg,
+          agentId: sessionAgentId,
+          sessionId,
+          sessionKey: params.sessionKey,
+          sandbox,
+          workspaceDir,
+          runId: sideRunId,
+          currentMessagingTarget: params.messageTo,
+          currentThreadTs:
+            params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
+        },
+        pluginId: selectedHarness.pluginId ?? selectedHarness.id,
+      });
+      const sideParams = {
+        ...params,
+        hostCapabilities: host.capabilities,
+        sandbox,
+        provider: runtimeModel.provider,
+        model: runtimeModel.id,
+        runtimeModel,
+        preparedRuntimeAuth: {
+          plan: runtimeAuthPlan,
+          authProfileStore: scopeAuthProfileStoreToPreparedPlan(
+            selectedAuthProfileStore,
+            runtimeAuthPlan,
+          ),
+          authStorage: runtime.authStorage,
+          modelRegistry: runtime.modelRegistry,
+          ...(resolvedApiKey
+            ? {
+                resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
+                  resolvedApiKey,
+                  "BTW harness handoff",
+                ),
+              }
+            : {}),
+        },
+        sessionId,
+        sessionFile,
+        agentId: sessionAgentId,
+        workspaceDir,
+        ...(toolsAllow ? { toolsAllow } : {}),
+        authProfileId:
+          runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
+            ? undefined
+            : runtimeAuthPlan.forwardedAuthProfileId,
+        opts: { ...params.opts, runId: sideRunId },
+        authProfileIdSource:
+          runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
+            ? undefined
+            : runtimeAuthPlan.forwardedAuthProfileSource,
+      };
+      let result: Awaited<ReturnType<NonNullable<AgentHarness["runSideQuestion"]>>>;
+      try {
+        result = await selectedHarness.runSideQuestion(sideParams);
+      } finally {
+        host.close();
+      }
+      return { kind: "handled", payload: { text: result.text } };
     } finally {
-      host.close();
+      preparedRunAdmission.close();
     }
-    return { kind: "handled", payload: { text: result.text } };
   };
   if (harness.runSideQuestion) {
     const dispatch = await runHarnessSideQuestion(harness, await resolveRuntimeSelection());

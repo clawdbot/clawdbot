@@ -58,18 +58,19 @@ export async function runSkillHistoryScanReview(params: {
       }
     : undefined;
   const runId = params.runId ?? `${HISTORY_SCAN_SESSION_SEGMENT}:${randomUUID()}`;
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.config,
+    runId,
+    params.agentId,
+    "skill-workshop.history-scan",
+  );
   let runError: unknown;
   try {
     const sessionId = randomUUID();
     const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:incognito-${sessionId}`;
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
-      preparedRunAdmission: prepareSystemAgentRunAdmission(
-        params.config,
-        runId,
-        params.agentId,
-        "skill-workshop.history-scan",
-      ),
+      preparedRunAdmission,
       sessionId,
       sessionKey,
       sandboxSessionKey: sessionKey,
@@ -109,6 +110,8 @@ export async function runSkillHistoryScanReview(params: {
     runError = resolveSkillHistoryScanRunFailure(result);
   } catch (error) {
     runError = error;
+  } finally {
+    preparedRunAdmission.close();
   }
   if (proposalReviewCompletion?.completed) {
     return proposalMutationBudget.completed;

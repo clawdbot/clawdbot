@@ -875,16 +875,17 @@ timeline for current status.
 
   <Accordion title="Agent harness attempt params -> V2 host-capability contract">
     New or updated harness plugins should implement `AgentHarnessV2` and use
-    `AgentHarnessAttemptParamsV2` or `EmbeddedRunAttemptParamsV2`. The V2
-    parameter types require `hostCapabilities`, matching what core supplies at
-    the selected-harness boundary.
+    `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, or
+    `AgentHarnessSideQuestionParamsV2`. The V2 parameter types require
+    `hostCapabilities`, matching what core supplies at the selected-harness
+    boundary.
 
     Existing plugins may continue implementing `AgentHarness` and constructing
-    the legacy `AgentHarnessAttemptParams` or `EmbeddedRunAttemptParams` types
-    without that field through 2026-10-12. Those names are deprecated and keep
-    the capability optional only for source compatibility; they do not create
-    a capability-free runtime path. Migrate by changing the imported type name
-    and binding tool or native-action surfaces through
+    the legacy `AgentHarnessAttemptParams`, `EmbeddedRunAttemptParams`, or
+    `AgentHarnessSideQuestionParams` types without that field through
+    2026-10-12. Those contracts keep the capability optional only for source
+    compatibility; they do not create a capability-free runtime path. Migrate
+    by changing the imported type name and binding tool or native-action surfaces through
     `params.hostCapabilities`.
 
   </Accordion>

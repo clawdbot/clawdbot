@@ -258,6 +258,12 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     runId,
     storePath,
   });
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.cfg,
+    runId,
+    params.agentId,
+    "session-companion.ask",
+  );
   try {
     const [{ SessionManager }, { runEmbeddedAgent }] = await Promise.all([
       import("../agents/sessions/index.js"),
@@ -268,12 +274,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
     }
     const result = await runEmbeddedAgent({
-      preparedRunAdmission: prepareSystemAgentRunAdmission(
-        params.cfg,
-        runId,
-        params.agentId,
-        "session-companion.ask",
-      ),
+      preparedRunAdmission,
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
@@ -314,6 +315,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ""
     );
   } finally {
+    preparedRunAdmission.close();
     await removeInternalSessionEffectsSession(target);
   }
 }

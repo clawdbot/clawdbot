@@ -11,9 +11,9 @@ import {
   registerNativeHookRelay,
   supportsModelTools,
   type AnyAgentTool,
-  type AgentHarnessSideQuestionParams,
+  type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -159,7 +159,7 @@ You may perform non-mutating inspection, including reading or searching files an
 Do not modify files, source, git state, permissions, configuration, workspace state, or external state unless the user explicitly requests that mutation in this side conversation. Do not request escalated permissions or broader sandbox access unless the user explicitly requests a mutation that requires it. If the user explicitly requests a mutation, keep it minimal, local to the request, and avoid disrupting the main thread.`;
 
 export async function runCodexAppServerSideQuestion(
-  params: AgentHarnessSideQuestionParams,
+  params: AgentHarnessSideQuestionParamsV2,
   options: {
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
@@ -264,7 +264,7 @@ export async function runCodexAppServerSideQuestion(
   const cwd = binding.cwd || params.workspaceDir || process.cwd();
   const runId = params.opts?.runId ?? randomUUID();
   // Side runs inherit private-binding capabilities, not outer model metadata.
-  const effectiveParams: AgentHarnessSideQuestionParams = supervisionModelSelection
+  const effectiveParams: AgentHarnessSideQuestionParamsV2 = supervisionModelSelection
     ? {
         ...params,
         provider: supervisionModelSelection.modelProvider,
@@ -277,10 +277,15 @@ export async function runCodexAppServerSideQuestion(
           reasoning: true,
           input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        } as NonNullable<AgentHarnessSideQuestionParams["runtimeModel"]>,
+        } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>,
       }
     : params;
-  const sideRunParams = buildSideRunAttemptParams(effectiveParams, { cwd, authProfileId, runId });
+  const sideRunParams = buildSideRunAttemptParams(effectiveParams, {
+    cwd,
+    authProfileId,
+    runId,
+    timeoutMs: appServer.requestTimeoutMs,
+  });
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
@@ -805,7 +810,7 @@ function registerCodexSideNativeHookRelay(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
-  config: EmbeddedRunAttemptParams["config"];
+  config: EmbeddedRunAttemptParamsV2["config"];
   runId: string;
   channelId?: string;
   requestTimeoutMs: number;
@@ -856,9 +861,9 @@ function resolveCodexSideNativeHookRelayTtlMs(params: {
 }
 
 function buildSideRunAttemptParams(
-  params: AgentHarnessSideQuestionParams,
-  options: { cwd: string; authProfileId?: string; runId: string },
-): EmbeddedRunAttemptParams {
+  params: AgentHarnessSideQuestionParamsV2,
+  options: { cwd: string; authProfileId?: string; runId: string; timeoutMs: number },
+): EmbeddedRunAttemptParamsV2 {
   const sideParams = {
     params,
     config: params.cfg,
@@ -866,6 +871,8 @@ function buildSideRunAttemptParams(
     provider: params.provider,
     modelId: params.model,
     model: params.runtimeModel ?? ({ id: params.model, provider: params.provider } as never),
+    prompt: params.question,
+    timeoutMs: options.timeoutMs,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
     sessionKey: params.sessionKey,
@@ -917,11 +924,11 @@ function buildSideRunAttemptParams(
     onPartialReply: params.opts?.onPartialReply,
     hostCapabilities: params.hostCapabilities,
   };
-  return sideParams as unknown as EmbeddedRunAttemptParams;
+  return sideParams as EmbeddedRunAttemptParamsV2;
 }
 
 async function createCodexSideToolBridge(input: {
-  params: AgentHarnessSideQuestionParams;
+  params: AgentHarnessSideQuestionParamsV2;
   cwd: string;
   pluginConfig: ReturnType<typeof readCodexPluginConfig>;
   sessionAgentId: string;
@@ -1183,7 +1190,7 @@ class CodexSideQuestionCollector {
   completed = false;
 
   constructor(
-    private readonly params: AgentHarnessSideQuestionParams,
+    private readonly params: AgentHarnessSideQuestionParamsV2,
     private readonly readRecentRateLimits: () => JsonValue | undefined,
   ) {}
 

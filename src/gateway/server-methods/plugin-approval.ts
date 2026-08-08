@@ -85,6 +85,21 @@ export function createPluginApprovalHandlers(
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
       const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
 
+      if (
+        trustedAgentRuntime &&
+        context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "agent runtime approval authority is no longer active",
+          ),
+        );
+        return;
+      }
+
       if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
         respond(
           false,
@@ -132,6 +147,9 @@ export function createPluginApprovalHandlers(
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      if (trustedAgentRuntime) {
+        record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+      }
       if (
         trustedAgentRuntime?.executionIdentity &&
         request.runId === trustedAgentRuntime.executionIdentity.runId

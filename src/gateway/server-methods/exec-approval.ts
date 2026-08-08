@@ -187,6 +187,20 @@ export function createExecApprovalHandlers(
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
       const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+      if (
+        trustedAgentRuntime &&
+        context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "agent runtime approval authority is no longer active",
+          ),
+        );
+        return;
+      }
       const approvalContext = resolveSystemRunApprovalRequestContext({
         host,
         command: p.command,
@@ -371,6 +385,9 @@ export function createExecApprovalHandlers(
         throw error;
       }
       bindApprovalRequesterMetadata({ record, client });
+      if (trustedAgentRuntime) {
+        record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+      }
       const trustedExecutionIdentity = trustedAgentRuntime?.executionIdentity;
       if (trustedExecutionIdentity && requestRunId === trustedExecutionIdentity.runId) {
         record.executionIdentityToken = trustedExecutionIdentity;

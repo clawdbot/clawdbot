@@ -1605,6 +1605,8 @@ export async function runMemoryFlushIfNeeded(params: {
     if (visibleErrorPayload) {
       params.onVisibleErrorPayloads?.([visibleErrorPayload]);
     }
+  } finally {
+    preparedRunAdmission.close();
   }
 
   return { sessionEntry: activeSessionEntry, outcome };

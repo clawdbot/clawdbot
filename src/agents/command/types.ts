@@ -196,6 +196,12 @@ export type AgentCommandOpts = {
   executionIdentityAdmission?: ReturnType<
     (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
   >;
+  /** Gateway-owned exact operational instance shared with its abort controller. */
+  operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
+  /** Private exact-instance binding hook invoked after delegated authority admission. */
+  onAdmittedRunContext?: (
+    context: import("../admitted-run-context.js").AdmittedRunContext,
+  ) => void | Promise<void>;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -219,7 +225,11 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "executionIdentityAdmission"
+  | "senderIsOwner"
+  | "allowModelOverride"
+  | "executionIdentityAdmission"
+  | "operationalRunInstance"
+  | "onAdmittedRunContext"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;
@@ -229,4 +239,7 @@ export type AgentCommandIngressOpts = Omit<
 
 /** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
-  Pick<AgentCommandOpts, "executionIdentityAdmission">;
+  Pick<
+    AgentCommandOpts,
+    "executionIdentityAdmission" | "operationalRunInstance" | "onAdmittedRunContext"
+  >;

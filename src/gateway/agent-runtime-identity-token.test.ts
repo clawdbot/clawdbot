@@ -3,6 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  resetAgentRunRegistryForTest,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../infra/agent-run-registry.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -13,9 +19,9 @@ const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 const tempHomes: string[] = [];
 
 function operationalRun(runId = "run-1") {
-  return {
-    operationalRunInstance: { instanceId: `instance-${runId}`, runId },
-  } as const;
+  const operationalRunInstance = { instanceId: `instance-${runId}`, runId } as const;
+  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  return { operationalRunInstance, delegatedAuthority };
 }
 
 function useTempHome(): string {
@@ -43,6 +49,7 @@ async function importRuntimeTokenModule(): Promise<
 }
 
 afterEach(() => {
+  resetAgentRunRegistryForTest();
   closeOpenClawStateDatabaseForTest();
   execApprovalsStoreTesting.reset();
   vi.resetModules();
@@ -53,6 +60,52 @@ afterEach(() => {
 });
 
 describe("agent runtime identity token", () => {
+  it("rejects copied delegated authority after terminal, replacement, and restart boundaries", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const first = operationalRun("run-lifecycle");
+    const firstRun = first.operationalRunInstance;
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      operationalRunInstance: firstRun,
+    });
+    const copied = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(copied).toBeDefined();
+    expect(
+      copied && runtimeToken.validateAgentRuntimeDelegatedAuthority(copied.delegatedAuthority),
+    ).toBe(true);
+
+    releaseAgentRunDelegatedAuthority(first.delegatedAuthority);
+    expect(
+      copied && runtimeToken.validateAgentRuntimeDelegatedAuthority(copied.delegatedAuthority),
+    ).toBe(false);
+
+    const replacement = { instanceId: "instance-replacement", runId: firstRun.runId };
+    claimAgentRunDelegatedAuthority(replacement);
+    expect(
+      copied && runtimeToken.validateAgentRuntimeDelegatedAuthority(copied.delegatedAuthority),
+    ).toBe(false);
+
+    const replacementToken = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      operationalRunInstance: replacement,
+    });
+    const replacementIdentity =
+      await runtimeToken.verifyAgentRuntimeIdentityToken(replacementToken);
+    expect(
+      replacementIdentity &&
+        runtimeToken.validateAgentRuntimeDelegatedAuthority(replacementIdentity.delegatedAuthority),
+    ).toBe(true);
+
+    rotateAgentRunRegistryLifecycleGeneration();
+    expect(
+      replacementIdentity &&
+        runtimeToken.validateAgentRuntimeDelegatedAuthority(replacementIdentity.delegatedAuthority),
+    ).toBe(false);
+  });
+
   it("persists the local signing secret so tokens verify across processes", async () => {
     useTempHome();
     const firstProcess = await importRuntimeTokenModule();
@@ -68,7 +121,7 @@ describe("agent runtime identity token", () => {
     expect(persistedToken).not.toHaveLength(0);
 
     const secondProcess = await importRuntimeTokenModule();
-    await expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+    await expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
@@ -90,7 +143,7 @@ describe("agent runtime identity token", () => {
       turnSourceThreadId: " thread-1 ",
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
@@ -113,7 +166,7 @@ describe("agent runtime identity token", () => {
       executionIdentityToken: createExecutionIdentityAdmissionToken("run-other"),
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
@@ -164,7 +217,9 @@ describe("agent runtime identity token", () => {
       cronSelfManagementJobId: " job-1 ",
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 60_999)).resolves.toEqual({
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(token, 60_999),
+    ).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "ops",
       sessionKey: "agent:ops:cron:job-1:run:run-1",
@@ -358,14 +413,17 @@ describe("agent runtime identity token", () => {
       },
     });
 
-    await expect(Promise.all(verifications)).resolves.toEqual(
-      Array.from({ length: 8 }, () => ({
+    const verified = await Promise.all(verifications);
+    expect(verified).toHaveLength(8);
+    for (const identity of verified) {
+      expect(identity).toMatchObject({
         kind: "agentRuntime",
         agentId: "main",
         sessionKey: "session-1",
         operationalRunInstance: operationalRun().operationalRunInstance,
-      })),
-    );
+        delegatedAuthority: { kind: "local" },
+      });
+    }
   });
 
   it("rechecks message action expiry after waiting for an approvals update", async () => {

@@ -51,10 +51,20 @@ const mocks = vi.hoisted(() => ({
   isForegroundRestrictedPluginNodeCommand: vi.fn((command: string) =>
     command.startsWith("canvas."),
   ),
-  sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
-    ok: true,
-    params: rawParams,
-  })),
+  sanitizeNodeInvokeParamsForForwarding: vi.fn(
+    ({
+      rawParams,
+    }: {
+      rawParams: unknown;
+    }): {
+      ok: boolean;
+      params: unknown;
+      approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
+    } => ({
+      ok: true,
+      params: rawParams,
+    }),
+  ),
   clearApnsRegistrationIfCurrent: vi.fn(),
   loadApnsRegistration: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
@@ -368,6 +378,10 @@ async function invokeNode(params: {
   };
   client?: unknown;
   requestParams?: Partial<Record<string, unknown>>;
+  validateAgentRuntimeApprovalAuthority?: () => boolean;
+  execApprovalManager?: {
+    projectDecisionIfActive: (id: string, decision: string) => string | null;
+  };
 }) {
   const respond = vi.fn();
   const logGateway = {
@@ -388,9 +402,10 @@ async function invokeNode(params: {
     respond: respond as never,
     context: {
       nodeRegistry,
-      execApprovalManager: undefined,
+      execApprovalManager: params.execApprovalManager,
       logGateway,
       getRuntimeConfig: () => mocks.getRuntimeConfig(),
+      validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     } as never,
     client: (params.client ?? null) as never,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
@@ -1947,6 +1962,51 @@ describe("node.invoke APNs wake path", () => {
       message: "node pairing changed while invocation was active",
       details: { code: "PAIRING_CHANGED" },
     });
+  });
+
+  it("does not raw-dispatch when runtime authority closes during an awaited policy check", async () => {
+    const nodeId = "ios-node-authority-close";
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId,
+        connId: "authority-conn",
+        commands: ["camera.capture"],
+        platform: "iOS 26.4.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
+    };
+    let authorityActive = true;
+    vi.spyOn(nodeInvokePluginPolicy, "applyPluginNodeInvokePolicy").mockImplementationOnce(
+      async () => {
+        await Promise.resolve();
+        authorityActive = false;
+        return null;
+      },
+    );
+    mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
+      ok: true,
+      params: { command: ["echo", "approved"] },
+      approvalAuthority: { recordId: "approval-backend-bridge", decision: "allow-always" },
+    });
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient(),
+      requestParams: { nodeId, idempotencyKey: "idem-authority-close" },
+      execApprovalManager: {
+        projectDecisionIfActive: (_id, decision) => (authorityActive ? decision : null),
+      },
+    });
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        message: "approved runtime authority closed before node dispatch",
+        details: { code: "APPROVAL_AUTHORITY_CLOSED" },
+      },
+    ]);
   });
 
   it("does not dispatch through an invalidated old node session", async () => {

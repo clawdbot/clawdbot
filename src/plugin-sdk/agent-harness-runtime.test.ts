@@ -12,6 +12,8 @@ import {
   type AgentHarness,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptParamsV2,
+  type AgentHarnessSideQuestionParams,
+  type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
   type AgentHarnessV2,
@@ -155,10 +157,14 @@ describe("agent harness runtime SDK facade", () => {
       runAttempt: async (_params: AgentHarnessAttemptParams) => {
         throw new Error("type-only legacy harness");
       },
+      runSideQuestion: async (_params: AgentHarnessSideQuestionParams) => ({ text: "legacy" }),
     } satisfies AgentHarness;
 
     expectTypeOf(legacyHarness).toMatchTypeOf<AgentHarness>();
     expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
+    expectTypeOf<
+      Omit<AgentHarnessSideQuestionParams, "hostCapabilities">
+    >().toMatchTypeOf<AgentHarnessSideQuestionParams>();
     expectTypeOf<
       Omit<AgentHarnessAttemptParams, "hostCapabilities">
     >().toMatchTypeOf<AgentHarnessAttemptParams>();
@@ -172,6 +178,14 @@ describe("agent harness runtime SDK facade", () => {
     >().toEqualTypeOf<false>();
     expectTypeOf<
       Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities"> extends EmbeddedRunAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Omit<
+        AgentHarnessSideQuestionParamsV2,
+        "hostCapabilities"
+      > extends AgentHarnessSideQuestionParamsV2
         ? true
         : false
     >().toEqualTypeOf<false>();

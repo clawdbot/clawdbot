@@ -8,6 +8,12 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
 export type OperationalRunInstanceRef = Readonly<{
@@ -28,7 +34,42 @@ export type PreparedAgentRunAdmission = Readonly<{
     runtimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"],
     runtimeInstanceId?: string,
   ) => Promise<AdmittedRunContext>;
+  /** Idempotently closes the exact delegated approval lease, if admission occurred. */
+  close: () => void;
 }>;
+
+const delegatedAuthorityLeases = new WeakMap<
+  AdmittedRunContext,
+  { authority: AgentRunDelegatedAuthority; closed: boolean }
+>();
+
+function bindAdmittedRunDelegatedAuthority(
+  context: AdmittedRunContext,
+): AgentRunDelegatedAuthority {
+  const authority = claimAgentRunDelegatedAuthority(context.operationalRunInstance);
+  delegatedAuthorityLeases.set(context, { authority, closed: false });
+  return authority;
+}
+
+/** Reads the immutable outer-run authority without reviving a closed claim. */
+export function getAdmittedRunDelegatedAuthority(
+  context: AdmittedRunContext,
+): AgentRunDelegatedAuthority | undefined {
+  const lease = delegatedAuthorityLeases.get(context);
+  return lease && !lease.closed && validateAgentRunDelegatedAuthority(lease.authority)
+    ? lease.authority
+    : undefined;
+}
+
+/** Idempotently compare-releases the authority captured by this admission. */
+export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): boolean {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || lease.closed) {
+    return false;
+  }
+  lease.closed = true;
+  return releaseAgentRunDelegatedAuthority(lease.authority);
+}
 
 type ExecutionIdentityRecoveryAdmission = Readonly<{
   /** Recovery retries never manufacture replacement identity when exact evidence is absent. */
@@ -98,9 +139,22 @@ export function prepareAgentRunAdmission(params: {
   let admittedRuntimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"] | undefined;
   let admittedRuntimeInstanceId: string | undefined;
   let admitted: Promise<AdmittedRunContext> | undefined;
+  let admittedContext: AdmittedRunContext | undefined;
+  let closed = false;
   return Object.freeze({
     operationalRunInstance,
+    close: () => {
+      closed = true;
+      if (admittedContext) {
+        closeAdmittedRunDelegatedAuthority(admittedContext);
+      } else {
+        void admitted?.then(closeAdmittedRunDelegatedAuthority).catch(() => undefined);
+      }
+    },
     admit: (runtimeKind, runtimeInstanceId) => {
+      if (closed) {
+        return Promise.reject(new Error("prepared execution context is already closed"));
+      }
       // The first runtime that actually executes fixes the captured runtime fact.
       // Later fallback paths reuse this exact admission instead of recapturing identity.
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
@@ -113,8 +167,17 @@ export function prepareAgentRunAdmission(params: {
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),
         });
-        await params.onAdmitted?.(context);
-        return context;
+        admittedContext = context;
+        try {
+          await params.onAdmitted?.(context);
+          if (closed || !getAdmittedRunDelegatedAuthority(context)) {
+            throw new Error("prepared execution authority closed during admission");
+          }
+          return context;
+        } catch (error) {
+          closeAdmittedRunDelegatedAuthority(context);
+          throw error;
+        }
       })();
       return admitted;
     },
@@ -137,6 +200,10 @@ export async function resolvePreparedRunAdmission(params: {
     : params.admittedRunContext;
   if (!admitted || admitted.operationalRunInstance.runId !== params.runId) {
     throw new Error("prepared execution context is unavailable or disagrees with the run");
+  }
+  const lease = delegatedAuthorityLeases.get(admitted);
+  if (lease && !getAdmittedRunDelegatedAuthority(admitted)) {
+    throw new Error("prepared execution authority is no longer active");
   }
   return admitted;
 }
@@ -184,7 +251,9 @@ function admitPreparedAgentRun(params: {
     runId: params.facts.runId,
   });
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
-    return Object.freeze({ operationalRunInstance });
+    const context = Object.freeze({ operationalRunInstance });
+    bindAdmittedRunDelegatedAuthority(context);
+    return context;
   }
   const executionIdentityToken =
     recovery.token ??
@@ -192,7 +261,9 @@ function admitPreparedAgentRun(params: {
       ? createExecutionIdentityAdmissionToken(params.facts.runId)
       : undefined);
   if (!executionIdentityToken) {
-    return Object.freeze({ operationalRunInstance });
+    const context = Object.freeze({ operationalRunInstance });
+    bindAdmittedRunDelegatedAuthority(context);
+    return context;
   }
 
   enqueueExecutionIdentityContextAtAdmission(params.facts, {
@@ -201,5 +272,7 @@ function admitPreparedAgentRun(params: {
     runtimeInstanceId: params.runtimeInstanceId,
     retryOnly: params.recovery?.retryOnly === true,
   });
-  return Object.freeze({ operationalRunInstance, executionIdentityToken });
+  const context = Object.freeze({ operationalRunInstance, executionIdentityToken });
+  bindAdmittedRunDelegatedAuthority(context);
+  return context;
 }

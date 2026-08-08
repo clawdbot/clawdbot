@@ -82,6 +82,7 @@ export type {
   AgentHarnessResultClassification,
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
+  AgentHarnessSideQuestionParamsV2,
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,

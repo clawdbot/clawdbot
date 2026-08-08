@@ -307,6 +307,7 @@ function callerClient(
   currentJobId?: string,
   currentJobExpiresAtMs = Date.now() + 60_000,
 ): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
   return {
     connect: {} as GatewayClient["connect"],
     internal: {
@@ -314,7 +315,13 @@ function callerClient(
         kind: "agentRuntime",
         agentId,
         sessionKey: sessionKey ?? `agent:${agentId}:main`,
-        operationalRunInstance: createOperationalRunInstanceRef("run-cron-validation"),
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "test-generation",
+          claimId: "test-claim",
+        },
         ...(accountId ? { turnSourceAccountId: accountId } : {}),
         ...(currentJobId
           ? {

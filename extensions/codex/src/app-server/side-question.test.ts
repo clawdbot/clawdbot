@@ -2243,6 +2243,59 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
+    let active = true;
+    let retainedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
+    const bindToolSurface = vi.fn((tools: Array<{ execute?: (...args: never[]) => unknown }>) =>
+      tools.map((tool) => {
+        const execute = async (...args: never[]) => {
+          if (!active) {
+            throw new Error("agent harness host capability is no longer active");
+          }
+          return await tool.execute?.(...args);
+        };
+        retainedExecute = execute;
+        return { ...tool, execute };
+      }),
+    );
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit(turnCompleted("side-thread", "turn-1", "Bound answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          hostCapabilities: {
+            ...TEST_HOST_CAPABILITIES,
+            bindToolSurface: bindToolSurface as never,
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "Bound answer." });
+    expect(bindToolSurface).toHaveBeenCalledTimes(1);
+    active = false;
+    const copiedExecute = retainedExecute;
+    await expect(copiedExecute?.()).rejects.toThrow("no longer active");
+    expect(toolExecuteMock).not.toHaveBeenCalled();
+  });
+
   it("omits computer control from side threads without a compaction owner", async () => {
     const client = createFakeClient();
     const computerExecute = vi.fn();

@@ -457,6 +457,18 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         if (respondIfInvokeExpired()) {
           return;
         }
+        const isForwardedApprovalAuthorityActive = () => {
+          const authority = forwardedParams.approvalAuthority;
+          if (!authority) {
+            return true;
+          }
+          return (
+            context.execApprovalManager?.projectDecisionIfActive(
+              authority.recordId,
+              authority.decision,
+            ) === authority.decision
+          );
+        };
         const policyResult = await awaitNodeInvokeWithinDeadline(
           () =>
             applyPluginNodeInvokePolicy({
@@ -482,6 +494,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               idempotencyKey: p.idempotencyKey,
               isInvocationCurrent: () =>
                 isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
+              isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
             }),
           invokeDeadlineAtMs,
         );
@@ -577,6 +590,36 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         const dispatchTimeoutMs = resolveRemainingInvokeTimeoutMs();
         if (invokeDeadlineAtMs !== undefined && dispatchTimeoutMs === 0) {
           respondIfInvokeExpired();
+          return;
+        }
+        const callerIdentity = client?.internal?.agentRuntimeIdentity;
+        // Policy, pairing, and approval checks above may await. Revalidate the
+        // exact runtime capability at the final raw transport handoff.
+        if (
+          callerIdentity &&
+          context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "agent runtime approval authority closed before node dispatch",
+              { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
+            ),
+          );
+          return;
+        }
+        if (!isForwardedApprovalAuthorityActive()) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "approved runtime authority closed before node dispatch",
+              { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
+            ),
+          );
           return;
         }
         const res = await context.nodeRegistry.invoke({

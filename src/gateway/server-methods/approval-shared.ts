@@ -257,7 +257,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
-  const decision = await decisionPromise;
+  const decision = params.manager.projectDecisionIfActive(id, await decisionPromise);
   const terminalSnapshot = params.manager.getSnapshot(id) ?? snapshot;
   const terminalReason = params.resolveTerminalReason?.(terminalSnapshot);
   params.respond(
@@ -354,20 +354,25 @@ export async function handlePendingApprovalRequest<
           : "none";
 
     const respondWithDecision = async (decision: ExecApprovalDecision | null): Promise<void> => {
+      let projectedDecision = params.manager.projectDecisionIfActive(params.record.id, decision);
       if (params.afterDecision) {
         try {
-          await params.afterDecision(decision, params.requestEvent);
+          await params.afterDecision(projectedDecision, params.requestEvent);
         } catch (err) {
           params.context.logGateway?.error?.(
             `${params.afterDecisionErrorLabel ?? "approval follow-up failed"}: ${String(err)}`,
           );
         }
       }
+      projectedDecision = params.manager.projectDecisionIfActive(
+        params.record.id,
+        projectedDecision,
+      );
       params.respond(
         true,
         {
           id: params.record.id,
-          decision,
+          decision: projectedDecision,
           createdAtMs: params.record.createdAtMs,
           expiresAtMs: params.record.expiresAtMs,
         },

@@ -30,6 +30,7 @@ import {
   type AgentEventPayload,
   getAgentEventLifecycleGeneration,
   onAgentEvent as subscribeAgentEvent,
+  resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
@@ -52,7 +53,10 @@ import {
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
+import {
+  validateAgentRuntimeDelegatedAuthority,
+  verifyAgentRuntimeIdentityToken,
+} from "../agent-runtime-identity-token.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import {
   createWorkerSessionPlacementStore,
@@ -163,6 +167,7 @@ describe("worker turn launcher", () => {
     cleanupAdmissionSink?.();
     cleanupAdmissionSink = undefined;
     closeOpenClawStateDatabaseForTest();
+    resetAgentEventsForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -743,6 +748,17 @@ describe("worker turn launcher", () => {
         });
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
         expect(command.transportRetry).toBe("never");
+        const activeRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
+          descriptor.assignment.agentRuntimeIdentityToken,
+        );
+        expect(activeRuntimeIdentity?.delegatedAuthority.kind).toBe("worker");
+        expect(
+          activeRuntimeIdentity &&
+            validateAgentRuntimeDelegatedAuthority(
+              activeRuntimeIdentity.delegatedAuthority,
+              placements,
+            ),
+        ).toBe(true);
         expect(command.argv).toEqual([
           "sh",
           "-c",
@@ -865,6 +881,13 @@ describe("worker turn launcher", () => {
       descriptor?.assignment.operationalRunInstance,
     );
     expect(verifiedRuntimeIdentity?.executionIdentity?.runId).toBe("run-worker-turn");
+    expect(
+      verifiedRuntimeIdentity &&
+        validateAgentRuntimeDelegatedAuthority(
+          verifiedRuntimeIdentity.delegatedAuthority,
+          placements,
+        ),
+    ).toBe(false);
     expect(admissionWork?.kind).toBe("capture");
     if (admissionWork?.kind === "capture") {
       expect(admissionWork.envelope.runtimeInstanceId).toBe(ENVIRONMENT_ID);
@@ -2280,8 +2303,8 @@ describe("worker turn launcher", () => {
         expect(runLocal).not.toHaveBeenCalled();
 
         clock.mockReturnValue(admissionAt + contextTtlMs + 1);
-        expect(sweepStaleRunContexts()).toBe(1);
-        expect(getAgentRunContext(runId)).toBeUndefined();
+        expect(sweepStaleRunContexts()).toBe(0);
+        expect(getAgentRunContext(runId)).toBeDefined();
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({ owner: "worker", runId });
 
         clock.mockReturnValue(admissionAt);

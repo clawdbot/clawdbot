@@ -236,6 +236,9 @@ export function createAgentHarnessHostCapabilities(params: {
   return {
     capabilities,
     close: () => {
+      if (!active) {
+        return;
+      }
       active = false;
     },
   };

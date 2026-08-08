@@ -4,10 +4,14 @@ import {
   createExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
+import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import {
+  closeAdmittedRunDelegatedAuthority,
   createExecutionIdentityRecoveryAdmission,
   createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  resolvePreparedRunAdmission,
 } from "./admitted-run-context.js";
 
 const enabledConfig = { logging: { audit: { enabled: true, executionIdentity: true } } };
@@ -174,5 +178,77 @@ describe("prepared run admission", () => {
       expect(work.envelope.runtime).toEqual({ kind: "plugin-harness" });
       expect(work.envelope.runtimeInstanceId).toBe("plugin-instance-1");
     }
+  });
+
+  it("keeps one claim across fallback and never revives it after outer close", async () => {
+    const { runtime, ...admissionFacts } = facts;
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-lease" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-lease"),
+    });
+    const admitted = await resolvePreparedRunAdmission({
+      runId: "run-lease",
+      runtimeKind: runtime.kind,
+      preparedRunAdmission: prepared,
+    });
+    const first = getAdmittedRunDelegatedAuthority(admitted)!;
+    expect(validateAgentRunDelegatedAuthority(first)).toBe(true);
+    await expect(
+      resolvePreparedRunAdmission({
+        runId: "run-lease",
+        runtimeKind: "plugin-harness",
+        preparedRunAdmission: prepared,
+      }),
+    ).resolves.toBe(admitted);
+    expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(first);
+    prepared.close();
+    expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
+    expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
+    await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
+  });
+
+  it("closes admitted authority when the owner binding hook fails", async () => {
+    const { runtime, ...admissionFacts } = facts;
+    let authority: ReturnType<typeof getAdmittedRunDelegatedAuthority>;
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-binding-failure" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-binding-failure"),
+      onAdmitted: (context) => {
+        authority = getAdmittedRunDelegatedAuthority(context);
+        throw new Error("controller binding failed");
+      },
+    });
+
+    await expect(prepared.admit(runtime.kind)).rejects.toThrow("controller binding failed");
+    expect(authority).toBeDefined();
+    expect(validateAgentRunDelegatedAuthority(authority!)).toBe(false);
+  });
+
+  it("closes authority synchronously while an admission hook is pending", async () => {
+    const { runtime, ...admissionFacts } = facts;
+    let releaseHook: (() => void) | undefined;
+    let authority: ReturnType<typeof getAdmittedRunDelegatedAuthority>;
+    const hookPending = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-close-during-binding" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-close-during-binding"),
+      onAdmitted: async (context) => {
+        authority = getAdmittedRunDelegatedAuthority(context);
+        await hookPending;
+      },
+    });
+    const admission = prepared.admit(runtime.kind);
+    await vi.waitFor(() => expect(authority).toBeDefined());
+
+    prepared.close();
+
+    expect(validateAgentRunDelegatedAuthority(authority!)).toBe(false);
+    releaseHook?.();
+    await expect(admission).rejects.toThrow("closed during admission");
   });
 });

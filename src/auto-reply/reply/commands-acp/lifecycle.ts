@@ -17,6 +17,7 @@ import {
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
+  closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../../agents/admitted-run-context.js";
@@ -401,29 +402,33 @@ async function runAcpSteer(params: {
     },
   }).admit("acp");
 
-  await acpManager.runTurn({
-    admittedRunContext,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    provenance: "agent",
-    text: params.instruction,
-    mode: "steer",
-    requestId: params.requestId,
-    onEvent: (event) => {
-      if (event.type !== "text_delta") {
-        return;
-      }
-      if (event.stream && event.stream !== "output") {
-        return;
-      }
-      if (event.text) {
-        output += event.text;
-        if (output.length > ACP_STEER_OUTPUT_LIMIT) {
-          output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
+  try {
+    await acpManager.runTurn({
+      admittedRunContext,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      provenance: "agent",
+      text: params.instruction,
+      mode: "steer",
+      requestId: params.requestId,
+      onEvent: (event) => {
+        if (event.type !== "text_delta") {
+          return;
         }
-      }
-    },
-  });
+        if (event.stream && event.stream !== "output") {
+          return;
+        }
+        if (event.text) {
+          output += event.text;
+          if (output.length > ACP_STEER_OUTPUT_LIMIT) {
+            output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
+          }
+        }
+      },
+    });
+  } finally {
+    closeAdmittedRunDelegatedAuthority(admittedRunContext);
+  }
   return output.trim();
 }
 

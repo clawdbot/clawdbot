@@ -17,8 +17,10 @@ import {
   toAcpRuntimeError,
 } from "../../acp/runtime/errors.js";
 import {
+  closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
@@ -664,6 +666,7 @@ export async function tryDispatchAcpReplyCore(params: {
       );
     }
   };
+  let admittedRunContext: AdmittedRunContext | undefined;
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -783,7 +786,7 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     turnDispatched = true;
-    const admittedRunContext = await prepareAgentRunAdmission({
+    admittedRunContext = await prepareAgentRunAdmission({
       cfg: params.cfg,
       operationalRunInstance: createOperationalRunInstanceRef(requestId),
       facts: {
@@ -896,6 +899,10 @@ export async function tryDispatchAcpReplyCore(params: {
       queuedFinal,
       outcome: { kind: "error", error: acpError },
     });
+  } finally {
+    if (admittedRunContext) {
+      closeAdmittedRunDelegatedAuthority(admittedRunContext);
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

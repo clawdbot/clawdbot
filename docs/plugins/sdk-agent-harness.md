@@ -352,11 +352,14 @@ plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
 New harnesses should implement `AgentHarnessV2` and type prepared attempts as
-`AgentHarnessAttemptParamsV2` or `EmbeddedRunAttemptParamsV2`; those contracts
-require `hostCapabilities`. The older `AgentHarness`,
+`AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
+`AgentHarnessSideQuestionParamsV2`; those contracts require
+`hostCapabilities`. The older `AgentHarness`,
 `AgentHarnessAttemptParams`, and `EmbeddedRunAttemptParams` names remain
 source-compatible for existing plugins, so the capability field is optional
-in those deprecated parameter types through 2026-10-12. Core still supplies
+in those deprecated parameter types through 2026-10-12. The public
+`AgentHarnessSideQuestionParams` contract has the same compatibility window
+and optional field. Core still supplies
 the capability on every selected attempt. Compatibility is type-level only:
 current harness code must not add a runtime path that operates without the
 host capability.

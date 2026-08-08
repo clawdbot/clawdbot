@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -436,6 +437,14 @@ export function startAgentRunExecution(params: {
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           forceCodeModeTools: params.request.forceCodeModeTools,
           ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+          operationalRunInstance: prepared.operationalRunInstance,
+          onAdmittedRunContext: (admittedRunContext) => {
+            const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+            if (!authority) {
+              throw new Error("agent run delegated authority was not admitted");
+            }
+            prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+          },
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:

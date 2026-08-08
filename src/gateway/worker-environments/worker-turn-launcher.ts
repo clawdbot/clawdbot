@@ -341,6 +341,7 @@ async function executeWorkerTurn(params: {
     sessionKey: workerSessionKey,
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     executionIdentityToken: admittedRunContext.executionIdentityToken,
+    workerTurnClaim: params.turnClaim,
   });
   const launchPlan = fitLaunchDescriptor(
     (windowedMessages) =>

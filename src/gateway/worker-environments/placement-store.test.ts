@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -145,6 +145,51 @@ describe("worker session placement store", () => {
       terminalReason: "workspace synchronization failed",
       terminalAtMs: 1_000,
     });
+  });
+
+  it("emits exact worker claim closure after release and owner fencing", () => {
+    const closed = vi.fn();
+    const unregister = store.registerTurnClaimClosedHandler(closed);
+    const active = advanceToActive();
+    const first = store.claimTurn({
+      ...SESSION,
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      claimId: "claim-release",
+      runId: "run-release",
+    });
+    store.releaseTurn(first);
+    expect(closed).toHaveBeenLastCalledWith(first);
+
+    const second = store.claimTurn({
+      ...SESSION,
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      claimId: "claim-fence",
+      runId: "run-fence",
+    });
+    const draining = store.startDrain({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    store.startReconcile({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    expect(closed).toHaveBeenLastCalledWith(second);
+    expect(closed).toHaveBeenCalledTimes(2);
+
+    unregister();
   });
 
   it("requires each placement phase to persist its complete metadata", () => {

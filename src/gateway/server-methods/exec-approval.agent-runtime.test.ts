@@ -25,6 +25,12 @@ function identity(enabled: boolean): AgentRuntimeIdentity {
     agentId: "main",
     sessionKey: "agent:main:session-1",
     operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+    delegatedAuthority: {
+      kind: "local",
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-1",
+    },
     turnSourceChannel: "telegram",
     turnSourceTo: "chat-1",
     turnSourceAccountId: "default",
@@ -43,7 +49,10 @@ function identity(enabled: boolean): AgentRuntimeIdentity {
   };
 }
 
-function requestOptions(runtimeIdentity: AgentRuntimeIdentity): GatewayRequestHandlerOptions {
+function requestOptions(
+  runtimeIdentity: AgentRuntimeIdentity,
+  validateAuthority: () => boolean = () => true,
+): GatewayRequestHandlerOptions {
   const request = {
     command: "echo ok",
     cwd: "/tmp",
@@ -73,6 +82,7 @@ function requestOptions(runtimeIdentity: AgentRuntimeIdentity): GatewayRequestHa
       getRuntimeConfig: () => ({}),
       hasExecApprovalClients: () => true,
       chatRunState: createChatRunState(),
+      validateAgentRuntimeApprovalAuthority: validateAuthority,
       logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
     },
   } as unknown as GatewayRequestHandlerOptions;
@@ -83,6 +93,38 @@ afterEach(() => {
 });
 
 describe("exec approval signed agent runtime", () => {
+  it("rejects closed authority before creating an exec approval", async () => {
+    const manager = new ExecApprovalManager({
+      validateAgentRuntimeDelegatedAuthority: () => false,
+    });
+    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const opts = requestOptions(identity(false), () => false);
+
+    await handler(opts);
+
+    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+      message: expect.stringContaining("no longer active"),
+    });
+  });
+
+  it("cancels an exec approval when authority closes after the handshake", async () => {
+    let active = true;
+    const manager = new ExecApprovalManager({
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const opts = requestOptions(identity(false), () => active);
+    const pending = handler(opts);
+    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+    const record = manager.listPendingRecords()[0]!;
+    active = false;
+
+    await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
+    await pending;
+    expect(manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
+  });
+
   it.each([
     ["enabled", true],
     ["disabled", false],
@@ -91,6 +133,7 @@ describe("exec approval signed agent runtime", () => {
     const manager = new ExecApprovalManager({
       approvalKind: "exec",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
+      validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
     if (!handler) {

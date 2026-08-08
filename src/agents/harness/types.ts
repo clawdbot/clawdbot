@@ -166,9 +166,13 @@ export type AgentHarnessAuthBindingFingerprintParams = {
   agentDir: string;
   config?: import("../../config/types.openclaw.js").OpenClawConfig;
 };
+/**
+ * @deprecated Use {@link AgentHarnessSideQuestionParamsV2}. This compatibility
+ * contract is retained through 2026-10-12.
+ */
 export type AgentHarnessSideQuestionParams = {
   /** Host-bound authority for this admitted side execution; contains no public token fields. */
-  hostCapabilities: AgentHarnessHostCapabilities;
+  hostCapabilities?: AgentHarnessHostCapabilities;
   /** Host-resolved sandbox snapshot for this side execution. */
   sandbox?: import("../sandbox/types.js").SandboxContext | null;
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
@@ -223,6 +227,10 @@ export type AgentHarnessSideQuestionParams = {
   toolsAllow?: string[];
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+};
+/** Current side-question contract for hosts that always provide closure-bound authority. */
+export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
+  hostCapabilities: AgentHarnessHostCapabilities;
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
@@ -333,8 +341,10 @@ type AgentHarnessRunCapability<
   ): Promise<AgentHarnessIsolatedCompletionResult>;
 };
 
-type AgentHarnessSideQuestionCapability = {
-  runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
+type AgentHarnessSideQuestionCapability<
+  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
+> = {
+  runSideQuestion?(params: TSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 };
 
 type AgentHarnessClassificationCapability<
@@ -425,7 +435,7 @@ export type AgentHarness = AgentHarnessRunCapability &
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
 export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessSideQuestionCapability &
+  AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
   AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &

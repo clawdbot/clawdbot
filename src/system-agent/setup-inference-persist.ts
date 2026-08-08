@@ -627,5 +627,7 @@ export async function runSetupInferenceTest(params: {
       status: mapFailoverReasonToSetupStatus(described.reason),
       error: described.message,
     };
+  } finally {
+    preparedRunAdmission.close();
   }
 }

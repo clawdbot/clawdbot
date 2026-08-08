@@ -144,12 +144,13 @@ async function runConfiguredSystemAgentText(params: {
   }
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   let text: string | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
     const timeoutMs =
       params.timeoutMs ??
       (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
-    const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,
       route.agentId,
@@ -210,6 +211,7 @@ async function runConfiguredSystemAgentText(params: {
     }
     text = undefined;
   } finally {
+    preparedRunAdmission?.close();
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
   if (!text) {
