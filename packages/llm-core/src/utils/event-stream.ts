@@ -67,7 +67,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
       // pre-attached catch keeps iterate-only consumers (which legitimately
       // never call result()) free of unhandled rejections.
       this.resultSettled = true;
-      this.finalResultPromise.catch(() => {});
+      void this.finalResultPromise.catch(() => {});
       this.rejectFinalResult(
         new Error("event stream ended without a terminal event or final result"),
       );
