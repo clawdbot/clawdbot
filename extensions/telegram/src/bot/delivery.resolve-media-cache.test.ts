@@ -175,4 +175,41 @@ describe("resolveMedia media file cache", () => {
     expect(getFile).toHaveBeenCalledTimes(2);
     expect(saveRemoteMedia).toHaveBeenCalledTimes(2);
   });
+
+  it("honors an already-aborted signal instead of returning cached media", async () => {
+    saveRemoteMedia.mockReset();
+    const getFile = vi.fn().mockResolvedValue({ file_path: "media/abort.jpg" });
+    mockNextDownload();
+
+    await resolveMedia({
+      ctx: makeCtx("abort-u1", getFile),
+      maxBytes: 1024,
+      token: BOT_TOKEN,
+    });
+    expect(getFile).toHaveBeenCalledTimes(1);
+
+    // Same cancellation outcome as the download path: the caller records
+    // failed-retryable and replays the update instead of dispatching it.
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      resolveMedia({
+        ctx: makeCtx("abort-u1", getFile),
+        maxBytes: 1024,
+        token: BOT_TOKEN,
+        abortSignal: aborted.signal,
+      }),
+    ).rejects.toThrow();
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
+
+    // A live signal still hits the cache afterwards.
+    const third = await resolveMedia({
+      ctx: makeCtx("abort-u1", getFile),
+      maxBytes: 1024,
+      token: BOT_TOKEN,
+    });
+    expect(third?.path).toBe("/media/inbound/file-1.jpg");
+    expect(getFile).toHaveBeenCalledTimes(1);
+  });
 });

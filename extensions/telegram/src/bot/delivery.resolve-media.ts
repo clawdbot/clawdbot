@@ -513,6 +513,10 @@ export async function resolveMedia(params: {
   if (fileUniqueId) {
     const cachedMedia = getCachedTelegramMediaFile(fileUniqueId, maxBytes);
     if (cachedMedia) {
+      // A cache hit must keep the download path's cancellation contract: with
+      // an already-aborted cycle signal the caller records failed-retryable
+      // and replays instead of dispatching a cancelled update.
+      abortSignal?.throwIfAborted();
       logVerbose(`telegram: media file cache hit for ${fileUniqueId}`);
       const { path: cachedPath, kind, contentType } = cachedMedia;
       return { path: cachedPath, kind, ...(contentType ? { contentType } : {}) };
