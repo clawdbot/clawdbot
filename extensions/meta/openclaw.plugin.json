@@ -73,7 +73,7 @@
               "text",
               "image"
             ],
-            "contextWindow": 1000000,
+            "contextWindow": 1048576,
             "maxTokens": 131072,
             "thinkingLevelMap": {
               "off": "minimal",
@@ -112,7 +112,7 @@
               "text",
               "image"
             ],
-            "contextWindow": 1000000,
+            "contextWindow": 1048576,
             "maxTokens": 131072,
             "thinkingLevelMap": {
               "off": "minimal",

@@ -62,7 +62,7 @@ describe("meta provider", () => {
     if (!model) {
       throw new Error("Expected muse-spark-1.2 model");
     }
-    expect(model.contextWindow).toBe(1000000);
+    expect(model.contextWindow).toBe(1048576);
     expect(model.maxTokens).toBe(131072);
     expect(model.reasoning).toBe(true);
     expect(model.input).toEqual(["text", "image"]);
@@ -80,7 +80,7 @@ describe("meta provider", () => {
     if (!model) {
       throw new Error("Expected muse-spark-1.2-contributor model");
     }
-    expect(model.contextWindow).toBe(1000000);
+    expect(model.contextWindow).toBe(1048576);
     expect(model.maxTokens).toBe(131072);
     expect(model.reasoning).toBe(true);
     expect(model.input).toEqual(["text", "image"]);
@@ -90,7 +90,16 @@ describe("meta provider", () => {
       cacheRead: 0.002,
       cacheWrite: 0,
     });
-    expect(model.name).toBe("Muse Spark 1.2 Contributor");
+  });
+
+  it("publishes a non-empty display name for every catalog model", () => {
+    const models = buildMetaProvider().models;
+    expect(models.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: "muse-spark-1.1", name: "Muse Spark 1.1" },
+      { id: "muse-spark-1.2", name: "Muse Spark 1.2" },
+      { id: "muse-spark-1.2-contributor", name: "Muse Spark 1.2 Contributor" },
+    ]);
+    expect(models.every((model) => model.name.trim().length > 0)).toBe(true);
   });
 
   it("advertises a high default thinking profile for every reasoning model", () => {

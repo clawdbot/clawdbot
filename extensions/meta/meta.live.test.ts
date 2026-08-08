@@ -1,5 +1,5 @@
 // Meta live tests prove muse-spark auth and Responses API completion.
-import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { buildMetaProvider } from "./provider-catalog.js";
@@ -8,10 +8,16 @@ import { wrapMetaProviderStream } from "./stream.js";
 const MODEL_API_KEY = process.env.MODEL_API_KEY?.trim() ?? "";
 const STANDARD_LIVE_MODEL_IDS = ["muse-spark-1.1", "muse-spark-1.2"] as const;
 const CONTRIBUTOR_LIVE_MODEL_ID = "muse-spark-1.2-contributor";
+// Validated 96x96 PNG: white background with a 20x72 green vertical center bar.
+const GREEN_VERTICAL_CENTER_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAABlBMVEUAsUD///8TauZEAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAQklEQVRo3u3ZMQEAAAjDsOHfNAY44SI1EAFNHRcAAABYAzIEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwHymoEAACXNba4HmGuMYsrAAAAAElFTkSuQmCC";
+const GREEN_VERTICAL_CENTER_DATA_URL = `data:image/png;base64,${GREEN_VERTICAL_CENTER_PNG_BASE64}`;
 // This bounds the live request; it is not an advertised model limit.
 const LIVE_TEST_MAX_OUTPUT_TOKENS = 4_000;
 const LIVE =
   isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) && MODEL_API_KEY.length > 0;
+// Contributor prompts and completions may train future Meta models, so sending live
+// test content requires deliberate opt-in even though the fixture is synthetic.
 const CONTRIBUTOR_LIVE = LIVE && process.env.OPENCLAW_LIVE_META_CONTRIBUTOR === "1";
 const describeLive = LIVE ? describe : describe.skip;
 const describeContributorLive = CONTRIBUTOR_LIVE ? describe : describe.skip;
@@ -52,29 +58,37 @@ async function fetchLiveModelIds(): Promise<string[]> {
   return (body.data ?? []).map((entry) => entry.id);
 }
 
-async function expectLiveCompletion(modelId: string): Promise<void> {
+function containsExpectedImagePayload(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(containsExpectedImagePayload);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.type === "input_image" && record.image_url === GREEN_VERTICAL_CENTER_DATA_URL) {
+    return true;
+  }
+  return Object.values(record).some(containsExpectedImagePayload);
+}
+
+async function expectLiveCompletion(params: {
+  modelId: string;
+  context: Context;
+  expectedText: string | RegExp;
+  expectImagePayload?: boolean;
+}): Promise<void> {
+  const { modelId, context, expectedText, expectImagePayload = false } = params;
   const model = resolveLiveModel(modelId);
   let capturedPayload: Record<string, unknown> | undefined;
-  const stream = await resolveLiveStreamFn(modelId)(
-    model,
-    {
-      messages: [
-        {
-          role: "user",
-          content: "Reply with exactly: PATCH_OK",
-          timestamp: Date.now(),
-        },
-      ],
+  const stream = await resolveLiveStreamFn(modelId)(model, context, {
+    apiKey: MODEL_API_KEY,
+    maxTokens: LIVE_TEST_MAX_OUTPUT_TOKENS,
+    reasoning: "high",
+    onPayload: (payload) => {
+      capturedPayload = payload as Record<string, unknown>;
     },
-    {
-      apiKey: MODEL_API_KEY,
-      maxTokens: LIVE_TEST_MAX_OUTPUT_TOKENS,
-      reasoning: "high",
-      onPayload: (payload) => {
-        capturedPayload = payload as Record<string, unknown>;
-      },
-    },
-  );
+  });
   const result = await stream.result();
 
   if (result.stopReason === "error") {
@@ -85,7 +99,58 @@ async function expectLiveCompletion(modelId: string): Promise<void> {
   expect(capturedPayload?.include).toEqual(expect.arrayContaining(["reasoning.encrypted_content"]));
   const reasoning = capturedPayload?.reasoning as { effort?: string } | undefined;
   expect(reasoning?.effort).toBe("high");
-  expect(extractNonEmptyAssistantText(result.content)).toMatch(/PATCH_OK/i);
+  if (expectImagePayload) {
+    expect(containsExpectedImagePayload(capturedPayload)).toBe(true);
+  }
+  const assistantText = extractNonEmptyAssistantText(result.content).trim();
+  if (typeof expectedText === "string") {
+    expect(assistantText).toBe(expectedText);
+  } else {
+    expect(assistantText).toMatch(expectedText);
+  }
+}
+
+async function expectLiveTextCompletion(modelId: string): Promise<void> {
+  await expectLiveCompletion({
+    modelId,
+    context: {
+      messages: [
+        {
+          role: "user",
+          content: "Reply with exactly: PATCH_OK",
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    expectedText: /PATCH_OK/i,
+  });
+}
+
+async function expectLiveImageCompletion(modelId: string): Promise<void> {
+  await expectLiveCompletion({
+    modelId,
+    context: {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Inspect the image. Classify the colored bar's basic color, orientation, and horizontal position. Divide the full white canvas into three equal vertical zones and use the zone containing the bar's midpoint. Reply only with DETAIL=<COLOR>_<ORIENTATION>_<POSITION> in uppercase. Valid positions are LEFT, RIGHT, or CENTER.",
+            },
+            {
+              type: "image",
+              data: GREEN_VERTICAL_CENTER_PNG_BASE64,
+              mimeType: "image/png",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    expectedText: "DETAIL=GREEN_VERTICAL_CENTER",
+    expectImagePayload: true,
+  });
 }
 
 describeLive("meta plugin live", () => {
@@ -99,7 +164,15 @@ describeLive("meta plugin live", () => {
   it.each(STANDARD_LIVE_MODEL_IDS)(
     "completes a %s Responses API turn with high reasoning effort",
     async (modelId) => {
-      await expectLiveCompletion(modelId);
+      await expectLiveTextCompletion(modelId);
+    },
+    120_000,
+  );
+
+  it.each(STANDARD_LIVE_MODEL_IDS)(
+    "accepts image input for %s",
+    async (modelId) => {
+      await expectLiveImageCompletion(modelId);
     },
     120_000,
   );
@@ -112,6 +185,10 @@ describeContributorLive("meta contributor plugin live", () => {
   }, 30_000);
 
   it("completes a contributor Responses API turn with high reasoning effort", async () => {
-    await expectLiveCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
+    await expectLiveTextCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
+  }, 120_000);
+
+  it("accepts image input for the contributor model", async () => {
+    await expectLiveImageCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
   }, 120_000);
 });
