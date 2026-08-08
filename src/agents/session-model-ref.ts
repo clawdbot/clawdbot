@@ -3,6 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import {
   findNormalizedProviderKey,
   inferUniqueProviderFromConfiguredModels,
@@ -13,8 +15,6 @@ import {
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
-import { findModelInCatalog } from "./model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 type SessionModelEntry =
   | SessionEntry
@@ -24,10 +24,7 @@ function hasCatalogModelRef(
   catalog: ModelCatalogEntry[] | undefined,
   ref: { provider: string; model: string },
 ): boolean {
-  return Boolean(
-    catalog &&
-      findModelInCatalog(catalog, ref.provider, ref.model),
-  );
+  return Boolean(catalog && findModelInCatalog(catalog, ref.provider, ref.model));
 }
 
 function currentConfigAllowsPersistedModelRef(params: {
