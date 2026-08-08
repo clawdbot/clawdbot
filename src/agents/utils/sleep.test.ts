@@ -6,6 +6,39 @@ import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { sleep } from "./sleep.js";
 
 describe("agents sleep", () => {
+  it("rejects a pre-aborted zero-duration wait with the canonical abort error", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+
+    const error = await sleep(0, controller.signal).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ name: "AbortError", message: "aborted", cause: reason });
+    expect(isAbortError(error)).toBe(true);
+  });
+
+  it("rejects a pre-aborted positive-duration wait", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+
+    await expect(sleep(1, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      message: "aborted",
+      cause: reason,
+    });
+  });
+
+  it("resolves a non-aborted zero-duration wait", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await expect(sleep(0, new AbortController().signal)).resolves.toBeUndefined();
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("clamps oversized delays before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
