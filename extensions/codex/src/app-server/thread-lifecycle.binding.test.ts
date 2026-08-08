@@ -430,12 +430,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ...common,
       environmentSelection: firstSelection,
     });
-    await retainCodexAppServerLiveThread(
-      client,
-      started.threadId,
-      undefined,
-      started.liveThreadConfigFingerprint,
-    );
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
     const switched = await startOrResumeThread({
       ...common,
       environmentSelection: secondSelection,
@@ -444,12 +446,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
       threadId: "thread-environments",
       environmentSelectionFingerprint: fingerprintEnvironmentSelection(secondSelection),
     });
-    await retainCodexAppServerLiveThread(
-      client,
-      switched.threadId,
-      undefined,
-      switched.liveThreadConfigFingerprint,
-    );
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        switched.threadId,
+        switched.liveThreadOwnership?.release,
+        switched.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
     const restored = await startOrResumeThread({
       ...common,
       environmentSelection: firstSelection,

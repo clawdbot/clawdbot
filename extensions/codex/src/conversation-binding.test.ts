@@ -3598,6 +3598,66 @@ describe("codex conversation binding", () => {
     expect(bindingAfterRefresh?.conversationSourceTransferComplete).toBe(true);
   });
 
+  it("restores the old owner and rolls back a network replacement when unsubscribe fails", async () => {
+    const sessionFile = path.join(tempDir, "network-rotation-release-failure.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-old",
+      clientId: "client-network-rotation",
+      cwd: tempDir,
+      networkProxyProfileName: "openclaw-network-stale",
+      networkProxyConfigFingerprint: "stale-proxy-config",
+      conversationStartId: "start-1",
+    });
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const client = {
+      getInstanceId: () => "client-network-rotation",
+      request: vi.fn(async (method: string, params: Record<string, unknown>) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return conversationThreadStartResult("thread-new");
+        }
+        if (method === "thread/unsubscribe" && params.threadId === "thread-old") {
+          throw new Error("old thread unsubscribe failed");
+        }
+        if (method === "thread/unsubscribe" && params.threadId === "thread-new") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+      addCloseHandler: vi.fn(() => () => undefined),
+    } as unknown as CodexAppServerClient;
+    ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
+    await expect(
+      retainCodexAppServerLiveThread(client, "thread-old", async (threadId) => {
+        await client.request("thread/unsubscribe", { threadId });
+      }),
+    ).resolves.toBe(true);
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    const result = await handleCodexConversationInboundClaim(event, ctx, {
+      pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
+    });
+
+    expect(result?.reply?.text).toContain("old thread unsubscribe failed");
+    expect(requests).toEqual([
+      { method: "thread/start", params: expect.any(Object) },
+      { method: "thread/unsubscribe", params: { threadId: "thread-old" } },
+      { method: "thread/unsubscribe", params: { threadId: "thread-new" } },
+    ]);
+    await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+      clientId: "client-network-rotation",
+      threadId: "thread-old",
+    });
+    expect(isCodexAppServerLiveThreadClaimed(client, "thread-old")).toBe(false);
+    await expect(consumeCodexAppServerLiveThread(client, "thread-old")).resolves.toEqual(
+      expect.objectContaining({ release: expect.any(Function) }),
+    );
+    await expect(consumeCodexAppServerLiveThread(client, "thread-new")).resolves.toBeUndefined();
+  });
+
   it("blocks Guardian-mode bound turns with stale no-approval policy on custom model providers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {

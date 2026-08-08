@@ -854,13 +854,22 @@ async function runBoundTurn(params: {
   let activeTurnCleanup: () => void = () => undefined;
   let retiredUnsafeClient: CodexAppServerClient | undefined;
   let turnRoute: CodexThreadRouteReservation | undefined;
-  let liveThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
+  let liveThreadOwnership:
+    | {
+        client: CodexAppServerClient;
+        threadId: string;
+        ownership: CodexAppServerLiveThreadOwnership;
+      }
+    | undefined;
   let ownsNativeSubscription = false;
   let turnSucceeded = false;
   try {
     if (!isIncognitoSessionKey(params.sessionKey) && isCodexAppServerClientRuntimeLive(client)) {
-      liveThreadOwnership = await consumeCodexAppServerLiveThread(client, threadId);
-      ownsNativeSubscription = liveThreadOwnership !== undefined;
+      const ownership = await consumeCodexAppServerLiveThread(client, threadId);
+      if (ownership) {
+        liveThreadOwnership = { client, threadId, ownership };
+        ownsNativeSubscription = true;
+      }
     }
     if (networkProxyBindingChanged) {
       const response = assertCodexThreadStartResponse(
@@ -894,8 +903,29 @@ async function runBoundTurn(params: {
       );
       threadId = response.thread.id;
       ownsNativeSubscription = true;
-      if (liveThreadOwnership && binding.threadId !== threadId) {
-        await liveThreadOwnership.release(binding.threadId);
+      if (
+        liveThreadOwnership &&
+        (liveThreadOwnership.threadId !== threadId || liveThreadOwnership.client !== client)
+      ) {
+        const previousOwnership = liveThreadOwnership;
+        try {
+          await previousOwnership.ownership.release(previousOwnership.threadId);
+        } catch (error) {
+          // A failed unsubscribe leaves the old subscription alive. Restore
+          // its exact branded owner before rolling back the new native thread.
+          const restored =
+            isCodexAppServerClientRuntimeLive(previousOwnership.client) &&
+            (await retainCodexAppServerBindingSubscription(
+              previousOwnership.client,
+              previousOwnership.threadId,
+              previousOwnership.ownership,
+            ).catch(() => false));
+          if (!restored) {
+            await closeCodexStartupClientBestEffort(previousOwnership.client);
+          }
+          liveThreadOwnership = undefined;
+          throw error;
+        }
         liveThreadOwnership = undefined;
       } else if (binding.threadId !== threadId) {
         await releaseCodexAppServerBindingSubscription(binding);
@@ -1079,6 +1109,12 @@ async function runBoundTurn(params: {
         !isIncognitoSessionKey(params.sessionKey) &&
         isCodexAppServerClientRuntimeLive(client)
       ) {
+        // Ownership callbacks are branded to one physical client and native
+        // thread; an old generation must never clean up its replacement.
+        const currentLiveThreadOwnership =
+          liveThreadOwnership?.client === client && liveThreadOwnership.threadId === threadId
+            ? liveThreadOwnership.ownership
+            : undefined;
         let retained = false;
         if (turnSucceeded) {
           retained = await params.bindingStore.withLease(identity, async () => {
@@ -1091,13 +1127,13 @@ async function runBoundTurn(params: {
             return await retainCodexAppServerBindingSubscription(
               client,
               threadId,
-              liveThreadOwnership,
+              currentLiveThreadOwnership,
             );
           });
         }
         if (!retained) {
-          const released = liveThreadOwnership
-            ? await liveThreadOwnership.release(threadId).then(() => true)
+          const released = currentLiveThreadOwnership
+            ? await currentLiveThreadOwnership.release(threadId).then(() => true)
             : await unsubscribeCodexThreadBestEffort(client, {
                 threadId,
                 timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
