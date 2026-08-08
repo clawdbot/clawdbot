@@ -13,7 +13,6 @@ import { resolveStorePath } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
-  dedupeSessionStoreTargetsBySqliteTarget,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
