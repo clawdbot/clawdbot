@@ -74,7 +74,7 @@ function usage() {
 
 Options:
   --package-spec <spec>       Published npm spec for source=npm.
-  --package-ref <ref>         Trusted repo ref for source=ref.
+  --package-ref <ref>         Trusted repo ref for source=ref or npm companion packaging.
   --package-url <url>         HTTPS tarball URL for source=url or source=trusted-url.
   --package-sha256 <sha256>   Expected tarball SHA-256 for source=url, source=trusted-url, or source=artifact.
   --trusted-source-id <id>    Named trusted URL policy for source=trusted-url.
@@ -1473,6 +1473,9 @@ async function resolveCandidate(options) {
   let packageTrustedReason = "";
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
+  let pluginRegistrySource;
+  let pluginRegistryCandidateVersion = "";
+  let pluginRegistrySourceSha = "";
   let artifactMetadata = {};
   let pluginRegistryManifestSha256 = "";
   let resolveError;
@@ -1482,6 +1485,9 @@ async function resolveCandidate(options) {
       packageRef = options.packageRef || "main";
       const packageSource = await preparePackageSourceWorktree(packageRef);
       packageWorktreeDir = packageSource.sourceDir;
+      if (options.pluginRegistryOutputDir) {
+        pluginRegistrySource = packageSource;
+      }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
       await installPackageSourceDeps(packageSource.sourceDir);
@@ -1495,20 +1501,6 @@ async function resolveCandidate(options) {
         "--output-name",
         options.outputName || DEFAULT_OUTPUT_NAME,
       ]);
-      if (options.pluginRegistryOutputDir) {
-        const requiredPackages = JSON.parse(options.requiredPluginPackagesJson);
-        const rootPackage = JSON.parse(
-          await fs.readFile(path.join(packageSource.sourceDir, "package.json"), "utf8"),
-        );
-        const registry = createPrepublishPluginRegistryArtifact({
-          repoRoot: packageSource.sourceDir,
-          outputDir: path.resolve(ROOT_DIR, options.pluginRegistryOutputDir),
-          sourceSha: packageSource.selectedSha,
-          candidateVersion: rootPackage.version,
-          requiredPackages,
-        });
-        pluginRegistryManifestSha256 = registry.manifestSha256;
-      }
     } else if (options.source === "npm") {
       const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
         env: process.env,
@@ -1525,6 +1517,12 @@ async function resolveCandidate(options) {
         packOutput,
         options.outputName || DEFAULT_OUTPUT_NAME,
       );
+      if (options.pluginRegistryOutputDir) {
+        pluginRegistrySource = await preparePackageSourceWorktree(options.packageRef);
+        packageWorktreeDir = pluginRegistrySource.sourceDir;
+        packageRef = options.packageRef;
+        await installPackageSourceDeps(pluginRegistrySource.sourceDir);
+      }
     } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
         throw new Error(`${options.source} requires --package-url`);
@@ -1568,8 +1566,26 @@ async function resolveCandidate(options) {
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
-    if (options.source !== "ref" && options.pluginRegistryOutputDir) {
-      throw new Error("--plugin-registry-output-dir is only supported with source=ref");
+    if (options.pluginRegistryOutputDir && !pluginRegistrySource) {
+      throw new Error(
+        "--plugin-registry-output-dir is only supported with source=ref or source=npm",
+      );
+    }
+    if (options.pluginRegistryOutputDir && pluginRegistrySource) {
+      const requiredPackages = JSON.parse(options.requiredPluginPackagesJson);
+      const rootPackage = JSON.parse(
+        await fs.readFile(path.join(pluginRegistrySource.sourceDir, "package.json"), "utf8"),
+      );
+      const registry = createPrepublishPluginRegistryArtifact({
+        repoRoot: pluginRegistrySource.sourceDir,
+        outputDir: path.resolve(ROOT_DIR, options.pluginRegistryOutputDir),
+        sourceSha: pluginRegistrySource.selectedSha,
+        candidateVersion: rootPackage.version,
+        requiredPackages,
+      });
+      pluginRegistryCandidateVersion = rootPackage.version;
+      pluginRegistrySourceSha = pluginRegistrySource.selectedSha;
+      pluginRegistryManifestSha256 = registry.manifestSha256;
     }
   } catch (error) {
     resolveError = error;
@@ -1596,6 +1612,14 @@ async function resolveCandidate(options) {
     if (packageSourceSha && !packageTrustedReason) {
       packageTrustedReason = "package-build-info";
     }
+  }
+  if (
+    pluginRegistryManifestSha256 &&
+    (pluginRegistryCandidateVersion !== pkg.version || pluginRegistrySourceSha !== packageSourceSha)
+  ) {
+    throw new Error(
+      "prepublish plugin registry source SHA/version differs from the package candidate",
+    );
   }
   const metadata = {
     name: pkg.name,

@@ -164,6 +164,9 @@ describe("cross-OS release checks workflow", () => {
     expect(resolve.run).toContain("'$provider + $docker | unique | sort'");
     expect(resolve.run).toContain("--plugin-registry-output-dir");
     expect(resolve.run).toContain("--required-plugin-packages-json");
+    expect(resolve.run).toContain(
+      'source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC" --package-ref "$PACKAGE_REF")',
+    );
 
     const registryUpload = step(producer, "Upload shared prerelease plugin registry artifact");
     expect(registryUpload.with?.name).toBe(

@@ -196,6 +196,11 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(createIndex).toBeLessThan(cleanupIndex);
     expect(script).toContain("requiredPackages,");
     expect(script).toContain("plugin_registry_manifest_sha256: pluginRegistryManifestSha256");
+    expect(script).toContain('options.source === "npm"');
+    expect(script).toContain("pluginRegistrySource = await preparePackageSourceWorktree(");
+    expect(script).toContain(
+      "prepublish plugin registry source SHA/version differs from the package candidate",
+    );
   });
 
   it("rejects option-shaped package candidate option values", () => {

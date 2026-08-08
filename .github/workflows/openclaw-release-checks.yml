@@ -655,37 +655,32 @@ jobs:
         run: |
           set -euo pipefail
           source_args=(--source ref --package-ref "$PACKAGE_REF")
-          registry_args=()
           package_label="ref:${PACKAGE_REF}"
           if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
-            source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC")
+            source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC" --package-ref "$PACKAGE_REF")
             package_label="$RELEASE_PACKAGE_SPEC"
-          else
-            provider_packages="$(
-              OPENCLAW_RELEASE_CHECKS_SCRIPT=scripts/openclaw-cross-os-release-checks.ts \
-                bash scripts/github/run-openclaw-cross-os-release-checks.sh \
-                --resolve-provider-required-companion-packages \
-                --provider "${{ needs.resolve_target.outputs.provider }}"
-            )"
-            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
-            export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
-            export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${{ needs.resolve_target.outputs.release_profile != 'beta' }}"
-            export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="${{ needs.resolve_target.outputs.release_profile }}"
-            docker_plan="$(node scripts/test-docker-all.mjs --plan-json)"
-            required_packages="$(
-              jq -cn \
-                --argjson provider "$provider_packages" \
-                --argjson docker "$(jq -c '.requiredPrepublishPluginPackages' <<< "$docker_plan")" \
-                '$provider + $docker | unique | sort'
-            )"
-            registry_args=(
-              --plugin-registry-output-dir .artifacts/prepublish-plugin-registry
-              --required-plugin-packages-json "$required_packages"
-            )
           fi
+          provider_packages="$(
+            OPENCLAW_RELEASE_CHECKS_SCRIPT=scripts/openclaw-cross-os-release-checks.ts \
+              bash scripts/github/run-openclaw-cross-os-release-checks.sh \
+              --resolve-provider-required-companion-packages \
+              --provider "${{ needs.resolve_target.outputs.provider }}"
+          )"
+          export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+          export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
+          export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${{ needs.resolve_target.outputs.release_profile != 'beta' }}"
+          export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="${{ needs.resolve_target.outputs.release_profile }}"
+          docker_plan="$(node scripts/test-docker-all.mjs --plan-json)"
+          required_packages="$(
+            jq -cn \
+              --argjson provider "$provider_packages" \
+              --argjson docker "$(jq -c '.requiredPrepublishPluginPackages' <<< "$docker_plan")" \
+              '$provider + $docker | unique | sort'
+          )"
           node scripts/resolve-openclaw-package-candidate.mjs \
             "${source_args[@]}" \
-            "${registry_args[@]}" \
+            --plugin-registry-output-dir .artifacts/prepublish-plugin-registry \
+            --required-plugin-packages-json "$required_packages" \
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz \
             --metadata .artifacts/docker-e2e-package/package-candidate.json \
