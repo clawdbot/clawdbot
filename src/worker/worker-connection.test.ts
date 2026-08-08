@@ -180,6 +180,37 @@ describe("worker connection error coercion", () => {
     expect(error).not.toHaveProperty("details");
   });
 
+  it("preserves the base Error when structured enumeration traps throw", () => {
+    const handlers: ProxyHandler<{ code: string; status: number }>[] = [
+      {
+        ownKeys() {
+          throw new Error("unexpected ownKeys call");
+        },
+      },
+      {
+        ownKeys() {
+          return ["code", "status"];
+        },
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "status") {
+            throw new Error("unexpected descriptor read");
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    ];
+
+    for (const handler of handlers) {
+      const cause = new Proxy({ code: "ECONNRESET", status: 503 }, handler);
+      const error = toError(cause);
+
+      expect(error).toMatchObject({ name: "Error", message: "[object Object]" });
+      expect(error.cause).toBe(cause);
+      expect(error).not.toHaveProperty("code");
+      expect(error).not.toHaveProperty("status");
+    }
+  });
+
   it("preserves adapter-owned Error fields when structured cause fields collide", () => {
     const detailKey = Symbol("detail");
     let reservedReads = 0;

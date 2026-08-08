@@ -104,22 +104,27 @@ export function toError(error: unknown): Error {
   if ((typeof error !== "object" || error === null) && typeof error !== "function") {
     return toErrorObject(error, message);
   }
-  const details = Object.fromEntries(
-    Reflect.ownKeys(error)
-      .filter(
-        (key) =>
-          (typeof key !== "string" || !ERROR_OWNED_FIELDS.has(key)) &&
-          Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
-      )
-      .flatMap((key): [PropertyKey, unknown][] => {
-        try {
-          return [[key, Reflect.get(error, key)]];
-        } catch {
-          return [];
-        }
-      }),
-  );
-  const normalized = toErrorObject(details, message);
+  const normalized = toErrorObject({}, message);
   normalized.cause = error;
+  try {
+    const details = Object.fromEntries(
+      Reflect.ownKeys(error)
+        .filter(
+          (key) =>
+            (typeof key !== "string" || !ERROR_OWNED_FIELDS.has(key)) &&
+            Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
+        )
+        .flatMap((key): [PropertyKey, unknown][] => {
+          try {
+            return [[key, Reflect.get(error, key)]];
+          } catch {
+            return [];
+          }
+        }),
+    );
+    Object.assign(normalized, details);
+  } catch {
+    // Opaque proxies may reject enumeration; preserve the original failure as the cause.
+  }
   return normalized;
 }
