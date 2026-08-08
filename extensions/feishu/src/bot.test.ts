@@ -6,7 +6,7 @@ import type {
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -129,6 +129,21 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
 
 function createConfiguredBindingReadiness(ok: boolean, error?: string): BindingReadiness {
   return (ok ? { ok: true } : { ok: false, error: error ?? "unknown error" }) as BindingReadiness;
+}
+
+function createPlainGroupBoundConversation(): NonNullable<BoundConversation> {
+  return {
+    bindingId: "default:oc_group_chat",
+    targetSessionKey: "agent:review:acp:binding:feishu:default:plain-group",
+    targetKind: "session",
+    conversation: {
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat",
+    },
+    status: "active",
+    boundAt: 0,
+  };
 }
 
 function createBoundConversation(): NonNullable<BoundConversation> {
@@ -442,13 +457,15 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
         return { bindingRecord: null, route: params.route };
       }
       mockTouchBinding(bindingRecord.bindingId);
+      const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
       return {
         bindingRecord,
         boundSessionKey,
-        boundAgentId: params.route.agentId,
+        boundAgentId,
         route: {
           ...params.route,
           sessionKey: boundSessionKey,
+          agentId: boundAgentId,
           lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
           matchedBy: "binding.channel",
         },
@@ -658,6 +675,48 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(conversationRef.channel).toBe("feishu");
     expect(conversationRef.conversationId).toBe("oc_group_chat:topic:om_topic_root");
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
+  });
+
+  it("keeps plain group session ownership while attributing bound agents in reply footers", async () => {
+    mockResolveBoundConversation.mockReturnValue(createPlainGroupBoundConversation());
+    mockResolveAgentRoute.mockReturnValue(
+      createFeishuTestRoute({
+        agentId: "main",
+        sessionKey: "agent:main:feishu:group:oc_group_chat",
+        matchedBy: "default",
+      }),
+    );
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groups: {
+          oc_group_chat: {
+            requireMention: false,
+            groupSessionScope: "group",
+          },
+        },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-plain-bound",
+        senderOpenId: "ou_sender_1",
+        chatId: "oc_group_chat",
+        chatType: "group",
+        text: "hello plain group",
+      }),
+    });
+
+    expect(mockResolveBoundConversation).toHaveBeenCalledWith({
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat",
+      parentConversationId: "oc_group_chat",
+    });
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "review",
+        sessionKey: "agent:main:feishu:group:oc_group_chat",
+      }),
+    );
   });
 
   it("records Feishu DM last-route updates on the resolved session", async () => {

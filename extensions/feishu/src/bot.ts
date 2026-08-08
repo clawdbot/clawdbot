@@ -926,6 +926,22 @@ export async function handleFeishuMessage(params: {
       }
     }
 
+    let outboundAgentId = route.agentId;
+    if (isGroup && !feishuAcpConversationSupported) {
+      // Plain groups keep session ownership on the default route; core may still dispatch via
+      // a runtime conversation binding. Resolve attribution without rewriting route.sessionKey.
+      const attributionRoute = resolveRuntimeConversationBindingRoute({
+        route,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          ...(parentConversationId ? { parentConversationId } : {}),
+        },
+      });
+      outboundAgentId = attributionRoute.boundAgentId ?? route.agentId;
+    }
+
     if (configuredBinding) {
       const ensured = await ensureConfiguredBindingRouteReady({
         cfg: effectiveCfg,
@@ -1804,7 +1820,7 @@ export async function handleFeishuMessage(params: {
         ctx.mentionedBot,
       );
 
-      const identity = resolveAgentOutboundIdentity(effectiveCfg, route.agentId);
+      const identity = resolveAgentOutboundIdentity(effectiveCfg, outboundAgentId);
       const storePath = resolveStorePath(effectiveCfg.session?.store, {
         agentId: route.agentId,
       });
@@ -1817,7 +1833,7 @@ export async function handleFeishuMessage(params: {
       const { dispatcherOptions, delivery, replyOptions, ensureNoVisibleReplyFallback } =
         createFeishuReplyDispatcher({
           cfg: effectiveCfg,
-          agentId: route.agentId,
+          agentId: outboundAgentId,
           runtime: runtime as RuntimeEnv,
           chatId: ctx.chatId,
           sendTarget: feishuReplyTarget,
