@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -47,6 +48,7 @@ import type { SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 
 const log = createSubsystemLogger("agents/session");
+const MAX_COMMITTED_STEERING_PROMPT_CHARS = 32_768;
 
 interface ToolDefinitionEntry {
   definition: ToolDefinition;
@@ -398,7 +400,17 @@ export abstract class AgentSessionBase {
           this.lastAssistantEntryId = entryId;
         }
         if (event.message.role === "user") {
-          this.steering.resolve(event.message);
+          const persistedEntry = this.sessionManager.getEntry(entryId);
+          if (persistedEntry?.type !== "message" || persistedEntry.message.role !== "user") {
+            throw new Error(`persisted steering message ${entryId} could not be identified`);
+          }
+          // Receipts expose only the bounded visible text from the exact durable entry.
+          // Raw and prepared inputs are not authoritative after persistence transforms.
+          const committedPrompt = truncateUtf16Safe(
+            extractTextContent(persistedEntry.message.content),
+            MAX_COMMITTED_STEERING_PROMPT_CHARS,
+          );
+          this.steering.resolve(event.message, committedPrompt);
         }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere

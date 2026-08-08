@@ -23,7 +23,10 @@ import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  loadSqliteTrajectoryRuntimeEvents,
+} from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -1340,6 +1343,137 @@ describe("exportTrajectoryBundle", () => {
     });
     const transcriptAfter = await loadTranscriptEvents(transcriptScope);
     expect(JSON.stringify(transcriptAfter)).toBe(transcriptBytesBefore);
+  });
+
+  it("keeps the committed native prompt and provenance aligned across persistence and export", async () => {
+    const tmpDir = makeTempDir();
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "native-steer-session";
+    const sessionKey = "agent:main:native-steer-session";
+    const storePath = path.join(tmpDir, "sessions.json");
+    const committedPrompt = '<skill name="deploy">expanded and [sanitized]</skill>';
+    const origin = {
+      kind: "internal_system",
+      sourceTool: "sessions_send",
+    } as const;
+    const transcriptScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(transcriptScope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: applyInputProvenanceToUserMessage(userMessage(committedPrompt), origin),
+      },
+    ]);
+    const recorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId,
+        sessionKey,
+        sessionTarget: transcriptScope,
+        workspaceDir: tmpDir,
+      }),
+      "SQLite trajectory recorder",
+    );
+    recorder.recordEvent("prompt.submitted", { prompt: committedPrompt, origin });
+    await recorder.flush();
+
+    const transcript = await loadTranscriptEvents(transcriptScope);
+    const transcriptUser = transcript.find(
+      (entry) => entry.type === "message" && entry.message.role === "user",
+    );
+    const sqlitePrompt = (await loadSqliteTrajectoryRuntimeEvents(transcriptScope)).find(
+      (event) => event.type === "prompt.submitted",
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: transcriptScope,
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+    const exportedPrompt = bundle.events.find((event) => event.type === "prompt.submitted");
+
+    expect(transcriptUser).toMatchObject({
+      message: { content: committedPrompt, provenance: origin },
+    });
+    expect(sqlitePrompt?.data).toMatchObject({ prompt: committedPrompt, origin });
+    expect(exportedPrompt?.data).toMatchObject({ prompt: committedPrompt, origin });
+  });
+
+  it("preserves exact Codex steer text from SQLite through export", async () => {
+    const tmpDir = makeTempDir();
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "codex-steer-session";
+    const sessionKey = "agent:main:codex-steer-session";
+    const storePath = path.join(tmpDir, "sessions.json");
+    const committedPrompt = "steer this active turn\nwith exact spacing";
+    const transcriptScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(transcriptScope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: userMessage(committedPrompt),
+      },
+    ]);
+    const recorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId,
+        sessionKey,
+        sessionTarget: transcriptScope,
+        workspaceDir: tmpDir,
+        provider: "codex",
+      }),
+      "SQLite trajectory recorder",
+    );
+    recorder.recordEvent("prompt.submitted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      prompt: committedPrompt,
+      imagesCount: 0,
+    });
+    await recorder.flush();
+
+    const sqlitePrompt = (await loadSqliteTrajectoryRuntimeEvents(transcriptScope)).find(
+      (event) => event.type === "prompt.submitted",
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: transcriptScope,
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+    const exportedPrompt = bundle.events.find((event) => event.type === "prompt.submitted");
+
+    expect(sqlitePrompt?.data?.prompt).toBe(committedPrompt);
+    expect(exportedPrompt?.data?.prompt).toBe(committedPrompt);
   });
 
   it("projects each provenance record independently without an identity limit", async () => {

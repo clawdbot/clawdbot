@@ -15,7 +15,7 @@ import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 type SteerReceipt = {
   accepted: Promise<void>;
-  committed: Promise<void>;
+  committed: Promise<string>;
   cancel(): boolean;
 };
 type SteerArgs = [
@@ -32,19 +32,21 @@ type SteerTarget = {
 };
 type SteeringOutcome =
   | { kind: "answered-pending-input" }
-  | { kind: "steered"; transcriptCommit: "confirmed" | "not-requested" }
+  | { kind: "steered"; transcriptCommit: "confirmed"; committedPrompt: string }
+  | { kind: "steered"; transcriptCommit: "not-requested" }
   | { kind: "accepted-unconfirmed"; errorMessage: string };
+type CommitWaitOutcome = { committedPrompt: string } | { errorMessage: string };
 
 const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
 
 class ReceiptWaitError extends Error {}
 
-function waitForStage(
-  stage: Promise<void>,
+function waitForStage<T>(
+  stage: Promise<T>,
   deadlineMs: number,
   signal: AbortSignal | undefined,
   timeoutMessage: string,
-): Promise<void> {
+): Promise<T> {
   if (signal?.aborted) {
     return Promise.reject(new ReceiptWaitError("queued steering message was cancelled"));
   }
@@ -52,25 +54,32 @@ function waitForStage(
   if (remainingMs <= 0) {
     return Promise.reject(new ReceiptWaitError(timeoutMessage));
   }
-  return new Promise<void>((resolve, reject) => {
-    const finish = (error?: unknown) => {
+  return new Promise<T>((resolve, reject) => {
+    const finish = (outcome: { value: T } | { error: unknown }) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      if (error === undefined) {
-        resolve();
+      if ("value" in outcome) {
+        resolve(outcome.value);
       } else {
         reject(
-          error instanceof Error
-            ? error
-            : new Error("steering receipt wait failed", { cause: error }),
+          outcome.error instanceof Error
+            ? outcome.error
+            : new Error("steering receipt wait failed", { cause: outcome.error }),
         );
       }
     };
-    const timer = setTimeout(() => finish(new ReceiptWaitError(timeoutMessage)), remainingMs);
+    const timer = setTimeout(
+      () => finish({ error: new ReceiptWaitError(timeoutMessage) }),
+      remainingMs,
+    );
     timer.unref?.();
-    const onAbort = () => finish(new ReceiptWaitError("queued steering message was cancelled"));
+    const onAbort = () =>
+      finish({ error: new ReceiptWaitError("queued steering message was cancelled") });
     signal?.addEventListener("abort", onAbort, { once: true });
-    void stage.then(() => finish(), finish);
+    void stage.then(
+      (value) => finish({ value }),
+      (error) => finish({ error }),
+    );
   });
 }
 
@@ -88,7 +97,7 @@ async function steerWithCommitWait(
   text: string,
   deadlineMs: number,
   options: EmbeddedAgentQueueMessageOptions,
-): Promise<string | undefined> {
+): Promise<CommitWaitOutcome> {
   if (!target.steerWithReceipt) {
     options.onQueueAccepted?.(false);
     throw new Error("active session does not support transcript commit receipts");
@@ -115,12 +124,13 @@ async function steerWithCommitWait(
     );
     accepted = true;
     options.onQueueAccepted?.(true);
-    await waitForStage(
+    const committedPrompt = await waitForStage(
       receipt.committed,
       deadlineMs,
       options.abortSignal,
       "queued steering message was not committed to the transcript before timeout",
     );
+    return { committedPrompt };
   } catch (error) {
     if (!accepted && !(error instanceof ReceiptWaitError)) {
       options.onQueueAccepted?.(false);
@@ -133,9 +143,10 @@ async function steerWithCommitWait(
     if (cancelled) {
       throw error;
     }
-    return error instanceof Error ? error.message : "queued steering commitment failed";
+    return {
+      errorMessage: error instanceof Error ? error.message : "queued steering commitment failed",
+    };
   }
-  return undefined;
 }
 
 export async function steerActiveSessionWithOptionalDeliveryWait(
@@ -188,13 +199,17 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     }
   }
 
-  const errorMessage = await steerWithCommitWait(
+  const commitOutcome = await steerWithCommitWait(
     target,
     text,
     Date.now() + Math.max(0, options.deliveryTimeoutMs ?? DEFAULT_COMMIT_TIMEOUT_MS),
     options,
   );
-  return errorMessage
-    ? { kind: "accepted-unconfirmed", errorMessage }
-    : { kind: "steered", transcriptCommit: "confirmed" };
+  return "errorMessage" in commitOutcome
+    ? { kind: "accepted-unconfirmed", errorMessage: commitOutcome.errorMessage }
+    : {
+        kind: "steered",
+        transcriptCommit: "confirmed",
+        committedPrompt: commitOutcome.committedPrompt,
+      };
 }

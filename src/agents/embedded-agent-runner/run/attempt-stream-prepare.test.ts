@@ -24,8 +24,8 @@ function createSteerReceipt() {
   const accepted = new Promise<void>((resolve) => {
     resolveAccepted = resolve;
   });
-  let resolveCommitted!: () => void;
-  const committed = new Promise<void>((resolve) => {
+  let resolveCommitted!: (committedPrompt: string) => void;
+  const committed = new Promise<string>((resolve) => {
     resolveCommitted = resolve;
   });
   return {
@@ -309,12 +309,12 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     deferred.resolveAccepted();
     await vi.waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
-    deferred.resolveCommitted();
+    deferred.resolveCommitted('<skill name="queue">expanded queued prompt</skill>');
     await queued;
 
     expect(recordEvent).toHaveBeenCalledOnce();
     expect(recordEvent).toHaveBeenCalledWith("prompt.submitted", {
-      prompt: "queued prompt",
+      prompt: '<skill name="queue">expanded queued prompt</skill>',
       messages: activeSession.messages,
       imagesCount: 0,
     });
@@ -348,12 +348,12 @@ describe("prepareEmbeddedAttemptStream", () => {
     deferred.resolveAccepted();
     await Promise.resolve();
     expect(recordEvent).not.toHaveBeenCalled();
-    deferred.resolveCommitted();
+    deferred.resolveCommitted("expanded delegated work");
     await queued;
 
     expect(recordEvent).toHaveBeenCalledWith(
       "prompt.submitted",
-      expect.objectContaining({ origin, prompt: "delegated work" }),
+      expect.objectContaining({ origin, prompt: "expanded delegated work" }),
     );
   });
 

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { preparePersistedUserTurnMessageForTranscriptWrite } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { createTestSession } from "./agent-session-loop-correctness.test-support.js";
 import { AgentSessionSteering } from "./agent-session-steering.js";
 
 function userMessage(text: string, sourceSessionKey: string): AgentMessage {
@@ -73,6 +76,87 @@ describe("AgentSessionSteering", () => {
     expect(enqueued).toEqual([secondMessage]);
   });
 
+  it("resolves the exact persisted text after before_message_write transforms it", async () => {
+    const { session, sessionManager } = await createTestSession();
+    const originalAppendMessage = sessionManager.appendMessage.bind(sessionManager);
+    vi.spyOn(sessionManager, "appendMessage").mockImplementation((message, options) => {
+      if (message.role !== "user") {
+        return originalAppendMessage(message, options);
+      }
+      const transformed = preparePersistedUserTurnMessageForTranscriptWrite(
+        message as PersistedUserTurnMessage,
+        {
+          beforeMessageWrite: ({ message: persistedMessage }) => ({
+            ...persistedMessage,
+            content: "expanded and sanitized prompt",
+          }),
+        },
+      );
+      if (!transformed) {
+        throw new Error("expected before_message_write to preserve the user message");
+      }
+      return originalAppendMessage(transformed, options);
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => false });
+    try {
+      const receipt = session.steerWithReceipt("raw command");
+      await receipt.accepted;
+      const message = steer.mock.calls[0]?.[0];
+      if (!message) {
+        throw new Error("expected an admitted steering message");
+      }
+
+      const handleAgentEvent = (
+        session as unknown as {
+          handleAgentEvent(event: unknown): Promise<void>;
+        }
+      ).handleAgentEvent;
+      await handleAgentEvent({ type: "message_start", message });
+      await handleAgentEvent({ type: "message_end", message });
+
+      await expect(receipt.committed).resolves.toBe("expanded and sanitized prompt");
+      expect(sessionManager.getLeafEntry()).toMatchObject({
+        type: "message",
+        message: { role: "user", content: "expanded and sanitized prompt" },
+      });
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("rejects commitment when the exact persisted user entry cannot be identified", async () => {
+    const { session, sessionManager } = await createTestSession();
+    const originalAppendMessage = sessionManager.appendMessage.bind(sessionManager);
+    vi.spyOn(sessionManager, "appendMessage").mockImplementation((message, options) => {
+      originalAppendMessage(message, options);
+      return "missing-persisted-entry";
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => false });
+    try {
+      const receipt = session.steerWithReceipt("must not fall back");
+      await receipt.accepted;
+      const message = steer.mock.calls[0]?.[0];
+      if (!message) {
+        throw new Error("expected an admitted steering message");
+      }
+
+      const handleAgentEvent = (
+        session as unknown as {
+          handleAgentEvent(event: unknown): Promise<void>;
+        }
+      ).handleAgentEvent;
+      await handleAgentEvent({ type: "message_start", message });
+      await expect(handleAgentEvent({ type: "message_end", message })).rejects.toThrow(
+        "persisted steering message missing-persisted-entry could not be identified",
+      );
+      await expect(receipt.committed).rejects.toThrow(
+        "persisted steering message missing-persisted-entry could not be identified",
+      );
+    } finally {
+      session.dispose();
+    }
+  });
+
   it("commits only the exact message after its persistence owner succeeds", async () => {
     const steering = new AgentSessionSteering(vi.fn());
     const reservation = steering.reserve("persist me");
@@ -88,8 +172,8 @@ describe("AgentSessionSteering", () => {
     await Promise.resolve();
     expect(committed).toBe(false);
 
-    steering.resolve(message);
-    await reservation.receipt.committed;
+    steering.resolve(message, "persisted text");
+    await expect(reservation.receipt.committed).resolves.toBe("persisted text");
     expect(committed).toBe(true);
   });
 
@@ -116,7 +200,7 @@ describe("AgentSessionSteering", () => {
 
     expect(reservation.receipt.cancel()).toBe(false);
     expect(steering.pendingCount).toBe(0);
-    steering.resolve(message);
-    await expect(reservation.receipt.committed).resolves.toBeUndefined();
+    steering.resolve(message, "already drained");
+    await expect(reservation.receipt.committed).resolves.toBe("already drained");
   });
 });

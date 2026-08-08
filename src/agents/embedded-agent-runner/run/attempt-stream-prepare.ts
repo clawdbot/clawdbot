@@ -420,7 +420,7 @@ export function prepareEmbeddedAttemptStream(input: {
       if (outcome.kind === "steered" && outcome.transcriptCommit === "confirmed") {
         try {
           input.trajectoryRecorder?.recordEvent("prompt.submitted", {
-            prompt: text,
+            prompt: outcome.committedPrompt,
             messages: input.activeSession.messages,
             imagesCount: options?.images?.length ?? 0,
             ...(options?.inputProvenance ? { origin: options.inputProvenance } : {}),

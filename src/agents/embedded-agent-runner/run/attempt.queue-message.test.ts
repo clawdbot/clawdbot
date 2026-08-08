@@ -3,10 +3,10 @@ import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-mess
 
 type SteerTarget = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0];
 
-function deferred() {
-  let resolve!: () => void;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
@@ -15,8 +15,8 @@ function deferred() {
 }
 
 function createReceipt(cancelResult: boolean) {
-  const accepted = deferred();
-  const committed = deferred();
+  const accepted = deferred<void>();
+  const committed = deferred<string>();
   const cancel = vi.fn(() => cancelResult);
   return {
     accepted,
@@ -59,13 +59,14 @@ describe("embedded steering receipts", () => {
     );
     expect(onQueueAccepted).not.toHaveBeenCalled();
 
-    receipt.accepted.resolve();
+    receipt.accepted.resolve(undefined);
     await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true));
-    receipt.committed.resolve();
+    receipt.committed.resolve("expanded delegated work");
 
     await expect(queued).resolves.toEqual({
       kind: "steered",
       transcriptCommit: "confirmed",
+      committedPrompt: "expanded delegated work",
     });
   });
 
@@ -104,10 +105,12 @@ describe("embedded steering receipts", () => {
       const queued = waitForCommit(target, { deliveryTimeoutMs: 10, onQueueAccepted });
       await vi.advanceTimersByTimeAsync(10);
 
-      await expect(queued).resolves.toEqual({
+      const outcome = await queued;
+      expect(outcome).toEqual({
         kind: "accepted-unconfirmed",
         errorMessage: "queued steering message was not accepted before timeout",
       });
+      expect(outcome).not.toHaveProperty("committedPrompt");
       expect(receipt.receipt.cancel).toHaveBeenCalledOnce();
       expect(onQueueAccepted).toHaveBeenCalledWith(true);
     } finally {
@@ -128,7 +131,7 @@ describe("embedded steering receipts", () => {
       abortSignal: controller.signal,
       onQueueAccepted,
     });
-    receipt.accepted.resolve();
+    receipt.accepted.resolve(undefined);
     await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true));
     controller.abort();
 
@@ -141,11 +144,11 @@ describe("embedded steering receipts", () => {
     const accepted = vi.fn();
     const target: SteerTarget = { steer };
 
-    await expect(
-      steerActiveSessionWithOptionalDeliveryWait(target, "plain steer", {
-        onQueueAccepted: accepted,
-      }),
-    ).resolves.toEqual({ kind: "steered", transcriptCommit: "not-requested" });
+    const outcome = await steerActiveSessionWithOptionalDeliveryWait(target, "plain steer", {
+      onQueueAccepted: accepted,
+    });
+    expect(outcome).toEqual({ kind: "steered", transcriptCommit: "not-requested" });
+    expect(outcome).not.toHaveProperty("committedPrompt");
     expect(accepted).toHaveBeenCalledWith(true);
 
     const controller = new AbortController();

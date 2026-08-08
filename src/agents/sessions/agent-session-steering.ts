@@ -3,14 +3,14 @@ import type { AgentMessage } from "../runtime/index.js";
 
 export type AgentSessionSteerReceipt = {
   accepted: Promise<void>;
-  committed: Promise<void>;
+  committed: Promise<string>;
   cancel(): boolean;
 };
 
 type QueueReceipt = { cancel(): boolean };
 type SteeringItem = {
   accepted?: Deferred;
-  committed?: Deferred;
+  committed?: Deferred<string>;
   enqueue?: () => QueueReceipt;
   message?: AgentMessage;
   queueReceipt?: QueueReceipt;
@@ -24,7 +24,7 @@ export class AgentSessionSteering {
 
   reserve(text: string) {
     const accepted = createDeferred();
-    const committed = createDeferred();
+    const committed = createDeferred<string>();
     void accepted.promise.catch(() => {});
     void committed.promise.catch(() => {});
     const item: SteeringItem = { accepted, committed, text };
@@ -66,11 +66,11 @@ export class AgentSessionSteering {
     return true;
   }
 
-  resolve(message: AgentMessage): void {
-    this.settle(message);
+  resolve(message: AgentMessage, committedPrompt: string): void {
+    this.settle(message, { committedPrompt });
   }
   reject(message: AgentMessage, error: unknown): void {
-    this.settle(message, error);
+    this.settle(message, { error });
   }
 
   clear(): string[] {
@@ -107,17 +107,20 @@ export class AgentSessionSteering {
     return this.pending.length;
   }
 
-  private settle(message: AgentMessage, error?: unknown): void {
+  private settle(
+    message: AgentMessage,
+    outcome: { committedPrompt: string } | { error: unknown },
+  ): void {
     const item = this.byMessage.get(message);
     if (!item) {
       return;
     }
     const notify = this.removePending(item);
     this.byMessage.delete(message);
-    if (error === undefined) {
-      item.committed?.resolve(undefined);
+    if ("committedPrompt" in outcome) {
+      item.committed?.resolve(outcome.committedPrompt);
     } else {
-      item.committed?.reject(error);
+      item.committed?.reject(outcome.error);
     }
     if (notify) {
       this.onChange();
