@@ -5,7 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
-import { setInternalBeforeToolBatch } from "./internal-hooks.js";
+import {
+  attachInternalToolBatchLifecycle,
+  setInternalBeforeToolBatch,
+  takeInternalToolBatchLifecycle,
+} from "./internal-hooks.js";
 import {
   type AssistantMessage,
   createAssistantMessageEventStream,
@@ -75,6 +79,21 @@ function expectTerminalFailure(events: AgentEvent[], result: AgentMessage[]): vo
     errorMessage: "provider exploded",
   });
 }
+
+describe("internal tool batch lifecycle", () => {
+  it("binds lifecycle state to one exact admission result and consumes it once", () => {
+    const result = {};
+    const lifecycle = {
+      commitReadyCalls: vi.fn(),
+      releaseSkippedCalls: vi.fn(),
+    };
+
+    expect(attachInternalToolBatchLifecycle(result, lifecycle)).toBe(result);
+    expect(takeInternalToolBatchLifecycle(result)).toBe(lifecycle);
+    expect(takeInternalToolBatchLifecycle(result)).toBeUndefined();
+    expect(takeInternalToolBatchLifecycle({})).toBeUndefined();
+  });
+});
 
 describe("agentLoop EventStream failures", () => {
   it("ends the public stream when a new prompt run rejects", async () => {
@@ -1084,7 +1103,9 @@ describe("agentLoop tool termination", () => {
       toolExecution: "sequential",
       afterToolOutcome,
     });
-    setInternalBeforeToolBatch(agent, async () => ({ commitReadyCalls, releaseSkippedCalls }));
+    setInternalBeforeToolBatch(agent, async () =>
+      attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
+    );
     agent.subscribe((event) => {
       events.push(event);
     });
@@ -1226,7 +1247,9 @@ describe("agentLoop tool termination", () => {
     });
     const commitReadyCalls = vi.fn();
     const releaseSkippedCalls = vi.fn();
-    setInternalBeforeToolBatch(agent, async () => ({ commitReadyCalls, releaseSkippedCalls }));
+    setInternalBeforeToolBatch(agent, async () =>
+      attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
+    );
     const events: AgentEvent[] = [];
     const steer = { role: "user" as const, content: "before tools", timestamp: 2 };
     agent.subscribe(async (event) => {
@@ -1295,7 +1318,7 @@ describe("agentLoop tool termination", () => {
     const releaseSkippedCalls = vi.fn();
     setInternalBeforeToolBatch(agent, async ({ calls }) => {
       expect(calls.map((call) => call.toolCall.id)).toEqual(["valid-tail"]);
-      return { commitReadyCalls, releaseSkippedCalls };
+      return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
     });
     agent.subscribe((event) => {
       if (
@@ -1357,7 +1380,7 @@ describe("agentLoop tool termination", () => {
     const releaseSkippedCalls = vi.fn();
     setInternalBeforeToolBatch(agent, async ({ calls }) => {
       expect(calls.map((call) => call.toolCall.id)).toEqual(["prepared"]);
-      return { commitReadyCalls, releaseSkippedCalls };
+      return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
     });
     const events: AgentEvent[] = [];
     agent.subscribe((event) => {
@@ -1438,7 +1461,8 @@ describe("agentLoop tool termination", () => {
       {
         ...config,
         toolExecution: "parallel",
-        beforeToolBatch: async () => ({ commitReadyCalls, releaseSkippedCalls }),
+        beforeToolBatch: async () =>
+          attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
       },
       () => {},
       undefined,
@@ -1473,12 +1497,16 @@ describe("agentLoop tool termination", () => {
         {
           ...config,
           toolExecution: "parallel",
-          beforeToolBatch: async () => ({
-            commitReadyCalls: () => {
-              throw commitError;
-            },
-            releaseSkippedCalls,
-          }),
+          beforeToolBatch: async () =>
+            attachInternalToolBatchLifecycle(
+              {},
+              {
+                commitReadyCalls: () => {
+                  throw commitError;
+                },
+                releaseSkippedCalls,
+              },
+            ),
         },
         () => {},
         undefined,
@@ -3129,7 +3157,8 @@ describe("agentLoop tool termination", () => {
       {
         ...config,
         toolExecution: "parallel",
-        beforeToolBatch: async () => ({ commitReadyCalls, releaseSkippedCalls }),
+        beforeToolBatch: async () =>
+          attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
         beforeToolCall: async ({ toolCall }) => {
           if (toolCall.name === "gated") {
             await Promise.resolve();

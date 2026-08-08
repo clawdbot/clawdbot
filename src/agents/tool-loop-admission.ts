@@ -23,6 +23,11 @@ type ToolLoopCall = {
   toolCallId?: string;
 };
 
+type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
+  commitReadyCalls?: (toolCallIds: readonly string[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
+};
+
 async function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
@@ -127,7 +132,7 @@ export async function admitSingleToolCallLoop(
 export async function admitToolCallBatch(
   calls: InternalToolBatchCall[],
   ctx: HookContext,
-): Promise<InternalBeforeToolBatchResult> {
+): Promise<ToolLoopBatchAdmission> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return {};
   }

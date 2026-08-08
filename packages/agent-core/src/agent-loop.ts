@@ -11,6 +11,10 @@ import type {
 import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
+import {
+  takeInternalToolBatchLifecycle,
+  type InternalToolBatchLifecycle,
+} from "./internal-hooks.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -33,7 +37,6 @@ import type {
   AgentTool,
   AgentToolCall,
   AgentToolResult,
-  InternalBeforeToolBatchResult,
   StreamFn,
   ToolLoopIntervention,
 } from "./types.js";
@@ -634,7 +637,7 @@ async function executeToolCalls(
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
   const resolvedToolCalls = new Map<AgentToolCall, ResolvedToolCallOutcome>();
   const validatedToolCalls = new Map<AgentToolCall, ValidatedToolCallOutcome>();
-  let batchAdmission: InternalBeforeToolBatchResult | undefined;
+  let batchLifecycle: InternalToolBatchLifecycle | undefined;
   if (config.beforeToolBatch) {
     for (const toolCall of toolCalls) {
       if (signal?.aborted) {
@@ -680,7 +683,7 @@ async function executeToolCalls(
           terminal: criticalToolLoopSeen,
         });
       }
-      batchAdmission = admission;
+      batchLifecycle = admission ? takeInternalToolBatchLifecycle(admission) : undefined;
     }
   }
   let hasSequentialToolCall = false;
@@ -710,7 +713,7 @@ async function executeToolCalls(
       toolCalls,
       resolvedToolCalls,
       validatedToolCalls,
-      batchAdmission,
+      batchLifecycle,
       config,
       signal,
       emit,
@@ -722,7 +725,7 @@ async function executeToolCalls(
     toolCalls,
     resolvedToolCalls,
     validatedToolCalls,
-    batchAdmission,
+    batchLifecycle,
     config,
     signal,
     emit,
@@ -760,7 +763,7 @@ async function executeToolCallsSequential(
   toolCalls: AgentToolCall[],
   resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   validatedToolCalls: Map<AgentToolCall, ValidatedToolCallOutcome>,
-  batchAdmission: InternalBeforeToolBatchResult | undefined,
+  batchLifecycle: InternalToolBatchLifecycle | undefined,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -834,7 +837,7 @@ async function executeToolCallsSequential(
         break;
       }
       if (!signal?.aborted) {
-        batchAdmission?.commitReadyCalls?.([toolCall.id]);
+        batchLifecycle?.commitReadyCalls([toolCall.id]);
       }
       const executed = await executePreparedToolCall(
         preparation,
@@ -867,7 +870,7 @@ async function executeToolCallsSequential(
   // Complete the unstarted tail through one lifecycle path so committed tool
   // calls remain paired and outcome hooks observe every synthetic result.
   if (steeringMessages.length > 0) {
-    batchAdmission?.releaseSkippedCalls?.(
+    batchLifecycle?.releaseSkippedCalls(
       toolCalls
         .slice(skippedStartIndex)
         .filter((toolCall) => validatedToolCalls.get(toolCall)?.kind === "validated")
@@ -916,7 +919,7 @@ async function executeToolCallsParallel(
   toolCalls: AgentToolCall[],
   resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   validatedToolCalls: Map<AgentToolCall, ValidatedToolCallOutcome>,
-  batchAdmission: InternalBeforeToolBatchResult | undefined,
+  batchLifecycle: InternalToolBatchLifecycle | undefined,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -991,10 +994,10 @@ async function executeToolCallsParallel(
       : []),
   ];
   if (readyToolCallIds.length > 0) {
-    batchAdmission?.commitReadyCalls?.(readyToolCallIds);
+    batchLifecycle?.commitReadyCalls(readyToolCallIds);
   }
   if (skippedToolCallIds.length > 0) {
-    batchAdmission?.releaseSkippedCalls?.(skippedToolCallIds);
+    batchLifecycle?.releaseSkippedCalls(skippedToolCallIds);
   }
   const orderedFinalizedCalls: FinalizedToolCallOutcome[] = [];
   if (steeringMessages.length > 0) {
