@@ -144,6 +144,8 @@ export type HeartbeatRunOptions = {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   runScope?: HeartbeatRunScope;
+  /** Persisted monitor cadence carried by a coalesced scheduled wake. */
+  scheduledEveryMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
   /** Exact cron run marker whose own activity must not block this wake. */
   owningCronJobMarker?: CronActiveJobMarker;
@@ -321,6 +323,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     forcedSessionKey: opts.sessionKey,
     source: wakeSource,
     reason: opts.reason,
+    scheduledEveryMs: opts.scheduledEveryMs,
     scheduledTasks,
     nowMs: startedAt,
   });

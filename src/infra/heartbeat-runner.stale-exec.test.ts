@@ -7,13 +7,23 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
-import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  runHeartbeatOnce,
+  setHeartbeatsEnabled,
+  startHeartbeatRunner,
+} from "./heartbeat-runner.js";
+import {
+  seedMainSessionStore,
+  setupTelegramHeartbeatPluginRuntimeForTests,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
+import { resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   requestHeartbeat,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 describe("stale exec heartbeat wakes", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];
@@ -27,10 +37,10 @@ describe("stale exec heartbeat wakes", () => {
     currentHandlerDisposer = setRuntimeHeartbeatWakeHandler(handler);
   }
 
-  function heartbeatConfig(): OpenClawConfig {
+  function heartbeatConfig(every = "30m"): OpenClawConfig {
     return {
       agents: {
-        defaults: { heartbeat: { every: "30m" } },
+        defaults: { heartbeat: { every } },
       },
     } as OpenClawConfig;
   }
@@ -63,6 +73,8 @@ describe("stale exec heartbeat wakes", () => {
   }
 
   beforeEach(() => {
+    setupTelegramHeartbeatPluginRuntimeForTests();
+    resetSystemEventsForTest();
     resetGatewayWorkAdmission();
   });
 
@@ -81,6 +93,7 @@ describe("stale exec heartbeat wakes", () => {
     resetConfigRuntimeState();
     resetGatewayWorkAdmission();
     resetHeartbeatEventsForTest();
+    resetSystemEventsForTest();
     setHeartbeatsEnabled(true);
     envSnapshot.restore();
     vi.useRealTimers();
@@ -122,6 +135,157 @@ describe("stale exec heartbeat wakes", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a scheduled turn alive when an acknowledged exec wake coalesces with it", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "telegram" },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-100155462274",
+      });
+      enqueueSystemEvent("Unrelated queued event", { sessionKey });
+
+      const getReplyFromConfig = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const telegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "155462274",
+      });
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        scheduledEveryMs: 5 * 60_000,
+        deps: {
+          getReplyFromConfig,
+          telegram,
+        },
+      });
+      expect(result.status).toBe("ran");
+      expect(getReplyFromConfig).toHaveBeenCalledOnce();
+      expect(peekSystemEvents(sessionKey)).toEqual(["Unrelated queued event"]);
+    });
+  });
+
+  it("does not move cadence when a stale exec wake defers for min-spacing", async () => {
+    vi.useFakeTimers();
+    const intervalMs = 5 * 60_000;
+    const phaseMs = resolveHeartbeatPhaseMs({
+      schedulerSeed,
+      agentId: "main",
+      intervalMs,
+    });
+    const updateAtMs = phaseMs === 0 ? intervalMs - 1 : phaseMs - 1;
+    const initialNowMs = updateAtMs - 100;
+    vi.setSystemTime(initialNowMs);
+
+    const runSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: schedulerSeed,
+    });
+
+    requestHeartbeat({
+      source: "manual",
+      intent: "manual",
+      reason: "manual",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(99);
+    runner.updateConfig(heartbeatConfig("5m"));
+    await vi.advanceTimersByTimeAsync(1);
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runner.stop();
+  });
+
+  it("does not move cadence when a stale exec wake defers for flood", async () => {
+    vi.useFakeTimers();
+    const intervalMs = 5 * 60_000;
+    const phaseMs = resolveHeartbeatPhaseMs({
+      schedulerSeed,
+      agentId: "main",
+      intervalMs,
+    });
+    const updateAtMs = phaseMs === 0 ? intervalMs - 1 : phaseMs - 1;
+    const initialNowMs = updateAtMs - 100;
+    vi.setSystemTime(initialNowMs);
+
+    const runSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: schedulerSeed,
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      requestHeartbeat({
+        source: "manual",
+        intent: "manual",
+        reason: "manual",
+        agentId: "main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await vi.advanceTimersByTimeAsync(95);
+    runner.updateConfig(heartbeatConfig("5m"));
+    await vi.advanceTimersByTimeAsync(1);
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(5);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(6);
+    runner.stop();
   });
 
   it("does not record cooldown bookkeeping for an acknowledged exec wake", async () => {

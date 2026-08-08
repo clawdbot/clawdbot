@@ -135,10 +135,18 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     decision?: DeferDecision,
+    options: { authoritativeScheduledTick?: boolean; execEventWake?: boolean } = {},
   ) => {
-    if (!decision?.defer || decision.reason === "not-due" || agent.nextDueMs > now) {
+    if (
+      !decision?.defer ||
+      decision.reason === "not-due" ||
+      agent.nextDueMs > now ||
+      (options.execEventWake && !options.authoritativeScheduledTick)
+    ) {
       return;
     }
+    // A stale exec wake can be retained by the wake layer after a guard
+    // deferral, but it never owns cadence unless a scheduled tick joined it.
     // Deferrals that do not have wake-layer retry ownership still move the due
     // slot forward so repeated event wakes cannot retry a stale interval.
     advanceAgentSchedule(agent, now, reason);
@@ -272,6 +280,7 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params.reason;
     const intent = params.intent;
+    const execEventWake = params.source === "exec-event";
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
     const requestedHeartbeat = params.heartbeat;
@@ -281,6 +290,7 @@ export function startHeartbeatRunner(opts: {
       params.scheduledEveryMs > 0
         ? params.scheduledEveryMs
         : undefined;
+    const authoritativeScheduledTick = scheduledEveryMs !== undefined;
     const scheduledAnchorMs =
       typeof params.scheduledAnchorMs === "number" &&
       Number.isSafeInteger(params.scheduledAnchorMs) &&
@@ -336,7 +346,10 @@ export function startHeartbeatRunner(opts: {
         retainedWork,
       });
       if (deferral.defer) {
-        advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
+        advanceStaleScheduleAfterDeferral(agent, now, reason, deferral, {
+          authoritativeScheduledTick,
+          execEventWake,
+        });
         return {
           ran: false,
           result: {
@@ -356,6 +369,7 @@ export function startHeartbeatRunner(opts: {
           source: params.source,
           intent,
           reason,
+          ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
           runScope: "global",
           tasks: requestedTasks,
           deps: { runtime: state.runtime },
@@ -440,8 +454,6 @@ export function startHeartbeatRunner(opts: {
       const targetAgent = state.agents.get(targetAgentId);
       // Task intent wins scheduled-task coalescing, so the cadence payload—not
       // the final intent—proves that the persisted monitor tick joined this turn.
-      const authoritativeScheduledTick =
-        params.source === "interval" && scheduledEveryMs !== undefined;
       if (targetAgent && scheduledEveryMs !== undefined && authoritativeScheduledTick) {
         targetAgent.intervalMs = scheduledEveryMs;
         targetAgent.phaseMs =
@@ -490,7 +502,10 @@ export function startHeartbeatRunner(opts: {
           retainedWork,
         });
         if (deferral.defer) {
-          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
+          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral, {
+            authoritativeScheduledTick,
+            execEventWake,
+          });
           return {
             status: "skipped",
             reason: deferral.reason,
@@ -513,6 +528,7 @@ export function startHeartbeatRunner(opts: {
           source: params.source,
           intent,
           reason,
+          ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
           runScope: "global",
           sessionKey: requestedSessionKey,
           tasks: requestedTasks,

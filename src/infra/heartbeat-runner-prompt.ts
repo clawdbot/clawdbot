@@ -114,6 +114,7 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   dueCommitments: CommitmentRecord[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
+  authoritativeScheduledTick: boolean;
   skipReason?: HeartbeatSkipReason;
   scratchJobId?: string;
   scratchRevision?: number;
@@ -128,6 +129,7 @@ export async function resolveHeartbeatPreflight(params: {
   forcedSessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
+  scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
   nowMs?: number;
 }): Promise<HeartbeatPreflight> {
@@ -204,6 +206,10 @@ export async function resolveHeartbeatPreflight(params: {
     dueCommitments,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
+    authoritativeScheduledTick:
+      typeof params.scheduledEveryMs === "number" &&
+      Number.isSafeInteger(params.scheduledEveryMs) &&
+      params.scheduledEveryMs > 0,
     ...(monitorScratch?.jobId
       ? {
           scratchJobId: monitorScratch.jobId,
@@ -222,6 +228,7 @@ export async function resolveHeartbeatPreflight(params: {
   // queued. Treat that stale wake as consumed without touching unrelated events.
   if (
     wakeFlags.isExecEventWake &&
+    !basePreflight.authoritativeScheduledTick &&
     !params.scheduledTasks?.length &&
     !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
   ) {
@@ -400,6 +407,9 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     );
+  }
+  if (preflight.isExecEventWake && !params.hasExecCompletion) {
+    return [];
   }
   return preflight.pendingEventEntries;
 }
