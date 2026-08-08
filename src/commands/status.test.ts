@@ -1151,7 +1151,13 @@ describe("statusCommand", () => {
     expect(vi.isMockFunction(freshTotalTokensMock)).toBe(true);
     // The real resolvers reject negative totals, so these controls prove the mock is live.
     expect(totalTokensMock({ totalTokens: -1 })).toBe(-1);
-    expect(freshTotalTokensMock({ totalTokens: -1 })).toBe(-1);
+    expect(
+      freshTotalTokensMock({
+        totalTokens: -1,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    ).toBe(-1);
   });
 
   it("surfaces stale usage when totalTokens is preserved but not fresh", async () => {
