@@ -1,7 +1,8 @@
 // Telegram message-like update registration and cache/dispatch ordering.
 import type { Message } from "grammy/types";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
 import type { TelegramHandlerInboundRuntime } from "./bot-handlers.inbound.runtime.js";
@@ -310,7 +311,30 @@ export function registerTelegramMessageHandlers(
       businessConnectionId,
       fetchConnection: () => bot.api.getBusinessConnection(businessConnectionId),
     });
-    if (msg.from?.id != null && connection?.userId === msg.from.id) {
+    // Fail closed: an unresolved connection means we cannot tell whether this
+    // is the owner's own echo or verify it is still active, and a disabled
+    // connection must never reach the agent — Telegram can still deliver a
+    // straggling business_message after business_connection reports
+    // is_enabled=false. Either way, do not record or dispatch.
+    if (!connection) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "telegram",
+        reason: "business connection could not be resolved (hydration failed)",
+        target: businessConnectionId,
+      });
+      return;
+    }
+    if (!connection.isEnabled) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "telegram",
+        reason: "business connection is disabled",
+        target: businessConnectionId,
+      });
+      return;
+    }
+    if (msg.from?.id != null && connection.userId === msg.from.id) {
       return;
     }
     const isForum = await resolveTelegramForumFlag({

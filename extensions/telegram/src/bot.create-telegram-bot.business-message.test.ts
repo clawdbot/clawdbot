@@ -200,6 +200,35 @@ describe("createTelegramBot business_message", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("fails closed and does not dispatch an agent run when connection hydration fails", async () => {
+    // beforeEach already primes getBusinessConnectionSpy to reject, and no
+    // business_connection push was received in this test, so
+    // resolveBusinessConnection has neither a cache hit nor a successful
+    // live fetch to fall back on.
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("business_message");
+
+    await messageHandler(
+      businessMessageContext({ fromId: CUSTOMER_USER_ID, messageId: 10, text: "ping" }),
+    );
+
+    expect(getBusinessConnectionSpy).toHaveBeenCalledWith(CONNECTION_ID);
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and does not dispatch an agent run for a disabled connection", async () => {
+    createTelegramBot({ token: "tok" });
+    const connectionHandler = getOnHandler("business_connection");
+    const messageHandler = getOnHandler("business_message");
+
+    await connectionHandler(businessConnectionUpdate({ isEnabled: false }));
+    await messageHandler(
+      businessMessageContext({ fromId: CUSTOMER_USER_ID, messageId: 11, text: "ping" }),
+    );
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
   it("hydrates an unknown connection via getBusinessConnection on cache miss (post-restart)", async () => {
     getBusinessConnectionSpy.mockReset();
     getBusinessConnectionSpy.mockResolvedValue({
