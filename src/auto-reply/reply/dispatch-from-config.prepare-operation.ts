@@ -20,6 +20,7 @@ import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -145,6 +146,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   }
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
+  const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
+  if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
+    return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+  }
   const preDispatchAcquisition = await state.ensureDispatchReplyOperation("pre_dispatch");
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };

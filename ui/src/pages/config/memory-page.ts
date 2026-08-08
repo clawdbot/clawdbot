@@ -2,7 +2,6 @@
 // this element owns the shared agent selection, Overview status, and global
 // configuration controllers used by Settings.
 import { consume } from "@lit/context";
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -15,8 +14,8 @@ import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   loadPluginCatalog,
@@ -383,7 +382,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       }
       this.overviewStatus = {
         kind: "error",
-        message: formatErrorMessage(error, { redact: redactToolDetail }),
+        message: formatUiError(error),
       };
     } finally {
       if (this.overviewRequest === request) {
@@ -497,10 +496,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.connection === connection) {
-        this.addonErrors = new Map(this.addonErrors).set(
-          pluginId,
-          formatErrorMessage(error, { redact: redactToolDetail }),
-        );
+        this.addonErrors = new Map(this.addonErrors).set(pluginId, formatUiError(error));
       }
     } finally {
       if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
@@ -553,7 +549,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       if (this.connection === connection) {
         this.engineOutcome = {
           kind: "error",
-          message: formatErrorMessage(error, { redact: redactToolDetail }),
+          message: formatUiError(error),
         };
       }
     } finally {

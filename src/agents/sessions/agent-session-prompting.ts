@@ -16,6 +16,7 @@ import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
+import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
@@ -336,6 +337,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -355,6 +357,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         : undefined,
       media,
       imageOrder,
+      queueIdentity,
     );
   }
 
@@ -390,6 +393,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     },
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
@@ -397,6 +401,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
+    setSteeringMessageIdentity(promptMessage, queueIdentity);
     this.agent.steer(
       transcriptContext
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)

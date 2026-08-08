@@ -852,7 +852,15 @@ export function startDiagnosticStabilityRecorder(): void {
     if (event.type === "telemetry.exporter") {
       return;
     }
-    if (metadata.trusted || event.type === "log.record") {
+    // Model-call instrumentation is trusted core telemetry required by recovery.
+    // Other trusted events retain their dedicated owners outside this ring.
+    if (
+      (metadata.trusted &&
+        event.type !== "model.call.started" &&
+        event.type !== "model.call.completed" &&
+        event.type !== "model.call.error") ||
+      event.type === "log.record"
+    ) {
       return;
     }
     appendRecord(sanitizeDiagnosticEvent(event));

@@ -789,7 +789,7 @@ describe("qa scenario catalog", () => {
     const scenario = requireFlowScenario(readQaScenarioById("model-switch-follow-up"));
     const flow = JSON.stringify(scenario.execution.flow);
 
-    expect(flow).toContain("alternate?.model");
+    expect(flow).toContain("expectedAlternate.model");
     expect(flow).toContain("config.followupPrompt");
     expect(flow).not.toContain("gpt-5.6-luna-alt");
   });

@@ -601,29 +601,19 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const runPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({ opts: { runId: "queued-turn-attribution" } }),
-    );
+    const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(registerAgentRunContext).toHaveBeenCalledWith(
-      "queued-turn-attribution",
+      expect.any(String),
       expect.objectContaining({
         sessionKey: "main",
         sessionId: "session",
-        attribution: expect.objectContaining({
-          runId: "queued-turn-attribution",
-          sessionKey: "main",
-          sessionId: "session",
-        }),
       }),
     );
-    const attribution = registerAgentRunContext.mock.calls[0]?.[1]?.attribution;
-    expect(Object.isFrozen(attribution)).toBe(true);
     expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
 
     resolveImages?.();
     await runPromise;
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.attribution).toBe(attribution);
   });
 
   it("clears run ownership when image preflight fails", async () => {

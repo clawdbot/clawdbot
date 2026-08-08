@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
       "state": 6,
@@ -48,7 +48,6 @@
     "!dist/plugin-sdk/agent-core.d.ts",
     "!dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-task-runtime.d.ts",
-    "!dist/plugin-sdk/agent-harness-tool-authority-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-tool-runtime.d.ts",
     "!dist/plugin-sdk/agent-runtime-test-contracts.js",
     "!dist/plugin-sdk/agent-runtime-test-contracts.d.ts",

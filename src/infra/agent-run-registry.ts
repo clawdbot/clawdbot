@@ -1,16 +1,11 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import type { AgentExecutionAttribution } from "../agents/agent-execution-attribution.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { retireAgentRunContext } from "./agent-run-context-retirement.js";
-import { captureAgentRunExecutionContextLifecycleToken } from "./agent-run-execution-context.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 type AgentRunContext = {
-  /** Immutable admission-owned correlation; later context merges cannot replace it. */
-  readonly attribution?: AgentExecutionAttribution;
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -47,19 +42,13 @@ type AgentRunContextOwnership = {
 type AgentRunRegistryState = {
   contexts: Map<string, AgentRunContext>;
   owners: Map<string, AgentRunContextOwnership>;
-  activeRunContextLeases?: WeakMap<AgentRunContext, number>;
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
   lifecycleGeneration: string;
-  sequenceResetHandler?: (runId: string, lifecycleGeneration?: string) => void;
+  sequenceResetHandler?: (runId: string) => void;
   version: number;
 };
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
-const AGENT_RUN_CONTEXT_LIFECYCLE_TOKEN = Symbol.for(
-  "openclaw.agentRunRegistry.contextLifecycleToken",
-);
-
-export class AgentRunAttributionCollisionError extends TypeError {}
 
 function getAgentRunRegistryState(): AgentRunRegistryState {
   return resolveGlobalSingleton<AgentRunRegistryState>(AGENT_RUN_REGISTRY_STATE_KEY, () => ({
@@ -72,111 +61,6 @@ function getAgentRunRegistryState(): AgentRunRegistryState {
 
 function bumpAgentRunIndexVersion(): void {
   getAgentRunRegistryState().version += 1;
-}
-
-function attachAgentExecutionAttribution(
-  context: AgentRunContext,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  if (!attribution || context.attribution) {
-    return;
-  }
-  Object.defineProperty(context, "attribution", {
-    value: attribution,
-    enumerable: true,
-    configurable: false,
-    writable: false,
-  });
-}
-
-/** Rejects a same-generation run id that is already bound to different private identity. */
-export function assertAgentRunAttributionCompatible(
-  existingAttribution: AgentExecutionAttribution | undefined,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  if (existingAttribution && !attribution) {
-    throw new AgentRunAttributionCollisionError(
-      "Agent run ID is already bound to host-owned execution attribution.",
-    );
-  }
-  if (
-    existingAttribution &&
-    attribution &&
-    (existingAttribution.contextId !== attribution.contextId ||
-      existingAttribution.executionId !== attribution.executionId ||
-      existingAttribution.createdAt !== attribution.createdAt)
-  ) {
-    throw new AgentRunAttributionCollisionError(
-      "Agent run ID is already bound to different execution attribution.",
-    );
-  }
-}
-
-/**
- * Atomically reserves current-generation attribution before admission audit capture.
- * The first admission owns the immutable value; later conflicting callers fail closed.
- */
-export function reserveAgentRunAttribution(
-  runId: string,
-  lifecycleGeneration: string,
-  attribution: AgentExecutionAttribution,
-): AgentExecutionAttribution {
-  if (attribution.runId !== runId) {
-    throw new TypeError("Agent run attribution runId does not match the reserved runId.");
-  }
-  if (attribution.lifecycleGeneration !== lifecycleGeneration) {
-    throw new TypeError(
-      "Agent run attribution lifecycleGeneration does not match the reserved generation.",
-    );
-  }
-  const state = getAgentRunRegistryState();
-  const existing = state.contexts.get(runId);
-  if (existing?.lifecycleGeneration === lifecycleGeneration) {
-    assertAgentRunAttributionCompatible(existing.attribution, attribution);
-    attachAgentExecutionAttribution(existing, attribution);
-    return existing.attribution ?? attribution;
-  }
-  // Stale callers fail the normal lifecycle guard without replacing a current run.
-  if (lifecycleGeneration !== state.lifecycleGeneration) {
-    return attribution;
-  }
-  state.owners.delete(runId);
-  state.contexts.set(
-    runId,
-    createAgentRunContext(
-      {
-        attribution,
-        sessionKey: attribution.sessionKey,
-        sessionId: attribution.sessionId,
-        agentId: attribution.agentId,
-      },
-      lifecycleGeneration,
-    ),
-  );
-  state.sequenceResetHandler?.(runId);
-  clearAgentRunUsage(runId);
-  bumpAgentRunIndexVersion();
-  return attribution;
-}
-
-function createAgentRunContext(
-  context: AgentRunContext,
-  lifecycleGeneration: string,
-): AgentRunContext {
-  const { attribution, ...fields } = context;
-  const stored: AgentRunContext = {
-    ...fields,
-    lifecycleGeneration,
-    registeredAt: context.registeredAt ?? Date.now(),
-  };
-  Object.defineProperty(stored, AGENT_RUN_CONTEXT_LIFECYCLE_TOKEN, {
-    value: Object.freeze({}),
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  attachAgentExecutionAttribution(stored, attribution);
-  return stored;
 }
 
 /** Reads the process-local version of the active-run projection inputs. */
@@ -196,9 +80,7 @@ export function rotateAgentRunRegistryLifecycleGeneration(): string {
 }
 
 /** Connects registry cleanup to the event sequencer without reversing ownership. */
-export function registerAgentRunSequenceResetHandler(
-  handler: (runId: string, lifecycleGeneration?: string) => void,
-): void {
+export function registerAgentRunSequenceResetHandler(handler: (runId: string) => void): void {
   getAgentRunRegistryState().sequenceResetHandler = handler;
 }
 
@@ -223,9 +105,11 @@ export function registerAgentRunContext(
   }
   const existing = state.contexts.get(runId);
   if (!existing) {
-    const stored = createAgentRunContext(context, lifecycleGeneration);
-    state.contexts.set(runId, stored);
-    captureAgentRunContextLifecycleToken(runId, lifecycleGeneration, stored);
+    state.contexts.set(runId, {
+      ...context,
+      lifecycleGeneration,
+      registeredAt: context.registeredAt ?? Date.now(),
+    });
     bumpAgentRunIndexVersion();
     return;
   }
@@ -236,7 +120,6 @@ export function registerAgentRunContext(
   ) {
     return;
   }
-  attachAgentExecutionAttribution(existing, context.attribution);
   let runIndexChanged = false;
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
@@ -283,7 +166,6 @@ export function registerAgentRunContext(
   if (runIndexChanged) {
     bumpAgentRunIndexVersion();
   }
-  captureAgentRunContextLifecycleToken(runId, lifecycleGeneration, existing);
 }
 
 /** Claims a run id for a newly admitted execution, replacing stale ownership. */
@@ -359,20 +241,12 @@ export function claimAgentRunContext(
     }
     return claimId;
   }
-  state.sequenceResetHandler?.(runId, existing?.lifecycleGeneration);
-  if (existing) {
-    retireAgentRunContext(
-      runId,
-      existing.lifecycleGeneration,
-      "replaced",
-      existing.lifecycleGeneration
-        ? getAgentRunContextLifecycleToken(runId, existing.lifecycleGeneration)
-        : undefined,
-    );
-  }
-  const stored = createAgentRunContext(context, lifecycleGeneration);
-  state.contexts.set(runId, stored);
-  captureAgentRunContextLifecycleToken(runId, lifecycleGeneration, stored);
+  state.contexts.set(runId, {
+    ...context,
+    lifecycleGeneration,
+    registeredAt: context.registeredAt ?? Date.now(),
+  });
+  state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
   bumpAgentRunIndexVersion();
   return claimId;
@@ -381,46 +255,6 @@ export function claimAgentRunContext(
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string): AgentRunContext | undefined {
   return getAgentRunRegistryState().contexts.get(runId);
-}
-
-/** Opaque identity for one stored run/lifecycle context; same-generation merges preserve it. */
-export function getAgentRunContextLifecycleToken(
-  runId: string,
-  lifecycleGeneration: string,
-): object | undefined {
-  const context = getAgentRunContext(runId);
-  if (context?.lifecycleGeneration !== lifecycleGeneration) {
-    return undefined;
-  }
-  return getOrCreateAgentRunContextLifecycleToken(context);
-}
-
-function getOrCreateAgentRunContextLifecycleToken(context: AgentRunContext): object {
-  const existing = Reflect.get(context, AGENT_RUN_CONTEXT_LIFECYCLE_TOKEN) as object | undefined;
-  if (existing) {
-    return existing;
-  }
-  // Supports process-local contexts created before this module revision loaded.
-  const token = Object.freeze({});
-  Object.defineProperty(context, AGENT_RUN_CONTEXT_LIFECYCLE_TOKEN, {
-    value: token,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  return token;
-}
-
-function captureAgentRunContextLifecycleToken(
-  runId: string,
-  lifecycleGeneration: string,
-  context: AgentRunContext,
-): void {
-  captureAgentRunExecutionContextLifecycleToken(
-    runId,
-    lifecycleGeneration,
-    getOrCreateAgentRunContextLifecycleToken(context),
-  );
 }
 
 /** Holds an existing run context only while its current execution awaits lane admission. */
@@ -462,40 +296,6 @@ export function retainQueuedAgentRunContext(
       state.lifecycleGeneration === lifecycleGeneration
     ) {
       context.lastActiveAt = Date.now();
-    }
-  };
-}
-
-/**
- * Keeps a currently executing run context live until its runtime owner settles.
- * The caller must release the lease from its terminal/finally boundary.
- */
-export function retainActiveAgentRunContext(
-  runId: string,
-  lifecycleGeneration: string,
-): (() => void) | undefined {
-  const state = getAgentRunRegistryState();
-  const context = state.contexts.get(runId);
-  if (
-    !context ||
-    context.lifecycleGeneration !== lifecycleGeneration ||
-    state.lifecycleGeneration !== lifecycleGeneration
-  ) {
-    return undefined;
-  }
-  const leases = (state.activeRunContextLeases ??= new WeakMap<AgentRunContext, number>());
-  leases.set(context, (leases.get(context) ?? 0) + 1);
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    const remaining = (leases.get(context) ?? 0) - 1;
-    if (remaining > 0) {
-      leases.set(context, remaining);
-    } else {
-      leases.delete(context);
     }
   };
 }
@@ -647,17 +447,9 @@ export function clearAgentRunContext(
     return;
   }
   const removed = state.contexts.delete(runId);
-  state.sequenceResetHandler?.(runId, existing?.lifecycleGeneration);
+  state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
   if (removed) {
-    retireAgentRunContext(
-      runId,
-      existing?.lifecycleGeneration,
-      "cleared",
-      existing?.lifecycleGeneration
-        ? getOrCreateAgentRunContextLifecycleToken(existing)
-        : undefined,
-    );
     bumpAgentRunIndexVersion();
   }
 }
@@ -696,11 +488,10 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
   const now = Date.now();
   let swept = 0;
   for (const [runId, context] of state.contexts) {
-    // Explicit runtime and queue leases are live ownership, but never protect a retired lifecycle.
+    // Queue capacity waits are live ownership, but never protect a retired lifecycle.
     if (
       context.lifecycleGeneration === state.lifecycleGeneration &&
-      ((state.activeRunContextLeases?.get(context) ?? 0) > 0 ||
-        (state.queuedRunContextLeases?.get(context) ?? 0) > 0)
+      (state.queuedRunContextLeases?.get(context) ?? 0) > 0
     ) {
       continue;
     }
@@ -710,15 +501,9 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     const age = lastSeen ? now - lastSeen : Infinity;
     if (age > maxAgeMs) {
       state.contexts.delete(runId);
-      state.sequenceResetHandler?.(runId, context.lifecycleGeneration);
+      state.sequenceResetHandler?.(runId);
       clearAgentRunUsage(runId, context.lifecycleGeneration);
       state.owners.delete(runId);
-      retireAgentRunContext(
-        runId,
-        context.lifecycleGeneration,
-        "swept",
-        getOrCreateAgentRunContextLifecycleToken(context),
-      );
       swept += 1;
     }
   }
@@ -732,17 +517,8 @@ export function resetAgentRunRegistryForTest(): void {
   const state = getAgentRunRegistryState();
   const hadRunContexts = state.contexts.size > 0;
   resetAgentRunUsageForTest();
-  for (const [runId, context] of state.contexts) {
-    retireAgentRunContext(
-      runId,
-      context.lifecycleGeneration,
-      "reset",
-      getOrCreateAgentRunContextLifecycleToken(context),
-    );
-  }
   state.contexts.clear();
   state.owners.clear();
-  state.activeRunContextLeases = undefined;
   state.queuedRunContextLeases = undefined;
   if (hadRunContexts) {
     bumpAgentRunIndexVersion();

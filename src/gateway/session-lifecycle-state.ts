@@ -1,6 +1,7 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -17,7 +18,7 @@ import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
-import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type LifecyclePhase = "start" | "end" | "error";
 

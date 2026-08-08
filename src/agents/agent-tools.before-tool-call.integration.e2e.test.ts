@@ -34,10 +34,8 @@ import {
 } from "../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
-import { bindToolExecutionAttribution } from "./agent-tools.before-tool-call.attribution.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -1658,9 +1656,7 @@ describe("before_tool_call adapter and client tool integration", () => {
       approveVoiceToolParams(runId, toolParams);
       const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
       const preparedState = new WeakMap<object, string>();
-      const preparationContexts: Array<Record<string, unknown>> = [];
-      const prepareBeforeToolCallParams = vi.fn((params: unknown, context: unknown) => {
-        preparationContexts.push(context as Record<string, unknown>);
+      const prepareBeforeToolCallParams = vi.fn((params: unknown) => {
         const prepared = { ...(params as Record<string, unknown>) };
         preparedState.set(prepared, "prepared");
         return prepared;
@@ -1677,21 +1673,7 @@ describe("before_tool_call adapter and client tool integration", () => {
         prepareBeforeToolCallParams,
         finalizeBeforeToolCallParams,
       } as unknown as AnyAgentTool;
-      const hookContext = bindToolExecutionAttribution(
-        {
-          runId: "run-flat-forged",
-          agentId: "flat-forged",
-          sessionKey: "agent:flat:forged",
-          sessionId: "session-flat-forged",
-        },
-        createAgentExecutionAttribution({
-          runId,
-          lifecycleGeneration: "generation-private",
-          agentId: "main",
-          sessionKey: "agent:main:voice",
-          sessionId: "session-voice",
-        }),
-      );
+      const hookContext = { runId, agentId: "main", sessionKey: "agent:main:voice" };
       const tool =
         pathKind === "wrapped"
           ? wrapToolWithBeforeToolCallHook(sourceTool, hookContext)
@@ -1724,16 +1706,6 @@ describe("before_tool_call adapter and client tool integration", () => {
       });
       expect(execute).toHaveBeenCalledOnce();
       expect(prepareBeforeToolCallParams).toHaveBeenCalledTimes(2);
-      for (const context of preparationContexts) {
-        expect(context.hookContext).toMatchObject({
-          runId,
-          agentId: "main",
-          sessionKey: "agent:main:voice",
-          sessionId: "session-voice",
-        });
-        expect(context.hookContext).not.toHaveProperty("attribution");
-        expect(context.hookContext).not.toHaveProperty("lifecycleGeneration");
-      }
       expect(finalizeBeforeToolCallParams).toHaveBeenCalledOnce();
       expect(execute).toHaveBeenCalledWith(
         `call-voice-unchanged-${pathKind}-1`,

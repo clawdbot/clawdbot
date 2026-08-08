@@ -674,7 +674,11 @@ function configuredChannelIdsForLane(poolLane, scenario) {
 
 export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
   const configuredChannelIds = new Set();
+  const requiredPackages = new Set();
   for (const poolLane of poolLanes) {
+    for (const packageName of poolLane.prepublishPluginPackages ?? []) {
+      requiredPackages.add(packageName);
+    }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;
@@ -683,7 +687,7 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
       configuredChannelIds.add(channelId);
     }
   }
-  return (officialExternalChannelCatalog.entries ?? [])
+  for (const packageName of (officialExternalChannelCatalog.entries ?? [])
     .filter((entry) => {
       const channelId = entry.openclaw?.channel?.id;
       const install = entry.openclaw?.install;
@@ -694,8 +698,10 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
         install?.npmSpec === entry.name
       );
     })
-    .map((entry) => entry.name)
-    .toSorted((a, b) => a.localeCompare(b));
+    .map((entry) => entry.name)) {
+    requiredPackages.add(packageName);
+  }
+  return [...requiredPackages].toSorted((a, b) => a.localeCompare(b));
 }
 
 function buildPlanJson(params) {
