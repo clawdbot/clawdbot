@@ -302,13 +302,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         resolveAzureDeploymentName(model),
         metadata,
       ),
-    createResponseStream: async ({ client, request, requestOptions, observePrompt }) => {
-      observePrompt?.(request, { egress: "responses-sdk", payloadVariant: "initial" });
-      const { data, response } = await client.responses
-        .create(request as never, requestOptions)
-        .withResponse();
-      return { stream: data as unknown as AsyncIterable<unknown>, response };
-    },
+    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
   });
 }
 
