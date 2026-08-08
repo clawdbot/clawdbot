@@ -517,7 +517,9 @@ export function createAcpReplyProjector(params: {
       return;
     }
 
-    if (event.type === "done" || event.type === "error") {
+    // Streamed terminal events can precede outer turn completion. Final-only
+    // state stays with dispatch until runTurn settles and its caller flushes.
+    if ((event.type === "done" || event.type === "error") && settings.deliveryMode === "live") {
       await flush(true);
       resetTurnState();
     }

@@ -231,6 +231,8 @@ describe("createAcpReplyProjector", () => {
     allowToolSummaries = false;
 
     await finishTurn(projector);
+    expect(deliveries).toEqual([]);
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "done" }]);
   });
@@ -259,6 +261,8 @@ describe("createAcpReplyProjector", () => {
     allowToolSummaries = false;
 
     await finishTurn(projector);
+    expect(deliveries).toEqual([]);
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "fallback.\n\nI don't" }]);
   });
@@ -269,7 +273,7 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, "A");
     await finishTurn(projector, { type: "done", stopReason: "end_turn" });
     await emitText(projector, "A");
-    await finishTurn(projector, { type: "done", stopReason: "end_turn" });
+    await finishTurn(projector, { type: "error", message: "turn failed" });
 
     expect(blockDeliveries(deliveries)).toEqual([
       { kind: "block", text: "A" },
@@ -328,7 +332,7 @@ describe("createAcpReplyProjector", () => {
     }
   });
 
-  it("supports deliveryMode=final_only by buffering all projected output until done", async () => {
+  it("keeps final-only output buffered across streamed terminal events", async () => {
     const { deliveries, projector } = createFinalOnlyStatusToolHarness();
 
     await emitText(projector, "What");
@@ -340,10 +344,12 @@ describe("createAcpReplyProjector", () => {
       title: "List files",
       text: "List files (in_progress)",
     });
-    await emitText(projector, " now?");
-    expect(deliveries).toStrictEqual([]);
-
     await finishTurn(projector);
+    await emitText(projector, " now?");
+    await finishTurn(projector, { type: "error", message: "intermediate failure" });
+
+    expect(deliveries).toStrictEqual([]);
+    await projector.flush(true);
     expect(deliveries).toHaveLength(3);
     expect(deliveries[0]).toEqual({
       kind: "tool",
@@ -353,7 +359,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
   });
 
-  it("flushes buffered status/tool output on error in deliveryMode=final_only", async () => {
+  it("flushes buffered status/tool output at final-only outer settlement", async () => {
     const { deliveries, projector } = createFinalOnlyStatusToolHarness();
 
     await emitStatus(projector, "available commands updated (7)", "available_commands_update");
@@ -367,6 +373,8 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toStrictEqual([]);
 
     await finishTurn(projector, { type: "error", message: "turn failed" });
+    expect(deliveries).toStrictEqual([]);
+    await projector.flush(true);
     expect(deliveries).toHaveLength(2);
     expect(deliveries[0]).toEqual({
       kind: "tool",

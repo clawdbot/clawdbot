@@ -629,6 +629,27 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("settles final-only output once after streamed terminal events", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "Before tools. ", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+        await onEvent({ type: "text_delta", text: "After tools.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      },
+    );
+
+    const result = await runDispatch({ bodyForAgent: "reply", dispatcher });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Before tools. After tools.");
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(result?.queuedFinal).toBe(true);
+  });
+
   it("persists ACP transcript when routed delivery fails", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");
