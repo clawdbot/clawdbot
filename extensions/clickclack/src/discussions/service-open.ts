@@ -482,7 +482,9 @@ export async function openClickClackDiscussionBinding(
       section: currentSection,
       archived: false,
       label: currentLabel,
-      displayTitle: "display_title" in currentChannel ? currentChannel.display_title : undefined,
+      ...(currentChannel.display_title !== undefined
+        ? { displayTitle: currentChannel.display_title }
+        : {}),
     };
     try {
       store.set(sessionKey, nextBinding);

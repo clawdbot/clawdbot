@@ -182,7 +182,6 @@ describe("resolveGatewayConnection", () => {
           token: undefined,
           password: undefined,
           tlsFingerprint: "sha256:selected",
-          allowInsecureLocalOperatorUi: false,
         });
         expect(loadConfig).not.toHaveBeenCalled();
       },
@@ -220,7 +219,6 @@ describe("resolveGatewayConnection", () => {
       url: "wss://override.example/ws",
       ...expected,
       preauthHandshakeTimeoutMs: undefined,
-      allowInsecureLocalOperatorUi: false,
     });
   });
 
@@ -590,46 +588,6 @@ describe("resolveGatewayConnection", () => {
       },
     );
   });
-
-  it("keeps loopback local connections on device-authenticated operator UI", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        controlUi: {
-          allowInsecureAuth: true,
-        },
-        auth: {
-          mode: "token",
-          token: "config-token",
-        },
-      },
-    });
-
-    const result = await resolveGatewayConnection({});
-    expect(result.allowInsecureLocalOperatorUi).toBe(false);
-  });
-
-  it("keeps a loopback URL override on device-authenticated operator UI", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        controlUi: {
-          allowInsecureAuth: true,
-        },
-        auth: {
-          mode: "token",
-          token: "config-token",
-        },
-      },
-    });
-
-    const result = await resolveGatewayConnection({
-      url: "ws://127.0.0.1:18791",
-      token: "override-token",
-    });
-    expect(result.allowInsecureLocalOperatorUi).toBe(false);
-    expect(result.token).toBe("override-token");
-  });
 });
 
 describe("GatewayChatClient", () => {
@@ -641,7 +599,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     let finishStop: (() => void) | undefined;
     const stopAndWait = vi.fn(
@@ -691,10 +648,8 @@ describe("GatewayChatClient", () => {
         token: "test-token",
         tlsFingerprint: "sha256:11:22:33:44",
         preauthHandshakeTimeoutMs: 30_000,
-        allowInsecureLocalOperatorUi: true,
       });
 
-      expect(client.connection.allowInsecureLocalOperatorUi).toBe(true);
       expect(constructedOptions).toHaveLength(1);
       expect(constructedOptions[0]).toMatchObject({
         clientName: "openclaw-tui",
@@ -703,8 +658,8 @@ describe("GatewayChatClient", () => {
         scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
-        deviceIdentity: null,
       });
+      expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");
       const onConnectError = vi.fn();
       const onDisconnected = vi.fn();
       client.onConnectError = onConnectError;
@@ -761,7 +716,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     client.onDisconnected = onDisconnected;
 
@@ -783,7 +737,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi
       .fn()
@@ -811,7 +764,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi.fn().mockResolvedValue({ messages: [] });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -850,7 +802,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -867,7 +818,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi
       .fn()
@@ -896,7 +846,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi
       .fn()
@@ -933,7 +882,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi
       .fn()
@@ -971,7 +919,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi.fn().mockResolvedValue({ runId: "run-gateway", status: "timeout" });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
@@ -989,7 +936,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const command = {
       name: "tts",
@@ -1016,7 +962,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const pending = [{ id: "plugin:skill-1" }];
     const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
@@ -1038,7 +983,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const suggestion = {
       id: "task_1",
@@ -1082,7 +1026,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     client.hello = {
       features: {
@@ -1101,7 +1044,6 @@ describe("GatewayChatClient", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
-      allowInsecureLocalOperatorUi: true,
     });
     const request = vi.fn();
     client.hello = { features: { methods: ["chat.history"] } } as never;

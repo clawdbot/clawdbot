@@ -27,6 +27,11 @@ describe("normalizeTarget", () => {
     ["qqbot:Group:GroupOpenId", "qqbot:group:GroupOpenId"],
     ["C2C:OpenId", "qqbot:c2c:OpenId"],
     ["qqbot:channel:ChannelId", "qqbot:channel:ChannelId"],
+    ["qqbot:0123456789abcdef0123456789abcdef", "qqbot:c2c:0123456789abcdef0123456789abcdef"],
+    [
+      "QQBOT:01234567-89ab-cdef-0123-456789abcdef",
+      "qqbot:c2c:01234567-89ab-cdef-0123-456789abcdef",
+    ],
   ])("normalizes %s to %s", (to, normalized) => {
     expect(looksLikeQQBotTarget(to)).toBe(true);
     expect(normalizeTarget(to)).toBe(normalized);

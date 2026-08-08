@@ -35,10 +35,19 @@ export type QaMockProviderDispatchResult = {
   failure?: QaMockProviderFailure;
   onResponseSent?: () => void;
   previewPauseMs?: number;
+  responsePauseMs?: number;
 };
 
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
+  | {
+      type: "response.failed";
+      response: {
+        id: string;
+        status: "failed";
+        error?: { code: string; message: string };
+      };
+    }
   | {
       type: "response.output_item.added";
       output_index?: number;
@@ -220,6 +229,10 @@ export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
   /empty response after write recovery qa check/i;
+export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
+  /repeated request queued reply gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;

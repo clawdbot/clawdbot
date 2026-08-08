@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
@@ -10,6 +14,8 @@ import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js"
 
 function createContext(): GatewayRequestContext {
   return {
+    deps: {},
+    getRuntimeConfig: () => ({}),
     logGateway: {
       warn: vi.fn(),
       error: vi.fn(),
@@ -66,6 +72,76 @@ describe("createGatewayInstanceRuntime", () => {
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
+  });
+
+  it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
+    await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
+      const sendText = vi.fn(async () => ({ channel: "signal", messageId: "signal-message-1" }));
+      const handleAction = vi.fn(async () => {
+        throw new Error("recovery notice must not invoke message actions");
+      });
+      const plugin: ChannelPlugin = {
+        id: "signal",
+        meta: {
+          id: "signal",
+          label: "Signal",
+          selectionLabel: "Signal",
+          docsPath: "/channels/signal",
+          blurb: "Signal-shaped recovery test plugin.",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["work"],
+          resolveAccount: () => ({}),
+          isConfigured: () => true,
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: () => false,
+          handleAction,
+        },
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
+          sendText,
+        },
+      };
+      setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", source: "test", plugin }]));
+      const context = {
+        ...createContext(),
+        getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
+      } as GatewayRequestContext;
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+
+      try {
+        await runtime.recovery.sendRecoveryNotice({
+          channel: "signal",
+          to: "+15551234567",
+          accountId: "work",
+          threadId: "thread-1",
+          text: "Recovery notice",
+          idempotencyKey: "main-session-restart-recovery:run-1:failed-notice",
+        });
+
+        expect(sendText).toHaveBeenCalledOnce();
+        expect(sendText).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to: "+15551234567",
+            accountId: "work",
+            threadId: "thread-1",
+            text: "Recovery notice",
+          }),
+        );
+        expect(handleAction).not.toHaveBeenCalled();
+      } finally {
+        runtime.close();
+        setActivePluginRegistry(createTestRegistry([]));
+      }
+    });
   });
 
   it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", () => {

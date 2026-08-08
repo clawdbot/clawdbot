@@ -262,7 +262,11 @@ export async function planClawPackageRemovals(
       continue;
     }
     if (!managedCleanup && !explicitlySelected && cleanup.mode !== "remove-if-unused") {
-      retain("Referenced resources are retained unless a cleanup mode selects them.");
+      retain(
+        packageRef.origin === "claw-introduced"
+          ? "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it."
+          : "Referenced resources are retained unless a separate cleanup mode selects them.",
+      );
       continue;
     }
     if (!explicitlySelected && affectedClawAgentIds.length > 0) {

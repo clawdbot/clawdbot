@@ -320,11 +320,12 @@ describe("createPtyAdapter", () => {
       const stub = createStubPty();
       spawnMock.mockReturnValue(stub);
 
-      await createPtyAdapter({
+      const adapter = await createPtyAdapter({
         shell: "bash",
         args: ["-lc", "env"],
         env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv", TERM: "dumb" },
       });
+      expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);

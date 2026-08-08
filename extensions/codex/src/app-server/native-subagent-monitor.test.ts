@@ -5,6 +5,7 @@ import type {
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
@@ -21,9 +22,6 @@ type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagen
 function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
   type ThreadTurnsParams = { threadId?: string };
-  type NotificationHandler = (notification: CodexServerNotification) => Promise<void> | void;
-  const notificationHandlers = new Set<NotificationHandler>();
-  const closeHandlers = new Set<() => void>();
   const threadReads = new Map<
     string,
     | CodexThreadReadResponse
@@ -31,7 +29,7 @@ function createClient() {
     | ((params: ThreadReadParams) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>)
   >();
   const threadTurns = new Map<string, JsonValue | Error>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
     if (method === "thread/turns/list") {
       const childThreadId = ((params as ThreadTurnsParams | undefined) ?? {}).threadId ?? "";
       const response = threadTurns.get(childThreadId);
@@ -58,7 +56,7 @@ function createClient() {
     return typeof response === "function" ? await response(readParams) : response;
   });
   return {
-    request,
+    request: fixture.request,
     setThreadRead(childThreadId: string, response: CodexThreadReadResponse | Error) {
       threadReads.set(childThreadId, response);
     },
@@ -73,25 +71,10 @@ function createClient() {
     setThreadTurns(childThreadId: string, response: JsonValue | Error) {
       threadTurns.set(childThreadId, response);
     },
-    addNotificationHandler(handler: NotificationHandler) {
-      notificationHandlers.add(handler);
-      return () => notificationHandlers.delete(handler);
-    },
-    addCloseHandler(handler: (client: never) => void) {
-      const closeHandler = () => handler(undefined as never);
-      closeHandlers.add(closeHandler);
-      return () => closeHandlers.delete(closeHandler);
-    },
-    async notify(notification: CodexServerNotification) {
-      await Promise.all(
-        [...notificationHandlers].map(async (handler) => await handler(notification)),
-      );
-    },
-    close() {
-      for (const handler of closeHandlers) {
-        handler();
-      }
-    },
+    addNotificationHandler: fixture.client.addNotificationHandler.bind(fixture.client),
+    addCloseHandler: fixture.client.addCloseHandler.bind(fixture.client),
+    notify: (notification: CodexServerNotification) => fixture.notify(notification),
+    close: () => fixture.close(),
   };
 }
 
@@ -350,6 +333,45 @@ function taskRecord(params: {
 }
 
 describe("CodexNativeSubagentMonitor", () => {
+  it("pins a parent subscription until its final independently running child settles", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseParentThread = vi.fn();
+    const retainParentThread = vi.fn(() => releaseParentThread);
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+      retainParentThread,
+    });
+    const parent = registerParent(monitor);
+
+    await notifyChildStarted(client, "parent-thread", "child-a");
+    await notifyChildStarted(client, "parent-thread", "child-b");
+    parent.unregister();
+
+    expect(retainParentThread).toHaveBeenCalledExactlyOnceWith("parent-thread");
+    await client.notify(nativeCompletionNotification({ agentPath: "child-a" }));
+    expect(releaseParentThread).not.toHaveBeenCalled();
+    await client.notify(nativeCompletionNotification({ agentPath: "child-b" }));
+
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+    monitor.dispose();
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+  });
+
+  it("releases detached parent subscription pins when its physical client closes", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseParentThread = vi.fn();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+      retainParentThread: () => releaseParentThread,
+    });
+    registerParent(monitor);
+    await notifyChildStarted(client);
+
+    client.close();
+
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+  });
+
   it("keeps native subagent task mirroring on the shared client", async () => {
     const client = createClient();
     const runtime = createRuntime();

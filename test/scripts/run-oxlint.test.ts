@@ -495,6 +495,13 @@ describe("run-oxlint", () => {
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
   });
 
+  it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(
+    "rejects shard selectors without a name: %s",
+    (...args) => {
+      expect(() => parseShardRunnerArgs(args)).toThrow("--only requires a shard name");
+    },
+  );
+
   it("filters split core shards by shard family", () => {
     const shards = filterOxlintShards(
       createOxlintShards({
@@ -510,6 +517,44 @@ describe("run-oxlint", () => {
       "core:ui",
       "core:packages",
     ]);
+  });
+
+  it.each([
+    { selectors: ["wat"], message: "Unknown oxlint shard selector: wat" },
+    {
+      selectors: ["core", "wat"],
+      message: "Unknown oxlint shard selector: wat",
+    },
+  ])("rejects unmatched shard selectors: $selectors", ({ selectors, message }) => {
+    expect(() =>
+      filterOxlintShards(createOxlintShards({ cwd: "/repo" }), new Set(selectors)),
+    ).toThrow(message);
+  });
+
+  it.each([
+    ["--only"],
+    ["--only", "--split-core"],
+    ["--only="],
+    ["--only=-h"],
+    ["--only=wat"],
+    ["--only=core", "--only=wat"],
+  ])("rejects invalid shard CLI input before starting work: %s", (...args) => {
+    const tempDir = createTempDir("openclaw-oxlint-selector-");
+    const result = spawnSync(process.execPath, [RUN_OXLINT_SHARDS_URL, ...args], {
+      cwd: tempDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "worktree",
+        OPENCLAW_LOCAL_CHECK: "1",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("[oxlint:");
+    expect(existsSync(join(tempDir, ".artifacts/openclaw-local-checks/heavy-check.lock"))).toBe(
+      false,
+    );
   });
 
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {

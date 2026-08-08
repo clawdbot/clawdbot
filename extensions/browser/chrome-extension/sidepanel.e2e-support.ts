@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright-core";
 import type { expect as VitestExpect } from "vitest";
-import type { RawData } from "ws";
+import { WebSocketServer, type RawData } from "ws";
 
 type CopilotTurnIsolationGateway = {
   chatSends: Array<Record<string, unknown>>;
@@ -55,6 +56,115 @@ export function rawDataText(data: RawData): string {
   return data instanceof ArrayBuffer
     ? Buffer.from(new Uint8Array(data)).toString("utf8")
     : data.toString("utf8");
+}
+
+type RelayHarness = {
+  readonly connectionCount: number;
+  hellos: Array<Record<string, unknown>>;
+  port: number;
+  close: () => Promise<void>;
+  command: (body: Record<string, unknown>) => Promise<unknown>;
+  setAvailable: (available: boolean) => void;
+};
+
+export async function createRelayHarness(): Promise<RelayHarness> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("extension relay test server did not bind a TCP port");
+  }
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 1_000_000,
+    handleProtocols: (protocols) => protocols.values().next().value ?? false,
+  });
+  const hellos: Array<Record<string, unknown>> = [];
+  const pendingCommands = new Map<
+    number,
+    { reject: (error: Error) => void; resolve: (result: unknown) => void }
+  >();
+  let available = true;
+  let connectionCount = 0;
+  let nextCommandSeq = 0;
+  server.on("upgrade", (request, socket, head) => {
+    if (!available) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (client) => {
+      wss.emit("connection", client, request);
+    });
+  });
+  wss.on("connection", (socket) => {
+    connectionCount += 1;
+    socket.on("message", (data) => {
+      const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
+      if (message.type === "hello") {
+        hellos.push(message);
+        return;
+      }
+      const seq = typeof message.seq === "number" ? message.seq : undefined;
+      if (seq === undefined || (message.type !== "result" && message.type !== "error")) {
+        return;
+      }
+      const pending = pendingCommands.get(seq);
+      if (!pending) {
+        return;
+      }
+      pendingCommands.delete(seq);
+      if (message.type === "error") {
+        pending.reject(new Error(textValue(message.message) || "extension relay command failed"));
+      } else {
+        pending.resolve(message.result);
+      }
+    });
+  });
+  return {
+    get connectionCount() {
+      return connectionCount;
+    },
+    hellos,
+    port: address.port,
+    command: async (body) => {
+      const client = [...wss.clients].find((candidate) => candidate.readyState === 1);
+      if (!client) {
+        throw new Error("extension relay client is not connected");
+      }
+      const seq = ++nextCommandSeq;
+      const result = new Promise<unknown>((resolve, reject) => {
+        pendingCommands.set(seq, { resolve, reject });
+      });
+      client.send(JSON.stringify({ ...body, seq }));
+      return await result;
+    },
+    setAvailable: (nextAvailable) => {
+      available = nextAvailable;
+      if (!available) {
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+      }
+    },
+    close: async () => {
+      for (const pending of pendingCommands.values()) {
+        pending.reject(new Error("extension relay harness closed"));
+      }
+      pendingCommands.clear();
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
 }
 
 export async function assertCopilotStaleRunIsolation(params: {

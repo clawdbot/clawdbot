@@ -235,17 +235,15 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
-  const historySnapshot = buildSessionHistorySnapshot({
-    rawMessages: rawSnapshot,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-  });
-  const history = historySnapshot.history;
-
   if (!shouldStreamSse(req)) {
+    const history = buildSessionHistorySnapshot({
+      rawMessages: rawSnapshot,
+      maxChars: effectiveMaxChars,
+      limit,
+      cursor,
+      rawTranscriptSeq: boundedSnapshot?.totalMessages,
+      totalRawMessages: boundedSnapshot?.totalMessages,
+    }).history;
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -266,7 +264,6 @@ export async function handleSessionHistoryHttpRequest(
       )
     : new Set<string>();
 
-  let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       agentId: target.agentId,
@@ -283,7 +280,7 @@ export async function handleSessionHistoryHttpRequest(
     limit,
     cursor,
   });
-  sentHistory = sseState.snapshot();
+  let sentHistory = sseState.snapshot();
   let streamStopped = false;
   let streamQueue = Promise.resolve();
   const streamResources: {

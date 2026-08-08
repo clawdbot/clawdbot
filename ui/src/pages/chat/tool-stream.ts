@@ -1055,11 +1055,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
+      const segmentStartedAt = host.chatStreamStartedAt ?? now;
       host.chatStreamSegments = [
         ...host.chatStreamSegments,
-        { text: host.chatStream, ts: now, runId: payload.runId, toolCallId },
+        { text: host.chatStream, ts: segmentStartedAt, runId: payload.runId, toolCallId },
       ];
       host.chatStream = null;
+      // The segment becomes the elapsed-time owner after the live tail is flushed.
+      // Preserve the run start or replaying a tool event resets the working timer.
       host.chatStreamStartedAt = null;
     }
     entry = {

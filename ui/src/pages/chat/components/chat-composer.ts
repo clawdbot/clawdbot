@@ -37,7 +37,6 @@ import {
   selectSlashArg,
   selectSlashCommand,
   tabCompleteSlashCommand,
-  tokenEstimate,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
@@ -164,7 +163,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   const hasVisualAttachments = (props.attachments ?? []).some(
     (attachment) => !isLargePastedTextAttachment(attachment),
   );
-  const tokens = tokenEstimate(visibleDraft);
   const contextNotice = renderContextNotice(
     activeSession,
     props.sessions?.defaults?.contextTokens ?? null,
@@ -686,7 +684,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     showAbortableUi,
     activeSession,
     visibleDraft,
-    tokens,
     contextNotice,
     composerControls,
     runStatusAnnouncement,

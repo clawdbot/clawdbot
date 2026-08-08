@@ -20,6 +20,7 @@ import {
   firstFinalReplyPayload,
   globalBeforeAll0,
   describe2BeforeEach0,
+  requireBlockReplyHandler,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -81,6 +82,125 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    {
+      name: "delivers marked status blocks in direct message-tool-only turns",
+      sendPolicy: "allow",
+      ctx: { ChatType: "direct", SessionKey: "test:direct" },
+      delivered: true,
+    },
+    {
+      name: "suppresses marked status blocks for ambient room events",
+      sendPolicy: "allow",
+      ctx: {
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:room",
+      },
+      delivered: false,
+    },
+    {
+      name: "delivers marked status blocks for explicit room-event commands",
+      sendPolicy: "allow",
+      ctx: {
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:room-command",
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandBody: "/compact",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "compact",
+          body: "/compact",
+        },
+      },
+      delivered: true,
+    },
+    {
+      name: "suppresses marked status blocks when sendPolicy denies delivery",
+      sendPolicy: "deny",
+      ctx: { ChatType: "direct", SessionKey: "test:denied" },
+      delivered: false,
+    },
+  ] as const)("$name", async ({ sendPolicy, ctx, delivered }) => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy };
+    const dispatcher = createDispatcher();
+    const onBlockReplyQueued = vi.fn(async () => {});
+    const payload = setReplyPayloadMetadata(
+      { text: "Model set for this session.", isStatusNotice: true },
+      { deliverDespiteSourceReplySuppression: true },
+    );
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await requireBlockReplyHandler(opts?.onBlockReply)(payload);
+      return [];
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx(ctx),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onBlockReplyQueued,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    if (delivered) {
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledExactlyOnceWith(payload);
+    } else {
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    }
+    expect(onBlockReplyQueued).not.toHaveBeenCalled();
+  });
+
+  it("keeps hook-cancelled marked blocks out of delivery and queued callbacks", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const deliver = vi.fn(async (_payload: ReplyPayload) => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async () => null,
+    });
+    const onBlockReplyQueued = vi.fn(async () => {});
+    const payload = setReplyPayloadMetadata(
+      { text: "Model set for this session.", isStatusNotice: true },
+      { deliverDespiteSourceReplySuppression: true },
+    );
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await requireBlockReplyHandler(opts?.onBlockReply)(payload);
+      return [];
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:cancelled-block" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onBlockReplyQueued,
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result.queuedFinal).toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(onBlockReplyQueued).not.toHaveBeenCalled();
   });
 
   it("mirrors internal source reply payloads into the active transcript", async () => {

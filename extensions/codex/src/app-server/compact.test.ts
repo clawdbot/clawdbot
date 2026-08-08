@@ -208,7 +208,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.completed).toBe(true);
   });
 
-  it("resubscribes an evicted session before compacting without displacing its sibling", async () => {
+  it("compacts a warm session without displacing its independently retained sibling", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
@@ -229,19 +229,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       compacted: true,
     });
 
-    expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/resume",
-      "thread/compact/start",
-      "thread/unsubscribe",
-    ]);
-    expect(fake.request).toHaveBeenCalledWith(
-      "thread/resume",
-      { threadId: "thread-1", excludeTurns: true },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
+    await expect(
+      consumeCodexAppServerLiveThread(fake.client, "thread-1", "config-thread-1"),
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-1" }));
     await expect(
       consumeCodexAppServerLiveThread(fake.client, "thread-2", "config-thread-2"),
-    ).resolves.toBe(true);
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-2" }));
   });
 
   it("keeps an owned thread subscribed when a sibling finishes during compaction", async () => {
@@ -258,14 +252,17 @@ describe("maybeCompactCodexAppServerSession", () => {
     fake.completeCompaction();
 
     await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
-    expect(fake.request).toHaveBeenCalledWith(
+    expect(fake.request).not.toHaveBeenCalledWith(
       "thread/unsubscribe",
       { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
+      expect.anything(),
     );
     await expect(
+      consumeCodexAppServerLiveThread(fake.client, "thread-1", "config-thread-1"),
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-1" }));
+    await expect(
       consumeCodexAppServerLiveThread(fake.client, "thread-2", "config-thread-2"),
-    ).resolves.toBe(true);
+    ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-2" }));
   });
 
   it("preserves an incognito thread's separately owned live subscription", async () => {

@@ -56,6 +56,11 @@ import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
 import {
+  disableUpdatedPackageCompileCacheEnv,
+  resolveUpdatedInstallCommandEnv,
+  resolveUpdatedServicePathEnv,
+} from "./update-command-service-env.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
   isPackageManagerUpdateMode,
@@ -69,13 +74,10 @@ const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
-const SERVICE_REFRESH_PATH_ENV_KEYS = [
+const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
-] as const;
-const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
-  ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
 ] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
@@ -745,35 +747,7 @@ async function resolvePackageRuntimeForPreflight(params: {
   return { version, nodeRunner };
 }
 
-function resolveServiceRefreshEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
-  for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
-    const rawValue = resolvedEnv[key]?.trim();
-    if (!rawValue) {
-      continue;
-    }
-    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    if (!invocationCwd) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
-  }
-  return resolvedEnv;
-}
-
-export function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
-}
+export { disableUpdatedPackageCompileCacheEnv } from "./update-command-service-env.js";
 
 export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const resolvedEnv = { ...env };
@@ -781,13 +755,6 @@ export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.Pro
   delete resolvedEnv.OPENCLAW_SERVICE_KIND;
   delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   return resolvedEnv;
-}
-
-function resolveUpdatedInstallCommandEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
 }
 
 export function resolvePostInstallDoctorEnv(params?: {
@@ -802,7 +769,7 @@ export function resolvePostInstallDoctorEnv(params?: {
     return resolvedEnv;
   }
 
-  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  const serviceEnv = resolveUpdatedServicePathEnv(params.serviceEnv, params.invocationCwd);
   for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
     const value = serviceEnv[key]?.trim();
     if (value) {
@@ -855,7 +822,11 @@ async function refreshGatewayServiceEnv(params: {
       [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
       {
         cwd: params.result.root,
-        env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+        env: resolveUpdatedInstallCommandEnv({
+          processEnv: process.env,
+          serviceEnv: params.env,
+          invocationCwd: params.invocationCwd,
+        }),
         timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
       },
     );
@@ -899,7 +870,11 @@ async function runUpdatedInstallGatewayRestart(params: {
     [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
     {
       cwd: params.result.root,
-      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+      env: resolveUpdatedInstallCommandEnv({
+        processEnv: process.env,
+        serviceEnv: params.env,
+        invocationCwd: params.invocationCwd,
+      }),
       // Restart health owns migration-aware readiness. Keep only the caller's bounded update
       // budget outside it so the former fixed 60-second watchdog cannot preempt that wait.
       timeoutMs: params.timeoutMs,

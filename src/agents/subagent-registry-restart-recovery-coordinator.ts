@@ -19,6 +19,7 @@ type RecoveryRetry = {
 
 type RecoveryCoordinatorParams = {
   runs: Map<string, SubagentRunRecord>;
+  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   abandonLaunch: ReturnType<
     typeof createSubagentRunManager
@@ -61,7 +62,10 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
   const retries = new Map<string, RecoveryRetry>();
   const ownsCurrentGeneration = (runId: string, entry: SubagentRunRecord) =>
     params.runs.get(runId) === entry &&
-    getLatestSubagentRunByChildSessionKeyFromRuns(params.runs, entry.childSessionKey) === entry;
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      params.getRunsForChildSession(entry.childSessionKey),
+      entry.childSessionKey,
+    ) === entry;
 
   function defer(runId: string, retry: Omit<RecoveryRetry, "at">, delayMs: number) {
     retries.set(runId, { ...retry, at: Date.now() + delayMs });
@@ -119,7 +123,7 @@ export function createInterruptedRecoveryCoordinator(params: RecoveryCoordinator
       entry,
       now,
       gatewayRuntime: params.getGatewayRuntime(),
-      isCurrent: () => ownsCurrentGeneration(runId, entry),
+      isCurrent: ownsCurrentGeneration,
       abandonLaunch: params.abandonLaunch,
       clearAcceptedRecovery: params.clearAcceptedRecovery,
       getRun: (targetRunId) => params.runs.get(targetRunId),

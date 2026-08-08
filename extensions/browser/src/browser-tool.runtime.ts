@@ -17,20 +17,13 @@ export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | 
 }
 export {
   callGatewayTool,
-  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
-  extractAssistantText,
-  htmlToMarkdown,
   imageResultFromFile,
   jsonResult,
   listNodes,
   readPositiveIntegerParam,
   readStringParam,
-  normalizeWhitespace,
-  prepareSimpleCompletionModelForAgent,
-  validateJsonSchemaValue,
   saveMediaBuffer,
-  sanitizeHtml,
 } from "./sdk-setup-tools.js";
 export type { AnyAgentTool } from "./sdk-setup-tools.js";
 export { wrapExternalContent } from "./sdk-security-runtime.js";
@@ -46,7 +39,6 @@ export {
   browserConsoleMessages,
   browserDownload,
   browserNavigate,
-  browserPageContent,
   browserPdfSave,
   browserScreenshotAction,
   browserWaitForDownload,

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import { resolveUserPath } from "../utils.js";
 import {
+  inspectBundlePluginArtifact,
+  inspectNativePluginArtifact,
+  type PluginInstallArtifactInspection,
+} from "./install-artifact-inspection.js";
+import {
   scanAndLinkInstalledPackage,
   validatePackagePluginInstallSource,
 } from "./install-installed-package.js";
@@ -33,6 +38,7 @@ const PLUGIN_ARCHIVE_ROOT_MARKERS = [
   ".codex-plugin/plugin.json",
   ".claude-plugin/plugin.json",
   ".cursor-plugin/plugin.json",
+  "plugin.json",
 ];
 
 function pickPackageInstallCommonParams(
@@ -170,7 +176,7 @@ async function installBundleFromSourceDir(
     return scanResult;
   }
 
-  return await installPluginDirectoryIntoExtensions({
+  const installed = await installPluginDirectoryIntoExtensions({
     sourceDir: params.sourceDir,
     pluginId,
     manifestName: manifestRes.manifest.name,
@@ -186,6 +192,22 @@ async function installBundleFromSourceDir(
     hasDeps: false,
     depsLogMessage: "",
   });
+  return installed.ok
+    ? {
+        ...installed,
+        artifactInspection: inspectBundlePluginArtifact({
+          format: manifestRes.manifest.bundleFormat,
+          capabilities: manifestRes.manifest.capabilities,
+        }),
+      }
+    : installed;
+}
+
+function withArtifactInspection(
+  result: InstallPluginResult,
+  artifactInspection: PluginInstallArtifactInspection,
+): InstallPluginResult {
+  return result.ok ? { ...result, artifactInspection } : result;
 }
 
 async function installPluginFromSourceDir(
@@ -195,11 +217,14 @@ async function installPluginFromSourceDir(
 ): Promise<InstallPluginResult> {
   const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
   if (nativePackageManifest) {
-    return await installPluginFromPackageDir({
-      packageDir: params.sourceDir,
-      packageManifest: nativePackageManifest,
-      ...pickPackageInstallCommonParams(params),
-    });
+    return withArtifactInspection(
+      await installPluginFromPackageDir({
+        packageDir: params.sourceDir,
+        packageManifest: nativePackageManifest,
+        ...pickPackageInstallCommonParams(params),
+      }),
+      inspectNativePluginArtifact(),
+    );
   }
   const bundleResult = await installBundleFromSourceDir({
     sourceDir: params.sourceDir,
@@ -208,10 +233,13 @@ async function installPluginFromSourceDir(
   if (bundleResult) {
     return bundleResult;
   }
-  return await installPluginFromPackageDir({
-    packageDir: params.sourceDir,
-    ...pickPackageInstallCommonParams(params),
-  });
+  return withArtifactInspection(
+    await installPluginFromPackageDir({
+      packageDir: params.sourceDir,
+      ...pickPackageInstallCommonParams(params),
+    }),
+    inspectNativePluginArtifact(),
+  );
 }
 
 async function detectNativePackageInstallSource(

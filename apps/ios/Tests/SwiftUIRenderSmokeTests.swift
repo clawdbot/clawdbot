@@ -317,7 +317,8 @@ struct SwiftUIRenderSmokeTests {
                 #expect(kind == .image)
                 return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
                     data: Data(base64Encoded:
-                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
                     mimeType: "image/png"))
             })
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
@@ -501,7 +502,6 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
-            AnyView(OnboardingPermissionsStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
                 statusLine: "",
                 isConnecting: false,

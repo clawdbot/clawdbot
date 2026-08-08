@@ -48,6 +48,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   const sessionTarget = await resolveAgentRunSessionTarget({
     agentId: attempt.sessionTarget?.agentId,
     config: attempt.config,
+    missingSessionKey: "resolve-existing",
     sessionFile: attempt.sessionFile,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,

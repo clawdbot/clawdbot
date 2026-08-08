@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createContextEngineLogicalTurnLease,
+  selectContextEngineForTranscriptHost,
+} from "../agents/harness/context-engine-logical-turn.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -702,6 +707,157 @@ describe("Default engine selection", () => {
     const engine = await resolveContextEngine(configWithSlot("test-engine"));
     expect(engine.info.id).toBe("test-engine");
   });
+
+  it("does not replay a started engine operation and retries the configured engine next turn", async () => {
+    const engineId = uniqueEngineId("logical-turn-retry");
+    const assemble = vi
+      .fn<ContextEngine["assemble"]>()
+      .mockRejectedValueOnce(new Error("configured engine unavailable"))
+      .mockImplementation(async ({ messages }) => ({ messages, estimatedTokens: 0 }));
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Logical Turn Retry" },
+      async ingest() {
+        return { ingested: true };
+      },
+      assemble,
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+    const warn = vi.fn();
+    const first = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+    const messages = [makeMockMessage()];
+
+    first.begin();
+    await expect(first.engine.assemble({ sessionId: "first", messages })).rejects.toThrow(
+      "configured engine unavailable",
+    );
+    expect(first.degraded).toBe(false);
+    expect(first.engine.info.id).toBe(engineId);
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    await first.dispose();
+
+    const second = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+    await expect(second.engine.assemble({ sessionId: "second", messages })).resolves.toMatchObject({
+      messages,
+    });
+    expect(second.degraded).toBe(false);
+    expect(second.engine.info.id).toBe(engineId);
+    expect(assemble).toHaveBeenCalledTimes(2);
+    await second.dispose();
+  });
+
+  it("rejects an incompatible fallback host after the logical turn starts", async () => {
+    const engineId = uniqueEngineId("logical-turn-host-transition");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Host Transition",
+        hostRequirements: {
+          "agent-run": { requiredCapabilities: ["thread-bootstrap-projection"] },
+        },
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+    });
+
+    lease.selectForHost({
+      host: {
+        id: "agent-harness:first",
+        label: 'agent harness "first"',
+        capabilities: ["thread-bootstrap-projection"],
+      },
+      operation: "agent-run",
+      requiresDurableCommit: true,
+      hasAdmissionFence: true,
+    });
+    lease.begin();
+
+    expect(() =>
+      lease.selectForHost({
+        host: {
+          id: "agent-harness:fallback",
+          label: 'agent harness "fallback"',
+          capabilities: [],
+        },
+        operation: "agent-run",
+        requiresDurableCommit: true,
+        hasAdmissionFence: true,
+      }),
+    ).toThrow(
+      'context-engine logical turn cannot change to incompatible agent harness "fallback": host "agent-harness:fallback" is missing thread-bootstrap-projection',
+    );
+    expect(lease.engine.info.id).toBe(engineId);
+    await lease.dispose();
+  });
+
+  it("degrades before start when the current turn has no admission receipt", async () => {
+    const engineId = uniqueEngineId("logical-turn-admission");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Admission Fence",
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    const selected = selectContextEngineForTranscriptHost({
+      lease,
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run",
+      recorder: { getAdmissionReceipt: () => undefined },
+    });
+    lease.begin();
+
+    expect(selected.engine.info.id).toBe("legacy");
+    expect(lease.degradedReason).toBe("current-turn transcript admission receipt is unavailable");
+    expect(warn).toHaveBeenCalledOnce();
+    await lease.dispose();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1115,6 +1271,56 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
     expect(assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes legacy resolver fence failures through normal quarantine", async () => {
+    const engineId = uniqueEngineId("transcript-fence-fallback");
+    const ingest = vi.fn(async () => ({ ingested: true }));
+    const assemble = vi.fn(async () => {
+      throw new SessionTranscriptReadFenceError("admitted user row is unavailable");
+    });
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: {
+          id: "lcm",
+          name: "Lossless Context Manager",
+          ownsCompaction: true,
+        },
+        ingest,
+        assemble,
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      }),
+      "plugin:lossless-claw",
+      { allowSameOwnerRefresh: true },
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
+
+    const first = makeMockMessage("user", "first");
+    const second = makeMockMessage("user", "second");
+    await expect(engine.assemble({ sessionId: "s1", messages: [first] })).resolves.toMatchObject({
+      messages: [first],
+    });
+    await expect(engine.assemble({ sessionId: "s1", messages: [second] })).resolves.toMatchObject({
+      messages: [second],
+    });
+    await engine.ingest({ sessionId: "s1", message: second });
+
+    expect(engine.info.id).toBe("legacy");
+    expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({
+        engineId,
+        operation: "assemble",
+        reason: "admitted user row is unavailable",
+      }),
+    ]);
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(ingest).not.toHaveBeenCalled();
   });
 
   it("quarantines compact failures without same-call legacy fallback", async () => {

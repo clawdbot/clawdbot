@@ -521,6 +521,7 @@ function buildRecord(params: {
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
   trustedOfficialInstall?: boolean;
 }): PluginManifestRecord {
+  const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
   const providerSourceEntry =
     params.manifest.providerCatalogEntry !== undefined
       ? {
@@ -553,7 +554,7 @@ function buildRecord(params: {
     params.candidate.packageManifest?.channel?.commands,
   );
   return {
-    id: params.manifest.id,
+    id: pluginId,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
@@ -576,7 +577,7 @@ function buildRecord(params: {
       ? resolveManifestPluginSourcePath({
           rootDir: params.candidate.rootDir,
           manifestPath: params.manifestPath,
-          pluginId: params.manifest.id,
+          pluginId,
           entryName: providerSourceEntry.entryName,
           entry: providerSourceEntry.entry,
           rejectHardlinks: params.rejectHardlinks,
@@ -1088,6 +1089,7 @@ export function loadPluginManifestRegistry(
       continue;
     }
     const manifest = manifestRes.manifest;
+    const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
     if (candidate.origin !== "bundled") {
       const packageManifestSource = path.join(
         candidate.packageDir ?? candidate.rootDir,
@@ -1096,7 +1098,7 @@ export function loadPluginManifestRegistry(
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           candidate,
           config,
           env,
@@ -1110,7 +1112,7 @@ export function loadPluginManifestRegistry(
       if (!minHostVersionCheck.ok) {
         diagnostics.push({
           level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           source: packageManifestSource,
           message:
             minHostVersionCheck.kind === "invalid"
@@ -1125,7 +1127,7 @@ export function loadPluginManifestRegistry(
       if (!packagePluginApiRangeCheck.ok) {
         diagnostics.push({
           level: "error",
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
         });
@@ -1138,7 +1140,7 @@ export function loadPluginManifestRegistry(
       ) {
         diagnostics.push({
           level: "warn",
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
         });
@@ -1173,7 +1175,7 @@ export function loadPluginManifestRegistry(
           schemaCacheKey,
           configSchema,
           trustedOfficialInstall: isTrustedOfficialPluginInstall({
-            pluginId: manifest.id,
+            pluginId: effectivePluginId,
             candidate,
             env,
             installRecords: getInstallRecords(),
@@ -1183,7 +1185,7 @@ export function loadPluginManifestRegistry(
             : {}),
         });
 
-    const existing = seenIds.get(manifest.id);
+    const existing = seenIds.get(effectivePluginId);
     if (existing) {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
@@ -1202,21 +1204,21 @@ export function loadPluginManifestRegistry(
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
           pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
       }
 
       const candidateRank = resolveDuplicatePrecedenceRank({
-        pluginId: manifest.id,
+        pluginId: effectivePluginId,
         candidate,
         config,
         env,
         installRecords: getInstallRecords(),
       });
       const existingRank = resolveDuplicatePrecedenceRank({
-        pluginId: manifest.id,
+        pluginId: effectivePluginId,
         candidate: existing.candidate,
         config,
         env,
@@ -1227,12 +1229,12 @@ export function loadPluginManifestRegistry(
       const overriddenCandidate = candidateWins ? existing.candidate : candidate;
       if (candidateWins) {
         records[existing.recordIndex] = record;
-        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
         pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
         isIntentionalInstalledBundledDuplicate({
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           left: candidate,
           right: existing.candidate,
           config,
@@ -1247,7 +1249,7 @@ export function loadPluginManifestRegistry(
       }
       diagnostics.push({
         level: "warn",
-        pluginId: manifest.id,
+        pluginId: effectivePluginId,
         source: overriddenCandidate.source,
         message:
           winnerCandidate.origin === "config"
@@ -1257,7 +1259,7 @@ export function loadPluginManifestRegistry(
       continue;
     }
 
-    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+    seenIds.set(effectivePluginId, { candidate, recordIndex: records.length });
     records.push(record);
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }

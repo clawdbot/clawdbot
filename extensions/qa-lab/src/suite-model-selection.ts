@@ -6,8 +6,10 @@ import {
 } from "./model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { defaultQaModelForMode } from "./run-config.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { resolveQaScenarioRequiredProviderMode } from "./scenario-lane.js";
+import {
+  resolveQaScenarioRequiredProviderMode,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 
 function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
   const model = input?.trim();

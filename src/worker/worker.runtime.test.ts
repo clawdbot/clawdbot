@@ -1176,6 +1176,29 @@ describe("worker runtime", () => {
 });
 
 describe("worker reconnect clients", () => {
+  it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
+    const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
+    const connection = createWorkerConnection({
+      socketPath: gateway.socketPath,
+      connectParams: buildWorkerConnectParams(launch),
+    });
+    let healthyReadyCalls = 0;
+    connection.onReady(() => {
+      throw new Error("induced ready observer failure");
+    });
+    connection.onReady(() => {
+      healthyReadyCalls += 1;
+    });
+
+    try {
+      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
+      expect(healthyReadyCalls).toBe(1);
+      await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
+    } finally {
+      await connection.stop();
+    }
+  });
+
   it("fails closed when the overall admission deadline expires", async () => {
     const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
     const connection = createWorkerConnection({
