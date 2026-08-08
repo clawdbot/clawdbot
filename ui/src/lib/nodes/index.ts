@@ -1,12 +1,12 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
-import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 
@@ -652,7 +652,7 @@ export function removeExecApprovalsFormValue(
 }
 
 function deviceAuthStorageKey(gatewayUrl: string): string {
-  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
+  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function removeLegacyDeviceAuthStore(storage: Storage | null) {

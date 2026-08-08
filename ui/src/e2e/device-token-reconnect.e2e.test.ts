@@ -1,12 +1,9 @@
 // Control UI tests cover browser-native device-token isolation and reuse.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  normalizeGatewayCredentialScope,
-  normalizeGatewayTokenScope,
-} from "../app/gateway-scope.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -63,10 +60,9 @@ async function selectGatewayOnNextLoad(
   appBaseUrl: string,
   gatewayUrl: string,
 ): Promise<void> {
-  const settingsKey = `openclaw.control.settings.v1:${normalizeGatewayTokenScope(gatewayUrl)}`;
+  const settingsKey = `openclaw.control.settings.v1:${gatewayOriginScope(gatewayUrl)}`;
   const selectionKey =
-    `openclaw.control.currentGateway.v1:` +
-    normalizeGatewayTokenScope(browserPageGatewayUrl(appBaseUrl));
+    `openclaw.control.currentGateway.v1:` + gatewayOriginScope(browserPageGatewayUrl(appBaseUrl));
   await page.addInitScript(
     ({ nextGatewayUrl, nextSelectionKey, nextSettingsKey }) => {
       localStorage.setItem(nextSettingsKey, JSON.stringify({ gatewayUrl: nextGatewayUrl }));
@@ -262,7 +258,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     const revoke = await wilfredNodes.gateway.waitForRequest("device.token.revoke");
     expect(revoke.params).toEqual({ deviceId, role: "operator" });
     const wilfredStoreKey =
-      `openclaw.device.auth.v1:` + normalizeGatewayCredentialScope(WILFRED_GATEWAY_URL);
+      `openclaw.device.auth.v1:` + gatewayCredentialScope(WILFRED_GATEWAY_URL);
     await expect
       .poll(() =>
         wilfredNodes.page.evaluate((key) => {

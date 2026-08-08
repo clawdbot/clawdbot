@@ -700,6 +700,15 @@ export interface GatewayBootLifecycle {
   startup_reason: string | null;
 }
 
+export interface GatewayOriginDeviceTokens {
+  device_id: string;
+  gateway_scope: string;
+  role: string;
+  scopes_json: string;
+  token: string;
+  updated_at_ms: number;
+}
+
 export interface GatewayRestartHandoff {
   created_at: number;
   expires_at: number;
@@ -1610,6 +1619,7 @@ export interface DB {
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
+  gateway_origin_device_tokens: GatewayOriginDeviceTokens;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;

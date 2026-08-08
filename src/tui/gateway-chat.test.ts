@@ -13,6 +13,8 @@ import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-sup
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
+const loadDeviceIdentityIfPresentMock = vi.hoisted(() => vi.fn());
+const loadOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
@@ -37,6 +39,22 @@ vi.mock("../gateway/net.js", async () => {
 vi.mock("../infra/gateway-lock.js", () => ({
   readActiveGatewayLockPort: readActiveGatewayLockPortMock,
 }));
+
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+  return {
+    ...actual,
+    loadOriginDeviceToken: (...args: unknown[]) => loadOriginDeviceTokenMock(...args),
+  };
+});
+
+vi.mock("../infra/device-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+  return {
+    ...actual,
+    loadDeviceIdentityIfPresent: (...args: unknown[]) => loadDeviceIdentityIfPresentMock(...args),
+  };
+});
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
@@ -128,6 +146,8 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
+    loadDeviceIdentityIfPresentMock.mockReset().mockReturnValue(null);
+    loadOriginDeviceTokenMock.mockReset().mockReturnValue(null);
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     resolveGatewayPort.mockReset();
     resolveStateDir.mockReset();
@@ -179,6 +199,7 @@ describe("resolveGatewayConnection", () => {
 
         expect(result).toEqual({
           url: "wss://selected.example/ws",
+          deviceAuthScope: "wss://selected.example/ws",
           token: undefined,
           password: undefined,
           tlsFingerprint: "sha256:selected",
@@ -188,12 +209,35 @@ describe("resolveGatewayConnection", () => {
     );
   });
 
-  it("throws when url override is missing explicit credentials", async () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
+  it("rejects an auth-free url override without reusing configured or env credentials", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", auth: { token: "configured-token" } },
+    });
 
-    await expect(resolveGatewayConnection({ url: "wss://override.example/ws" })).rejects.toThrow(
-      /remove --url to use the configured target/i,
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+      await expect(
+        resolveGatewayConnection({ url: "wss://override.example/ws/?ignored=1" }),
+      ).rejects.toThrow(/pass --token or --password once to request pairing/i);
+    });
+  });
+
+  it("allows a url override with an exact-origin stored device credential", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
+    loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
+    loadOriginDeviceTokenMock.mockImplementation(({ gatewayScope }: { gatewayScope: string }) =>
+      gatewayScope === "wss://override.example/ws"
+        ? { token: "stored-origin-token", scopes: ["operator.read"] }
+        : null,
     );
+
+    await expect(
+      resolveGatewayConnection({ url: "wss://override.example/ws/?ignored=1" }),
+    ).resolves.toEqual({
+      url: "wss://override.example/ws/?ignored=1",
+      deviceAuthScope: "wss://override.example/ws",
+      token: undefined,
+      password: undefined,
+    });
   });
 
   it.each([
@@ -217,6 +261,7 @@ describe("resolveGatewayConnection", () => {
 
     expect(result).toEqual({
       url: "wss://override.example/ws",
+      deviceAuthScope: "wss://override.example/ws",
       ...expected,
       preauthHandshakeTimeoutMs: undefined,
     });
@@ -444,6 +489,32 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("allows a configured remote gateway to use its origin-scoped device credential", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example/rpc/?ignored=1" } },
+    });
+    loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
+    loadOriginDeviceTokenMock.mockReturnValue({
+      token: "stored-origin-token",
+      scopes: ["operator.read"],
+    });
+
+    await expect(resolveGatewayConnection({})).resolves.toMatchObject({
+      url: "wss://remote.example/rpc/?ignored=1",
+      deviceAuthScope: "wss://remote.example/rpc",
+      token: undefined,
+      password: undefined,
+    });
+  });
+
+  it("keeps configured remote auth required when no origin device token exists", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example/rpc" } },
+    });
+
+    await expect(resolveGatewayConnection({})).rejects.toThrow("Missing gateway auth credentials.");
+  });
+
   it("uses configured remote password for setup-launched TUI despite stale gateway env", async () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -644,7 +715,8 @@ describe("GatewayChatClient", () => {
     try {
       const { GatewayChatClient: CapturingGatewayChatClient } = await import("./gateway-chat.js");
       const client = new CapturingGatewayChatClient({
-        url: "ws://127.0.0.1:18789",
+        url: "wss://remote.example/rpc",
+        deviceAuthScope: "wss://remote.example/rpc",
         token: "test-token",
         tlsFingerprint: "sha256:11:22:33:44",
         preauthHandshakeTimeoutMs: 30_000,
@@ -658,6 +730,7 @@ describe("GatewayChatClient", () => {
         scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
+        deviceAuthScope: "wss://remote.example/rpc",
       });
       expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");
       const onConnectError = vi.fn();
@@ -680,6 +753,10 @@ describe("GatewayChatClient", () => {
       options.onClose?.(1008, "pairing required");
 
       expect(onConnectError).toHaveBeenCalledExactlyOnceWith(connectError);
+      expect(connectError.message).toContain("Pairing request sent.");
+      expect(connectError.message).toContain("Control UI (Settings -> Devices)");
+      expect(connectError.message).toContain("openclaw devices approve --latest");
+      expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
       expect(onDisconnected).not.toHaveBeenCalled();
 
       const retryError = new Error("retry failed");
