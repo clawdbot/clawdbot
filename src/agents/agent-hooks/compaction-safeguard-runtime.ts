@@ -78,10 +78,7 @@ export function consumeCompactionSafeguardCancelReason(sessionManager: unknown):
 }
 
 /** Stores the original safeguard error so compaction preserves status/cause identity. */
-export function setCompactionSafeguardCancelError(
-  sessionManager: unknown,
-  error: unknown | undefined,
-): void {
+export function setCompactionSafeguardCancelError(sessionManager: unknown, error: unknown): void {
   const current = getCompactionSafeguardRuntime(sessionManager);
   if (!current && error === undefined) {
     return;

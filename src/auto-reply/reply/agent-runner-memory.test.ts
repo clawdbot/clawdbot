@@ -1720,7 +1720,6 @@ describe("runMemoryFlushIfNeeded", () => {
     await upsertSessionEntry(
       {
         agentId: "main",
-        sessionId: "session",
         sessionKey,
         storePath: path.join(rootDir, "sessions.json"),
       },
@@ -1790,7 +1789,6 @@ describe("runMemoryFlushIfNeeded", () => {
     await upsertSessionEntry(
       {
         agentId: "main",
-        sessionId: "session",
         sessionKey,
         storePath: path.join(rootDir, "sessions.json"),
       },
@@ -1850,7 +1848,6 @@ describe("runMemoryFlushIfNeeded", () => {
     await upsertSessionEntry(
       {
         agentId: "main",
-        sessionId: "session",
         sessionKey,
         storePath: path.join(rootDir, "sessions.json"),
       },

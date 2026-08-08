@@ -3,7 +3,6 @@ import {
   compactionFailureFromFailoverReason,
   failoverReasonFromCompactionFailure,
   isStructuredCompactionFailure,
-  retryableCompactionFailure,
   terminalCompactionFailure,
 } from "./compaction-failure.js";
 
@@ -58,7 +57,7 @@ describe("compaction failure policy", () => {
   });
 
   it("normalizes status values without retaining raw provider errors", () => {
-    expect(retryableCompactionFailure("timeout", 599)).toEqual({
+    expect(compactionFailureFromFailoverReason("timeout", 599)).toEqual({
       disposition: "retryable",
       reason: "timeout",
       status: 599,

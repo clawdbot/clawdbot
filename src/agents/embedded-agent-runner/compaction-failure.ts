@@ -81,7 +81,7 @@ export function isStructuredCompactionFailure(value: unknown): value is Compacti
   );
 }
 
-export function retryableCompactionFailure(
+function retryableCompactionFailure(
   reason: RetryableCompactionFailureReason,
   status?: unknown,
 ): CompactionFailure {
