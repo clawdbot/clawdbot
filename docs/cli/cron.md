@@ -216,7 +216,7 @@ The scheduler does not classify final-output prose or approval-looking refusal p
 
 Retention behavior:
 
-- `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
+- `cron.sessionRetention` (default `24h`, or `false` to disable; a zero duration such as `"0h"` also disables) prunes completed isolated run sessions.
 - Run history keeps the newest 2000 terminal rows per job. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs

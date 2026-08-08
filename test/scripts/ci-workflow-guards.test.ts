@@ -29,6 +29,12 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+const MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS = [
+  ".github/workflows/mantis-web-ui-chat-proof.yml",
+  ".github/workflows/mantis-discord-status-reactions.yml",
+  ".github/workflows/mantis-discord-thread-attachment.yml",
+  ".github/workflows/mantis-telegram-live.yml",
+] as const;
 const TRUFFLEHOG_V3_95_9 = "trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55";
 const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -1062,6 +1068,39 @@ NODE
     });
   });
 
+  it("keeps ClawSweeper dispatch events aligned with receiver workflows", () => {
+    const workflowPath = ".github/workflows/clawsweeper-dispatch.yml";
+    const source = readFileSync(workflowPath, "utf8");
+    const workflow = readWorkflow(workflowPath);
+    const steps = workflow.jobs.dispatch.steps as WorkflowStep[];
+    const receiverDispatchSteps = steps.filter((step) =>
+      step.run?.includes("repos/openclaw/clawsweeper/dispatches"),
+    );
+    const eventTypes = receiverDispatchSteps.map((step) => {
+      const matches = [...(step.run ?? "").matchAll(/\bevent_type\s*:\s*"([^"]+)"/gu)];
+      expect(matches, step.name).toHaveLength(1);
+      return expectDefined(matches[0]?.[1], step.name ?? "ClawSweeper dispatch event");
+    });
+
+    // This allowlist mirrors the target repository receiver contract; changes require coordinated receiver updates.
+    expect(eventTypes.toSorted()).toEqual([
+      "clawsweeper_comment",
+      "clawsweeper_item",
+      "github_activity",
+    ]);
+    expect(source).not.toContain("clawsweeper_commit_review");
+    expect(source).not.toContain("CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS");
+    expect(workflow.on.push.branches).toEqual(["main"]);
+
+    const activityRun = expectDefined(
+      steps.find((step) => step.name === "Dispatch GitHub activity to ClawSweeper")?.run,
+      "ClawSweeper GitHub activity dispatch",
+    );
+    expect(activityRun).toMatch(
+      /push: \(if \$event_name == "push" then \{\s+before: \.before,\s+after: \.after,\s+ref: \.ref,\s+compare: \.compare,\s+head_commit: \.head_commit\.id\s+\} else null end\)/u,
+    );
+  });
+
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
     const workflow = readRealBehaviorProofWorkflow();
 
@@ -1300,6 +1339,25 @@ NODE
     expect(runStep).toMatchObject({
       if: "github.event_name == 'workflow_dispatch' && always()",
     });
+  });
+
+  it("keeps every path-filtered hosted gate runnable on landing-relevant events", () => {
+    const workflows = [
+      [".github/workflows/ci-check-testbox.yml", "check"],
+      [".github/workflows/ci-check-arm-testbox.yml", "check-arm"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "build-artifacts"],
+    ] as const;
+
+    for (const [workflowPath, jobName] of workflows) {
+      const workflow = readWorkflow(workflowPath);
+      expect(workflow.on.pull_request).toEqual({
+        types: ["opened", "reopened", "synchronize", "ready_for_review"],
+        paths: [".github/workflows/**"],
+      });
+      expect(workflow.jobs[jobName].if).toBe(
+        "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+      );
+    }
   });
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
@@ -3722,6 +3780,75 @@ NODE
     ).toBe(true);
   });
 
+  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
+    "keeps Mantis reaction ownership stable in %s",
+    (workflowPath) => {
+      const source = readFileSync(workflowPath, "utf8");
+      const workflow = parse(source);
+      const resolveJob = workflow.jobs.resolve_request;
+      const resolveSteps = resolveJob.steps as WorkflowStep[];
+      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
+      const cleanupSteps = cleanupJob.steps as WorkflowStep[];
+      const findStep = (steps: WorkflowStep[], id: string) =>
+        expectDefined(
+          steps.find((step) => step.id === id),
+          `${workflowPath} ${id}`,
+        );
+      const createTokenStep = findStep(resolveSteps, "mantis_reaction_token");
+      const createStep = findStep(resolveSteps, "add_reaction");
+      const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token");
+      const deleteStep = expectDefined(
+        cleanupSteps.find((step) => step.env?.REACTION_ID),
+        `${workflowPath} reaction cleanup step`,
+      );
+
+      expect(resolveJob.outputs.reaction_id, workflowPath).toBe(
+        "${{ steps.add_reaction.outputs.reaction_id }}",
+      );
+      for (const [label, tokenStep] of [
+        ["creation", createTokenStep],
+        ["cleanup", cleanupTokenStep],
+      ] as const) {
+        expect(tokenStep, `${workflowPath} ${label} token`).toMatchObject({
+          uses: CREATE_GITHUB_APP_TOKEN_V3,
+          with: {
+            "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+            "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+          },
+        });
+        expect(
+          Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
+          `${workflowPath} ${label} permissions`,
+        ).toEqual([["permission-issues", "write"]]);
+      }
+      expect(createStep, workflowPath).toMatchObject({
+        if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
+        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+      });
+      expect(createStep.with?.script, workflowPath).toContain("createForIssueComment");
+      expect(createStep.with?.script, workflowPath).toContain(
+        'core.setOutput("reaction_id", String(reaction.id))',
+      );
+      expect(source.match(/createForIssueComment/gu), workflowPath).toHaveLength(1);
+      expect(cleanupJob.if, workflowPath).toContain(
+        "needs.resolve_request.outputs.reaction_id != ''",
+      );
+      expect(cleanupJob.permissions, workflowPath).toEqual({});
+      expect(deleteStep, workflowPath).toMatchObject({
+        env: { REACTION_ID: "${{ needs.resolve_request.outputs.reaction_id }}" },
+        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+      });
+      expect(deleteStep.with?.script, workflowPath).toContain("deleteForIssueComment");
+      expect(deleteStep.with?.script, workflowPath).toContain("Number(process.env.REACTION_ID)");
+      expect(deleteStep.with?.script, workflowPath).toContain("reaction_id: reactionId");
+      expect(JSON.stringify(cleanupJob), workflowPath).not.toMatch(
+        /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
+      );
+    },
+  );
+
   it("bounds release ref validation fetches across checkout auth modes", () => {
     const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
 
@@ -4255,11 +4382,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
       "${{ steps.diff_base.outputs.sha }}",
     );
-    expect(
-      parsedWorkflow.jobs.preflight.steps.find(
-        (step: WorkflowStep) => step.name === "Resolve exact diff base",
-      ).run,
-    ).toContain("--prefer-first-parent");
+    const diffBaseStep = parsedWorkflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve exact diff base",
+    );
+    expect(diffBaseStep.run).toContain("--prefer-first-parent");
+    expect(diffBaseStep.env.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
+    expect(diffBaseStep.env.GH_TOKEN).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}",
+    );
+    expect(diffBaseStep.run).toContain(
+      '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}"',
+    );
+    expect(diffBaseStep.run).toContain("Could not resolve an exact diff base");
     const securityDiffBase = parsedWorkflow.jobs["security-fast"].steps.find(
       (step: WorkflowStep) => step.name === "Resolve security diff base",
     ).run;
@@ -4370,48 +4504,44 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {
     const workflow = readCiWorkflow();
-    const checksFastSteps = workflow.jobs["checks-fast-core"].steps;
+    const checksFastJob = workflow.jobs["checks-fast-core"];
+    const checksFastSteps = checksFastJob.steps;
+    const checkout = checksFastSteps.find((step: WorkflowStep) => step.name === "Checkout");
     const checksFastRun = checksFastSteps.find(
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
     const releaseGateMerge = checksFastSteps.find(
       (step: WorkflowStep) => step.name === "Prepare release-gate max-lines merge tree",
     );
-    const protocolManualBase = checksFastSteps.find(
-      (step: WorkflowStep) => step.name === "Resolve manual protocol base",
-    );
+    expect(
+      checksFastSteps.some((step: WorkflowStep) => step.name === "Resolve manual protocol base"),
+    ).toBe(false);
 
     expect(workflow.jobs["checks-fast-core"].permissions).toEqual({
       contents: "read",
       "pull-requests": "read",
     });
+    expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
+      "${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}",
+    );
+    expect(checkout.run).toContain(
+      'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")',
+    );
+    expect(checkout.run).toContain('"${fetch_refs[@]}" || return 1');
     expect(releaseGateMerge.if).toBe(
       "matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
     expect(checksFastRun.run).toContain("max-lines-ratchet)");
     expect(checksFastRun.run).toContain('has_package_script "check:max-lines-ratchet"');
-    expect(checksFastRun.env.RATCHET_EVENT_BASE_SHA).toBe(
-      "${{ github.event_name == 'push' && github.event.before || '' }}",
-    );
     expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
     );
-    expect(checksFastRun.env.RATCHET_MANUAL_TARGET_SHA).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}",
-    );
-    expect(checksFastRun.env.GH_TOKEN).toBe(
-      "${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}",
-    );
-    expect(protocolManualBase.if).toBe(
-      "matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate",
-    );
-    expect(protocolManualBase.env.GH_TOKEN).toBe("${{ github.token }}");
-    expect(protocolManualBase.run).toContain(
-      '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}"',
-    );
-    expect(protocolManualBase.run).toContain('echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"');
-    expect(checksFastRun.env.PROTOCOL_MANUAL_BASE_SHA).toBe(
-      "${{ steps.protocol_manual_base.outputs.sha }}",
+    expect(checksFastRun.env).not.toHaveProperty("RATCHET_EVENT_BASE_SHA");
+    expect(checksFastRun.env).not.toHaveProperty("RATCHET_MANUAL_TARGET_SHA");
+    expect(checksFastRun.env).not.toHaveProperty("GH_TOKEN");
+    expect(checksFastRun.env).not.toHaveProperty("PROTOCOL_MANUAL_BASE_SHA");
+    expect(checksFastRun.env.PROTOCOL_SINCE_BASE_SHA).toBe(
+      "${{ needs.preflight.outputs.diff_base_revision }}",
     );
     expect(releaseGateMerge.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}"',
@@ -4440,39 +4570,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(releaseGateMerge.run).not.toContain(".base.sha");
     expect(releaseGateMerge.run).toContain('git checkout --detach "$merge_sha"');
     expect(releaseGateMerge.run).toContain(
-      'echo "RATCHET_RELEASE_BASE_SHA=${frozen_base_sha}" >> "$GITHUB_ENV"',
+      'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );
     expect(releaseGateMerge.run).toContain(
       'echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"',
     );
-    expect(
-      checksFastRun.run.match(
-        /timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \\/gu,
-      ),
-    ).toHaveLength(4);
-    expect(checksFastRun.run).toContain('git ls-remote origin "refs/heads/${default_branch}"');
-    expect(checksFastRun.run).toContain(
-      '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}"',
-    );
-    expect(checksFastRun.run).toContain('PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"');
+    expect(checksFastRun.run).not.toContain("PROTOCOL_MANUAL_BASE_SHA");
     expect(checksFastRun.run).toContain(
       '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
     );
-    expect(checksFastRun.run).toContain("--jq '.merge_base_commit.sha'");
     expect(checksFastRun.run).toContain(
-      '"+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"',
+      'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"',
     );
-    expect(checksFastRun.run).toContain(
-      'if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]',
-    );
+    expect(checksFastRun.run).toContain('git cat-file -e "${base_ref}^{commit}"');
     expect(checksFastRun.run).toContain(
       "mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')",
     );
     expect(checksFastRun.run).toContain('"${#merge_parents[@]}" != "2"');
     expect(checksFastRun.run).toContain('"${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA"');
-    expect(checksFastRun.run).toContain('"+${merge_base}:refs/remotes/origin/ci-max-lines-base"');
+    expect(checksFastRun.run).toContain('prepared_base="$(git rev-parse "$base_ref")"');
+    expect(checksFastRun.run).toContain('"${merge_parents[0]}" != "$prepared_base"');
     expect(checksFastRun.run).not.toContain("ci-max-lines-target^");
-    expect(checksFastRun.run).toContain("unset GH_TOKEN");
+    expect(checksFastRun.run).not.toContain("resolve_manual_merge_base");
+    expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-max-lines-base");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
     expect(checksFastRun.run).toContain(
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',

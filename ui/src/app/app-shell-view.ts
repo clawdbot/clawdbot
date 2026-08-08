@@ -38,7 +38,6 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
 } from "./settings.ts";
-import { resolveControlUiRefreshRequiredBanner } from "./update-overlay-helpers.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
@@ -149,6 +148,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     !navDrawerOpen &&
     !settingsTakeover;
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
+    onboarding,
     navCollapsed,
     navDrawerOpen,
     mobileNavLayout,
@@ -213,6 +213,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
       updateRunning: overlaySnapshot.updateRunning,
       onUpdate: () => void context.overlays.runUpdate(),
+      refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
+      onRefresh: () => host.refreshControlUi(),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -241,6 +243,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateRunning: overlaySnapshot.updateRunning,
         onUpdate: () => void context.overlays.runUpdate(),
+        refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
+        onRefresh: () => host.refreshControlUi(),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -398,7 +402,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
       >
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
-          ? customElements.get("openclaw-device-auth-migration-banner")
+          ? // The migration banner is registered by a rare-flow dynamic import after first render.
+            customElements.get("openclaw-device-auth-migration-banner")
             ? html`<openclaw-device-auth-migration-banner
                 .props=${{
                   state: overlaySnapshot.deviceAuthMigration,
@@ -415,16 +420,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   },
                 }}
               ></openclaw-update-banner>`
-          : html`<openclaw-update-banner
-              .props=${{
-                statusBanner: overlaySnapshot.controlUiRefreshRequired
-                  ? resolveControlUiRefreshRequiredBanner()
-                  : null,
-                action: overlaySnapshot.controlUiRefreshRequired
-                  ? { label: t("common.refresh"), onClick: () => host.refreshControlUi() }
-                  : undefined,
-              }}
-            ></openclaw-update-banner>`}
+          : nothing}
         <openclaw-update-banner
           .props=${{
             statusBanner: overlaySnapshot.updateStatusBanner,
@@ -436,6 +432,8 @@ export function renderApplicationShell(host: ShellViewHost) {
           updateAvailable: overlaySnapshot.updateAvailable,
           updateRunning: overlaySnapshot.updateRunning,
           onUpdate: () => void context.overlays.runUpdate(),
+          refreshRequired: overlaySnapshot.controlUiRefreshRequired,
+          onRefresh: () => host.refreshControlUi(),
         })}
         <openclaw-router-outlet
           .router=${runtime.router}

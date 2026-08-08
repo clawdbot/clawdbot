@@ -227,6 +227,9 @@ export async function forkSqliteSessionEntryFromParentTarget(
         forkedFromParent: true,
         lifecycleRunId: undefined,
         sessionId: fork.transcript.sessionId,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
       };
       const next = mergeSessionEntry(freshBase, forkIdentityPatch);
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);

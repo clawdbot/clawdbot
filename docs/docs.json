@@ -2007,7 +2007,12 @@
                 "pages": [
                   "reference/pull-request-review-flow"
                 ]
-              },
+              }
+            ]
+          },
+          {
+            "tab": "Release & CI",
+            "groups": [
               {
                 "group": "Release and CI",
                 "pages": [

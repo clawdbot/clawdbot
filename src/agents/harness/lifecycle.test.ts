@@ -174,6 +174,40 @@ describe("AgentHarness lifecycle runner", () => {
     expect(runAttempt).toHaveBeenCalledWith(params);
   });
 
+  it("backfills omitted current-attempt provenance from the harness assistant", async () => {
+    const assistant = createFinalAssistant();
+    const result = { ...createAttemptResult(), lastAssistant: assistant };
+    const harness: AgentHarness = {
+      id: "legacy-harness",
+      label: "Legacy Harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+
+    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
+
+    expect(attemptResult.currentAttemptAssistant).toBe(assistant);
+  });
+
+  it("preserves explicit undefined current-attempt provenance", async () => {
+    const assistant = createFinalAssistant();
+    const result = {
+      ...createAttemptResult(),
+      lastAssistant: assistant,
+      currentAttemptAssistant: undefined,
+    };
+    const harness: AgentHarness = {
+      id: "current-harness",
+      label: "Current Harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => result,
+    };
+
+    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
+
+    expect(attemptResult).toHaveProperty("currentAttemptAssistant", undefined);
+  });
+
   it("records the selected harness for harness-scoped preflight failures", async () => {
     const params = createAttemptParams();
     const preflightError = new AgentHarnessPreflightError("Codex preflight failed", {

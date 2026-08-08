@@ -4,8 +4,16 @@ import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runne
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
+import {
+  consumeCoreModelRequestStartedDiagnosticEvent,
+  CORE_MODEL_REQUEST_STARTED_METADATA_KEY,
+} from "./diagnostic-model-request-provenance.js";
 import { isTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
 import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
+import {
+  consumeCoreSemanticRunProgressDiagnosticEvent,
+  CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
+} from "./diagnostic-semantic-run-progress-provenance.js";
 import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
@@ -284,6 +292,7 @@ type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  repeatedRequestNoProgressAgeMs?: number;
   terminalProgressStale?: boolean;
 };
 
@@ -861,6 +870,14 @@ export type DiagnosticEventMetadata = Readonly<{
   trusted: boolean;
 }>;
 
+type InternalDiagnosticEventMetadata = DiagnosticEventMetadata &
+  Readonly<{
+    [CORE_MODEL_REQUEST_STARTED_METADATA_KEY]?: boolean;
+    // String metadata survives duplicate module instances sharing dispatcher state;
+    // only the non-SDK core emitter can set this semantic authority.
+    [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]?: boolean;
+  }>;
+
 export type DiagnosticModelCallContent = Readonly<{
   inputMessages?: unknown;
   outputMessages?: unknown;
@@ -1299,6 +1316,8 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 
 type EmitDiagnosticEventOptions = {
   allowSecurityEvent?: boolean;
+  coreModelRequestStarted?: boolean;
+  coreSemanticRunProgress?: boolean;
   hostPluginId?: string;
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
@@ -1324,8 +1343,14 @@ function emitDiagnosticEventWithTrust(
   const enriched = enrichDiagnosticEvent(state, event);
   const { hostPluginId, internal = false, privateData } = options;
   const trustedTraceContext = options.trustedTraceContext === true;
-  const metadata = {
+  const metadata: InternalDiagnosticEventMetadata = {
     ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
+    ...(options.coreModelRequestStarted === true
+      ? { [CORE_MODEL_REQUEST_STARTED_METADATA_KEY]: true }
+      : {}),
+    ...(options.coreSemanticRunProgress === true
+      ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: true }
+      : {}),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
   const prepareTracePropagation = trusted && shouldPrepareDiagnosticTracePropagation(enriched);
@@ -1422,7 +1447,11 @@ export function getInternalDiagnosticEventSequence(): number {
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   const hostPluginId = consumeHostPluginUsageDiagnosticEvent(event);
-  emitDiagnosticEventWithTrust(event, true, hostPluginId ? { hostPluginId, internal: true } : {});
+  const coreSemanticRunProgress = consumeCoreSemanticRunProgressDiagnosticEvent(event);
+  emitDiagnosticEventWithTrust(event, true, {
+    ...(hostPluginId ? { hostPluginId, internal: true } : {}),
+    ...(coreSemanticRunProgress ? { coreSemanticRunProgress: true } : {}),
+  });
 }
 
 /** Keeps trusted internal skill accounting alive when optional diagnostics are disabled. */
@@ -1454,8 +1483,9 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   event: DiagnosticEventInput,
   privateData?: DiagnosticEventPrivateData,
 ) {
+  const coreModelRequestStarted = consumeCoreModelRequestStartedDiagnosticEvent(event);
   if (!privateData || !Object.hasOwn(privateData, "hostPluginId")) {
-    emitDiagnosticEventWithTrust(event, true, { privateData });
+    emitDiagnosticEventWithTrust(event, true, { coreModelRequestStarted, privateData });
     return;
   }
   // Plugin-facing emitters may provide trusted private content, but host attribution
@@ -1465,6 +1495,7 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   } as Record<string, unknown>;
   delete sanitized.hostPluginId;
   emitDiagnosticEventWithTrust(event, true, {
+    coreModelRequestStarted,
     privateData: sanitized as DiagnosticEventPrivateData,
   });
 }

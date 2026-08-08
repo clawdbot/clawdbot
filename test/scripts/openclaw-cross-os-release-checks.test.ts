@@ -966,6 +966,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
+    expect(resolveProviderConfig("openai", {})?.requiredCompanionPackages).toEqual([
+      "@openclaw/codex",
+    ]);
+    expect(resolveProviderConfig("anthropic", {})?.requiredCompanionPackages).toEqual([]);
+    expect(resolveProviderConfig("minimax", {})?.requiredCompanionPackages).toEqual([]);
   });
 
   it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {

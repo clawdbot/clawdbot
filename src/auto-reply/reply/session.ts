@@ -45,6 +45,7 @@ import {
 } from "../../config/sessions/terminal-status.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
   type SessionEntry,
   type SessionScope,
@@ -952,6 +953,7 @@ async function initSessionStateAttemptLocked(
     // inherit history without a fresh count, so keep those explicitly unknown.
     sessionEntry.totalTokens = 0;
     sessionEntry.totalTokensFresh = true;
+    sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;

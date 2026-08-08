@@ -272,11 +272,13 @@ if (args[0] === "workflow" && args[1] === "run") {
     console.error(env.MOCK_GH_DISPATCH_ERROR);
     process.exit(1);
   }
-  console.log("Created workflow_dispatch event.");
+  console.log(env.MOCK_GH_DISPATCH_OUTPUT);
 } else if (args[0] === "api" && args.some((value) => value.includes("/commits/"))) {
   console.log(env.MOCK_GH_CURRENT_SHA);
 } else if (args[0] === "api" && args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs"))) {
   console.log(env.MOCK_GH_MATCHES);
+} else if (args[0] === "api" && args.some((value) => value.includes("/actions/workflows/"))) {
+  console.log(env.MOCK_GH_WORKFLOW_ID);
 } else if (args[0] === "api" && args.some((value) => value.includes("/jobs?"))) {
   if (env.MOCK_GH_JOBS_ERROR) {
     console.error(env.MOCK_GH_JOBS_ERROR);
@@ -290,9 +292,15 @@ if (args[0] === "workflow" && args[1] === "run") {
   }
   console.log(JSON.stringify({
     conclusion,
+    display_title: env.MOCK_GH_RUN_TITLE,
+    event: env.MOCK_GH_RUN_EVENT,
+    head_branch: env.MOCK_GH_RUN_HEAD_BRANCH,
     head_sha: env.MOCK_GH_CHILD_SHA,
     html_url: url,
+    id: Number(env.MOCK_GH_RUN_ID),
+    path: env.MOCK_GH_RUN_PATH,
     status: nextStatus(),
+    workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
   }));
 } else if (args[0] === "run" && args[1] === "view") {
   const field = args[args.indexOf("--json") + 1];
@@ -390,10 +398,21 @@ if (args[0] === "workflow" && args[1] === "run") {
       MOCK_GH_CHILD_SHA: parentSha,
       MOCK_GH_CONCLUSION: "success",
       MOCK_GH_CURRENT_SHA: parentSha,
+      MOCK_GH_DISPATCH_OUTPUT: "Created workflow_dispatch event.",
       MOCK_GH_JOBS: JSON.stringify(defaultJobs),
       MOCK_GH_MATCHES: "[101]",
+      MOCK_GH_RUN_EVENT: "workflow_dispatch",
+      MOCK_GH_RUN_HEAD_BRANCH:
+        overrides.MOCK_GH_RUN_HEAD_BRANCH ??
+        overrides.CHILD_WORKFLOW_REF ??
+        stepEnv.CHILD_WORKFLOW_REF,
+      MOCK_GH_RUN_ID: "101",
+      MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
+      MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+      MOCK_GH_RUN_WORKFLOW_ID: "789",
       MOCK_GH_STATUSES: '["completed"]',
       MOCK_GH_STATUS_POLLS: statusPath,
+      MOCK_GH_WORKFLOW_ID: "789",
       PATH: `${workdir}:${process.env.PATH}`,
       ...overrides,
     },
@@ -1807,7 +1826,7 @@ describe("package acceptance workflow", () => {
       expect(script.match(/gh workflow run/gu)).toHaveLength(1);
       expect(script).not.toContain("gh_with_retry workflow run");
       expectTextToIncludeAll(script, [
-        "A failed dispatch POST can still create a run. Never retry it",
+        "The dispatch POST is one-shot",
         'encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF"',
         'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
         '"$current_workflow_sha" != "$PARENT_WORKFLOW_SHA"',
@@ -1816,6 +1835,8 @@ describe("package acceptance workflow", () => {
         "dispatch_status=$?",
         'if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]',
         "dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling.",
+        'sed -nE "s#^https://github[.]com/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)\\$#\\1#p"',
+        'validate_child_run "$run_id"',
         'DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF"',
         ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
         "Multiple runs matched ${dispatch_run_name}; refusing to guess.",
@@ -1909,6 +1930,80 @@ describe("package acceptance workflow", () => {
   });
 
   it.each(FULL_RELEASE_CHILD_DISPATCHES)(
+    "adopts and validates the run URL returned for $jobName without listing runs",
+    (child) => {
+      const { calls, result } = runFullReleaseChildDispatch(child, {
+        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+      expect(
+        calls.filter(({ args }) =>
+          args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
+        ),
+      ).toHaveLength(0);
+      expect(
+        calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/101"))),
+      ).toBe(true);
+      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+    },
+  );
+
+  it("recovers by exact name when a successful dispatch returns no run URL", () => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(
+      calls.filter(({ args }) =>
+        args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ["workflow", { MOCK_GH_RUN_WORKFLOW_ID: "790" }],
+    ["title", { MOCK_GH_RUN_TITLE: "Unrelated workflow run" }],
+    ["head branch", { MOCK_GH_RUN_HEAD_BRANCH: "other" }],
+    ["event", { MOCK_GH_RUN_EVENT: "push" }],
+  ] as const)("refuses a returned run URL with the wrong %s", (label, overrides) => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      ...overrides,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      label === "title"
+        ? "Refusing to adopt ci.yml run 101: run never became readable with display title"
+        : "Refusing to adopt unvalidated ci.yml run 101",
+    );
+    expect(
+      calls.some(({ args }) =>
+        args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
+      ),
+    ).toBe(false);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+  });
+
+  it("refuses a nonnumeric exact-name candidate without cancellation ownership", () => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "",
+      MOCK_GH_MATCHES: '["not-a-run-id"]',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to adopt invalid ci.yml run ID not-a-run-id");
+    expect(
+      calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/not-a-run-id"))),
+    ).toBe(false);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+  });
+
+  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
     "rejects moved workflow refs before dispatching $jobName",
     (child) => {
       const { calls, result } = runFullReleaseChildDispatch(child, {
@@ -1980,14 +2075,15 @@ describe("package acceptance workflow", () => {
   );
 
   it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "cancels exactly the adopted $jobName child when its workflow SHA differs",
+    "cancels exactly the identified $jobName child when its workflow SHA differs",
     (child) => {
       const { calls, result } = runFullReleaseChildDispatch(child, {
         MOCK_GH_CHILD_SHA: "c".repeat(40),
+        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
       });
 
       expect(result.status).toBe(1);
-      expect(result.stdout).toContain("expected parent workflow SHA");
+      expect(result.stderr).toContain("expected parent workflow SHA");
       expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toEqual([
         expect.objectContaining({ args: ["run", "cancel", "101"] }),
       ]);
@@ -2293,6 +2389,35 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_DOCKER_E2E_REPO_ROOT:");
     expect(workflow).toContain("node .release-harness/scripts/test-docker-all.mjs --plan-json");
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
+    expect(parsedWorkflow.on?.workflow_call?.inputs).toHaveProperty(
+      "enable_prepublish_plugin_registry",
+    );
+    expect(workflow).toContain("Pack prerelease plugin registry artifact");
+    expect(workflow).toContain("Validate prerelease plugin registry artifact");
+    expect(workflow).toContain("Download targeted prerelease plugin registry artifact");
+    expect(workflow).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+    expect(workflow).toContain("prepublishPluginRegistryManifestSha256");
+    expect(
+      workflowStep(
+        workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image"),
+        "Pack prerelease plugin registry artifact",
+      ).id,
+    ).toBe("create_prepublish_plugin_registry");
+    expect(
+      workflowStep(
+        workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image"),
+        "Validate prerelease plugin registry artifact",
+      ).env?.EXPECTED_MANIFEST_SHA256,
+    ).toBe(
+      "${{ steps.create_prepublish_plugin_registry.outputs.manifest_sha256 || inputs.prepublish_plugin_registry_manifest_sha256 }}",
+    );
+    expect(workflow).toContain(
+      "if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1'",
+    );
+    expect(
+      workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image").outputs
+        ?.prepublish_plugin_registry_artifact_id,
+    ).toContain("inputs.enable_prepublish_plugin_registry");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
     expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
@@ -2406,9 +2531,16 @@ describe("package artifact reuse", () => {
 
     expect(prepare.uses).toBe("./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
     expect(prepare.with).toMatchObject({
+      enable_prepublish_plugin_registry: true,
       prepare_only: true,
       shared_image_policy: "no-push-artifact",
     });
+    expect(prepare.with?.published_upgrade_survivor_scenarios).toBe(
+      "${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}",
+    );
+    expect(prepare.with?.allow_frozen_target_scenario_omissions).toBe(
+      "${{ inputs.target_context_ref != '' }}",
+    );
     expect(pluginDispatch.run).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
@@ -2416,6 +2548,14 @@ describe("package artifact reuse", () => {
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
     expect(workflow).toContain("Shared release candidate preparation ended with");
+  });
+
+  it("enables prerelease plugin companions for scheduled ref validation", () => {
+    const scheduled = workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks");
+    expect(scheduled.with).toMatchObject({
+      enable_prepublish_plugin_registry: true,
+      ref: "${{ github.sha }}",
+    });
   });
 
   it("gives memory extension shards enough CPU without lowering their planner cost", () => {
@@ -3187,7 +3327,14 @@ describe("package artifact reuse", () => {
     expect(dockerAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
         "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
+      enable_prepublish_plugin_registry:
+        '${{ contains(fromJSON(\'["artifact","ref"]\'), inputs.source) }}',
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
+    expect(workflow).toContain(
+      "candidate_artifact_json cannot be combined with release package specs.",
+    );
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
     );
@@ -3263,10 +3410,10 @@ describe("package artifact reuse", () => {
       "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.repo_live_suite_filter == '')",
+      "if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || needs.resolve_target.outputs.rerun_group == 'package'",
     );
     expect(workflow).toContain(
-      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.repo_live_suite_filter == ''",
+      "if: needs.resolve_target.outputs.docker_release_scheduled == 'true'",
     );
     expect(workflow).toContain(
       'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
@@ -5529,7 +5676,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("executes shared release candidate identity validation with its JSON input", () => {
     const selectedSha = "a".repeat(40);
     const candidate = {
-      packageArtifactName: "docker-e2e-package-123-1",
+      packageArtifactName: "docker-e2e-package-456-1",
       packageArtifactId: "123",
       packageArtifactDigest: "b".repeat(64),
       packageArtifactRunId: "456",
@@ -5550,21 +5697,90 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Validate shared release candidate identity",
     ).run;
     expect(validation).toBeDefined();
+    const binDir = resolve(tempDirs.make("release-candidate-validation-"), "bin");
+    mkdirSync(binDir, { recursive: true });
+    const ghPath = resolve(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+case "$2" in
+  */actions/artifacts/123)
+    printf '%s\n' '{"id":123,"name":"docker-e2e-package-456-1","expired":false,"digest":"sha256:${"b".repeat(64)}","workflow_run":{"id":456}}'
+    ;;
+  */actions/artifacts/790)
+    printf '%s\n' '{"id":790,"name":"docker-e2e-prepublish-plugin-registry-456-1","expired":false,"digest":"sha256:${"f".repeat(64)}","workflow_run":{"id":456}}'
+    ;;
+  */actions/runs/456/attempts/1)
+    printf '%s\n' '{"id":456,"run_attempt":1}'
+    ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const validationEnv = {
+      ...process.env,
+      GH_TOKEN: "test-token",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      SELECTED_SHA: selectedSha,
+    };
 
     const valid = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(valid.status, valid.stderr).toBe(0);
 
+    const registryCandidate = {
+      ...candidate,
+      prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-456-1",
+      prepublishPluginRegistryArtifactId: "790",
+      prepublishPluginRegistryArtifactDigest: "f".repeat(64),
+      prepublishPluginRegistryArtifactRunId: "456",
+      prepublishPluginRegistryArtifactRunAttempt: "1",
+      prepublishPluginRegistryManifestSha256: "1".repeat(64),
+    };
+    const validRegistry = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...validationEnv,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(registryCandidate),
+      },
+    });
+    expect(validRegistry.status, validRegistry.stderr).toBe(0);
+
+    const partialRegistry = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...validationEnv,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify({
+          ...candidate,
+          prepublishPluginRegistryArtifactId: "790",
+        }),
+      },
+    });
+    expect(partialRegistry.status).not.toBe(0);
+
+    const mismatchedRegistryName = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...validationEnv,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify({
+          ...registryCandidate,
+          prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-999-1",
+        }),
+      },
+    });
+    expect(mismatchedRegistryName.status).not.toBe(0);
+
     const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
         SELECTED_SHA: "f".repeat(40),
       },

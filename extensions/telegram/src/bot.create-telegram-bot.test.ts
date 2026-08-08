@@ -42,7 +42,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
-const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
+const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
@@ -5371,8 +5371,11 @@ describe("createTelegramBot", () => {
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
-    const patchSessionEntrySpy = vi.spyOn(sessionStoreRuntime, "patchSessionEntry");
-    patchSessionEntrySpy.mockRejectedValueOnce(new Error("session store boom"));
+    const applySessionModelSelectionSpy = vi.spyOn(
+      modelSessionRuntime,
+      "applySessionModelSelection",
+    );
+    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = makeCallbackRetryContext({
       updateId: 890,
@@ -5385,7 +5388,7 @@ describe("createTelegramBot", () => {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
     } finally {
-      patchSessionEntrySpy.mockRestore();
+      applySessionModelSelectionSpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
@@ -5403,15 +5406,14 @@ describe("createTelegramBot", () => {
   it("shows a permanent rejection when model selection is locked", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const patchSessionEntrySpy = vi
-      .spyOn(sessionStoreRuntime, "patchSessionEntry")
-      .mockImplementationOnce(async (params) => {
+    const getSessionEntrySpy = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntry")
+      .mockImplementationOnce(() => {
         const entry = {
           sessionId: "locked-session",
           updatedAt: Date.now(),
           modelSelectionLocked: true,
         };
-        await params.update(entry, { existingEntry: entry });
         return entry;
       });
     const ctx = makeCallbackRetryContext({
@@ -5423,7 +5425,7 @@ describe("createTelegramBot", () => {
     try {
       await expect(callbackHandler(ctx)).resolves.toBeUndefined();
     } finally {
-      patchSessionEntrySpy.mockRestore();
+      getSessionEntrySpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

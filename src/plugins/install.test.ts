@@ -3754,6 +3754,16 @@ describe("installPluginFromDir", () => {
 
   it.each([
     {
+      name: "installs Agent Plugins bundles from a local directory",
+      setup: () =>
+        setupBundleInstallFixture({
+          bundleFormat: "agent",
+          name: "Portable Sample",
+        }),
+      expectedPluginId: "portable-sample",
+      expectedFiles: ["plugin.json", "skills/fixture/SKILL.md"],
+    },
+    {
       name: "installs Codex bundles from a local directory",
       setup: () =>
         setupBundleInstallFixture({

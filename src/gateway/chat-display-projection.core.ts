@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isContextOverflowError } from "../agents/embedded-agent-helpers/context-overflow.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
@@ -22,13 +23,59 @@ import {
 } from "./chat-display-projection.sanitize.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
+import type {
+  CurrentUserProfileDisplay,
+  CurrentUserProfileDisplayResolver,
+} from "./current-user-profile-display.js";
 
 type ChatDisplayProjectionOptions = {
   maxChars?: number;
+  resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
   turnBoundaryPending?: boolean;
   streamErrorFallbackPending?: boolean;
 };
+
+function projectCurrentUserProfileAvatars(
+  messages: Array<Record<string, unknown>>,
+  resolveDisplay: CurrentUserProfileDisplayResolver | undefined,
+): Array<Record<string, unknown>> {
+  if (!resolveDisplay) {
+    return messages;
+  }
+  const displayBySenderId = new Map<string, CurrentUserProfileDisplay>();
+  let changed = false;
+  const projected = messages.map((message) => {
+    if (message.role !== "user") {
+      return message;
+    }
+    const metadata = asOptionalRecord(message["__openclaw"]);
+    if (!metadata) {
+      return message;
+    }
+    const senderId = metadata.senderId;
+    if (typeof senderId !== "string" || !senderId) {
+      return message;
+    }
+    let display = displayBySenderId.get(senderId);
+    if (!display) {
+      display = resolveDisplay(senderId);
+      displayBySenderId.set(senderId, display);
+    }
+    if (display.kind === "unresolved") {
+      return message;
+    }
+    if (metadata.senderProfileAvatarUrl === display.avatarUrl) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      __openclaw: { ...metadata, senderProfileAvatarUrl: display.avatarUrl },
+    };
+  });
+  return changed ? projected : messages;
+}
 
 type ChatDisplayProjectionResult = {
   messages: Array<Record<string, unknown>>;
@@ -274,11 +321,15 @@ export function projectChatDisplayMessagesWithState(
     ),
     options?.turnBoundaryPending,
   );
+  const displayMessages = sanitizeChatHistoryMessages(
+    mergeTtsSupplementMessages(filtered.messages),
+    options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  ) as Array<Record<string, unknown>>;
   return {
-    messages: sanitizeChatHistoryMessages(
-      mergeTtsSupplementMessages(filtered.messages),
-      options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-    ) as Array<Record<string, unknown>>,
+    messages: projectCurrentUserProfileAvatars(
+      displayMessages,
+      options?.resolveCurrentUserProfileDisplay,
+    ),
     turnBoundaryPending: filtered.turnBoundaryPending,
     streamErrorFallbackPending: repairedStreamErrors.pending,
     streamErrorFallbackRepaired: repairedStreamErrors.repaired,

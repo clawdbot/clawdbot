@@ -1083,6 +1083,29 @@ describe("logs cli", () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
+    it("redacts credential-bearing Gateway URLs from JSON errors", async () => {
+      const rawUrl =
+        "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed";
+      buildGatewayConnectionDetails.mockReturnValueOnce({
+        url: rawUrl,
+        urlSource: "cli --url",
+        message: `Gateway target: ${rawUrl}`,
+      });
+      callGatewayFromCli.mockRejectedValueOnce(new Error(`failed to connect to ${rawUrl}`));
+      const stderrWrites = captureStderrWrites();
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await runLogsCli(["logs", "--json", "--url", rawUrl]);
+
+      const stderr = stderrWrites.join("");
+      expect(stderr).toContain("gateway.example/ws");
+      expect(stderr).not.toContain("password");
+      expect(stderr).not.toContain("secret");
+      expect(stderr).not.toContain("api-key");
+      expect(stderr).not.toContain("signed");
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
     it("routes terminal reset to stderr in --follow --json so stdout stays parseable JSON in a PTY", async () => {
       callGatewayFromCli.mockRejectedValueOnce(
         new GatewayTransportError({

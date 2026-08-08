@@ -12,6 +12,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionSystemPromptReport,
   type SessionEntry,
 } from "../../config/sessions.js";
@@ -107,7 +108,6 @@ export async function persistSessionUsageUpdate(params: {
   providerUsed?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
-  usageIsContextSnapshot?: boolean;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
@@ -133,10 +133,7 @@ export async function persistSessionUsageUpdate(params: {
     params.promptTokens > 0;
   const hasUsableLastCallUsage =
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
-  const hasUsableUsageContextSnapshot =
-    params.usageIsContextSnapshot === true && params.usage?.contextUsage?.state !== "unavailable";
-  const hasFreshContextSnapshot =
-    hasUsableLastCallUsage || hasPromptTokens || hasUsableUsageContextSnapshot;
+  const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
   const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
   const hasCompactionSnapshot = compactionTokensAfter !== undefined;
 
@@ -161,13 +158,10 @@ export async function persistSessionUsageUpdate(params: {
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
           // `lastCallUsage` reflects only the final API call — the true context.
-          const usageForContext =
-            params.lastCallUsage ??
-            (params.usageIsContextSnapshot === true ? params.usage : undefined);
           const usageTotalTokens =
             hasFreshContextSnapshot && !preserveUserFacingRunState
               ? deriveSessionTotalTokens({
-                  usage: usageForContext,
+                  lastCallUsage: params.lastCallUsage,
                   contextTokens: resolvedContextTokens,
                   promptTokens: params.promptTokens,
                 })
@@ -224,9 +218,10 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          if ((hasFreshContextSnapshot || hasCompactionSnapshot) && !preserveUserFacingRunState) {
+          if ((hasPositiveUsageTotal || hasCompactionSnapshot) && !preserveUserFacingRunState) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
+            patch.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
             const accountedGoal = resolveSessionGoalDisplayState({ ...entry, ...patch }, updatedAt);
             if (accountedGoal) {
               patch.goal = accountedGoal;
@@ -236,7 +231,9 @@ export async function persistSessionUsageUpdate(params: {
             (params.preserveFreshTotalTokensOnStaleUsage !== true ||
               entry.totalTokensFresh !== true)
           ) {
+            patch.totalTokens = undefined;
             patch.totalTokensFresh = false;
+            patch.totalTokensVersion = undefined;
           }
           return preserveUserFacingRunState
             ? patch
@@ -288,6 +285,7 @@ export async function persistSessionUsageUpdate(params: {
             // A completed run without a context snapshot invalidates any fresh
             // zero persisted for the previously empty session.
             patch.totalTokensFresh = false;
+            patch.totalTokensVersion = undefined;
           }
           return preserveUserFacingRunState
             ? patch

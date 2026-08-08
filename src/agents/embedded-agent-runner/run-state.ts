@@ -12,6 +12,7 @@ import {
   resolveActiveReplyRunSessionId,
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
+  type ReplyBackendMessageInjection,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -32,6 +33,7 @@ export type EmbeddedAgentQueueHandle = {
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
   ) => Promise<void | ReplyBackendQueueMessageResult>;
+  messageInjection?: ReplyBackendMessageInjection;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
@@ -48,6 +50,8 @@ export type EmbeddedAgentQueueHandle = {
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
+
+export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;

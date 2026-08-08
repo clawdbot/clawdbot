@@ -74,6 +74,23 @@ function fetchFixtureMain(checkout: string, remote: string) {
   git(checkout, "fetch", origin, `main:refs/remotes/${remote}/main`);
 }
 
+async function runFixtureManagedCommand({
+  args,
+  bin,
+  cwd,
+  env,
+}: {
+  args: string[];
+  bin: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  // Fixtures need a real fast-forward, but do not need production process-tree timing.
+  // Keep that contract in managed-child-process tests so fixture assertions stay isolated.
+  execFileSync(bin, args, { cwd, env, stdio: "ignore" });
+  return 0;
+}
+
 function maintainFixture(
   options: Record<string, unknown>,
   dependencies: Record<string, unknown> = {},
@@ -111,6 +128,7 @@ function maintainFixture(
       proofSource: "fixture",
     }),
     readLaunchdEnvironment: () => null,
+    runManagedCommand: runFixtureManagedCommand,
     waitForGatewayProcess: () => {},
     ...dependencies,
   });

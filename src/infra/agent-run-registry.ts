@@ -1,14 +1,11 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import type { AgentExecutionAttribution } from "../agents/agent-execution-attribution.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 type AgentRunContext = {
-  /** Immutable admission-owned correlation; later context merges cannot replace it. */
-  readonly attribution?: AgentExecutionAttribution;
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -66,35 +63,6 @@ function bumpAgentRunIndexVersion(): void {
   getAgentRunRegistryState().version += 1;
 }
 
-function attachAgentExecutionAttribution(
-  context: AgentRunContext,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  if (!attribution || context.attribution) {
-    return;
-  }
-  Object.defineProperty(context, "attribution", {
-    value: attribution,
-    enumerable: true,
-    configurable: false,
-    writable: false,
-  });
-}
-
-function createAgentRunContext(
-  context: AgentRunContext,
-  lifecycleGeneration: string,
-): AgentRunContext {
-  const { attribution, ...fields } = context;
-  const stored: AgentRunContext = {
-    ...fields,
-    lifecycleGeneration,
-    registeredAt: context.registeredAt ?? Date.now(),
-  };
-  attachAgentExecutionAttribution(stored, attribution);
-  return stored;
-}
-
 /** Reads the process-local version of the active-run projection inputs. */
 export function readAgentRunIndexVersion(): number {
   return getAgentRunRegistryState().version;
@@ -137,7 +105,11 @@ export function registerAgentRunContext(
   }
   const existing = state.contexts.get(runId);
   if (!existing) {
-    state.contexts.set(runId, createAgentRunContext(context, lifecycleGeneration));
+    state.contexts.set(runId, {
+      ...context,
+      lifecycleGeneration,
+      registeredAt: context.registeredAt ?? Date.now(),
+    });
     bumpAgentRunIndexVersion();
     return;
   }
@@ -148,7 +120,6 @@ export function registerAgentRunContext(
   ) {
     return;
   }
-  attachAgentExecutionAttribution(existing, context.attribution);
   let runIndexChanged = false;
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
@@ -270,7 +241,11 @@ export function claimAgentRunContext(
     }
     return claimId;
   }
-  state.contexts.set(runId, createAgentRunContext(context, lifecycleGeneration));
+  state.contexts.set(runId, {
+    ...context,
+    lifecycleGeneration,
+    registeredAt: context.registeredAt ?? Date.now(),
+  });
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
   bumpAgentRunIndexVersion();

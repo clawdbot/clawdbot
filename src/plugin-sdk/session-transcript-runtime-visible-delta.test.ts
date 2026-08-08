@@ -7,6 +7,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -254,6 +255,73 @@ describe("session transcript visible cursor SDK", () => {
       entries: [{ message: { role: "user", content } }],
       hasMore: false,
       serializedBytes: bounded.requiredBytes,
+    });
+  });
+
+  it("stops a visible cursor before the admitted row and resumes it after the fence", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "visible-delta-fence",
+      sessionKey: "agent:main:visible-delta-fence",
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const prior = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "same prompt" },
+      now: 1_000,
+    });
+    const admitted = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "same prompt" },
+      parentId: prior?.messageId,
+      now: 2_000,
+    });
+    const assistant = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "assistant", content: "answer" },
+      parentId: admitted?.messageId,
+      now: 3_000,
+    });
+    if (!prior || !admitted || !assistant) {
+      throw new Error("expected visible fence setup messages");
+    }
+
+    if (!admitted.anchor) {
+      throw new Error("expected admitted transcript anchor");
+    }
+    const fenced = await runWithSessionTranscriptReadFence(
+      { ...admitted.anchor, logicalTurnId: "visible-delta-fence", role: "user" },
+      async () =>
+        await readSessionTranscriptVisibleMessageDelta({
+          ...scope,
+          maxBytes: 100_000,
+          maxMessages: 10,
+        }),
+    );
+    expect(fenced).toMatchObject({
+      kind: "page",
+      entries: [{ entryId: prior.messageId, message: { content: "same prompt" } }],
+      hasMore: false,
+    });
+    if (fenced.kind !== "page") {
+      throw new Error("expected fenced visible transcript page");
+    }
+
+    await expect(
+      readSessionTranscriptVisibleMessageDelta({
+        ...scope,
+        cursor: fenced.cursor,
+        maxBytes: 100_000,
+        maxMessages: 10,
+      }),
+    ).resolves.toMatchObject({
+      kind: "page",
+      entries: [
+        { entryId: admitted.messageId, message: { content: "same prompt" } },
+        { entryId: assistant.messageId, message: { content: "answer" } },
+      ],
+      hasMore: false,
     });
   });
 });

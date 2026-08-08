@@ -19,12 +19,6 @@ import { resolveConversationBindingRecord } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { logVerbose } from "../../globals.js";
-import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import {
-  toInternalMessageReceivedContext,
-  toPluginMessageContext,
-  toPluginMessageReceivedEvent,
-} from "../../hooks/message-hook-mappers.js";
 import {
   isPluginOwnedSessionBindingRecord,
   toPluginConversationBinding,
@@ -46,9 +40,9 @@ import {
 } from "./dispatch-from-config.harness-defaults.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
-import { createInternalHookEvent, triggerInternalHook } from "./dispatch-from-config.runtime.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
@@ -464,31 +458,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       | "plugin-bound-fallback-no-handler";
   } = {};
   const emitMessageReceivedHooks = () => {
-    if (
-      ctx.SuppressMessageReceivedHooks !== true &&
-      hookRunner?.hasHooks("message_received") === true
-    ) {
-      const messageReceivedHookContext = buildMessageReceivedHookContext();
-      fireAndForgetHook(
-        hookRunner.runMessageReceived(
-          toPluginMessageReceivedEvent(messageReceivedHookContext),
-          toPluginMessageContext(messageReceivedHookContext),
-        ),
-        "dispatch-from-config: message_received plugin hook failed",
-      );
-    }
-    if (ctx.SuppressMessageReceivedHooks !== true && sessionKey) {
-      const messageReceivedHookContext = buildMessageReceivedHookContext();
-      fireAndForgetHook(
-        triggerInternalHook(
-          createInternalHookEvent("message", "received", sessionKey, {
-            ...toInternalMessageReceivedContext(messageReceivedHookContext),
-            timestamp: state.timestamp,
-          }),
-        ),
-        "dispatch-from-config: message_received internal hook failed",
-      );
-    }
+    emitSharedMessageReceivedHooks({
+      ctx,
+      hookRunner,
+      sessionKey,
+      timestamp: state.timestamp,
+      buildContext: buildMessageReceivedHookContext,
+    });
   };
   state.markProcessing();
   if (await capturePendingConversationTurnReply({ cfg, ctx })) {
