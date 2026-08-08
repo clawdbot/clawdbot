@@ -50,14 +50,14 @@ const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 // Bound protocol-owned catalog text before it becomes model-visible JSON.
-// Eight entries retain the complete built-in thinking catalog.
+// Nine entries retain the complete built-in thinking catalog.
 const RESOLVED_MODEL_PROVIDER_MAX_LENGTH = 48;
 const RESOLVED_MODEL_MAX_LENGTH = 96;
 const RESOLVED_AGENT_RUNTIME_ID_MAX_LENGTH = 48;
 const RESOLVED_THINKING_LEVEL_MAX_LENGTH = 16;
 const RESOLVED_THINKING_LEVEL_ID_MAX_LENGTH = 12;
 const RESOLVED_THINKING_LEVEL_LABEL_MAX_LENGTH = 16;
-const RESOLVED_THINKING_LEVELS_MAX_ITEMS = 8;
+const RESOLVED_THINKING_LEVELS_MAX_ITEMS = 9;
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;

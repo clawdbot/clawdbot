@@ -41,7 +41,7 @@ const expectedAdversarialResolved = {
     source: "session-key" as const,
   },
   thinkingLevel: "考".repeat(15),
-  thinkingLevels: Array.from({ length: 8 }, (_, index) => ({
+  thinkingLevels: Array.from({ length: 9 }, (_, index) => ({
     id: `${index}:${"識".repeat(10)}`,
     label: `${index}:${"思".repeat(14)}`,
   })),
@@ -72,7 +72,7 @@ const expectedEscapeHeavyResolved = {
     source: "provider" as const,
   },
   thinkingLevel: "\0".repeat(16),
-  thinkingLevels: Array.from({ length: 8 }, (_, index) => ({
+  thinkingLevels: Array.from({ length: 9 }, (_, index) => ({
     id: `${index}:${"\0".repeat(10)}`,
     label: `${index}:${"\0".repeat(14)}`,
   })),
@@ -92,7 +92,7 @@ function expectBoundedResolvedAcknowledgement(
   expect(text).not.toContain('"path"');
   expect(text).not.toContain("skillsSnapshot");
   expect(text).not.toContain("🦞");
-  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_584);
+  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
 }
 
 describe("sessions tool", () => {
@@ -727,6 +727,41 @@ describe("sessions tool", () => {
     expect(text).not.toContain('"path"');
     expect(text).not.toContain("skillsSnapshot");
     expect(Buffer.byteLength(text, "utf8")).toBeLessThan(1_024);
+  });
+
+  it("preserves the complete canonical thinking catalog through ultra", async () => {
+    const thinkingLevels = [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+      "ultra",
+    ].map((id) => ({ id, label: id }));
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: "/sessions/main",
+      key: "agent:main:main",
+      entry: {},
+      resolved: { thinkingLevel: "ultra", thinkingLevels },
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-ultra-thinking", {
+      action: "patch",
+      thinkingLevel: "ultra",
+    });
+
+    expect(result.details).toMatchObject({
+      resolved: { thinkingLevel: "ultra", thinkingLevels },
+    });
   });
 
   it.each([
