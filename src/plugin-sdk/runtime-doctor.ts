@@ -51,7 +51,7 @@ export {
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
-export { removePluginFromConfig } from "../plugins/uninstall.js";
+export { removePluginFromConfig } from "../plugins/uninstall-config.js";
 export type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,

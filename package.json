@@ -107,8 +107,11 @@
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-fs.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-schema.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-core.d.ts",
@@ -1184,6 +1187,9 @@
     "./plugin-sdk/memory-core-host-embedding-registry": {
       "default": "./dist/plugin-sdk/memory-core-host-embedding-registry.js"
     },
+    "./plugin-sdk/memory-core-host-engine-curated": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-curated.js"
+    },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
     },
@@ -1191,8 +1197,14 @@
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
     },
+    "./plugin-sdk/memory-core-host-engine-fs": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-fs.js"
+    },
     "./plugin-sdk/memory-core-host-engine-qmd": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-schema": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-schema.js"
     },
     "./plugin-sdk/memory-core-host-engine-storage": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"

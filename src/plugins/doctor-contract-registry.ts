@@ -4,6 +4,8 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
@@ -15,6 +17,8 @@ import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+
+const log = createSubsystemLogger("plugins/doctor-contracts");
 
 type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
@@ -368,7 +372,10 @@ function loadPluginDoctorContractEntry(
   let mod: PluginDoctorContractModule;
   try {
     mod = loadPluginDoctorContractModule(contractSource);
-  } catch {
+  } catch (error) {
+    log.warn(
+      `failed to load doctor contract for ${record.id} from ${contractSource}: ${formatErrorMessage(error)}`,
+    );
     return null;
   }
   const rules = coerceLegacyConfigRules(
