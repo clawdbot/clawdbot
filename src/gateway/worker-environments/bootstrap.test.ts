@@ -80,6 +80,11 @@ function fakeRunner(
   return { calls, runCommand };
 }
 
+function commandPort(argv: string[]): number {
+  const portFlag = argv[0] === "scp" ? "-P" : "-p";
+  return Number(argv[argv.indexOf(portFlag) + 1]);
+}
+
 const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
 const bootstrapWorker = (
   request: WorkerBootstrapRequest,
@@ -193,12 +198,7 @@ describe("bootstrapWorker", () => {
     ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
 
     expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "scp", "ssh"]);
-    expect(
-      runner.calls.map((call) => {
-        const portFlag = call.argv[0] === "scp" ? "-P" : "-p";
-        return Number(call.argv[call.argv.indexOf(portFlag) + 1]);
-      }),
-    ).toEqual([2222, 22, 22, 22]);
+    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual([2222, 22, 22, 22]);
     expect(new Set(runner.calls.map((call) => call.argv[call.argv.indexOf("-i") + 1]))).toEqual(
       new Set(["/keys/worker"]),
     );
@@ -209,6 +209,44 @@ describe("bootstrapWorker", () => {
         ),
       ).size,
     ).toBe(1);
+  });
+
+  it("retries bundle transfer when the selected port changes after preflight", async () => {
+    const runner = fakeRunner([
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result({ code: 255, stderr: "primary transport unavailable" }),
+      result(),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+    ]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "scp", "ssh"]);
+    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual([2222, 2222, 22, 22]);
+  });
+
+  it("retries install when the selected port changes after bundle transfer", async () => {
+    const runner = fakeRunner([
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result(),
+      result({ code: 255, stderr: "primary transport unavailable" }),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+    ]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh", "ssh"]);
+    expect(runner.calls.map((call) => commandPort(call.argv))).toEqual([2222, 2222, 2222, 22]);
   });
 
   it("fails with provider setup guidance when Node.js is missing", async () => {
@@ -374,25 +412,62 @@ describe("bootstrapWorker", () => {
     expect(runner.calls).toHaveLength(1);
   });
 
-  it("removes a partial remote upload after transfer failure", async () => {
-    const runner = fakeRunner([
-      result({ stdout: tagged("install", REMOTE_TARBALL) }),
-      result({ code: 1, stderr: "connection reset" }),
-      result(),
-    ]);
+  it.each([
+    {
+      phase: "bundle transfer",
+      phaseCommand: "scp",
+      responses: [
+        result({ stdout: tagged("install", REMOTE_TARBALL) }),
+        result({ code: 1, stderr: "transfer rejected" }),
+        result({ code: 255, stderr: "selected port changed" }),
+        result(),
+      ],
+      commands: ["ssh", "scp", "ssh", "ssh"],
+      cleanupPorts: [2222, 22],
+    },
+    {
+      phase: "install",
+      phaseCommand: "install",
+      responses: [
+        result({ stdout: tagged("install", REMOTE_TARBALL) }),
+        result(),
+        result({ code: 1, stderr: "install rejected" }),
+        result(),
+      ],
+      commands: ["ssh", "scp", "ssh", "ssh"],
+      cleanupPorts: [2222],
+    },
+  ])(
+    "does not retry fallback after a non-255 $phase failure and cleans up the upload",
+    async ({ phase, phaseCommand, responses, commands, cleanupPorts }) => {
+      const runner = fakeRunner(responses);
 
-    await expect(
-      bootstrapWorker(
-        { ssh: SSH, artifact: BUNDLE },
-        { resolveIdentity, runCommand: runner.runCommand },
-      ),
-    ).rejects.toThrow("bundle transfer failed");
+      await expect(
+        bootstrapWorker(
+          { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
+          { resolveIdentity, runCommand: runner.runCommand },
+        ),
+      ).rejects.toThrow(`Worker bootstrap ${phase} failed`);
 
-    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh"]);
-    expect(runner.calls[2]?.options.input).toContain('rm -f -- "$1"');
-    expect(runner.calls[2]?.argv.at(-1)).toContain(REMOTE_TARBALL);
-    expect(runner.calls[2]?.options.signal).toBeUndefined();
-  });
+      expect(runner.calls.map((call) => call.argv[0])).toEqual(commands);
+      const phaseCalls = runner.calls.filter((call) =>
+        phaseCommand === "scp"
+          ? call.argv[0] === "scp"
+          : typeof call.options.input === "string" &&
+            call.options.input.includes("receipt_json=$5"),
+      );
+      expect(phaseCalls).toHaveLength(1);
+      expect(commandPort(phaseCalls[0]!.argv)).toBe(2222);
+
+      const cleanupCalls = runner.calls.filter(
+        (call) =>
+          typeof call.options.input === "string" && call.options.input.includes('rm -f -- "$1"'),
+      );
+      expect(cleanupCalls.map((call) => commandPort(call.argv))).toEqual(cleanupPorts);
+      expect(cleanupCalls.every((call) => call.argv.at(-1)?.includes(REMOTE_TARBALL))).toBe(true);
+      expect(cleanupCalls.every((call) => call.options.signal === undefined)).toBe(true);
+    },
+  );
 
   it("keeps bootstrap failure details on a valid UTF-16 boundary", async () => {
     const prefix = "e".repeat(511);

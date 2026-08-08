@@ -629,12 +629,21 @@ async function cleanupRemoteUpload(params: {
   runCommand: WorkerBootstrapCommandRunner;
   timeoutMs: number;
 }): Promise<void> {
-  await runSshScript({
-    prepared: params.prepared,
-    runCommand: params.runCommand,
-    script: CLEANUP_UPLOAD_SCRIPT,
-    scriptArgs: [params.remotePath],
-    timeoutMs: Math.min(params.timeoutMs, 10_000),
+  // Candidate failover shares one budget so best-effort cleanup cannot extend teardown per port.
+  const cleanupDeadline = Date.now() + Math.min(params.timeoutMs, 10_000);
+  await runWorkerSshCandidates(params.prepared, (port) => {
+    const timeoutMs = cleanupDeadline - Date.now();
+    if (timeoutMs <= 0) {
+      throw new Error("Worker bootstrap upload cleanup timed out");
+    }
+    return runSshScript({
+      prepared: params.prepared,
+      runCommand: params.runCommand,
+      script: CLEANUP_UPLOAD_SCRIPT,
+      scriptArgs: [params.remotePath],
+      timeoutMs,
+      port,
+    });
   }).catch(() => undefined);
 }
 
@@ -723,39 +732,44 @@ export async function bootstrapWorker(
 
     try {
       if (request.artifact.install === "bundle") {
-        const transfer = await runCommand(
-          [
-            "scp",
-            ...workerSshOptions(prepared, { forwarding: "disabled" }),
-            "-P",
-            String(prepared.port),
-            "--",
-            request.artifact.tarballPath,
-            `${prepared.scpTarget}:${preflight.path}`,
-          ],
-          workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
+        const transfer = await runWorkerSshCandidates(prepared, (port) =>
+          runCommand(
+            [
+              "scp",
+              ...workerSshOptions(prepared, { forwarding: "disabled" }),
+              "-P",
+              String(port),
+              "--",
+              request.artifact.tarballPath,
+              `${prepared.scpTarget}:${preflight.path}`,
+            ],
+            workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
+          ),
         );
         if (!isSuccess(transfer)) {
           throw commandFailure("bundle transfer", transfer);
         }
       }
 
-      const install = await runSshScript({
-        prepared,
-        runCommand,
-        script: INSTALL_SCRIPT,
-        scriptArgs: [
-          request.artifact.install,
-          receipt.bundleHash,
-          request.artifact.install === "npm" ? request.artifact.packageSpec : "",
-          request.artifact.install === "npm" ? request.artifact.packageIntegrity : "",
-          JSON.stringify(receipt),
-          preflight.path,
-          request.artifact.install === "bundle" ? request.artifact.tarballSha256 : "",
-        ],
-        timeoutMs,
-        signal: dependencies.signal,
-      });
+      const install = await runWorkerSshCandidates(prepared, (port) =>
+        runSshScript({
+          prepared,
+          runCommand,
+          script: INSTALL_SCRIPT,
+          scriptArgs: [
+            request.artifact.install,
+            receipt.bundleHash,
+            request.artifact.install === "npm" ? request.artifact.packageSpec : "",
+            request.artifact.install === "npm" ? request.artifact.packageIntegrity : "",
+            JSON.stringify(receipt),
+            preflight.path,
+            request.artifact.install === "bundle" ? request.artifact.tarballSha256 : "",
+          ],
+          timeoutMs,
+          port,
+          signal: dependencies.signal,
+        }),
+      );
       if (
         install.code === NPM_MISSING_EXIT_CODE ||
         install.stderr.includes(NPM_MISSING_MARKER) ||
