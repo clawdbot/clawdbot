@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { validatePrepublishPluginRegistryArtifact } from "../../prepublish-plugin-registry-artifact.mjs";
 
-export type CrossOsCompanionPackage = {
+type CrossOsCompanionPackage = {
   name: string;
   tarballPath: string;
 };
