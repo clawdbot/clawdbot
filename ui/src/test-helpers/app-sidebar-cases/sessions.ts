@@ -351,22 +351,25 @@ describe("AppSidebar session mutation feedback", () => {
       "agent:main:a",
       "agent:main:b",
     ]);
-    const originalRequest = client.request?.bind(client);
-    const gateway = createGatewayHarness({
-      ...client,
-      request: (method, params, options) => {
-        if (method === "sessions.archiveMany") {
-          const request = params as {
-            targets: Array<{ key: string; agentId?: string }>;
-            archived: boolean;
-          };
-          return harness.archiveMany(request.targets, request.archived);
-        }
-        return originalRequest
-          ? originalRequest(method, params, options)
-          : Promise.reject(new Error(`unexpected request: ${method}`));
-      },
-    } as GatewayBrowserClient);
+    const originalRequest = client.request?.bind(client) as
+      | GatewayBrowserClient["request"]
+      | undefined;
+    client.request = <T = unknown>(
+      ...args: Parameters<GatewayBrowserClient["request"]>
+    ): Promise<T> => {
+      const [method, params] = args;
+      if (method === "sessions.archiveMany") {
+        const request = params as {
+          targets: Array<{ key: string; agentId?: string }>;
+          archived: boolean;
+        };
+        return harness.archiveMany(request.targets, request.archived).then((result) => result as T);
+      }
+      return originalRequest
+        ? originalRequest<T>(...args)
+        : Promise.reject(new Error(`unexpected request: ${method}`));
+    };
+    const gateway = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;

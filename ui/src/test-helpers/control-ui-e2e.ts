@@ -1553,13 +1553,13 @@ function installControlUiMockGateway(
       case "sessions.archiveMany": {
         const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
         const result = {
-          outcomes: targets.map((target) => ({
-            ok: true,
-            key: isRecord(target) && typeof target.key === "string" ? target.key : "unknown",
-            ...(isRecord(target) && typeof target.agentId === "string"
-              ? { agentId: target.agentId }
-              : {}),
-          })),
+          outcomes: targets.map((target) => {
+            const key = isRecord(target) && typeof target.key === "string" ? target.key : "unknown";
+            if (isRecord(target) && typeof target.agentId === "string") {
+              return { ok: true, key, agentId: target.agentId };
+            }
+            return { ok: true, key };
+          }),
         };
         recordSessionsArchiveMany(params, result);
         return result;
