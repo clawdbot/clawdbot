@@ -29,7 +29,3 @@ export function resolveCrossOsCompanionPackages(params: {
       tarballPath: resolve(artifactDir, entry.tarball),
     }));
 }
-
-export function buildCrossOsCompanionInstallArgs(companion: CrossOsCompanionPackage): string[] {
-  return ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
-}

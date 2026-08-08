@@ -162,16 +162,6 @@ export function resolveProviderConfig(provider: string, env = process.env): Prov
   return { ...config, model };
 }
 
-export function assertCrossOsCompanionRegistryAvailable(
-  provider: string,
-  requiredPackages: readonly string[],
-  available: boolean,
-) {
-  if (requiredPackages.length > 0 && !available) {
-    throw new Error(`Provider "${provider}" requires an immutable prerelease companion registry.`);
-  }
-}
-
 const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "acpx",
   "bonjour",

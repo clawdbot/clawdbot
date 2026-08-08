@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { resolveCrossOsCompanionPackages } from "./lib/cross-os-release-checks/companions.ts";
 import type { CandidateBuild, LaneResult } from "./lib/cross-os-release-checks/config.ts";
 import {
-  assertCrossOsCompanionRegistryAvailable,
   isSupportedCrossOsSuite,
   parseArgs,
   readRunnerOverrideEnv,
@@ -101,10 +100,17 @@ async function main(argv: string[]) {
     : "";
   const providedCandidateVersion = args["candidate-version"]?.trim() || "";
   const providedSourceSha = args["source-sha"]?.trim() || "";
-  const pluginRegistryDir = args["plugin-registry-dir"]?.trim()
-    ? resolve(args["plugin-registry-dir"].trim())
-    : "";
-  const pluginRegistryManifestSha256 = args["plugin-registry-manifest-sha256"]?.trim() || "";
+  const pluginRegistryDir = args["plugin-registry-dir"]?.trim();
+  const pluginRegistryManifestSha256 = args["plugin-registry-manifest-sha256"]?.trim();
+  if (Boolean(pluginRegistryDir) !== Boolean(pluginRegistryManifestSha256)) {
+    throw new Error(
+      "--plugin-registry-dir and --plugin-registry-manifest-sha256 must be provided together.",
+    );
+  }
+  const pluginRegistry =
+    pluginRegistryDir && pluginRegistryManifestSha256
+      ? { dir: resolve(pluginRegistryDir), manifestSha256: pluginRegistryManifestSha256 }
+      : undefined;
   const runDiscordRoundtrip = args["run-discord-roundtrip"] === "true";
 
   const selectedProvider = resolveProviderConfig(provider);
@@ -175,21 +181,16 @@ async function main(argv: string[]) {
     summary.sourceSha = build.sourceSha;
     summary.candidateVersion = build.candidateVersion;
     summary.candidateTgz = build.candidateTgz;
-    if (Boolean(pluginRegistryDir) !== Boolean(pluginRegistryManifestSha256)) {
+    if (requiredCompanionPackages.length > 0 && !pluginRegistry) {
       throw new Error(
-        "--plugin-registry-dir and --plugin-registry-manifest-sha256 must be provided together.",
+        `Provider "${provider}" requires an immutable prerelease companion registry.`,
       );
     }
-    assertCrossOsCompanionRegistryAvailable(
-      provider,
-      requiredCompanionPackages,
-      Boolean(pluginRegistryDir),
-    );
-    const companions = pluginRegistryDir
+    const companions = pluginRegistry
       ? resolveCrossOsCompanionPackages({
-          artifactDir: pluginRegistryDir,
+          artifactDir: pluginRegistry.dir,
           candidateVersion: build.candidateVersion,
-          manifestSha256: pluginRegistryManifestSha256,
+          manifestSha256: pluginRegistry.manifestSha256,
           requiredPackages: requiredCompanionPackages,
           sourceSha: build.sourceSha,
         })

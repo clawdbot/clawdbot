@@ -1474,10 +1474,8 @@ async function resolveCandidate(options) {
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
   let pluginRegistrySource;
-  let pluginRegistryCandidateVersion = "";
-  let pluginRegistrySourceSha = "";
   let artifactMetadata = {};
-  let pluginRegistryManifestSha256 = "";
+  let pluginRegistryIdentity;
   let resolveError;
 
   try {
@@ -1583,9 +1581,11 @@ async function resolveCandidate(options) {
         candidateVersion: rootPackage.version,
         requiredPackages,
       });
-      pluginRegistryCandidateVersion = rootPackage.version;
-      pluginRegistrySourceSha = pluginRegistrySource.selectedSha;
-      pluginRegistryManifestSha256 = registry.manifestSha256;
+      pluginRegistryIdentity = {
+        candidateVersion: rootPackage.version,
+        manifestSha256: registry.manifestSha256,
+        sourceSha: pluginRegistrySource.selectedSha,
+      };
     }
   } catch (error) {
     resolveError = error;
@@ -1614,8 +1614,9 @@ async function resolveCandidate(options) {
     }
   }
   if (
-    pluginRegistryManifestSha256 &&
-    (pluginRegistryCandidateVersion !== pkg.version || pluginRegistrySourceSha !== packageSourceSha)
+    pluginRegistryIdentity &&
+    (pluginRegistryIdentity.candidateVersion !== pkg.version ||
+      pluginRegistryIdentity.sourceSha !== packageSourceSha)
   ) {
     throw new Error(
       "prepublish plugin registry source SHA/version differs from the package candidate",
@@ -1627,7 +1628,7 @@ async function resolveCandidate(options) {
     packageSpec: options.packageSpec || "",
     packageSourceSha,
     packageTrustedReason,
-    pluginRegistryManifestSha256,
+    pluginRegistryManifestSha256: pluginRegistryIdentity?.manifestSha256 ?? "",
     trustedSourceId: packageTrustedSourceId,
     sha256: digest,
     source: options.source,
@@ -1653,7 +1654,7 @@ async function resolveCandidate(options) {
     package_name: pkg.name,
     package_source_sha: packageSourceSha,
     package_version: pkg.version,
-    plugin_registry_manifest_sha256: pluginRegistryManifestSha256,
+    plugin_registry_manifest_sha256: pluginRegistryIdentity?.manifestSha256 ?? "",
     sha256: digest,
     tarball: metadata.tarball,
   });

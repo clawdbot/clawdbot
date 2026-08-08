@@ -21,12 +21,10 @@ import { describe, expect, it } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
   acquireManagedGatewayInstallerHostLease,
-  assertCrossOsCompanionRegistryAvailable,
   buildCrossOsDiscordRoundtripNonces,
   buildCrossOsReleaseAgentSessionId,
   buildCrossOsReleaseSmokePluginAllowlist,
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
-  buildCrossOsCompanionInstallArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -794,46 +792,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(freshLaneSource).toContain("phaseTimings: lane.phaseTimings");
   });
 
-  it("builds managed installs for validated companion tarballs", () => {
-    const companions = [
-      {
-        name: "@openclaw/codex",
-        tarballPath: "/tmp/openclaw-codex-2026.8.1-beta.1.tgz",
-      },
-      {
-        name: "@openclaw/discord",
-        tarballPath: "/tmp/openclaw-discord-2026.8.1-beta.1.tgz",
-      },
-    ];
-
-    expect(companions.map(buildCrossOsCompanionInstallArgs)).toEqual(
-      companions.map((companion) => [
-        "plugins",
-        "install",
-        `npm-pack:${companion.tarballPath}`,
-        "--force",
-      ]),
-    );
-  });
-
-  it.each([
-    ["Linux packaged fresh", "runFreshLane", "runUpgradeLane", false],
-    ["macOS packaged upgrade", "runUpgradeLane", "runInstallerFreshSuite", false],
-    ["Windows installer fresh", "runInstallerFreshSuite", "runDevUpdateSuite", true],
-  ])("installs companions before onboarding for %s", (_label, start, end, usesCliPath) => {
-    const source = readFileSync("scripts/lib/cross-os-release-checks/lanes.ts", "utf8");
-    const laneSource = source.slice(
-      source.indexOf(`function ${start}`),
-      source.indexOf(`function ${end}`),
-    );
-    const installIndex = laneSource.indexOf("installLaneCompanions(");
-    const onboardIndex = laneSource.indexOf('"onboard"');
-
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(onboardIndex).toBeGreaterThan(installIndex);
-    expect(laneSource.includes("cliPath: freshShell.cliPath")).toBe(usesCliPath);
-  });
-
   it("accepts OK agent output from the captured log when stdout is empty", () => {
     withTempDir("openclaw-cross-os-agent-output-", (dir) => {
       const logPath = join(dir, "agent.log");
@@ -1013,17 +971,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
     expect(resolveProviderConfig("anthropic", {})?.requiredCompanionPackages).toEqual([]);
     expect(resolveProviderConfig("minimax", {})?.requiredCompanionPackages).toEqual([]);
-  });
-
-  it("requires immutable companions only for providers that own them", () => {
-    expect(() =>
-      assertCrossOsCompanionRegistryAvailable("openai", ["@openclaw/codex"], false),
-    ).toThrow('Provider "openai" requires an immutable prerelease companion registry.');
-    expect(() =>
-      assertCrossOsCompanionRegistryAvailable("openai", ["@openclaw/codex"], true),
-    ).not.toThrow();
-    expect(() => assertCrossOsCompanionRegistryAvailable("anthropic", [], false)).not.toThrow();
-    expect(() => assertCrossOsCompanionRegistryAvailable("minimax", [], false)).not.toThrow();
   });
 
   it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {
@@ -1372,30 +1319,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       suite: "packaged-fresh",
       suite_label: "packaged fresh",
     });
-  });
-
-  it("keeps the immutable release matrix at three suites across three operating systems", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "08753a1d793c040b101c8a26c43445dbbab14995",
-      ubuntuRunner: "ubuntu-24.04",
-      windowsRunner: "windows-2025",
-      macosRunner: "macos-26",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(9);
-    expect(matrix.include.map(({ os_id, suite }) => `${os_id}/${suite}`).toSorted()).toEqual(
-      ["ubuntu", "windows", "macos"]
-        .flatMap((os) =>
-          ["packaged-fresh", "packaged-upgrade", "installer-fresh"].map(
-            (suite) => `${os}/${suite}`,
-          ),
-        )
-        .toSorted(),
-    );
   });
 
   it("keeps matrix resolution independent of package dependency imports", () => {

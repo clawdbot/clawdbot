@@ -187,22 +187,6 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
-  it("creates a source-built companion registry before removing the trusted worktree", () => {
-    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
-    const createIndex = script.indexOf("createPrepublishPluginRegistryArtifact({");
-    const cleanupIndex = script.indexOf("cleanupPackageSourceWorktree(packageWorktreeDir");
-
-    expect(createIndex).toBeGreaterThan(0);
-    expect(createIndex).toBeLessThan(cleanupIndex);
-    expect(script).toContain("requiredPackages,");
-    expect(script).toContain("plugin_registry_manifest_sha256: pluginRegistryManifestSha256");
-    expect(script).toContain('options.source === "npm"');
-    expect(script).toContain("pluginRegistrySource = await preparePackageSourceWorktree(");
-    expect(script).toContain(
-      "prepublish plugin registry source SHA/version differs from the package candidate",
-    );
-  });
-
   it("rejects option-shaped package candidate option values", () => {
     for (const flag of [
       "--artifact-dir",

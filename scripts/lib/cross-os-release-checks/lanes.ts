@@ -1,7 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { buildCrossOsCompanionInstallArgs } from "./companions.ts";
 import type {
   CandidateBuild,
   Cleanup,
@@ -96,7 +95,7 @@ async function installLaneCompanions(
         params.logsDir,
         `companion-${companion.name.replace(/[^a-z0-9]+/giu, "-")}.log`,
       );
-      const args = buildCrossOsCompanionInstallArgs(companion);
+      const args = ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
       if (params.cliPath) {
         await runInstalledCli({
           cliPath: params.cliPath,
