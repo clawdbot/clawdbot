@@ -8,7 +8,7 @@ function outcome(params: {
   result: AgentToolResult<unknown>;
   isError?: boolean;
   executionStarted?: boolean;
-  errorKind?: "argument-validation";
+  errorKind?: "argument-validation" | "steering";
 }): AfterToolOutcomeContext {
   return {
     assistantMessage:
@@ -89,6 +89,31 @@ describe("installCodeModeRepairHook", () => {
         bridgeDispatchStarted: false,
         repair: { allowed: true, remainingAttempts: 1 },
       },
+    });
+  });
+
+  it("leaves steering skips unchanged without spending repair", async () => {
+    const agent = createAgent();
+    const skipped = {
+      content: [{ type: "text" as const, text: "Skipped due to queued user message." }],
+      details: {},
+    };
+
+    await expect(
+      agent.afterToolOutcome?.(
+        outcome({
+          result: skipped,
+          isError: true,
+          executionStarted: false,
+          errorKind: "steering",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      agent.afterToolOutcome?.(outcome({ result: failedResult() })),
+    ).resolves.toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
     });
   });
 

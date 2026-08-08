@@ -61,6 +61,13 @@ type AssistantMessageUpdateEvent = Extract<
 
 const TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE =
   "OpenClaw stopped this run because tool-loop recovery encountered another critical loop. No blocked tool action was executed.";
+const STEERING_TOOL_SKIP_MESSAGE = "Skipped due to queued user message.";
+
+function getSteeringAtCheckpoint(
+  config: AgentLoopConfig,
+): AgentMessage[] | PromiseLike<AgentMessage[]> {
+  return config.getSteeringMessages?.() ?? [];
+}
 
 function appendTextDeltaToAssistantMessage(
   message: AssistantMessage,
@@ -290,7 +297,10 @@ async function runLoop(
     criticalToolLoopSeen: false,
   };
   // Check for steering messages at start (user may have typed while waiting)
-  let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+  const initialSteering = getSteeringAtCheckpoint(config);
+  let pendingMessages: AgentMessage[] = Array.isArray(initialSteering)
+    ? initialSteering
+    : await initialSteering;
   const stopIfAborted = async (): Promise<boolean> => {
     if (!signal?.aborted) {
       return false;
@@ -340,7 +350,9 @@ async function runLoop(
 
       // Process pending messages (inject before next assistant response)
       if (pendingMessages.length > 0) {
-        for (const message of pendingMessages) {
+        const messagesToInject = pendingMessages;
+        pendingMessages = [];
+        for (const message of messagesToInject) {
           if (message.role === "user") {
             turnTainted = false;
           }
@@ -394,6 +406,7 @@ async function runLoop(
         toolResults.push(...executedToolBatch.messages);
         turnTainted ||= toolResults.some(toolResultTaintsTurn);
         hasMoreToolCalls = !executedToolBatch.terminate;
+        pendingMessages = executedToolBatch.steeringMessages;
         if (executedToolBatch.intervention) {
           toolLoopRecoveryState.criticalToolLoopSeen = true;
         }
@@ -459,19 +472,22 @@ async function runLoop(
         return;
       }
 
-      if (
-        await config.shouldStopAfterTurn?.({
-          message,
-          toolResults,
-          context: currentContext,
-          newMessages,
-        })
-      ) {
-        await emit({ type: "agent_end", messages: newMessages });
-        return;
-      }
+      if (pendingMessages.length === 0) {
+        if (
+          await config.shouldStopAfterTurn?.({
+            message,
+            toolResults,
+            context: currentContext,
+            newMessages,
+          })
+        ) {
+          await emit({ type: "agent_end", messages: newMessages });
+          return;
+        }
 
-      pendingMessages = (await config.getSteeringMessages?.()) || [];
+        const steering = getSteeringAtCheckpoint(config);
+        pendingMessages = Array.isArray(steering) ? steering : await steering;
+      }
       if (await stopIfAborted()) {
         return;
       }
@@ -710,6 +726,7 @@ async function executeToolCalls(
 
 type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
+  steeringMessages: AgentMessage[];
   terminate: boolean;
   terminateRun: boolean;
   intervention?: ToolLoopIntervention;
@@ -744,8 +761,23 @@ async function executeToolCallsSequential(
 ): Promise<ExecutedToolCallBatch> {
   const finalizedCalls: FinalizedToolCallOutcome[] = [];
   const messages: ToolResultMessage[] = [];
+  let steeringMessages: AgentMessage[] = [];
+  let skippedPrepared: PreparedToolCall | undefined;
+  let skippedStartIndex = toolCalls.length;
 
-  for (const toolCall of toolCalls) {
+  for (let callIndex = 0; callIndex < toolCalls.length; callIndex++) {
+    const toolCall = toolCalls[callIndex];
+    if (!toolCall) {
+      continue;
+    }
+    if (!signal?.aborted) {
+      const steering = getSteeringAtCheckpoint(config);
+      steeringMessages = Array.isArray(steering) ? steering : await steering;
+    }
+    if (steeringMessages.length > 0) {
+      skippedStartIndex = callIndex;
+      break;
+    }
     const hideFromChannelProgress = hidesToolCallFromChannelProgress(
       currentContext,
       toolCall,
@@ -786,6 +818,15 @@ async function executeToolCallsSequential(
         signal,
       );
     } else {
+      if (!signal?.aborted) {
+        const steering = getSteeringAtCheckpoint(config);
+        steeringMessages = Array.isArray(steering) ? steering : await steering;
+      }
+      if (steeringMessages.length > 0) {
+        skippedPrepared = preparation;
+        skippedStartIndex = callIndex;
+        break;
+      }
       const executed = await executePreparedToolCall(
         preparation,
         { assistantMessage, toolCall: preparation.toolCall },
@@ -809,31 +850,44 @@ async function executeToolCallsSequential(
     messages.push(toolResultMessage);
 
     if (signal?.aborted) {
-      // Complete the skipped tail through the normal lifecycle and outcome hook
-      // so the committed tool-call turn stays paired and subscriber-safe.
-      for (let i = finalizedCalls.length; i < toolCalls.length; i++) {
-        const skippedToolCall = toolCalls[i];
-        if (!skippedToolCall) {
-          continue;
-        }
-        const completed = await completeAbortedToolCall(
-          currentContext,
-          assistantMessage,
-          skippedToolCall,
-          resolvedToolCalls,
-          config,
-          signal,
-          emit,
-        );
-        finalizedCalls.push(completed.finalized);
-        messages.push(completed.message);
-      }
+      skippedStartIndex = callIndex + 1;
       break;
     }
   }
 
+  // Complete the unstarted tail through one lifecycle path so committed tool
+  // calls remain paired and outcome hooks observe every synthetic result.
+  for (let i = skippedStartIndex; i < toolCalls.length; i++) {
+    const skippedToolCall = toolCalls[i];
+    if (!skippedToolCall) {
+      continue;
+    }
+    const isSteeringSkip = steeringMessages.length > 0;
+    const completed = await completeUnstartedToolCall(
+      currentContext,
+      assistantMessage,
+      skippedToolCall,
+      resolvedToolCalls,
+      config,
+      signal,
+      emit,
+      {
+        ...(i === skippedStartIndex && skippedPrepared
+          ? { args: skippedPrepared.args, startEmitted: true }
+          : {}),
+        ...(isSteeringSkip
+          ? { errorKind: "steering" as const, message: STEERING_TOOL_SKIP_MESSAGE }
+          : {}),
+      },
+    );
+    await emitToolResultMessage(completed.message, emit);
+    finalizedCalls.push(completed.finalized);
+    messages.push(completed.message);
+  }
+
   return {
     messages,
+    steeringMessages,
     terminate: shouldTerminateToolBatch(finalizedCalls),
     terminateRun: false,
   };
@@ -898,32 +952,65 @@ async function executeToolCallsParallel(
       continue;
     }
 
-    finalizedCalls.push(async () => {
-      const executed = await executePreparedToolCall(
-        preparation,
-        { assistantMessage, toolCall: preparation.toolCall },
-        signal,
-        emit,
-      );
-      const finalized = await finalizeExecutedToolCall(
-        currentContext,
-        assistantMessage,
-        preparation,
-        executed,
-        config,
-        signal,
-      );
-      await emitToolExecutionEnd(finalized, emit);
-      return finalized;
-    });
+    finalizedCalls.push(preparation);
     if (signal?.aborted) {
       break;
     }
   }
 
-  const orderedFinalizedCalls = await Promise.all(
-    finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
-  );
+  const steering = signal?.aborted ? [] : getSteeringAtCheckpoint(config);
+  const steeringMessages = Array.isArray(steering) ? steering : await steering;
+  const orderedFinalizedCalls: FinalizedToolCallOutcome[] = [];
+  if (steeringMessages.length > 0) {
+    for (const entry of finalizedCalls) {
+      if (!("kind" in entry)) {
+        orderedFinalizedCalls.push(entry);
+        continue;
+      }
+      const completed = await completeUnstartedToolCall(
+        currentContext,
+        assistantMessage,
+        entry.toolCall,
+        resolvedToolCalls,
+        config,
+        signal,
+        emit,
+        {
+          args: entry.args,
+          errorKind: "steering",
+          message: STEERING_TOOL_SKIP_MESSAGE,
+          startEmitted: true,
+        },
+      );
+      orderedFinalizedCalls.push(completed.finalized);
+    }
+  } else {
+    orderedFinalizedCalls.push(
+      ...(await Promise.all(
+        finalizedCalls.map(async (entry) => {
+          if (!("kind" in entry)) {
+            return entry;
+          }
+          const executed = await executePreparedToolCall(
+            entry,
+            { assistantMessage, toolCall: entry.toolCall },
+            signal,
+            emit,
+          );
+          const finalized = await finalizeExecutedToolCall(
+            currentContext,
+            assistantMessage,
+            entry,
+            executed,
+            config,
+            signal,
+          );
+          await emitToolExecutionEnd(finalized, emit);
+          return finalized;
+        }),
+      )),
+    );
+  }
   const messages: ToolResultMessage[] = [];
   for (const finalized of orderedFinalizedCalls) {
     const toolResultMessage = createToolResultMessage(finalized);
@@ -939,7 +1026,7 @@ async function executeToolCallsParallel(
       if (!skippedToolCall) {
         continue;
       }
-      const completed = await completeAbortedToolCall(
+      const completed = await completeUnstartedToolCall(
         currentContext,
         assistantMessage,
         skippedToolCall,
@@ -948,6 +1035,7 @@ async function executeToolCallsParallel(
         signal,
         emit,
       );
+      await emitToolResultMessage(completed.message, emit);
       orderedFinalizedCalls.push(completed.finalized);
       messages.push(completed.message);
     }
@@ -955,6 +1043,7 @@ async function executeToolCallsParallel(
 
   return {
     messages,
+    steeringMessages,
     terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
     terminateRun: false,
   };
@@ -990,12 +1079,12 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
-  errorKind?: "argument-validation";
+  errorKind?: "argument-validation" | "steering";
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
 };
 
-type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
+type FinalizedToolCallEntry = FinalizedToolCallOutcome | PreparedToolCall;
 
 function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
   return (
@@ -1464,6 +1553,7 @@ async function completeToolLoopInterventionBatch(params: {
   }
   return {
     messages,
+    steeringMessages: [],
     // A later critical loop always forces termination. During first recovery,
     // honor the outcome hooks: if every finalized outcome says terminate, the
     // batch ends without another provider turn.
@@ -1473,7 +1563,7 @@ async function completeToolLoopInterventionBatch(params: {
   };
 }
 
-async function completeAbortedToolCall(
+async function completeUnstartedToolCall(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
   toolCall: AgentToolCall,
@@ -1481,36 +1571,44 @@ async function completeAbortedToolCall(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
+  options: {
+    args?: unknown;
+    errorKind?: "steering";
+    message?: string;
+    startEmitted?: boolean;
+  } = {},
 ): Promise<{ finalized: FinalizedToolCallOutcome; message: ToolResultMessage }> {
   const hideFromChannelProgress = hidesToolCallFromChannelProgress(
     currentContext,
     toolCall,
     resolvedToolCalls,
   );
-  await emit({
-    type: "tool_execution_start",
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    args: toolCall.arguments,
-    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-  });
+  if (!options.startEmitted) {
+    await emit({
+      type: "tool_execution_start",
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      args: toolCall.arguments,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    });
+  }
   const finalized = await finalizeToolCallOutcome(
     currentContext,
     assistantMessage,
     {
       toolCall,
-      result: createErrorToolResult("Operation aborted"),
+      result: createErrorToolResult(options.message ?? "Operation aborted"),
       isError: true,
       executionStarted: false,
+      ...(options.errorKind ? { errorKind: options.errorKind } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
-    toolCall.arguments,
+    "args" in options ? options.args : toolCall.arguments,
     config,
     signal,
   );
   await emitToolExecutionEnd(finalized, emit);
   const message = createToolResultMessage(finalized);
-  await emitToolResultMessage(message, emit);
   return { finalized, message };
 }
 

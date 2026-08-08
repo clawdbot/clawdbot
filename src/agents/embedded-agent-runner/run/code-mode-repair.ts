@@ -235,6 +235,9 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
     if (isToolLoopRecoveryOutcome(context)) {
       return prior;
     }
+    if (context.errorKind === "steering") {
+      return prior;
+    }
     if (signal?.aborted && !context.executionStarted) {
       return prior;
     }
