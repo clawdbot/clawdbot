@@ -112,7 +112,9 @@ export async function runHandlerBoundaryProof() {
     refresh: sharedRefresh,
     eventLoop: { status: "live" },
   });
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
   const stale = await invokeHealthHandler({
     cached: snapshot({ ts: Date.now() - 60_001 }),
@@ -162,20 +164,20 @@ export async function runHandlerBoundaryProof() {
   return {
     cacheHitSameTimestamp:
       (firstResponse?.payload as { ts?: unknown } | undefined)?.ts === cached.ts,
-    cachedMeta: firstResponse?.meta?.cached === true,
+    cachedMeta: Boolean(firstResponse?.meta?.cached),
     passiveRefreshBounded:
       sharedRefreshCalls.length === 1 && second.responses[0]?.meta?.cached === true,
     staleRefresh: stale.refreshCalls.length === 1 && stale.responses[0]?.meta === undefined,
     explicitProbeRefresh:
       probe.refreshCalls.length === 1 &&
-      probe.refreshCalls[0]?.probe === true &&
-      probe.refreshCalls[0]?.includeSensitive === true,
+      Boolean(probe.refreshCalls[0]?.probe) &&
+      Boolean(probe.refreshCalls[0]?.includeSensitive),
     lifecycleMismatchRefresh:
       lifecycle.refreshCalls.length === 1 && lifecycle.responses[0]?.meta === undefined,
     liveOverlayMerged:
       (firstResponse?.payload as { eventLoop?: { status?: unknown } } | undefined)?.eventLoop
         ?.status === "live",
-    publicSensitiveOmitted: publicRefresh.refreshCalls[0]?.includeSensitive === false,
+    publicSensitiveOmitted: !publicRefresh.refreshCalls[0]?.includeSensitive,
   };
 }
 
@@ -277,11 +279,10 @@ async function runPluginToolProof(repoRoot: string) {
     });
     const after = (await gateway.call("health", { probe: true })) as HealthSummary;
     return {
-      pluginLoaded: before.plugins?.loaded.includes(FIXTURE_PLUGIN_ID) === true,
+      pluginLoaded: Boolean(before.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
       pluginToolCataloged: containsString(catalog, FIXTURE_TOOL_NAME),
       pluginToolInvoked: containsString(invoked, FIXTURE_RESULT),
-      healthAfterTool:
-        after.ok === true && after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID) === true,
+      healthAfterTool: after.ok && Boolean(after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
     };
   } finally {
     await gateway?.stop().catch(() => undefined);
@@ -328,7 +329,7 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const proof = await runCachedHealthSnapshotBoundariesProof(repoRoot);
     const failures = Object.entries(proof)
-      .filter(([, passed]) => passed !== true)
+      .filter(([, passed]) => !passed)
       .map(([name]) => `${name} failed`);
     writer.appendLog(`${JSON.stringify(proof, null, 2)}\n`);
     await writer.write({
