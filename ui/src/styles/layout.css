@@ -1619,6 +1619,16 @@ html.openclaw-native-macos
 }
 
 @media (hover: none), (pointer: coarse) {
+  /* Touch has no hover, so the chevron must be the resting state or
+     catalog collapsibility becomes undiscoverable. */
+  .sidebar-session-group-toggle__lead--branded .sidebar-session-catalog-provider-icon {
+    opacity: 0;
+  }
+
+  .sidebar-session-group-toggle__lead--branded .sidebar-session-group-toggle__icon {
+    opacity: 0.75;
+  }
+
   .sidebar-session-group-actions {
     opacity: 1;
     pointer-events: auto;
