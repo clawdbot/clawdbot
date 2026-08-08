@@ -356,5 +356,4 @@ describe("embedded-agent runner run registry", () => {
       sessionFile,
     );
   });
-
 });
