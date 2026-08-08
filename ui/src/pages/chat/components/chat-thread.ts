@@ -133,6 +133,8 @@ type ChatThreadProps = {
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
+  /** Suppresses transcript mutations while preserving read-only presentation controls. */
+  readOnly?: boolean;
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
@@ -1158,7 +1160,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
-  const canHide = groupKeys.length > 0;
+  const canHide = !props.readOnly && groupKeys.length > 0;
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
   if (!canReply && !canRewind && !canHide && !canCopy && !canFork) {
@@ -1656,7 +1658,7 @@ function renderChatThreadContents(
       allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply,
-      onDelete,
+      onDelete: props.readOnly ? undefined : onDelete,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1884,6 +1886,7 @@ function renderChatThreadContents(
     props.planStatus,
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
+    Boolean(props.readOnly),
     props.assistantName,
     assistantIdentity.avatar,
     props.userId,
