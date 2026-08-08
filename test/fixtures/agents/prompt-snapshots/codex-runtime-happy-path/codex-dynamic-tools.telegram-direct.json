@@ -1130,7 +1130,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1144,6 +1144,7 @@
                 "camera_snap",
                 "camera_list",
                 "camera_clip",
+                "camera_ptz",
                 "photos_latest",
                 "screen_record",
                 "screen_snapshot",
@@ -1257,8 +1258,15 @@
             "outPath": {
               "type": "string"
             },
+            "panDegrees": {
+              "type": "number"
+            },
             "priority": {
               "enum": ["passive", "active", "timeSensitive"],
+              "type": "string"
+            },
+            "ptzOperation": {
+              "enum": ["status", "set", "move", "home"],
               "type": "string"
             },
             "quality": {
@@ -1276,12 +1284,18 @@
             "sound": {
               "type": "string"
             },
+            "tiltDegrees": {
+              "type": "number"
+            },
             "timeoutMs": {
               "minimum": 1,
               "type": "integer"
             },
             "title": {
               "type": "string"
+            },
+            "zoomPercent": {
+              "type": "number"
             }
           },
           "required": ["action"],

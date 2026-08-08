@@ -912,6 +912,29 @@ struct MacNodeModeCoordinatorTests {
         #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
+    @Test func `camera cap gates capture and PTZ commands`() {
+        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: true,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local)
+        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
+        #expect(enabledCommands.contains(OpenClawCameraCommand.list.rawValue))
+        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+
+        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local)
+        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
+        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+    }
+
     @Test func `tls pin store key uses default wss port`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         #expect(GatewayTLSRoute.storeKey(for: url) == "gateway.example.ts.net:443")

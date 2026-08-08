@@ -244,6 +244,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
           label: "camera clip",
           detailKeys: ["node", "nodeId", "facing", "duration", "durationMs"],
         },
+        camera_ptz: {
+          label: "camera PTZ",
+          detailKeys: ["ptzOperation", "node", "nodeId", "deviceId"],
+        },
         screen_record: {
           label: "screen record",
           detailKeys: ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"],

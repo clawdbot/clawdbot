@@ -37,6 +37,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_snap",
   "camera_list",
   "camera_clip",
+  "camera_ptz",
   "photos_latest",
   "screen_record",
   "screen_snapshot",
@@ -55,6 +56,7 @@ const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
+const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
@@ -112,6 +114,11 @@ const NodesToolSchema = Type.Object({
   quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
   delayMs: optionalNonNegativeIntegerSchema(),
   deviceId: Type.Optional(Type.String()),
+  // camera_ptz
+  ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS),
+  panDegrees: optionalFiniteNumberSchema(),
+  tiltDegrees: optionalFiniteNumberSchema(),
+  zoomPercent: optionalFiniteNumberSchema(),
   limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
@@ -161,7 +168,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -251,6 +258,7 @@ export function createNodesTool(options?: {
             });
           }
           case "camera_list":
+          case "camera_ptz":
           case "notifications_list":
           case "device_status":
           case "device_info":

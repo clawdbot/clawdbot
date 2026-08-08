@@ -1084,6 +1084,8 @@ extension MacNodeModeCoordinator {
             commands.append(OpenClawCameraCommand.list.rawValue)
             commands.append(OpenClawCameraCommand.snap.rawValue)
             commands.append(OpenClawCameraCommand.clip.rawValue)
+            commands.append(OpenClawCameraCommand.ptzStatus.rawValue)
+            commands.append(OpenClawCameraCommand.ptzControl.rawValue)
         }
         if capsSet.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
