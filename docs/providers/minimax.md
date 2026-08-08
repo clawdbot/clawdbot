@@ -134,7 +134,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
                 id: "MiniMax-M3",
                 name: "MiniMax M3",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text"],
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
                 contextWindow: 1000000,
                 maxTokens: 131072,
@@ -302,7 +302,7 @@ The MiniMax plugin registers image understanding separately from the text catalo
 | `minimax`        | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
 | `minimax-portal` | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
 
-That is why automatic media routing can use MiniMax image understanding even when the bundled text-provider catalog also includes M3 image-capable chat refs. PDF understanding uses `MiniMax-M2.7` for text extraction only; MiniMax does not register a PDF-to-image conversion path.
+That is why automatic media routing uses the plugin-owned MiniMax vision model instead of the bundled Anthropic-compatible text catalog. On that route, `MiniMax-M3` is text-only; run `openclaw doctor --fix` after upgrading to repair persisted M3 image metadata. PDF understanding uses `MiniMax-M2.7` for text extraction only, and MiniMax does not register a PDF-to-image conversion path.
 
 ### Web search
 

@@ -348,7 +348,7 @@ describe("minimax provider hooks", () => {
     expect(provider?.baseUrl).toBe("https://api.minimax.io/anthropic");
     const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M3");
     expect(model?.id).toBe("MiniMax-M3");
-    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.input).toEqual(["text"]);
     expect(model?.name).toBe("MiniMax M3");
     expect(model?.reasoning).toBe(true);
   });
@@ -372,7 +372,7 @@ describe("minimax provider hooks", () => {
       id: "MiniMax-M3",
       api: "anthropic-messages",
       baseUrl: "https://api.minimax.io/anthropic",
-      input: ["text", "image"],
+      input: ["text"],
       contextWindow: 1_000_000,
     });
   });

@@ -147,6 +147,22 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     });
   });
 
+  it("passes text-only models to native image hydration", async () => {
+    const base = createInput();
+    const input = createInput({
+      attempt: {
+        ...base.attempt,
+        model: { ...base.attempt.model, input: ["text"] },
+      },
+    });
+
+    await prepareEmbeddedAttemptPromptExecution(input);
+
+    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+      expect.objectContaining({ model: input.attempt.model }),
+    );
+  });
+
   it("omits sandbox constraints when no sandbox bridge is active", async () => {
     const input = createInput({ sandbox: null });
 

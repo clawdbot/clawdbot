@@ -400,6 +400,9 @@ function resolvePluginDoctorContracts(params?: {
 
   const entries: PluginDoctorContractEntry[] = [];
   const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
+  const scopedProviderIds = scopedPluginIds
+    ? new Set([...scopedPluginIds].map(normalizeProviderId))
+    : null;
   for (const record of manifestRegistry.plugins) {
     if (
       scopedPluginIds &&
@@ -407,7 +410,15 @@ function resolvePluginDoctorContracts(params?: {
       !(record.packageName && scopedPluginIds.has(record.packageName)) &&
       !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
       !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
-      !record.providers.some((providerId) => scopedPluginIds.has(providerId))
+      !record.providers.some((providerId) => scopedPluginIds.has(providerId)) &&
+      !Object.entries(record.providerAuthAliases ?? {}).some(([alias, target]) => {
+        const targetProvider = normalizeProviderId(target);
+        return (
+          scopedProviderIds?.has(normalizeProviderId(alias)) &&
+          targetProvider.length > 0 &&
+          record.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+        );
+      })
     ) {
       continue;
     }

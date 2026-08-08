@@ -43,7 +43,7 @@ describe("minimax model definitions", () => {
       contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
       cost: MINIMAX_API_COST,
       id: "MiniMax-M3",
-      input: ["text", "image"],
+      input: ["text"],
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
       name: "MiniMax M3",
       reasoning: true,
@@ -73,7 +73,7 @@ describe("minimax model definitions", () => {
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(MINIMAX_M3_CATALOG_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
-    expect(model.input).toEqual(["text", "image"]);
+    expect(model.input).toEqual(["text"]);
   });
 
   it("falls back to generated name for unknown model id", () => {

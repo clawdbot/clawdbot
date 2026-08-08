@@ -1256,14 +1256,25 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
+  it("routes MiniMax M3 image requests through MiniMax-VL-01", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M3" } } },
+        models: {
+          mode: "merge",
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [makeModelDefinition("MiniMax-M3", ["text"])],
+            },
+          },
+        },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),

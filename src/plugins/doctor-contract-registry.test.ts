@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -502,6 +503,107 @@ describe("doctor-contract-registry module loader", () => {
       baseUrl: "https://ollama.com",
       models: [],
     });
+  });
+
+  it("loads a plugin doctor contract when scoped by a provider auth alias", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({
+        cfg,
+      }: {
+        cfg: { models?: { providers?: Record<string, Record<string, unknown>> } };
+      }) => ({
+        config: {
+          ...cfg,
+          models: {
+            ...cfg.models,
+            providers: {
+              ...cfg.models?.providers,
+              "minimax-cn": {
+                ...cfg.models?.providers?.["minimax-cn"],
+                models: [{ id: "MiniMax-M3", input: ["text"] }],
+              },
+            },
+          },
+        },
+        changes: ["removed stale MiniMax M3 image metadata"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "minimax",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: ["minimax", "minimax-portal"],
+          providerAuthAliases: { "minimax-cn": "minimax" },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      models: {
+        providers: {
+          "minimax-cn": {
+            baseUrl: "https://api.minimaxi.com/anthropic",
+            api: "anthropic-messages",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: ["minimax-cn"],
+    });
+
+    expect(result.changes).toEqual(["removed stale MiniMax M3 image metadata"]);
+    expect(result.config.models?.providers?.["minimax-cn"]?.models).toEqual([
+      { id: "MiniMax-M3", input: ["text"] },
+    ]);
+  });
+
+  it("does not load a plugin doctor contract for an unowned provider auth alias", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: () => {
+        throw new Error("unowned provider alias must not load this contract");
+      },
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "unrelated",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: ["other"],
+          providerAuthAliases: { openai: "openai" },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      applyPluginDoctorCompatibilityMigrations(config, {
+        config,
+        env: {},
+        pluginIds: ["openai"],
+      }),
+    ).toEqual({ config, changes: [] });
   });
 
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {

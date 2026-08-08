@@ -14,7 +14,8 @@ export const MINIMAX_TEXT_MODEL_CATALOG = {
   "MiniMax-M3": {
     name: "MiniMax M3",
     reasoning: true,
-    input: ["text", "image"],
+    // The Anthropic-compatible route accepts text only; MiniMax-VL-01 owns vision.
+    input: ["text"],
     contextWindow: 1_000_000,
     compat: { codeMode: "preferred" },
   },
