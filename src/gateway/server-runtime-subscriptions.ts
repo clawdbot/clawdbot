@@ -180,7 +180,9 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionActive = false;
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = false;
-                  entry.projectSessionTerminalEvent = undefined;
+                  // Keep projectSessionTerminalEvent until markTrackedRunTerminalPersisted
+                  // or live maintenance reconciliation succeeds; clearing here strands
+                  // replay after both bounded persist attempts reject.
                   queueMicrotask(() => {
                     const current = params.chatAbortControllers.get(candidateRunId);
                     if (

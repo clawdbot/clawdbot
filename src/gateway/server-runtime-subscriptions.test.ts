@@ -173,6 +173,7 @@ describe("startGatewayEventSubscriptions", () => {
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
     configureExecutionIdentityAdmissionSink(() => false)();
+    vi.useRealTimers();
   });
 
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
@@ -298,6 +299,170 @@ describe("startGatewayEventSubscriptions", () => {
         data: expect.objectContaining({ stopReason: "timeout" }),
       }),
     );
+  });
+
+  it("retains the terminal event through double persist rejection for maintenance replay", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const sessionLifecycleState = await import("./session-lifecycle-state.js");
+    const persistSpy = vi
+      .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+      .mockRejectedValueOnce(new Error("terminal write failed"))
+      .mockRejectedValueOnce(new Error("terminal write retry failed"))
+      .mockResolvedValueOnce(undefined);
+    const { getAgentEventLifecycleGeneration } = await import("../infra/agent-events.js");
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const params = createParams();
+    const runId = "run-double-persist-reject";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const entry = {
+      controller: new AbortController(),
+      sessionId: "sess-double-reject",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1_000,
+      expiresAtMs: Date.now() + 120_000,
+      lifecycleGeneration,
+      projectSessionActive: true,
+      controlUiVisible: true as const,
+    };
+    params.chatAbortControllers.set(runId, entry);
+
+    // Mirror finalizeLifecycleEvent ownership: clear active, then track a bounded
+    // double-reject persist through the production subscription callbacks.
+    agentEventHandlerMocks.create.mockImplementation((options: unknown) => {
+      const opts = options as {
+        clearTrackedActiveRun?: (params: {
+          runId: string;
+          clientRunId: string;
+          sessionKey: string;
+        }) => void;
+        trackTrackedRunTerminalPersistence?: (params: {
+          runId: string;
+          clientRunId: string;
+          sessionKey: string;
+          sessionId?: string;
+          observedAt: number;
+          persistence: Promise<void>;
+        }) => void;
+      };
+      return (evt: {
+        runId: string;
+        sessionKey?: string;
+        sessionId?: string;
+        ts: number;
+        stream: string;
+        data?: { phase?: unknown };
+      }) => {
+        if (evt.stream !== "lifecycle") {
+          return;
+        }
+        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+        if (phase !== "end" && phase !== "error") {
+          return;
+        }
+        const sessionKey = evt.sessionKey ?? "agent:main:main";
+        opts.clearTrackedActiveRun?.({
+          runId: evt.runId,
+          clientRunId: evt.runId,
+          sessionKey,
+        });
+        const persistence = (async () => {
+          try {
+            await sessionLifecycleState.persistGatewaySessionLifecycleEvent({
+              sessionKey,
+              event: evt,
+            });
+          } catch {
+            await sessionLifecycleState.persistGatewaySessionLifecycleEvent({
+              sessionKey,
+              event: evt,
+            });
+          }
+        })();
+        opts.trackTrackedRunTerminalPersistence?.({
+          runId: evt.runId,
+          clientRunId: evt.runId,
+          sessionKey,
+          sessionId: evt.sessionId,
+          observedAt: evt.ts,
+          persistence,
+        });
+        void persistence.catch(() => undefined);
+      };
+    });
+
+    unsubs = startGatewayEventSubscriptions(params);
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-double-reject",
+      data: {
+        phase: "end",
+        status: "cancelled",
+        aborted: true,
+        stopReason: "timeout",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+    });
+
+    await waitForFast(() => expect(persistSpy).toHaveBeenCalledTimes(2));
+    // Authoritative event must survive clearTrackedActiveRun + both write rejects.
+    expect(entry.projectSessionTerminalEvent).toEqual(
+      expect.objectContaining({
+        runId,
+        stream: "lifecycle",
+        data: expect.objectContaining({ stopReason: "timeout" }),
+      }),
+    );
+    expect(params.restartRecoveryCandidates.get(runId)).toEqual(
+      expect.objectContaining({
+        runId,
+        event: expect.objectContaining({
+          runId,
+          data: expect.objectContaining({ stopReason: "timeout" }),
+        }),
+      }),
+    );
+
+    entry.expiresAtMs = Date.now() - 1;
+    const timers = startGatewayMaintenanceTimers({
+      ...params,
+      nodeSendToAllSubscribed: vi.fn(),
+      getPresenceVersion: () => 1,
+      getHealthVersion: () => 1,
+      refreshGatewayHealthSnapshot: async () => ({ ok: true }),
+      logHealth: { error: vi.fn() },
+      dedupe: new Map(),
+      chatQueuedTurns: new Map(),
+      removeChatRun: () => undefined,
+      getRuntimeConfig: () => ({}),
+      runDeliveryQueueMediaGc: async () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await waitForFast(() => expect(persistSpy).toHaveBeenCalledTimes(3));
+    expect(persistSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        event: expect.objectContaining({
+          runId,
+          data: expect.objectContaining({ stopReason: "timeout" }),
+        }),
+      }),
+    );
+    expect(entry.projectSessionTerminalPersisted).toBe(true);
+    expect(params.chatAbortControllers.has(runId)).toBe(false);
+    expect(params.restartRecoveryCandidates.has(runId)).toBe(false);
+
+    clearInterval(timers.tickInterval);
+    clearInterval(timers.healthInterval);
+    clearInterval(timers.dedupeCleanup);
+    clearInterval(timers.worktreeCleanup);
+    await timers.stopMediaCleanup();
+    timers.skillCuratorCleanup();
+    persistSpy.mockRestore();
+    vi.useRealTimers();
   });
 
   it("disposes a loaded agent event handler on unsubscribe", async () => {
