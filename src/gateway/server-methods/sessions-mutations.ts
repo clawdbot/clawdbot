@@ -597,6 +597,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      workerPlacementContext: context,
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {

@@ -59,6 +59,35 @@ if [ -n "$author_name" ]; then git config user.name "$author_name"; fi
 if [ -n "$author_email" ]; then git config user.email "$author_email"; fi
 `;
 
+export const REMOTE_GIT_WORKSPACE_RETRY_RESET_JS = String.raw`const fs = require("node:fs");
+const path = require("node:path");
+const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
+const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
+const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
+const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
+const root = fs.realpathSync(process.argv[1]);
+function clean(directory, relativeDirectory) {
+  const originalMode = fs.lstatSync(directory).mode & 0o7777;
+  fs.chmodSync(directory, originalMode | 0o700);
+  for (const name of fs.readdirSync(directory)) {
+    const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
+    // Match the initial rsync receiver protections exactly: retry cleanup owns
+    // transferable workspace bytes, never Git metadata or derived scratch state.
+    if (name === ".git" || isDerivedWorkspacePath(relative)) continue;
+    const target = path.join(directory, name);
+    const stats = fs.lstatSync(target);
+    if (stats.isDirectory() && !stats.isSymbolicLink()) {
+      clean(target, relative);
+      if (fs.readdirSync(target).length === 0) fs.rmdirSync(target);
+    } else {
+      fs.unlinkSync(target);
+    }
+  }
+  fs.chmodSync(directory, originalMode);
+}
+clean(root, "");
+`;
+
 export const REMOTE_WORKSPACE_MANIFEST_JS = String.raw`const crypto = require("node:crypto");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");

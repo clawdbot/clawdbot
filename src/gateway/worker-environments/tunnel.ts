@@ -2,6 +2,7 @@ import { RetrySupervisor } from "../../../packages/retry/src/index.js";
 import { sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createDeferred, type Deferred } from "../../shared/deferred.js";
 import {
   advanceWorkerSshAfterTransportExit,
   prepareWorkerSsh,
@@ -87,10 +88,7 @@ type TunnelEntry = {
   initialization?: Promise<void>;
   loop?: Promise<void>;
   stopPromise?: Promise<void>;
-  ready: Promise<WorkerTunnelHandle>;
-  resolveReady: (handle: WorkerTunnelHandle) => void;
-  rejectReady: (error: Error) => void;
-  readySettled: boolean;
+  readiness: Deferred<WorkerTunnelHandle>;
   workspaceTasks: Set<Promise<unknown>>;
 };
 
@@ -289,12 +287,19 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           return;
         }
         entry.status = "connected";
-        if (!entry.readySettled) {
-          entry.readySettled = true;
-          entry.resolveReady(createHandle(entry));
-        }
+        const connectionReadiness = entry.readiness;
+        connectionReadiness.resolve(createHandle(entry));
         const connectedAtMs = now();
-        const exit = await child.exited;
+        const exit = await child.exited.finally(() => {
+          if (isCurrent(entry) && entry.readiness === connectionReadiness) {
+            // Each established child owns one readiness barrier. Replace it as soon as that child
+            // is lost so same-owner callers wait for the reconnect instead of using a stale handle.
+            entry.status = "reconnecting";
+            const readiness = createDeferred<WorkerTunnelHandle>();
+            void readiness.promise.catch(() => undefined);
+            entry.readiness = readiness;
+          }
+        });
         if (entry.prepared) {
           advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
         }
@@ -336,10 +341,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         entries.delete(entry.environmentId);
       }
       entry.abortController.abort(new Error("Worker tunnel owner stopped"));
-      if (!entry.readySettled) {
-        entry.readySettled = true;
-        entry.rejectReady(new Error("Worker tunnel stopped before connecting"));
-      }
+      entry.readiness.reject(new Error("Worker tunnel stopped before connecting"));
       await entry.process?.stop().catch(() => undefined);
       await entry.initialization?.catch(() => undefined);
       await entry.process?.stop().catch(() => undefined);
@@ -364,19 +366,14 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         throw new Error("Worker tunnel owner epoch is stale");
       }
       if (request.ownerEpoch === current.ownerEpoch) {
-        return await current.ready;
+        return await current.readiness.promise;
       }
     }
 
-    let resolveReady!: (handle: WorkerTunnelHandle) => void;
-    let rejectReady!: (error: Error) => void;
-    const ready = new Promise<WorkerTunnelHandle>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-    void ready.catch(() => undefined);
     const environmentKey = stableWorkerPathComponent(request.environmentId, 16);
     const remoteDirectory = `/tmp/ocw-${environmentKey}-${request.ownerEpoch}`;
+    const readiness = createDeferred<WorkerTunnelHandle>();
+    void readiness.promise.catch(() => undefined);
     const entry: TunnelEntry = {
       environmentId: request.environmentId,
       ownerEpoch: request.ownerEpoch,
@@ -385,10 +382,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       remoteSocketPath: `${remoteDirectory}/${REMOTE_SOCKET_NAME}`,
       abortController: new AbortController(),
       status: "connecting",
-      ready,
-      resolveReady,
-      rejectReady,
-      readySettled: false,
+      readiness,
       workspaceTasks: new Set(),
     };
     // Publish the new epoch before any teardown await. Stop/drain always sees the newest owner and
@@ -414,20 +408,14 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       }
       entry.loop = reconnectLoop(entry);
       void entry.loop.catch((error: unknown) => {
-        if (!entry.readySettled) {
-          entry.readySettled = true;
-          entry.rejectReady(error instanceof Error ? error : new Error("Worker tunnel failed"));
-        }
+        entry.readiness.reject(error instanceof Error ? error : new Error("Worker tunnel failed"));
       });
     })();
     void entry.initialization.catch((error: unknown) => {
-      if (!entry.readySettled) {
-        entry.readySettled = true;
-        entry.rejectReady(error instanceof Error ? error : new Error("Worker tunnel failed"));
-      }
+      entry.readiness.reject(error instanceof Error ? error : new Error("Worker tunnel failed"));
       void stopEntry(entry);
     });
-    return await entry.ready;
+    return await entry.readiness.promise;
   }
 
   async function stop(environmentId: string, ownerEpoch?: number): Promise<void> {

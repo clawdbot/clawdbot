@@ -546,10 +546,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         destroying,
         new Error(`${detail}; provider teardown pending: ${boundedError(cleanupError)}`),
       );
-      throw serviceError("bootstrap_failure", "Worker bootstrap failed; teardown is pending");
+      throw serviceError(
+        "bootstrap_failure",
+        `Worker bootstrap failed; teardown is pending: ${detail}`,
+      );
     }
     finishProvenDestroy(destroying);
-    throw serviceError("bootstrap_failure", "Worker bootstrap failed");
+    throw serviceError("bootstrap_failure", `Worker bootstrap failed: ${detail}`);
   };
 
   const finishBootstrap = async (

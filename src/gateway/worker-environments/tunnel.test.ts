@@ -16,9 +16,10 @@ import {
 } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
-import type {
-  WorkerWorkspaceReconciliationJournal,
-  WorkerWorkspaceReconciliationJournalAdapter,
+import {
+  parseWorkerWorkspaceManifest,
+  type WorkerWorkspaceReconciliationJournal,
+  type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
 
 function waitForFast<T>(
@@ -132,8 +133,16 @@ function fakeRunner(onRun?: (argv: string[], options: CommandOptions) => SpawnRe
   return { runner, runs, starts };
 }
 
-function localWorkspaceRunner(remoteHome: string) {
+function localWorkspaceRunner(
+  remoteHome: string,
+  onRsync?: (
+    argv: string[],
+    localArgv: string[],
+    options: CommandOptions,
+  ) => Promise<SpawnResult | undefined>,
+) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
+  const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
   const runner: WorkerSshRunner = {
     start(argv, options) {
       const process = new FakeProcess();
@@ -141,6 +150,7 @@ function localWorkspaceRunner(remoteHome: string) {
       return process;
     },
     async run(argv, options) {
+      runs.push({ argv, options });
       if (argv[0] === "git") {
         return await runCommandWithTimeout(argv, options);
       }
@@ -170,6 +180,10 @@ function localWorkspaceRunner(remoteHome: string) {
           localDestination.endsWith("/") ? localDestination : path.dirname(localDestination),
           { recursive: true },
         );
+        const intercepted = await onRsync?.(argv, localArgv, options);
+        if (intercepted) {
+          return intercepted;
+        }
         return await runCommandWithTimeout(localArgv, options);
       }
       if (argv[0] === "ssh") {
@@ -191,7 +205,7 @@ function localWorkspaceRunner(remoteHome: string) {
       throw new Error(`unexpected test command: ${argv[0] ?? "missing"}`);
     },
   };
-  return { runner, starts };
+  return { runner, runs, starts };
 }
 
 async function git(root: string, ...args: string[]): Promise<string> {
@@ -457,6 +471,92 @@ describe("worker tunnel manager", () => {
     } finally {
       await handle.stop();
       await fs.rm(localPath, { recursive: true, force: true });
+    }
+  });
+
+  it("converges a fallback transfer to the current managed worktree", async () => {
+    const root = tempDirs.make("openclaw-worker-convergent-sync-");
+    const localPath = path.join(root, "local");
+    const remoteHome = path.join(root, "remote-home");
+    await Promise.all([fs.mkdir(localPath), fs.mkdir(remoteHome)]);
+    await Promise.all([
+      fs.writeFile(path.join(localPath, "current.txt"), "current\n"),
+      fs.writeFile(path.join(localPath, "stale.txt"), "remove before fallback\n"),
+    ]);
+    await git(localPath, "init");
+    await git(localPath, "config", "user.name", "Worker Sync Test");
+    await git(localPath, "config", "user.email", "worker-sync@example.invalid");
+    await git(localPath, "add", ".");
+    await git(localPath, "commit", "-m", "base");
+    const baseCommit = await git(localPath, "rev-parse", "HEAD");
+
+    let primaryTransfer = true;
+    const fake = localWorkspaceRunner(remoteHome, async (argv, localArgv, options) => {
+      const isWorkspaceTransfer = argv.some((arg) => arg.startsWith("--files-from="));
+      if (!primaryTransfer || !isWorkspaceTransfer || rsyncArgvPort(argv) !== 2222) {
+        return undefined;
+      }
+      primaryTransfer = false;
+      const remoteWorkspaceDir = localArgv.at(-1);
+      if (!remoteWorkspaceDir) {
+        throw new Error("missing test rsync destination");
+      }
+      await fs.mkdir(path.join(remoteWorkspaceDir, "node_modules"), { recursive: true });
+      await fs.writeFile(path.join(remoteWorkspaceDir, "node_modules/worker-cache"), "preserve\n");
+      const transferred = await runCommandWithTimeout(localArgv, options);
+      if (transferred.termination !== "exit" || transferred.code !== 0) {
+        throw new Error(transferred.stderr || "test rsync transfer failed");
+      }
+      await fs.rm(path.join(localPath, "stale.txt"));
+      return { ...transferred, code: 255, stderr: "primary transport disconnected" };
+    });
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.start({
+      environmentId: "worker:convergent-sync",
+      ownerEpoch: 1,
+      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]!.process.becomeReady();
+    const handle = await starting;
+
+    try {
+      const result = await handle.syncWorkspace({
+        localPath,
+        sessionId: "session:convergent-sync",
+        generation: 1,
+      });
+      expect(result.mode).toBe("git");
+      await expect(
+        fs.readFile(path.join(result.remoteWorkspaceDir, "current.txt"), "utf8"),
+      ).resolves.toBe("current\n");
+      await expect(fs.access(path.join(result.remoteWorkspaceDir, "stale.txt"))).rejects.toThrow();
+      await expect(
+        fs.readFile(path.join(result.remoteWorkspaceDir, "node_modules/worker-cache"), "utf8"),
+      ).resolves.toBe("preserve\n");
+
+      const digest = result.manifestRef.slice("sha256:".length);
+      const rawManifest = await fs.readFile(
+        path.join(remoteHome, ".openclaw-worker/manifests", `${digest}.json`),
+        "utf8",
+      );
+      const manifest = parseWorkerWorkspaceManifest(rawManifest, result.manifestRef);
+      expect(manifest.entries.map((entry) => entry.path)).toEqual(["current.txt"]);
+      expect(await git(result.remoteWorkspaceDir, "rev-parse", "HEAD")).toBe(baseCommit);
+
+      const transfers = fake.runs.filter(
+        (entry) =>
+          entry.argv[0] === "rsync" && entry.argv.some((arg) => arg.startsWith("--files-from=")),
+      );
+      expect(transfers.map((entry) => rsyncArgvPort(entry.argv))).toEqual([2222, 22]);
+      for (const transfer of transfers) {
+        expect(transfer.argv).toContain("--delete-delay");
+        expect(transfer.argv).not.toContain("--delete-excluded");
+      }
+    } finally {
+      await handle.stop();
     }
   });
 
@@ -827,17 +927,38 @@ describe("worker tunnel manager", () => {
 
   it("reconnects on the next advertised port after SSH transport exit 255", async () => {
     const fake = fakeRunner();
-    const { handle } = await startConnectedTunnel(fake, "worker:port-reconnect", 1, {
-      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
-      manager: { sleep: async () => {} },
-      beforeReady: (start) => expect(sshArgvPort(start.argv)).toBe(2222),
+    const manager = createWorkerTunnelManager({
+      runner: fake.runner,
+      sleep: async () => {},
     });
+    const request = {
+      environmentId: "worker:port-reconnect",
+      ownerEpoch: 1,
+      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    } as const;
+    const starting = manager.start(request);
+    await waitForStarts(fake.starts, 1);
+    expect(sshArgvPort(fake.starts[0]!.argv)).toBe(2222);
+    fake.starts[0]!.process.becomeReady();
+    await starting;
 
     fake.starts[0]!.process.exit(255);
     await waitForStarts(fake.starts, 2);
     expect(sshArgvPort(fake.starts[1]!.argv)).toBe(22);
     expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
+    const reconnecting = manager.start(request);
+    const reconnectSettled = vi.fn();
+    void reconnecting.then(reconnectSettled, reconnectSettled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reconnectSettled).not.toHaveBeenCalled();
+
     fake.starts[1]!.process.becomeReady();
+    const handle = await reconnecting;
+    await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+    expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
     await handle.stop();
   });
 
@@ -953,7 +1074,16 @@ describe("worker tunnel manager", () => {
     fake.starts[0]?.process.exit();
     await sleepStarted.promise;
 
+    const reconnecting = manager.start({
+      environmentId: "worker:drain",
+      ownerEpoch: 8,
+      ssh: SSH,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    const reconnectResult = expect(reconnecting).rejects.toThrow("stopped before connecting");
     await handle.stop();
+    await reconnectResult;
     expect(manager.status("worker:drain")).toBe("stopped");
     expect(fake.starts).toHaveLength(1);
 
@@ -979,21 +1109,51 @@ describe("worker tunnel manager", () => {
 
   it("publishes a replacement epoch before awaiting prior teardown", async () => {
     const fake = fakeRunner();
-    const { manager } = await startConnectedTunnel(fake, "worker:replacement", 1);
+    const manager = createWorkerTunnelManager({ runner: fake.runner, sleep: async () => {} });
+    const initialRequest = {
+      environmentId: "worker:replacement",
+      ownerEpoch: 1,
+      ssh: SSH,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    } as const;
+    const current = manager.start(initialRequest);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await current;
 
+    fake.starts[0]?.process.exit();
+    await waitForStarts(fake.starts, 2);
+    const staleReconnect = fake.starts[1]!.process;
+    const staleOwnerStart = manager.start(initialRequest);
+    const staleOwnerResult = expect(staleOwnerStart).rejects.toThrow("stopped before connecting");
     const releaseStop = deferred<void>();
-    fake.starts[0]?.process.blockStopUntil(releaseStop.promise);
-    const replacement = startTestTunnel(manager, "worker:replacement", 2);
-    const rejectedReplacement = expect(replacement).rejects.toThrow("stopped before connecting");
-    await waitForFast(() => expect(fake.starts[0]?.process.stopCount).toBe(1));
+    staleReconnect.blockStopUntil(releaseStop.promise);
+    const replacement = manager.start({
+      environmentId: "worker:replacement",
+      ownerEpoch: 2,
+      ssh: SSH,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    const replacementSettled = vi.fn();
+    void replacement.then(replacementSettled, replacementSettled);
+    await waitForFast(() => expect(staleReconnect.stopCount).toBeGreaterThan(0));
+    await staleOwnerResult;
 
-    const stopping = manager.stop("worker:replacement");
+    staleReconnect.becomeReady();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(replacementSettled).not.toHaveBeenCalled();
     releaseStop.resolve();
-    await stopping;
-    await rejectedReplacement;
+    await waitForStarts(fake.starts, 3);
+    expect(replacementSettled).not.toHaveBeenCalled();
+    fake.starts[2]!.process.becomeReady();
+    const handle = await replacement;
 
-    expect(manager.status("worker:replacement")).toBe("stopped");
-    expect(fake.starts).toHaveLength(1);
+    expect(handle.ownerEpoch).toBe(2);
+    expect(manager.status("worker:replacement")).toBe("connected");
+    await handle.stop();
   });
 });
 

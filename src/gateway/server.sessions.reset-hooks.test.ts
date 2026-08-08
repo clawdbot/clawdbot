@@ -243,7 +243,7 @@ async function performSessionReset(params: {
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  return performGatewaySessionReset(params);
+  return performGatewaySessionReset({ ...params, workerPlacementContext: {} });
 }
 
 function expectResetErrorMessage(
@@ -447,8 +447,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
     const { getRuntimeConfig } = await import("../config/config.js");
     const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
-    const reset = await performGatewaySessionReset({
+    const reset = await performSessionReset({
       key: "agent:work:main",
       reason: "reset",
       commandSource: "gateway:sessions.reset",

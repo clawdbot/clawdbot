@@ -14,13 +14,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
+import { writeSessionStore } from "../test-helpers.js";
+import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -1204,11 +1210,12 @@ describe("worker environment service", () => {
     const destroy = vi.fn(async () => {});
     const workerService = createService(createProvider({ destroy }));
 
-    await expect(
-      workerService.create("development", "request-bootstrap-failure"),
-    ).rejects.toMatchObject({
+    const creation = workerService.create("development", "request-bootstrap-failure");
+    await expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("Worker bootstrap failed: remote bootstrap rejected"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
+    await expect(creation).rejects.not.toThrow(secret);
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(store.list()[0]).toMatchObject({
@@ -1219,6 +1226,67 @@ describe("worker environment service", () => {
       lastError: expect.stringContaining("remote bootstrap rejected"),
     });
     expect(store.list()[0]?.lastError).not.toContain(secret);
+  });
+
+  it("projects bounded bootstrap detail through sessions.describe after failed dispatch", async () => {
+    // Assembled at runtime so review-bundle secret scanners do not flag a key-shaped literal.
+    const secret = ["sk", "proj", "placement", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    bootstrapWorker = vi.fn(async () => {
+      throw new Error(`remote bootstrap rejected ${secret} ${"failure ".repeat(200)}`);
+    });
+    const workerService = createService(createProvider());
+    const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    const dispatch = createWorkerPlacementDispatchService({
+      placements,
+      environments: workerService,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runActivationBarrier: async ({ activate }) => activate(),
+      runReclaimBarrier: async ({ reclaim }) => await reclaim("/gateway/workspace"),
+      resolveWorkspacePath: async () => "/gateway/workspace",
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+    });
+
+    await expect(
+      dispatch.dispatch({
+        sessionId: "session-bootstrap-failure",
+        sessionKey: "agent:main:session-bootstrap-failure",
+        agentId: "main",
+        profileId: "development",
+      }),
+    ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
+
+    const persisted = expectDefined(
+      placements.get("session-bootstrap-failure"),
+      "failed worker placement",
+    );
+    const sessionStorePath = path.join(root, "sessions.json");
+    await writeSessionStore({
+      entries: { main: { sessionId: persisted.sessionId, updatedAt: nowMs } },
+      storePath: sessionStorePath,
+    });
+    const described = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: {
+          getRuntimeConfig: () => ({ session: { store: sessionStorePath } }),
+          workerSessionPlacementService: placements,
+        },
+      },
+    );
+    const describedPlacement = described.payload?.session?.placement;
+    expect(described).toMatchObject({ ok: true });
+    expect(describedPlacement).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("remote bootstrap rejected"),
+    });
+    if (describedPlacement?.state !== "failed") {
+      throw new Error("sessions.describe did not project the failed worker placement");
+    }
+    expect(describedPlacement.recoveryError).not.toContain(secret);
+    expect(describedPlacement.recoveryError.length).toBeLessThanOrEqual(1_024);
   });
 
   it("keeps an indeterminate bootstrap teardown retryable", async () => {
@@ -1240,6 +1308,7 @@ describe("worker environment service", () => {
       workerService.create("development", "request-bootstrap-cleanup"),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: "Worker bootstrap failed; teardown is pending: remote bootstrap failed",
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(store.list()[0]).toMatchObject({
       state: "destroying",

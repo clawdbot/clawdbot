@@ -71,7 +71,7 @@ describe("worker SSH preparation", () => {
         return {
           stdout: "",
           stderr: "",
-          code: port === 2202 ? 255 : 0,
+          code: port === 2202 ? 255 : 7,
           signal: null,
           killed: false,
           termination: "exit" as const,
@@ -149,7 +149,7 @@ describe("worker SSH preparation", () => {
     }
   });
 
-  it.each(["timeout", "signal"] as const)(
+  it.each(["timeout", "signal", "output-limit", "error"] as const)(
     "does not select a candidate after %s termination",
     async (termination) => {
       const prepared = await prepareTestWorkerSsh();

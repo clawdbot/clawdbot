@@ -277,7 +277,7 @@ export type GatewayRequestContext = {
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
-  /** Durable per-session worker placement; absent when cloud workers are disabled. */
+  /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

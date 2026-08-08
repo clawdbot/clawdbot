@@ -43,11 +43,12 @@ import {
   verifyRemoteWorkspaceManifest,
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded as success,
+  workerWorkspaceRsyncRemoteCommand,
   workerWorkspaceSshArgv,
   workspaceSyncError,
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
-import { runLocalCommandToFile, writeEligibleGitFiles } from "./workspace-sync-local.js";
+import { createGitTransferList, runLocalCommandToFile } from "./workspace-sync-local.js";
 export { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 import {
   REMOTE_WORKSPACE_QUIESCE_JS,
@@ -55,6 +56,7 @@ import {
   REMOTE_WORKSPACE_RESUME_JS,
 } from "./workspace-quiescence-scripts.js";
 import {
+  REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
   REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_SETUP_SCRIPT,
@@ -272,7 +274,7 @@ export function createWorkerWorkspaceActions(
       path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
     );
     try {
-      let fileListPath: string | undefined;
+      let prepareGitTransferList: (() => Promise<string>) | undefined;
       if (mode === "git") {
         const [canonicalRequestPath, canonicalGitRoot] = await Promise.all([
           fs.realpath(request.localPath),
@@ -285,74 +287,14 @@ export function createWorkerWorkspaceActions(
           throw new Error("Worker workspace git base is not a commit id");
         }
 
-        const eligiblePath = path.join(temporaryDirectory, "eligible");
-        const ignoredPath = path.join(temporaryDirectory, "ignored");
-        const selectedPath = path.join(temporaryDirectory, "selected");
-        fileListPath = path.join(temporaryDirectory, "transfer-list");
-        await runLocalCommandToFile({
-          argv: [
-            "git",
-            "-C",
+        let transferAttempt = 0;
+        prepareGitTransferList = async () =>
+          await createGitTransferList({
             gitRoot,
-            "ls-files",
-            "--full-name",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-          ],
-          outputPath: eligiblePath,
-          signal: options.ownerSignal,
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
-        });
-        const worktreeIncludePath = path.join(gitRoot, ".worktreeinclude");
-        const worktreeInclude = await fs.lstat(worktreeIncludePath).catch(() => undefined);
-        if (worktreeInclude?.isFile()) {
-          await runLocalCommandToFile({
-            argv: [
-              "git",
-              "-C",
-              gitRoot,
-              "ls-files",
-              "--full-name",
-              "--others",
-              "--ignored",
-              "--exclude-standard",
-              "-z",
-            ],
-            outputPath: ignoredPath,
+            temporaryDirectory: path.join(temporaryDirectory, `transfer-${transferAttempt++}`),
             signal: options.ownerSignal,
             timeoutMs: WORKSPACE_TIMEOUT_MS,
           });
-          await runLocalCommandToFile({
-            argv: [
-              "git",
-              "-C",
-              gitRoot,
-              "ls-files",
-              "--full-name",
-              "--others",
-              "--ignored",
-              `--exclude-from=${worktreeIncludePath}`,
-              "-z",
-            ],
-            outputPath: selectedPath,
-            signal: options.ownerSignal,
-            timeoutMs: WORKSPACE_TIMEOUT_MS,
-          });
-        } else {
-          await Promise.all([
-            fs.writeFile(ignoredPath, "", { mode: 0o600 }),
-            fs.writeFile(selectedPath, "", { mode: 0o600 }),
-          ]);
-        }
-        await writeEligibleGitFiles({
-          gitRoot,
-          eligiblePath,
-          ignoredPath,
-          selectedPath,
-          outputPath: fileListPath,
-        });
 
         const objectListPath = path.join(temporaryDirectory, "base-objects");
         const packPath = path.join(temporaryDirectory, "base.pack");
@@ -423,10 +365,11 @@ export function createWorkerWorkspaceActions(
       }
 
       const localSource = gitRoot.endsWith(path.sep) ? gitRoot : `${gitRoot}${path.sep}`;
-      const transfer = await runRsync(prepared, (rsyncSsh) => [
+      const transferArgv = (rsyncSsh: string, fileListPath?: string) => [
         "rsync",
         "--archive",
         "--checksum",
+        "--delete-delay",
         "--exclude=.git",
         ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
         ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
@@ -435,7 +378,50 @@ export function createWorkerWorkspaceActions(
         "--",
         localSource,
         `${prepared.scpTarget}:${remoteWorkspaceDir}/`,
-      ]);
+      ];
+      let retryingGitTransfer = false;
+      const transfer = prepareGitTransferList
+        ? await runWorkerSshCandidates(
+            prepared,
+            WORKSPACE_TIMEOUT_MS,
+            async (port, remainingTimeoutMs) => {
+              const deadlineMs = Date.now() + remainingTimeoutMs;
+              const commandOptions = () =>
+                workerSshCommandOptions({
+                  timeoutMs: Math.max(0, deadlineMs - Date.now()),
+                  signal: options.ownerSignal,
+                });
+              if (retryingGitTransfer) {
+                const probe = await runTask(
+                  workerWorkspaceSshArgv(prepared, ["true"], port),
+                  commandOptions(),
+                );
+                if (!success(probe)) {
+                  return probe;
+                }
+                const reset = await runTask(
+                  workerWorkspaceSshArgv(
+                    prepared,
+                    ["node", "-e", REMOTE_GIT_WORKSPACE_RETRY_RESET_JS, remoteWorkspaceDir],
+                    port,
+                  ),
+                  commandOptions(),
+                );
+                if (!success(reset)) {
+                  // Reset changes remote state, so an ambiguous result must fail closed.
+                  throw workspaceSyncError(reset);
+                }
+              }
+              const fileListPath = await prepareGitTransferList();
+              const result = await runTask(
+                transferArgv(workerWorkspaceRsyncRemoteCommand(prepared, port), fileListPath),
+                commandOptions(),
+              );
+              retryingGitTransfer = result.termination === "exit" && result.code === 255;
+              return result;
+            },
+          )
+        : await runRsync(prepared, (rsyncSsh) => transferArgv(rsyncSsh));
       if (!success(transfer)) {
         throw workspaceSyncError(transfer);
       }
