@@ -64,6 +64,14 @@ function sessionPage(face: BoardFace) {
     component: () =>
       import("./chat-page.ts").then(() => ({
         header: true,
+        // ChatPage owns pane/session teardown. The route namespace only changes
+        // presentation, so it must not preempt that owner during face switches.
+        renderOwnerKey: (data: unknown) => {
+          const routeData = data as ChatRouteData | undefined;
+          return routeData === undefined || routeData.kind === "session"
+            ? "chat-session-page"
+            : undefined;
+        },
         render: (data: unknown) => {
           const routeData = data as ChatRouteData | undefined;
           if (!routeData) {

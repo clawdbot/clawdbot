@@ -217,12 +217,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const enabled = isWorkboardEnabledInConfigSnapshot(
       this.context?.runtimeConfig?.state.configSnapshot,
     );
-    if (
-      !board.hasBoard ||
-      board.face !== "dashboard" ||
-      !enabled ||
-      gateway?.phase !== "connected"
-    ) {
+    if (!board.hasBoard || !enabled || gateway?.phase !== "connected") {
       return null;
     }
     const client = gateway.client;
@@ -231,6 +226,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
+      active: board.face === "dashboard",
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
@@ -421,6 +417,15 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.state.settings = next;
     }
     this.requestUpdate();
+  }
+
+  protected shouldRenderBoardSurface(board: ResolvedBoardView): boolean {
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    return (
+      board.hasBoard &&
+      Boolean(sessionKey) &&
+      (board.face === "dashboard" || this.retainedBoardSessionKey === sessionKey)
+    );
   }
 
   protected persistBoardReopenDock(board: ResolvedBoardView, dock: BoardVisibleChatDock): void {

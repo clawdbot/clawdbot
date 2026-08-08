@@ -682,6 +682,26 @@ describe("chat page split layout host", () => {
     );
   });
 
+  it("skips face persistence already represented by the cached session row", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    (navigation.context.sessions.state as { result: unknown }).result = {
+      sessions: [{ key: WORK_SESSION_KEY, boardFace: "dashboard" }],
+    };
+    page.data = { sessionKey: WORK_SESSION_KEY, face: "chat" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    page.querySelector<RenderedPane>("openclaw-chat-pane")?.onFaceChange?.("dashboard");
+
+    expect(navigation.patch).not.toHaveBeenCalled();
+    expect(navigation.navigate).toHaveBeenCalledWith("dashboard", {
+      pathname: "/dashboard/main/12345678",
+      search:
+        "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
+    });
+  });
+
   it("passes an empty session key while route data is still unresolved", async () => {
     // Regression: a fabricated fallback key here made the pane canonicalize
     // against it and skip gateway startup entirely (chat.startup never sent).

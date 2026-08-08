@@ -409,7 +409,12 @@ export class ChatPage extends OpenClawLightDomElement {
     if (layout && layout.activePaneId !== paneId) {
       this.persistLayout(setActivePane(layout, paneId));
     }
-    persistSessionBoardFace(this.context, sessionKey, face);
+    const session = this.context.sessions.state.result?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, sessionKey),
+    );
+    if (session?.boardFace !== face) {
+      persistSessionBoardFace(this.context, sessionKey, face);
+    }
     this.updateRoute(sessionKey, false, face);
   };
 

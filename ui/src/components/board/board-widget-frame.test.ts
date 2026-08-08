@@ -7,6 +7,7 @@ import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
   sandboxOrigin: string;
+  sandboxHost: { dispose: () => void } | null;
   frameFailureKey: string;
   frameRefreshAttempts: number;
   refreshFailedFrame: (widget: BoardViewWidget) => void;
@@ -17,6 +18,7 @@ function createTicketRefreshLifecycle(
   refreshFrame: (name: string) => Promise<void>,
 ): BoardWidgetFrameLifecycle {
   const lifecycle = new BoardWidgetFrameLifecycle({
+    active: () => true,
     connected: () => true,
     context: () => undefined,
     refreshFrame: () => refreshFrame,
@@ -24,7 +26,6 @@ function createTicketRefreshLifecycle(
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
-    ticketRefreshEnabled: () => true,
     widget: () => widget,
   });
   lifecycle.connect();
@@ -45,6 +46,7 @@ function terminalFailureError(params: {
 }): string {
   const widget = { name: "clock", revision: 1, ...params.widget } as BoardViewWidget;
   const lifecycle = new BoardWidgetFrameLifecycle({
+    active: () => true,
     connected: () => true,
     context: () => undefined,
     refreshFrame: () => undefined,
@@ -52,7 +54,6 @@ function terminalFailureError(params: {
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
-    ticketRefreshEnabled: () => true,
     widget: () => widget,
   });
   const internals = lifecycle as unknown as LifecycleInternals;
@@ -101,6 +102,54 @@ describe("board widget frame terminal failure message", () => {
 });
 
 describe("board widget frame ticket refresh", () => {
+  it("disconnects frame work while inactive and reconnects on activation", async () => {
+    vi.useFakeTimers();
+    let active = true;
+    const refreshFrame = vi.fn(async () => undefined);
+    const widget = {
+      name: "clock",
+      revision: 1,
+      viewTicket: "ticket",
+      viewTicketTtlMs: 30_000,
+    } as BoardViewWidget;
+    recordBoardWidgetTicketReceipt(widget);
+    const lifecycle = new BoardWidgetFrameLifecycle({
+      active: () => active,
+      connected: () => true,
+      context: () => undefined,
+      refreshFrame: () => refreshFrame,
+      reportContentHeight: () => {},
+      requestUpdate: () => {},
+      resolveFrameUrl: () => () => "",
+      root: () => document,
+      widget: () => widget,
+    });
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const dispose = vi.fn();
+
+    lifecycle.connect();
+    lifecycle.update();
+    (lifecycle as unknown as LifecycleInternals).sandboxHost = { dispose };
+    active = false;
+    lifecycle.activityChanged();
+
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(removeWindowListener).toHaveBeenCalledWith("message", expect.any(Function));
+    expect(removeDocumentListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshFrame).not.toHaveBeenCalled();
+
+    active = true;
+    lifecycle.activityChanged();
+    lifecycle.update();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshFrame).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshFrame).toHaveBeenCalledOnce();
+    lifecycle.disconnect();
+  });
+
   it("pauses while hidden and re-arms when the document becomes visible", async () => {
     vi.useFakeTimers();
     let visibilityState: DocumentVisibilityState = "hidden";

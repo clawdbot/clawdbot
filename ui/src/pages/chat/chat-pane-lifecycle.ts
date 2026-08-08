@@ -682,7 +682,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
-    if (this.resolveWorkboardCardChip(board)) {
+    const boardSessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    if (!board.hasBoard || !boardSessionKey) {
+      this.retainedBoardSessionKey = "";
+    } else if (board.face === "dashboard") {
+      this.retainedBoardSessionKey = boardSessionKey;
+    } else if (this.retainedBoardSessionKey !== boardSessionKey) {
+      this.retainedBoardSessionKey = "";
+    }
+    if (this.retainedBoardSessionKey === boardSessionKey && this.resolveWorkboardCardChip(board)) {
       void ensureWorkboardCardChipElement().catch(() => undefined);
     }
     if (
@@ -711,6 +719,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
 
   override disconnectedCallback() {
     this.clearComposerPrefillAttention();
+    this.retainedBoardSessionKey = "";
     this.boardProviderLifecycleConnected = false;
     this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);

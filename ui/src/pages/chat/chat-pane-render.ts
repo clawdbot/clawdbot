@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -567,41 +568,48 @@ export class ChatPane extends ChatPaneHeader {
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
-    const workboardCardChip = this.resolveWorkboardCardChip(board);
-    const primary =
-      board.hasBoard && board.face === "dashboard"
-        ? renderBoardSessionSurface({
-            snapshot: board.snapshot,
-            observer: {
-              activeRunId: observerRunId,
-              digests: this.observerDigestHistory.get(
-                this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
-              ),
-              lastReadAt: selectedSession?.lastReadAt,
-            },
-            activeTabId: board.activeTabId,
-            dock: board.dock,
-            dockSize: this.boardChatDockSize,
-            chat,
-            divider: this.renderBoardDivider("bottom"),
-            canMutate: board.provider.canMutate,
-            canGrant: board.provider.canGrant,
-            callbacks: {
-              applyOps: (ops) => board.provider.applyOps(ops),
-              grant: (name, decision) => board.provider.grant(name, decision),
-              selectTab: (tabId) => {
-                this.boardCommandDock = null;
-                this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
-              },
-              frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
-              widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
-              refreshWidgetAppView: (name, revision) =>
-                board.provider.refreshWidgetAppView(name, revision),
-            } satisfies BoardViewCallbacks,
-            widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-            workboardCardChip,
-          })
-        : chat;
+    const boardActive = board.face === "dashboard";
+    const renderBoardSurface = (active: boolean) =>
+      renderBoardSessionSurface({
+        active,
+        snapshot: board.snapshot,
+        observer: {
+          activeRunId: observerRunId,
+          digests: this.observerDigestHistory.get(
+            this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
+          ),
+          lastReadAt: selectedSession?.lastReadAt,
+        },
+        activeTabId: board.activeTabId,
+        dock: board.dock,
+        dockSize: this.boardChatDockSize,
+        chat,
+        divider: this.renderBoardDivider("bottom"),
+        canMutate: board.provider.canMutate,
+        canGrant: board.provider.canGrant,
+        callbacks: {
+          applyOps: (ops) => board.provider.applyOps(ops),
+          grant: (name, decision) => board.provider.grant(name, decision),
+          selectTab: (tabId) => {
+            this.boardCommandDock = null;
+            this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
+          },
+          frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
+          widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
+          refreshWidgetAppView: (name, revision) =>
+            board.provider.refreshWidgetAppView(name, revision),
+        } satisfies BoardViewCallbacks,
+        widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
+        workboardCardChip: this.resolveWorkboardCardChip(board),
+      });
+    const boardSurface = !this.shouldRenderBoardSurface(board)
+      ? nothing
+      : boardActive
+        ? renderBoardSurface(true)
+        : guard([this.resolveBoardSessionKey(board.snapshot.sessionKey)], () =>
+            renderBoardSurface(false),
+          );
+    const primary = html`${boardActive ? nothing : chat}${boardSurface}`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,

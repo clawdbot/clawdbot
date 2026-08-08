@@ -49,8 +49,9 @@ import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = {
+export type AppRouteModule = {
   render: (data: unknown) => unknown;
+  renderOwnerKey?: (data: unknown) => string | undefined;
 };
 
 export type ApplicationRouter = Router<

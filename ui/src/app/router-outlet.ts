@@ -1,4 +1,4 @@
-import type { Router } from "@openclaw/uirouter";
+import type { RouteMatch, Router } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
@@ -22,6 +22,7 @@ export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
+  renderOwnerKey?: (data: TData | undefined) => string | undefined;
 };
 
 type RouterOutletOptions<TLoadContext = unknown> = {
@@ -139,10 +140,9 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
 function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   selection: RouterOutletSnapshot<TRouteId, TModule, TData>,
+  renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
   options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
-  const pending = selection.pending;
-  const renderedMatch = selectRenderedRouteMatch(selection.active, pending);
   if (renderedMatch?.status === "notFound") {
     return nothing;
   }
@@ -250,14 +250,22 @@ class OpenClawRouterOutlet<
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
-    const rendered = renderRouterOutlet(this.router, snapshot, {
+    const rendered = renderRouterOutlet(this.router, snapshot, renderedMatch, {
       retryContext: this.retryContext,
     });
-    return this.mcpAppUnmountGate.render(
-      renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty",
-      rendered,
-      () => [this],
-    );
+    const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
+    const routeModule = renderedMatch?.module;
+    const declaredOwnerKey = isRenderableModule<TData>(routeModule)
+      ? routeModule.renderOwnerKey?.(renderedMatch?.data)
+      : undefined;
+    const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
+    const retainCurrent =
+      explicitOwnerKey !== undefined &&
+      renderedMatch?.status === "pending" &&
+      renderedMatch.data === undefined;
+    return this.mcpAppUnmountGate.render(explicitOwnerKey ?? routeKey, rendered, () => [this], {
+      retainRenderedValue: retainCurrent,
+    });
   }
 }
 

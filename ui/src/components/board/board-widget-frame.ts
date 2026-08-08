@@ -48,6 +48,7 @@ function resolveBoardFrameFailureMessage(
 type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
+  active: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
@@ -55,7 +56,6 @@ type BoardWidgetFrameLifecycleHost = {
   reportContentHeight: (name: string, height: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
-  ticketRefreshEnabled: () => boolean;
   widget: () => BoardViewWidget | undefined;
 };
 
@@ -142,13 +142,13 @@ export class BoardWidgetFrameLifecycle {
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
-    () => this.host.ticketRefreshEnabled() && !documentHidden(),
+    () => this.host.active() && !documentHidden(),
   );
 
   constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
 
   connect(): void {
-    if (this.listening) {
+    if (!this.host.active() || this.listening) {
       return;
     }
     window.addEventListener("message", this.handleWindowMessage);
@@ -165,6 +165,14 @@ export class BoardWidgetFrameLifecycle {
     this.ticketRefresh.reset();
     this.sandboxHost?.dispose();
     this.sandboxHost = null;
+  }
+
+  activityChanged(): void {
+    if (this.host.active()) {
+      this.connect();
+    } else {
+      this.disconnect();
+    }
   }
 
   widgetChanged(previous: BoardViewWidget, current: BoardViewWidget | undefined): void {
@@ -184,6 +192,11 @@ export class BoardWidgetFrameLifecycle {
   }
 
   update(): void {
+    if (!this.host.active()) {
+      this.disconnect();
+      return;
+    }
+    this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
   }
@@ -253,6 +266,9 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private refreshFailedFrame(widget: BoardViewWidget): void {
+    if (!this.host.active()) {
+      return;
+    }
     this.frameProbeGeneration += 1;
     const failureKey = `${widget.name}:${widget.revision}`;
     if (this.frameFailureKey !== failureKey) {
@@ -290,6 +306,7 @@ export class BoardWidgetFrameLifecycle {
       frame.isConnected &&
       frame.getAttribute("src") === src &&
       this.frameProbeGeneration === probeGeneration &&
+      this.host.active() &&
       this.host.widget()?.name === widget.name &&
       this.host.widget()?.revision === widget.revision;
     // View tickets are reusable HMAC bindings until expiry. Iframe load events
@@ -405,7 +422,7 @@ export class BoardWidgetFrameLifecycle {
   };
 
   private handleWindowMessage = (event: MessageEvent): void => {
-    if (!this.host.connected()) {
+    if (!this.host.connected() || !this.host.active()) {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
