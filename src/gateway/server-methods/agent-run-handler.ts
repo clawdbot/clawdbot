@@ -5,7 +5,6 @@ import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery-store.js";
-import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -20,7 +19,6 @@ import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 import { runAgentResetPhase } from "./agent-reset-phase.js";
-import { resolveAgentRestartRecoveryExecutionIdentityAdmission } from "./agent-restart-recovery-context.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
@@ -434,19 +432,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       return;
     }
     const { activeSessionAgentId } = delivery;
-    let executionIdentityAdmission;
-    try {
-      executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
-        collectionEnabled: isExecutionIdentityCollectionEnabled(cfg),
-        isRestartRecoveryResumeRun,
-        retryOnly: request.internalExecutionIdentityRetry,
-        runId,
-        sessionEntry,
-      });
-    } catch (error) {
-      dedupeLifecycle.failBeforeDispatch(formatForLog(error));
-      return;
-    }
 
     const preparedDispatch = await prepareAgentRunDispatch({
       request,
@@ -472,7 +457,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       inputProvenance,
       isOneShotModelRun,
       isRestartRecoveryResumeRun,
-      executionIdentityAdmission,
       runId,
       agentDedupeKeys,
       context,

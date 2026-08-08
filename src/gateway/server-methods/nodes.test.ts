@@ -126,7 +126,6 @@ function createContext() {
       getActiveNode: vi.fn(),
       updateSurface: vi.fn(),
       updateNodeSkills: vi.fn(),
-      updateProtocolFeatures: vi.fn(),
     },
   };
 }
@@ -194,34 +193,6 @@ describe("nodeHandlers node.skills.update", () => {
       { nodeId: "node-1", skills: [skill] },
       undefined,
     );
-  });
-});
-
-describe("nodeHandlers node.protocolFeatures.update", () => {
-  it("stores transient features on the calling node connection", async () => {
-    const features = ["node-invoke-session-key-envelope-v1"];
-    const { context, opts } = createOptions(
-      { features },
-      {
-        client: {
-          connId: "conn-1",
-          connect: { device: { id: "node-1" }, client: { id: "node-client" } },
-        } as never,
-      },
-    );
-    context.nodeRegistry.updateProtocolFeatures.mockReturnValue({ nodeId: "node-1" });
-
-    await expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
-    )(opts);
-
-    expect(context.nodeRegistry.updateProtocolFeatures).toHaveBeenCalledWith(
-      "node-1",
-      "conn-1",
-      features,
-    );
-    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
   });
 });
 

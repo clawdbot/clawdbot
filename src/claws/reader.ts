@@ -653,6 +653,6 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
       workspaceSources: snapshot.workspaceSources,
       ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     },
-    diagnostics: parsed.diagnostics,
+    diagnostics: [...parsed.diagnostics, ...(profile.diagnostics ?? [])],
   };
 }

@@ -570,6 +570,14 @@ export class ManagedWorktreeService {
     this.now = options.now ?? Date.now;
   }
 
+  private async worktreesRoot(): Promise<string> {
+    const root = path.join(resolveStateDir(this.env), "worktrees");
+    await fs.mkdir(root, { recursive: true });
+    // Git canonicalizes paths in `git worktree list`; minting below the real root keeps
+    // lock-state and adoption comparisons aligned when the state path traverses symlinks.
+    return await fs.realpath(root);
+  }
+
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
     const repository = await resolveRepository(params.repoRoot);
     if (params.ownerId) {
@@ -633,7 +641,7 @@ export class ManagedWorktreeService {
     repository: Awaited<ReturnType<typeof resolveRepository>>,
     inferredName: string,
   ): Promise<ManagedWorktreeRecord> {
-    const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
+    const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name = validateName(
       params.name ??
         (await generateName(
@@ -962,10 +970,7 @@ export class ManagedWorktreeService {
         throw commandError("git branch -D", branchDelete);
       }
       await requireGit(record.repoRoot, ["worktree", "prune"]);
-      await removeEmptyParents(
-        path.dirname(record.path),
-        path.join(resolveStateDir(this.env), "worktrees"),
-      );
+      await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
       const removedAt = this.now();
       updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
       finalizeWorktreeRemoval(this.env, record.id);
@@ -1283,7 +1288,7 @@ export class ManagedWorktreeService {
         }
       }
     }
-    const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
+    const worktreesRoot = await this.worktreesRoot();
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
     let deleted = 0;
     for (const fingerprint of fingerprints) {

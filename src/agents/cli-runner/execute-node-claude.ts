@@ -197,12 +197,10 @@ export async function executeNodeClaudeRun(params: {
   if (contextParams.abortSignal?.aborted) {
     abortNodeRun();
   }
-  let replyBackendCompleted = false;
   const replyBackendHandle = contextParams.replyOperation
     ? {
         kind: "cli" as const,
         cancel: abortNodeRun,
-        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   if (replyBackendHandle) {
@@ -307,7 +305,6 @@ export async function executeNodeClaudeRun(params: {
     };
   } finally {
     clearTimeout(hardDeadlineTimer);
-    replyBackendCompleted = true;
     if (replyBackendHandle) {
       contextParams.replyOperation?.detachBackend(replyBackendHandle);
     }

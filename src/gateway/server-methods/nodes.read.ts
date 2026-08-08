@@ -5,7 +5,6 @@ import {
   validateNodeDescribeParams,
   validateNodeListParams,
   validateNodePluginToolsUpdateParams,
-  validateNodeProtocolFeaturesUpdateParams,
   validateNodeSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -326,33 +325,6 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
-  },
-  "node.protocolFeatures.update": async ({ params, respond, client, context }) => {
-    if (!validateNodeProtocolFeaturesUpdateParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.protocolFeatures.update",
-        validator: validateNodeProtocolFeaturesUpdateParams,
-      });
-      return;
-    }
-    const nodeId = normalizeOptionalString(
-      client?.connect?.device?.id ?? client?.connect?.client?.id,
-    );
-    if (!nodeId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
-      return;
-    }
-    const updated = context.nodeRegistry.updateProtocolFeatures(
-      nodeId,
-      client?.connId,
-      params.features,
-    );
-    if (!updated) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
-      return;
-    }
-    respond(true, { nodeId }, undefined);
   },
   "node.skills.update": async ({ params, respond, client, context }) => {
     if (!validateNodeSkillsUpdateParams(params)) {

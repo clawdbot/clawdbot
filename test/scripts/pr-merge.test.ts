@@ -85,6 +85,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
   const shell = `
 set -euo pipefail
 source "$OPENCLAW_TEST_MERGE_SCRIPT"
+script_parent_dir="$OPENCLAW_TEST_SCRIPTS_DIR"
 enter_worktree() { :; }
 require_artifact() { :; }
 validate_review_artifact_data() {
@@ -118,8 +119,17 @@ git() {
   fi
   return 0
 }
-gh() {
-  printf '%s\\n' "$*" >> "$OPENCLAW_TEST_GH_CALLS"
+node() {
+  if [[ "\${1-}" = */scripts/watch-pr-ci.mjs ]]; then
+    printf 'watch %s\\n' "$*" >> "$OPENCLAW_TEST_GH_CALLS"
+    return 0
+  fi
+  command node "$@"
+}
+gh_route() {
+  local route="$1"
+  shift
+  printf '%s %s\\n' "$route" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
   case "$1 $2" in
     "pr checks")
       case " $* " in
@@ -185,6 +195,8 @@ gh() {
     *) echo "unexpected gh invocation: $*" >&2; return 2 ;;
   esac
 }
+gh() { gh_route path "$@"; }
+gh_plain() { gh_route plain "$@"; }
 merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
 `;
 
@@ -212,6 +224,7 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_REVIEW_RECOMMENDATION: scenario.recommendation ?? "ready",
       OPENCLAW_TEST_RG_CALLS: rgCalls,
       OPENCLAW_TEST_ROOT: root,
+      OPENCLAW_TEST_SCRIPTS_DIR: join(process.cwd(), "scripts"),
       PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
     },
   });
@@ -272,7 +285,11 @@ describePosix("scripts/pr merge-run", () => {
     const result = runMerge({ mergeStateStatus: "CLEAN" });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.calls).toContain(`pr merge 123 --squash --match-head-commit ${headSha}`);
+    expect(result.calls).toContain(`plain pr merge 123 --squash --match-head-commit ${headSha}`);
+    expect(result.calls).toContain(`scripts/watch-pr-ci.mjs 123 ${headSha} --completion ci-run`);
+    expect(result.calls).toContain("plain pr checks 123 --required --json name,bucket,state");
+    expect(result.calls).toContain("path pr view 123 --json state,isDraft");
+    expect(result.calls).not.toContain("--required --watch");
     expect(result.calls).not.toContain("--auto");
     expect(result.stdout).toContain("merge-run complete for PR #123");
   });
@@ -281,8 +298,10 @@ describePosix("scripts/pr merge-run", () => {
     const result = runMerge({ auto: true });
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.calls).toContain(`pr merge 123 --auto --squash --match-head-commit ${headSha}`);
-    expect(result.calls.match(/^pr merge /gmu)).toHaveLength(1);
+    expect(result.calls).toContain(
+      `plain pr merge 123 --auto --squash --match-head-commit ${headSha}`,
+    );
+    expect(result.calls.match(/^plain pr merge /gmu)).toHaveLength(1);
     expect(result.stdout).toContain("AUTO-MERGE ENABLED");
     expect(result.stdout).toContain("required checks and branch up-to-dateness");
   });

@@ -254,7 +254,16 @@ function resolveLocalRef(
       : { found: false };
   }
   if (ref.startsWith("#")) {
-    const resolved = resolveLocalAnchor(resourceRoot, decodeURIComponent(ref.slice(1)));
+    // The pointer branch decodes through decodePointerSegment's try/catch;
+    // anchor fragments deserve the same tolerance so a malformed escape
+    // resolves to "not found" instead of throwing a raw URIError.
+    let anchor: string;
+    try {
+      anchor = decodeURIComponent(ref.slice(1));
+    } catch {
+      return { found: false };
+    }
+    const resolved = resolveLocalAnchor(resourceRoot, anchor);
     return resolved === undefined
       ? { found: false }
       : { found: true, schema: resolved, resourceRoot, resourceBaseId };

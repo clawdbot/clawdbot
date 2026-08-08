@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { exportClawAgent } from "./export.js";
@@ -298,6 +299,63 @@ describe("exportClawAgent", () => {
       "profile: coding",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("exports extension plugins into profile v1 without duplicating manifest packages", async () => {
+    const fixture = await installedFixture();
+    const integrity = `sha256:${"b".repeat(64)}`;
+    const extension = {
+      id: "coding-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["agents", "commands", "skills"],
+      unavailable: [],
+      adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
+    };
+    persistClawPackageRef(
+      fixture.plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@acme/coding-tools",
+        version: "1.2.3",
+        integrity,
+        extension,
+      },
+      { env: fixture.env, relationship: "referenced" },
+    );
+
+    const result = await exportClawAgent("worker", join(fixture.root, "exported-extension"), {
+      env: fixture.env,
+      config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
+      packageDeps: {
+        resolvePlugin: async () => ({
+          status: "found" as const,
+          pluginId: "coding-tools",
+          installedVersion: "1.2.3",
+          record: { source: "clawhub", integrity },
+        }),
+      },
+    });
+
+    expect(result.manifest.packages).toEqual([]);
+    expect(result.manifest.workspace.files).toContainEqual(
+      expect.objectContaining({ path: "reference/policy.md" }),
+    );
+    expect(result.openClawProfile).toMatchObject({
+      schemaVersion: 1,
+      extensions: [
+        {
+          id: "coding-tools",
+          kind: "plugin",
+          format: "claude",
+          source: "clawhub",
+          ref: "@acme/coding-tools",
+          version: "1.2.3",
+        },
+      ],
+    });
   });
 
   it("rejects modified managed content instead of silently creating a snapshot", async () => {

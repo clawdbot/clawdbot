@@ -452,17 +452,14 @@ function emitStructCustomCodable(
   props: Record<string, JsonSchema>,
   required: Set<string>,
 ): string {
-  const preservesExplicitNull = (key: string) =>
-    (name === "AgentsUpdateParams" && key === "model") ||
-    (name === "NodeInvokeRequestEvent" && key === "sessionKey");
-  if (!Object.keys(props).some(preservesExplicitNull)) {
+  if (name !== "AgentsUpdateParams" || !props.model) {
     return "";
   }
   const decodedProperties = Object.entries(props).map(([key, propSchema]) => {
     const propName = swiftStoredPropertyName(name, key);
-    if (preservesExplicitNull(key)) {
+    if (key === "model") {
       // decodeIfPresent collapses an explicit JSON null into nil. Presence-aware decoding
-      // preserves Gateway distinctions between clearing and omitting nullable fields.
+      // preserves the Gateway patch distinction between clearing and omitting the model.
       return `        self.${propName} = container.contains(.${propName})\n            ? try container.decode(AnyCodable.self, forKey: .${propName})\n            : nil`;
     }
     if (required.has(key)) {

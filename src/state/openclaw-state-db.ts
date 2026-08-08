@@ -60,6 +60,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertSupportedSchemaVersion,
+  CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   createOpenClawDatabaseVerificationError,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
@@ -84,10 +85,7 @@ export {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 };
-export const STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS = [
-  "claw_installs.bootstrap_source_path",
-  "claw_installs.bootstrap_content_digest",
-] as const;
+export const STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMNS;
 export type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,

@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-@_spi(AgentExecutionAttribution) import OpenClawKit
+import OpenClawKit
 import OSLog
 
 extension Notification.Name {
@@ -118,8 +118,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
-        let sessionKeyEnvelope = GatewayNodeInvokeContext.sessionKeyEnvelope
-        return await withCheckedContinuation { continuation in
+        await withCheckedContinuation { continuation in
             self.queue.async {
                 guard self.process?.isRunning == true, self.manifest != nil else {
                     continuation.resume(returning: Self.unavailableResponse(
@@ -135,18 +134,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 }
                 self.invokeContinuations[request.id] = continuation
                 do {
-                    var workerRequest: [String: Any] = [
+                    let workerRequest: [String: Any] = [
                         "id": request.id,
                         "nodeId": request.nodeId ?? "",
                         "command": request.command,
                         "paramsJSON": request.paramsJSON ?? NSNull(),
                     ]
-                    switch sessionKeyEnvelope {
-                    case .legacy:
-                        break
-                    case let .authoritative(sessionKey):
-                        workerRequest["sessionKey"] = sessionKey ?? NSNull()
-                    }
                     try self.enqueueWriteLocked([
                         "type": "invoke",
                         "request": workerRequest,

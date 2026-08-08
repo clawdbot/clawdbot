@@ -1,5 +1,5 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+  return { ...actual, spawn: vi.fn(actual.spawn) };
 });
 
 // These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
@@ -119,25 +119,38 @@ async function waitForChildClose(
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
-  it("hard-kills synchronous source root help after its timeout", () => {
-    const spawnSyncMock = vi.mocked(spawnSync);
-    const successfulRender = {
-      error: undefined,
-      output: [null, "Usage: openclaw\n", ""],
-      pid: 123,
-      signal: null,
-      status: 0,
-      stderr: "",
-      stdout: "Usage: openclaw\n",
-    };
-    spawnSyncMock.mockReturnValueOnce(successfulRender);
+  it("renders source root help without blocking sibling child events", async () => {
+    const child = createSpawnTextChild();
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockImplementationOnce(() => child as unknown as ReturnType<typeof spawn>);
+    let siblingEventObserved = false;
+    const siblingEvent = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        siblingEventObserved = true;
+        resolve();
+      });
+    });
 
-    expect(__testing.renderSourceRootHelpText()).toBe("Usage: openclaw\n");
+    const render = __testing.renderSourceRootHelpText();
+    child.stdout.write("Usage: openclaw\n");
+    setImmediate(() => {
+      child.emit("close", 0, null);
+    });
 
-    expect(spawnSyncMock).toHaveBeenCalledOnce();
-    expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({
-      killSignal: "SIGKILL",
-      timeout: 120_000,
+    await siblingEvent;
+    expect(siblingEventObserved).toBe(true);
+    await expect(render).resolves.toBe("Usage: openclaw\n");
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      expect.any(String),
+    ]);
+    expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
     });
   });
 

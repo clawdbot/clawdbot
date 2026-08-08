@@ -71,7 +71,12 @@ export async function sendChatMessageWithGeneratedRunId(
       message: msg,
       attachments,
       runId,
-      ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
+      ...(options.expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId: options.expectedLeafEntryId }
+        : expectedLeafEntryId !== undefined
+          ? { expectedLeafEntryId }
+          : {}),
+      ...(options.expectedRunId ? { expectedRunId: options.expectedRunId } : {}),
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
     });
   } catch (err) {

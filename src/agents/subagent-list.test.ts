@@ -376,6 +376,8 @@ describe("buildSubagentList", () => {
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "opencode/claude-opus-4-6",
       },
     );

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -2650,7 +2650,7 @@ describe("runCliAgent reliability", () => {
     expect(result.meta.finalPromptText).toContain("hi");
   });
 
-  it("reports CLI reply backends as streaming until the managed run finishes", async () => {
+  it("keeps CLI reply backend cancellation attached until the managed run finishes", async () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
       sessionId: "s1",
@@ -2678,14 +2678,9 @@ describe("runCliAgent reliability", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(true);
-    });
-
     finishRun?.();
     const result = await run;
     expect(result.text).toBe("hello from cli");
-    expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
     operation.complete();
   });
 

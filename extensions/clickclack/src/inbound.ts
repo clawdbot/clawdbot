@@ -238,6 +238,7 @@ export async function handleClickClackInbound(params: {
           onItemEvent: (payload: ClickClackItemEventPayload) => {
             progress?.onItemEvent(payload);
             activity?.onItemEvent(payload);
+            return false;
           },
           commentaryProgressEnabled: true,
           // ClickClack owns the native progress rendering, so item events must flow

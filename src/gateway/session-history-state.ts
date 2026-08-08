@@ -1,11 +1,13 @@
 // Gateway session-history projection state.
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
+import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -164,6 +166,7 @@ export function buildSessionHistorySnapshot(params: {
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    resolveCurrentUserProfileDisplay,
   });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
@@ -317,8 +320,23 @@ export class SessionHistorySseState {
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
         maxChars: this.maxChars,
+        resolveCurrentUserProfileDisplay,
       }),
     );
+    const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
+    if (
+      projectedMessages.length > this.sentHistory.messages.length &&
+      !isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
+    ) {
+      // A current-profile change can rewrite an already-emitted row while this
+      // append adds only one tail item. Refresh the full history so the client
+      // does not retain a stale prefix beside the newly revisioned message.
+      this.sentHistory = buildPaginatedSessionHistory({
+        messages: projectedMessages,
+        hasMore: false,
+      });
+      return { shouldRefresh: true };
+    }
     if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (hadPendingTurnBoundary && !this.turnBoundaryPending && addedMessages[0]) {
