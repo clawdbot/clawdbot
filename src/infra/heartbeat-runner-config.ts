@@ -52,13 +52,10 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
     typeof agentDefaultTimeoutSeconds === "number" &&
     Number.isFinite(agentDefaultTimeoutSeconds)
   ) {
-    // 0 is the documented unlimited-run sentinel for agent timeouts. Pass it
-    // through so downstream resolveAgentTimeoutMs maps it to NO_TIMEOUT_MS
-    // instead of clamping it to a 1-second heartbeat.
-    if (agentDefaultTimeoutSeconds === 0) {
-      return 0;
-    }
-    return Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+    // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
+    return agentDefaultTimeoutSeconds === 0
+      ? 0
+      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
   }
   // The wake dispatcher awaits heartbeat turns serially. Keep unset heartbeat
   // timeouts tied to the cadence instead of the 48h built-in agent default.
