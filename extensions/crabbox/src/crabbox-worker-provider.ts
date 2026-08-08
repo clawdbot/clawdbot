@@ -54,6 +54,7 @@ const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const LEASE_TOKEN_IN_OUTPUT_PATTERN = /^leased\s+(\S{1,128})(?=\s|$)/mu;
 
 type CrabboxCommandRunner = typeof runCommandWithTimeout;
+type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseCommandContext = {
   binary: string;
@@ -65,7 +66,7 @@ type ProvisionInspectContext = {
   binary: string;
   deadline: number;
   inspect: ParsedInspect;
-  profile: ReturnType<typeof parseCrabboxProfile>;
+  profile: CrabboxProfile;
   provider: string;
   runCommand: CrabboxCommandRunner;
 };
@@ -338,10 +339,7 @@ function statusFromInspect(inspect: ParsedInspect): WorkerLeaseStatus {
   return { status: "active" };
 }
 
-function leaseFromInspect(
-  inspect: ParsedInspect,
-  profile: ReturnType<typeof parseCrabboxProfile>,
-): WorkerLease {
+function leaseFromInspect(inspect: ParsedInspect, profile: CrabboxProfile): WorkerLease {
   if (isTerminalState(inspect.state)) {
     throw new Error("Crabbox operation lease is no longer active");
   }
