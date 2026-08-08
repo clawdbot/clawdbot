@@ -24,13 +24,17 @@ import {
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
+  canReadDetailedUpdateMetadata,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  projectUpdateAvailable,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
+import type { GatewayRequestContextWithClientLookup } from "./server-request-context.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
@@ -964,7 +968,8 @@ function createDeferredGatewayUpdateCheck(params: {
     warn: (msg: string) => void;
   };
   isNixMode: boolean;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  getClientConnIds: NonNullable<GatewayRequestContextWithClientLookup["getClientConnIds"]>;
   waitForPostReadyWork?: () => Promise<void>;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => void } {
@@ -973,6 +978,25 @@ function createDeferredGatewayUpdateCheck(params: {
   let stopUpdateCheck: (() => void) | null = null;
   let latestUpdateAvailable: GatewayUpdateAvailableEventPayload["updateAvailable"] = null;
   let latestSchedule: GatewayUpdateAvailableEventPayload["schedule"];
+
+  const broadcastUpdateAvailable = (payload: GatewayUpdateAvailableEventPayload) => {
+    const detailedConnIds = params.getClientConnIds((client) =>
+      canReadDetailedUpdateMetadata(client.connect.role ?? "operator", client.connect.scopes ?? []),
+    );
+    const legacyConnIds = new Set(params.getClientConnIds());
+    for (const connId of detailedConnIds) {
+      legacyConnIds.delete(connId);
+    }
+    params.broadcastToConnIds(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, detailedConnIds, {
+      dropIfSlow: true,
+    });
+    params.broadcastToConnIds(
+      GATEWAY_EVENT_UPDATE_AVAILABLE,
+      { updateAvailable: projectUpdateAvailable(payload.updateAvailable, false) ?? null },
+      legacyConnIds,
+      { dropIfSlow: true },
+    );
+  };
 
   const stop = () => {
     stopped = true;
@@ -1012,7 +1036,7 @@ function createDeferredGatewayUpdateCheck(params: {
                     updateAvailable,
                     ...(latestSchedule ? { schedule: latestSchedule } : {}),
                   };
-                  params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+                  broadcastUpdateAvailable(payload);
                 },
                 onUpdateScheduleChange: (schedule) => {
                   latestSchedule = schedule;
@@ -1020,7 +1044,7 @@ function createDeferredGatewayUpdateCheck(params: {
                     updateAvailable: latestUpdateAvailable,
                     schedule,
                   };
-                  params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+                  broadcastUpdateAvailable(payload);
                 },
               }),
             ),
@@ -1065,7 +1089,8 @@ export async function startGatewayPostAttachRuntime(
     };
     isNixMode: boolean;
     startupStartedAt?: number;
-    broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+    broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+    getClientConnIds: NonNullable<GatewayRequestContextWithClientLookup["getClientConnIds"]>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
@@ -1219,7 +1244,8 @@ export async function startGatewayPostAttachRuntime(
         cfg: params.cfgAtStart,
         log: params.log,
         isNixMode: params.isNixMode,
-        broadcast: params.broadcast,
+        broadcastToConnIds: params.broadcastToConnIds,
+        getClientConnIds: params.getClientConnIds,
         waitForPostReadyWork: params.waitForPostReadyWork,
         activeWorkInspectors: params.activeWorkInspectors,
       });
