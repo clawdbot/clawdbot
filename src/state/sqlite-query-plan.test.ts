@@ -212,19 +212,23 @@ describe("sqlite hot query plans", () => {
     const latestActiveBoundaryPlan = explainQueryPlan(
       database.db,
       `
-        SELECT active.active_position, identity.event_type, identity.seq
-          FROM transcript_event_identities AS identity
-          JOIN session_transcript_active_events AS active
-            ON active.session_id = identity.session_id AND active.event_seq = identity.seq
-         WHERE identity.session_id = ?
-           AND identity.event_type = 'reset'
-         ORDER BY identity.seq DESC
+        SELECT active.active_position, event.event_json,
+               json_extract(event.event_json, '$.type') AS event_type
+          FROM session_transcript_active_events AS active
+          JOIN transcript_events AS event
+            ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+           AND active.message_position IS NULL
+           AND json_extract(event.event_json, '$.type') IN ('reset', 'compaction')
+         ORDER BY active.active_position DESC
          LIMIT 1
       `,
       ["session-1"],
     );
-    expect(latestActiveBoundaryPlan).toContain("idx_agent_transcript_event_sequence");
-    expect(latestActiveBoundaryPlan).toContain("idx_agent_transcript_active_event_seq");
+    expect(latestActiveBoundaryPlan).toContain(
+      "sqlite_autoindex_session_transcript_active_events_1",
+    );
+    expect(latestActiveBoundaryPlan).toContain("sqlite_autoindex_transcript_events_1");
     expect(latestActiveBoundaryPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
     const mirrorIdentityPlan = explainQueryPlan(

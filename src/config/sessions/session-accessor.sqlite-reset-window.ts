@@ -1,4 +1,5 @@
 // Reset boundaries project a logical message window without rewriting raw cursor positions.
+import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -35,8 +36,8 @@ type ActiveBoundaryEventType = "compaction" | "reset";
 
 type ActiveBoundaryRow = {
   active_position: number;
-  event_type: string | null;
-  seq: number;
+  event_json: string;
+  event_type: ActiveBoundaryEventType;
 };
 
 type ResetMessageWindow = {
@@ -137,28 +138,40 @@ function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntr
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
 }
 
+function sqliteActiveBoundaryEventType() {
+  return /* kysely-allow-raw: boundary type lives inside canonical transcript JSON. */ sql<string>`json_extract(event.event_json, '$.type')`;
+}
+
 function findLatestActiveBoundary(
   projection: ResetWindowProjection,
-  eventType: ActiveBoundaryEventType,
+  eventTypes: readonly ActiveBoundaryEventType[],
 ): ActiveBoundaryRow | undefined {
   const db = getResetWindowKysely(projection.database);
-  // Active ancestry preserves append sequence, so the identity index finds one
-  // boundary candidate before the active join verifies selected-path membership.
-  return executeSqliteQueryTakeFirstSync(
+  // Persisted boundary rows can omit ids, so the identity index is incomplete.
+  // Read the canonical event on the selected path or an upgrade can cross a reset.
+  const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
+      .selectFrom("session_transcript_active_events as active")
+      .innerJoin("transcript_events as event", (join) =>
         join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
+          .onRef("event.session_id", "=", "active.session_id")
+          .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.active_position", "identity.event_type", "identity.seq"])
-      .where("identity.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_type", "=", eventType)
-      .orderBy("identity.seq", "desc")
+      .select([
+        "active.active_position",
+        "event.event_json",
+        sqliteActiveBoundaryEventType().as("event_type"),
+      ])
+      .where("active.session_id", "=", projection.resolved.sessionId)
+      .where("active.message_position", "is", null)
+      .where(sqliteActiveBoundaryEventType(), "in", eventTypes)
+      .orderBy("active.active_position", "desc")
       .limit(1),
   );
+  return row && (row.event_type === "reset" || row.event_type === "compaction")
+    ? { ...row, event_type: row.event_type }
+    : undefined;
 }
 
 function findLatestResetMessageWindow(
@@ -166,30 +179,14 @@ function findLatestResetMessageWindow(
   generation: string | undefined,
 ): ResetMessageWindow | null {
   const db = getResetWindowKysely(projection.database);
-  const latestReset = findLatestActiveBoundary(projection, "reset");
-  const latestCompaction = findLatestActiveBoundary(projection, "compaction");
-  const latestBoundaryRow =
-    latestReset && (!latestCompaction || latestReset.seq > latestCompaction.seq)
-      ? latestReset
-      : latestCompaction;
+  const latestBoundaryRow = findLatestActiveBoundary(projection, ["reset", "compaction"]);
   if (!latestBoundaryRow) {
     return null;
   }
   if (latestBoundaryRow.event_type !== "reset") {
     return null;
   }
-  const boundaryEvent = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", projection.resolved.sessionId)
-      .where("seq", "=", latestBoundaryRow.seq),
-  );
-  if (!boundaryEvent) {
-    throw new Error("Active reset boundary is missing its transcript event");
-  }
-  const boundary = JSON.parse(boundaryEvent.event_json) as {
+  const boundary = JSON.parse(latestBoundaryRow.event_json) as {
     firstKeptEntryId?: unknown;
   };
   const resetRow = latestBoundaryRow;
@@ -362,7 +359,7 @@ export function resolveSessionTranscriptGuardState(
       .where("identity.event_id", "=", expectedEntryId)
       .limit(1),
   );
-  const latestReset = findLatestActiveBoundary(projection, "reset");
+  const latestReset = findLatestActiveBoundary(projection, ["reset"]);
   return {
     kind: "identified",
     expectedEntryOnGuardPath:
