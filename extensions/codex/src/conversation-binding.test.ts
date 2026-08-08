@@ -206,13 +206,22 @@ function boundConversationClaim(sessionFile: string, sessionKey?: string) {
 
 async function createSameThreadClientMigrationFixture(
   sessionFile: string,
-  options: { rejectOldRelease: boolean },
+  options: { rejectOldRelease: boolean; owner: "session" | "conversation" },
 ) {
-  await writeTestConversationBinding(sessionFile, {
+  const binding = {
     threadId: "thread-migrated",
     clientId: "client-before-migration",
     cwd: tempDir,
-  });
+  };
+  const readOwner =
+    options.owner === "session"
+      ? async () => readCodexAppServerBinding(sessionFile)
+      : async () => readTestConversationBinding(sessionFile);
+  if (options.owner === "session") {
+    await writeCodexAppServerBinding(sessionFile, binding);
+  } else {
+    await writeTestConversationBinding(sessionFile, binding);
+  }
   const operations: string[] = [];
   const ownerDuringRelease: Array<string | undefined> = [];
   const notificationHandlers = new Set<(notification: unknown) => void>();
@@ -220,7 +229,7 @@ async function createSameThreadClientMigrationFixture(
     getInstanceId: () => "client-before-migration",
     request: vi.fn(async (method: string) => {
       operations.push(`previous:${method}`);
-      ownerDuringRelease.push((await readTestConversationBinding(sessionFile))?.clientId);
+      ownerDuringRelease.push((await readOwner())?.clientId);
       if (options.rejectOldRelease) {
         throw new Error("previous physical client unsubscribe failed");
       }
@@ -278,7 +287,7 @@ async function createSameThreadClientMigrationFixture(
       ? { client: previousClient, release: vi.fn() }
       : undefined,
   );
-  return { previousClient, replacementClient, operations, ownerDuringRelease };
+  return { previousClient, replacementClient, operations, ownerDuringRelease, readOwner };
 }
 
 function handleCodexConversationInboundClaim(
@@ -731,6 +740,184 @@ describe("codex conversation binding", () => {
     });
   });
 
+  it.each([
+    {
+      label: "an incognito source bound to an ordinary destination",
+      sourceSessionKey: "agent:main:dashboard:incognito-source",
+      destinationSessionKey: "agent:main:telegram:ordinary-destination",
+      ephemeral: true,
+      turnFails: false,
+    },
+    {
+      label: "an ordinary source bound to an incognito destination",
+      sourceSessionKey: "agent:main:telegram:ordinary-source",
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      ephemeral: false,
+      turnFails: false,
+    },
+    {
+      label: "a source without a session key bound to an incognito destination",
+      sourceSessionKey: undefined,
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      ephemeral: false,
+      turnFails: false,
+    },
+    {
+      label: "a failing incognito source bound to an ordinary destination",
+      sourceSessionKey: "agent:main:dashboard:incognito-source",
+      destinationSessionKey: "agent:main:telegram:ordinary-destination",
+      ephemeral: true,
+      turnFails: true,
+    },
+    {
+      label: "a failing ordinary source bound to an incognito destination",
+      sourceSessionKey: "agent:main:telegram:ordinary-source",
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      ephemeral: false,
+      turnFails: true,
+    },
+  ])(
+    "uses the persisted source lifecycle for $label",
+    async ({ sourceSessionKey, destinationSessionKey, ephemeral, turnFails }) => {
+      const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
+      const bindingId = "binding-mixed-source-lifecycle";
+      const operations: Array<{ method: string; params: Record<string, unknown> }> = [];
+      const notificationHandlers = new Set<(notification: unknown) => void>();
+      const client = {
+        getInstanceId: () => "client-mixed-source-lifecycle",
+        request: vi.fn(async (method: string, params: Record<string, unknown>) => {
+          operations.push({ method, params });
+          if (method === "thread/start") {
+            return conversationThreadStartResult("thread-mixed-source-lifecycle");
+          }
+          if (method === "turn/start") {
+            if (turnFails) {
+              throw new Error("mixed source lifecycle turn failed");
+            }
+            queueMicrotask(() => {
+              for (const handler of notificationHandlers) {
+                handler({
+                  method: "turn/completed",
+                  params: {
+                    threadId: "thread-mixed-source-lifecycle",
+                    turn: {
+                      id: "turn-mixed-source-lifecycle",
+                      status: "completed",
+                      items: [{ type: "agentMessage", id: "answer", text: "Bound reply" }],
+                    },
+                  },
+                });
+              }
+            });
+            return { turn: { id: "turn-mixed-source-lifecycle" } };
+          }
+          if (method === "thread/unsubscribe") {
+            return {};
+          }
+          throw new Error(`unexpected method: ${method}`);
+        }),
+        addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+          notificationHandlers.add(handler);
+          return () => notificationHandlers.delete(handler);
+        }),
+        addRequestHandler: vi.fn(() => () => undefined),
+        addCloseHandler: vi.fn(() => () => undefined),
+      } as unknown as CodexAppServerClient;
+      ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+      sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
+        client,
+        release: vi.fn(),
+      });
+      const { event, ctx } = boundConversationClaim(sessionFile, destinationSessionKey);
+      const data = {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId,
+        workspaceDir: tempDir,
+        source: {
+          agentId: "main",
+          sessionId: "source-mixed-lifecycle",
+          threadId: "thread-source-mixed-lifecycle",
+          ...(sourceSessionKey ? { sessionKey: sourceSessionKey } : {}),
+        },
+        start: { id: "start-mixed-source-lifecycle" },
+      };
+      ctx.pluginBinding.data = data;
+
+      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toMatchObject({
+        handled: true,
+        reply: {
+          text: turnFails
+            ? "Codex app-server turn failed: mixed source lifecycle turn failed"
+            : "Bound reply",
+        },
+      });
+
+      expect(operations.map(({ method }) => method)).toEqual(
+        turnFails
+          ? ["thread/start", "turn/start", "thread/unsubscribe"]
+          : ["thread/start", "turn/start"],
+      );
+      if (ephemeral) {
+        expect(operations[0]?.params.ephemeral).toBe(true);
+        await expect(
+          consumeCodexAppServerLiveThread(client, "thread-mixed-source-lifecycle"),
+        ).resolves.toBeUndefined();
+      } else {
+        expect(operations[0]?.params).not.toHaveProperty("ephemeral");
+        if (turnFails) {
+          await expect(
+            consumeCodexAppServerLiveThread(client, "thread-mixed-source-lifecycle"),
+          ).resolves.toBeUndefined();
+        } else {
+          const ownership = await consumeCodexAppServerLiveThread(
+            client,
+            "thread-mixed-source-lifecycle",
+          );
+          expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+          await expect(
+            retainCodexAppServerLiveThread(
+              client,
+              "thread-mixed-source-lifecycle",
+              ownership?.release,
+              ownership?.configFingerprint,
+              ownership?.serviceTier,
+            ),
+          ).resolves.toBe(true);
+        }
+      }
+
+      if (turnFails && ephemeral) {
+        await expect(
+          testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
+        ).resolves.toBeUndefined();
+        return;
+      }
+
+      await handleCodexConversationBindingResolved({
+        status: "denied",
+        decision: "deny",
+        request: {
+          data,
+          conversation: {
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "5185575566",
+          },
+        },
+      });
+
+      expect(operations.at(-1)).toEqual({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-mixed-source-lifecycle" },
+      });
+      await expect(
+        testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
+      ).resolves.toBeUndefined();
+    },
+  );
+
   it("selects Codex network-proxy permissions through app-server bind thread config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -902,8 +1089,11 @@ describe("codex conversation binding", () => {
     "transfers exact physical ownership during $path migration (old release fails: $rejectOldRelease)",
     async ({ path: migrationPath, rejectOldRelease }) => {
       const sessionFile = path.join(tempDir, "same-thread-client-migration.jsonl");
-      const { previousClient, replacementClient, operations, ownerDuringRelease } =
-        await createSameThreadClientMigrationFixture(sessionFile, { rejectOldRelease });
+      const { previousClient, replacementClient, operations, ownerDuringRelease, readOwner } =
+        await createSameThreadClientMigrationFixture(sessionFile, {
+          rejectOldRelease,
+          owner: migrationPath === "binding" ? "session" : "conversation",
+        });
 
       if (migrationPath === "binding") {
         const binding = startCodexConversationThread({
@@ -914,7 +1104,10 @@ describe("codex conversation binding", () => {
         if (rejectOldRelease) {
           await expect(binding).rejects.toThrow("previous physical client unsubscribe failed");
         } else {
-          await expect(binding).resolves.toBeUndefined();
+          await expect(binding).resolves.toMatchObject({
+            kind: "codex-app-server-session",
+            source: { threadId: "thread-migrated" },
+          });
         }
       } else {
         const { event, ctx } = boundConversationClaim(sessionFile);
@@ -932,7 +1125,7 @@ describe("codex conversation binding", () => {
       }
       expect(operations).toEqual(expectedOperations);
       expect(ownerDuringRelease).toEqual(["client-before-migration"]);
-      await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+      await expect(readOwner()).resolves.toMatchObject({
         threadId: "thread-migrated",
         clientId: rejectOldRelease ? "client-before-migration" : "client-after-migration",
       });

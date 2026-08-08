@@ -242,6 +242,7 @@ async function startCodexConversationThread(
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
     ...agentLookup,
   });
+  const incognito = isIncognitoSessionKey(params.sessionKey);
   if (params.threadId?.trim()) {
     await attachExistingThread({
       pluginConfig: params.pluginConfig,
@@ -258,6 +259,7 @@ async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      incognito,
       agentId: params.agentId,
     });
   } else {
@@ -275,6 +277,7 @@ async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      incognito,
       agentId: params.agentId,
     });
   }
@@ -364,6 +367,12 @@ async function handleCodexConversationInboundClaim(
   }
   try {
     const identity = conversationBindingIdentity(data);
+    const sessionKey = event.sessionKey ?? ctx.sessionKey;
+    // Native ephemeral ownership follows the persisted source, not the
+    // destination channel. Shipped v1 bindings have no source to consult.
+    const incognito = isIncognitoSessionKey(
+      data.source?.sessionKey ?? (data.legacyBinding ? sessionKey : undefined),
+    );
     // Start the snapshot before enqueueing, but do not await: yielding here
     // would let detach overtake an already-arrived bound message.
     const queuedOwner = options.bindingStore.read(identity);
@@ -400,7 +409,8 @@ async function handleCodexConversationInboundClaim(
         prompt,
         event,
         config: options.config,
-        sessionKey: event.sessionKey ?? ctx.sessionKey,
+        sessionKey,
+        incognito,
         pluginConfig: options.pluginConfig,
         timeoutMs: options.timeoutMs,
       });
@@ -458,6 +468,7 @@ type CodexThreadBindingParams = {
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;
   sessionKey?: string;
+  incognito: boolean;
 };
 
 type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversationAppServerRuntime>>;
@@ -607,7 +618,7 @@ async function requestNewConversationBindingThread(
           ...buildThreadRequestRuntimeOptions(params, resolved),
           developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
           experimentalRawEvents: true,
-          ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
+          ...(params.incognito ? { ephemeral: true } : {}),
         },
         requestOptions,
       ),
@@ -628,8 +639,7 @@ async function writeThreadBindingFromResponse(
     typeof resolved.runtime.approvalPolicy === "string"
       ? resolved.runtime.approvalPolicy
       : undefined;
-  const trackSubscription =
-    !isIncognitoSessionKey(params.sessionKey) && isCodexAppServerClientRuntimeLive(resolved.client);
+  const trackSubscription = !params.incognito && isCodexAppServerClientRuntimeLive(resolved.client);
   const sameOwner = isSameCodexAppServerThreadOwner(current, {
     threadId: response.thread.id,
     clientId: resolved.client.getInstanceId(),
@@ -773,6 +783,7 @@ async function runBoundTurn(params: {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
+  incognito: boolean;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
@@ -869,7 +880,7 @@ async function runBoundTurn(params: {
   let ownsNativeSubscription = false;
   let turnSucceeded = false;
   try {
-    if (!isIncognitoSessionKey(params.sessionKey) && isCodexAppServerClientRuntimeLive(client)) {
+    if (!params.incognito && isCodexAppServerClientRuntimeLive(client)) {
       const ownership = await consumeCodexAppServerLiveThread(client, threadId);
       if (ownership) {
         liveThreadOwnership = { client, threadId, ownership };
@@ -897,7 +908,7 @@ async function runBoundTurn(params: {
                 ...(serviceTier ? { serviceTier } : {}),
                 developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                 experimentalRawEvents: true,
-                ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
+                ...(params.incognito ? { ephemeral: true } : {}),
               },
               requestOptions,
             ),
@@ -965,9 +976,7 @@ async function runBoundTurn(params: {
       useStickyNetworkProfile = modelScopedRuntime.networkProxy !== undefined;
     } else if (
       binding.clientId !== client.getInstanceId() ||
-      (isCodexAppServerClientRuntimeLive(client) &&
-        !isIncognitoSessionKey(params.sessionKey) &&
-        !liveThreadOwnership)
+      (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
     ) {
       const response = await withLeasedCodexAppServerClientStartSelectionRetry({
         lease: clientLease,
@@ -1095,7 +1104,7 @@ async function runBoundTurn(params: {
         await retireUnsafeCodexTurnClientBestEffort(client, "turn interrupt");
       }
     }
-    if (isIncognitoSessionKey(params.sessionKey)) {
+    if (params.incognito) {
       const bindingReleased = await params.bindingStore.mutate(identity, {
         kind: "clear",
         threadId,
@@ -1118,7 +1127,7 @@ async function runBoundTurn(params: {
       if (
         ownsNativeSubscription &&
         retiredUnsafeClient !== client &&
-        !isIncognitoSessionKey(params.sessionKey) &&
+        !params.incognito &&
         isCodexAppServerClientRuntimeLive(client)
       ) {
         // Ownership callbacks are branded to one physical client and native
@@ -1190,6 +1199,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
+  incognito: boolean;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
   await prepareConversationBinding(params);
@@ -1211,6 +1221,7 @@ async function prepareConversationBinding(
     pluginConfig?: unknown;
     config?: CodexConversationConfig;
     sessionKey?: string;
+    incognito: boolean;
   },
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
@@ -1263,6 +1274,7 @@ async function prepareConversationBinding(
       serviceTier: inherited?.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      incognito: params.incognito,
       agentId: params.data.agentId,
     };
     // Harness threads retain immutable tools, developer instructions, and app
