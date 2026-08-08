@@ -5,7 +5,6 @@ import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-p
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
@@ -17,7 +16,6 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import { renderBoardSessionSurface } from "./board-session-surface.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -567,41 +565,10 @@ export class ChatPane extends ChatPaneHeader {
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
-    const workboardCardChip = this.resolveWorkboardCardChip(board);
-    const primary =
-      board.hasBoard && board.face === "dashboard"
-        ? renderBoardSessionSurface({
-            snapshot: board.snapshot,
-            observer: {
-              activeRunId: observerRunId,
-              digests: this.observerDigestHistory.get(
-                this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
-              ),
-              lastReadAt: selectedSession?.lastReadAt,
-            },
-            activeTabId: board.activeTabId,
-            dock: board.dock,
-            dockSize: this.boardChatDockSize,
-            chat,
-            divider: this.renderBoardDivider("bottom"),
-            canMutate: board.provider.canMutate,
-            canGrant: board.provider.canGrant,
-            callbacks: {
-              applyOps: (ops) => board.provider.applyOps(ops),
-              grant: (name, decision) => board.provider.grant(name, decision),
-              selectTab: (tabId) => {
-                this.boardCommandDock = null;
-                this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
-              },
-              frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
-              widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
-              refreshWidgetAppView: (name, revision) =>
-                board.provider.refreshWidgetAppView(name, revision),
-            } satisfies BoardViewCallbacks,
-            widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-            workboardCardChip,
-          })
-        : chat;
+    const primary = this.renderBoardPrimary(board, chat, {
+      activeRunId: observerRunId,
+      lastReadAt: selectedSession?.lastReadAt,
+    });
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,

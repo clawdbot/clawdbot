@@ -47,6 +47,7 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
 };
 
@@ -404,22 +405,23 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
   });
 
-  it("keeps the source performance gateway fixture network-hermetic", () => {
-    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+  it("isolates the source performance gateway from network and scheduled work", () => {
+    const step = findStep("Run OpenClaw source performance probes", "source_performance");
+    const run = step.run ?? "";
 
     expect(run).toContain("catalog_refresh_config");
     expect(run).toContain("rg -q 'catalogRefresh:' src/config/zod-schema.core.ts");
     expect(run).toContain(
       'catalog_refresh_config=\'    "models": { "catalogRefresh": { "enabled": false } },\'',
     );
-    expect(run).toContain('"agents": { "defaults": { "heartbeat": { "every": "0m" } } },');
     expect(run).toContain('"update": { "checkOnStart": false },');
-    expect(run).toContain('"browser": { "enabled": false },');
-    expect(run).toContain('"memory-core": { "config": { "dreaming": { "enabled": false } } }');
-    expect(run).toContain('cp "$gateway_config" "$gateway_readiness_config"');
-    expect(run.indexOf('"agents":')).toBeLessThan(
-      run.indexOf('cp "$gateway_config" "$gateway_readiness_config"'),
+    expect(run).toContain('"agents": { "defaults": { "heartbeat": { "every": "0m" } } },');
+    expect(run).toContain(
+      'OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \\',
     );
+    expect(readWorkflow().env?.OPENCLAW_SKIP_CRON).toBeUndefined();
+    expect(readWorkflow().jobs?.source_performance?.env?.OPENCLAW_SKIP_CRON).toBeUndefined();
+    expect(step.env?.OPENCLAW_SKIP_CRON).toBeUndefined();
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {

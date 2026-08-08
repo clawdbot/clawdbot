@@ -1070,6 +1070,7 @@ function installControlUiMockGateway(
       "label",
       "category",
       "icon",
+      "boardFace",
       "pinned",
       "unread",
       "toolOverrides",

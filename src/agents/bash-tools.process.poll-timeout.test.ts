@@ -264,6 +264,59 @@ test.each([
       expect(text).toContain(earlierMarker);
       expect(text).not.toContain("earlier retained output is omitted");
     }
+    expect(text).not.toContain("discarded at the retention cap");
+  },
+);
+
+test.each([
+  { name: "below the retained tail", outputLength: 1_500, aggregateCap: 1_000 },
+  { name: "above the retained tail", outputLength: 3_500, aggregateCap: 3_000 },
+])(
+  "process poll distinguishes discarded aggregate output $name",
+  async ({ outputLength, aggregateCap }) => {
+    const sessionId = `sess-aggregate-cap-${aggregateCap}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const earlierMarker = "[discarded-output]";
+    const latestMarker = "[latest-retained-output]";
+    const output = `${earlierMarker}${"x".repeat(
+      outputLength - earlierMarker.length - latestMarker.length,
+    )}${latestMarker}`;
+    session.maxOutputChars = aggregateCap;
+
+    appendOutput(session, "stdout", output);
+    const runningLog = await processTool.execute("toolcall-running-aggregate-cap", {
+      action: "log",
+      sessionId,
+    });
+    const runningPoll = await pollSession(processTool, "toolcall-running-aggregate-cap", sessionId);
+    markExited(session, 0, null, "completed");
+
+    const poll = await pollSession(processTool, "toolcall-aggregate-cap", sessionId);
+    const finishedLog = await processTool.execute("toolcall-finished-aggregate-cap", {
+      action: "log",
+      sessionId,
+    });
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    const runningLogText = runningLog.content[0]?.type === "text" ? runningLog.content[0].text : "";
+    const runningPollText =
+      runningPoll.content[0]?.type === "text" ? runningPoll.content[0].text : "";
+    const finishedLogText =
+      finishedLog.content[0]?.type === "text" ? finishedLog.content[0].text : "";
+    const details = poll.details as { aggregated?: string };
+
+    expect(details.aggregated).toHaveLength(aggregateCap);
+    expect(text).not.toContain(earlierMarker);
+    expect(text).toContain(latestMarker);
+    expect(text).toContain("discarded at the retention cap and cannot be recovered");
+    expect(runningLogText).toContain("discarded at the retention cap and cannot be recovered");
+    expect(runningPollText).toContain("discarded at the retention cap and cannot be recovered");
+    expect(finishedLogText).toContain("discarded at the retention cap and cannot be recovered");
+    if (aggregateCap > 2_000) {
+      expect(text).toContain("earlier retained output is omitted");
+      expect(text).toContain("action=log with offset and limit");
+    } else {
+      expect(text).not.toContain("action=log with offset and limit");
+    }
   },
 );
 

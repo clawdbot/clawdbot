@@ -13,9 +13,12 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
-} from "./openai-responses-replay-internal.js";
+} from "./openai-responses-compaction-replay.js";
+import { tagOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay-internal.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+const SDK_FULL_HISTORY_PREFIX = "full history before compaction";
+const SDK_REASONING_CIPHERTEXT = "opaque-sdk-reasoning";
 
 const sdkState = vi.hoisted(() => ({
   clients: [] as Array<"openai" | "azure">,
@@ -123,10 +126,30 @@ function completedSdkResponse(responseId: string): SdkResponse {
 function createCompactionContext(
   model: Model,
   identity: { authProfileId: string; sessionId: string },
+  includeReasoning = false,
 ): Context {
   const prior: AssistantMessage = {
     role: "assistant",
-    content: [],
+    content: includeReasoning
+      ? [
+          {
+            type: "thinking",
+            thinking: "prior reasoning",
+            thinkingSignature: JSON.stringify(
+              tagOpenAIResponsesReasoningReplayItem(
+                {
+                  type: "reasoning",
+                  id: "rs_sdk_retry",
+                  encrypted_content: SDK_REASONING_CIPHERTEXT,
+                  summary: [],
+                },
+                model,
+                identity,
+              ),
+            ),
+          },
+        ]
+      : [],
     api: model.api,
     provider: model.provider,
     model: model.id,
@@ -154,7 +177,11 @@ function createCompactionContext(
   );
   return {
     systemPrompt: "PRIVATE-AZURE-RECOVERY-PROMPT",
-    messages: [prior, { role: "user", content: "continue", timestamp: 2 }],
+    messages: [
+      { role: "user", content: SDK_FULL_HISTORY_PREFIX, timestamp: 0 },
+      prior,
+      { role: "user", content: "continue", timestamp: 2 },
+    ],
   };
 }
 
@@ -301,12 +328,74 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
     expect(requestHasCompaction(sdkState.requests[1])).toBe(false);
     expect(requestHasCompaction(sdkState.requests[2])).toBe(false);
+    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain(SDK_FULL_HISTORY_PREFIX);
+    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
     expect(observations.map((entry) => entry.payloadVariant)).toEqual([
       "initial",
       "compaction-stripped",
       "initial",
     ]);
     expect(JSON.stringify(observations)).not.toContain("opaque-azure-compaction");
+  });
+
+  it("lazily rebuilds full history after reasoning and compaction rejection", async () => {
+    const identity = { sessionId: "sdk-recovery-session", authProfileId: "sdk-profile" };
+    const openAIModel = createModel();
+    const context = createCompactionContext(openAIModel, identity, true);
+    const invalidEncryptedContent = () =>
+      Object.assign(new Error("invalid encrypted content"), {
+        code: "invalid_encrypted_content",
+      });
+    const onPayload = vi.fn((request: unknown) => request);
+    sdkState.outcomes = [
+      invalidEncryptedContent(),
+      invalidEncryptedContent(),
+      completedSdkResponse("resp_sdk_recovered"),
+    ];
+
+    const stream = await Promise.resolve(
+      createOpenAIResponsesTransportStreamFn()(openAIModel, context, {
+        apiKey: "test-key",
+        ...identity,
+        onPayload,
+      } as never),
+    );
+    expect((await stream.result()).stopReason).toBe("stop");
+
+    expect(sdkState.requests).toHaveLength(3);
+    expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
+    expect(JSON.stringify(sdkState.requests[0]?.input)).toContain(SDK_REASONING_CIPHERTEXT);
+    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain(SDK_FULL_HISTORY_PREFIX);
+    expect(requestHasCompaction(sdkState.requests[1])).toBe(true);
+    expect(JSON.stringify(sdkState.requests[1]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
+    expect(requestHasCompaction(sdkState.requests[2])).toBe(false);
+    expect(JSON.stringify(sdkState.requests[2]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
+    expect(JSON.stringify(sdkState.requests[2]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
+    expect(onPayload).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not invoke the provider or retry when prompt observation throws", async () => {
+    const options = { apiKey: "test-key" };
+    responsesPromptObserver.set(options, () => {
+      throw Object.assign(new Error("observer failed"), {
+        code: "invalid_encrypted_content",
+      });
+    });
+    sdkState.outcomes = [completedSdkResponse("resp_unexpected")];
+
+    const stream = await Promise.resolve(
+      createOpenAIResponsesTransportStreamFn()(
+        createModel(),
+        createContext("PRIVATE-OBSERVER-FAILURE-PROMPT"),
+        options as never,
+      ),
+    );
+    expect(await stream.result()).toMatchObject({
+      stopReason: "error",
+      errorMessage: "observer failed",
+    });
+    expect(sdkState.clients).toEqual([]);
+    expect(sdkState.requests).toEqual([]);
   });
 
   it("observes the async replacement immediately before final transformed egress", async () => {
@@ -359,23 +448,22 @@ describe("OpenAI Responses provider prompt observer", () => {
     const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
       code: "invalid_encrypted_content",
     });
+    const onPayload = vi.fn((request: Record<string, unknown>) => ({
+      ...request,
+      input: [
+        ...((request.input as unknown[]) ?? []),
+        { type: "reasoning", encrypted_content: "opaque", summary: [] },
+        {
+          type: "compaction",
+          id: "cmp_invalid",
+          encrypted_content: "opaque-compaction",
+        },
+      ],
+    }));
     const run = await runObservedRequest({
       context: createContext(prompt),
       errors: [invalidEncryptedContent, invalidEncryptedContent, new Error("stop after retry")],
-      options: {
-        onPayload: (request: Record<string, unknown>) => ({
-          ...request,
-          input: [
-            ...((request.input as unknown[]) ?? []),
-            { type: "reasoning", encrypted_content: "opaque", summary: [] },
-            {
-              type: "compaction",
-              id: "cmp_invalid",
-              encrypted_content: "opaque-compaction",
-            },
-          ],
-        }),
-      },
+      options: { onPayload },
     });
 
     expect(run.order).toEqual([
@@ -407,6 +495,7 @@ describe("OpenAI Responses provider prompt observer", () => {
         (item) => item.type === "compaction",
       ),
     ).toBe(false);
+    expect(onPayload).toHaveBeenCalledTimes(2);
   });
 
   it("uses cache-boundary and surrogate normalization as the expected prompt owner", async () => {

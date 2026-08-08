@@ -1,3 +1,5 @@
+import { html, nothing, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
 import {
   GATEWAY_SERVER_CAPS,
   type SessionObserverDigest,
@@ -11,6 +13,7 @@ import {
   boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
+  type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import {
   updateBoardSessionView,
@@ -18,7 +21,7 @@ import {
   type BoardVisibleChatDock,
 } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import type { BoardObserverContext, BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
@@ -32,7 +35,12 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { WorkboardCardChipProps } from "./board-session-surface.ts";
+import {
+  ensureBoardViewElement,
+  ensureWorkboardCardChipElement,
+  renderBoardSessionSurface,
+  type WorkboardCardChipProps,
+} from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import { boardChatDockLayout, type ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
@@ -217,12 +225,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const enabled = isWorkboardEnabledInConfigSnapshot(
       this.context?.runtimeConfig?.state.configSnapshot,
     );
-    if (
-      !board.hasBoard ||
-      board.face !== "dashboard" ||
-      !enabled ||
-      gateway?.phase !== "connected"
-    ) {
+    if (!board.hasBoard || !enabled || gateway?.phase !== "connected") {
       return null;
     }
     const client = gateway.client;
@@ -231,10 +234,36 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
+      active: board.face === "dashboard",
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
     };
+  }
+
+  protected syncRetainedBoardSession(board: ResolvedBoardView): void {
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    if (!board.hasBoard || !sessionKey) {
+      this.retainedBoardSessionKey = "";
+    } else if (board.face === "dashboard") {
+      this.retainedBoardSessionKey = sessionKey;
+    } else if (this.retainedBoardSessionKey !== sessionKey) {
+      this.retainedBoardSessionKey = "";
+    }
+    if (this.retainedBoardSessionKey === sessionKey && this.resolveWorkboardCardChip(board)) {
+      void ensureWorkboardCardChipElement().catch(() => undefined);
+    }
+    if (
+      board.hasBoard &&
+      board.face === "dashboard" &&
+      !customElements.get("openclaw-board-view")
+    ) {
+      void ensureBoardViewElement().then((loaded) => {
+        if (loaded) {
+          this.requestUpdate();
+        }
+      });
+    }
   }
 
   protected resolveBoardSessionKey(snapshotSessionKey = ""): string {
@@ -421,6 +450,57 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.state.settings = next;
     }
     this.requestUpdate();
+  }
+
+  protected renderBoardPrimary(
+    board: ResolvedBoardView,
+    chat: TemplateResult,
+    observer: Pick<BoardObserverContext, "activeRunId" | "lastReadAt">,
+  ) {
+    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
+    const shouldRender =
+      board.hasBoard &&
+      Boolean(sessionKey) &&
+      (board.face === "dashboard" || this.retainedBoardSessionKey === sessionKey);
+    const boardActive = board.face === "dashboard";
+    const renderSurface = (active: boolean) =>
+      renderBoardSessionSurface({
+        active,
+        snapshot: board.snapshot,
+        observer: {
+          ...observer,
+          digests: this.observerDigestHistory.get(
+            this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
+          ),
+        },
+        activeTabId: board.activeTabId,
+        dock: board.dock,
+        dockSize: this.boardChatDockSize,
+        chat,
+        divider: this.renderBoardDivider("bottom"),
+        canMutate: board.provider.canMutate,
+        canGrant: board.provider.canGrant,
+        callbacks: {
+          applyOps: (ops) => board.provider.applyOps(ops),
+          grant: (name, decision) => board.provider.grant(name, decision),
+          selectTab: (tabId) => {
+            this.boardCommandDock = null;
+            this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
+          },
+          frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
+          widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
+          refreshWidgetAppView: (name, revision) =>
+            board.provider.refreshWidgetAppView(name, revision),
+        } satisfies BoardViewCallbacks,
+        widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
+        workboardCardChip: this.resolveWorkboardCardChip(board),
+      });
+    const boardSurface = !shouldRender
+      ? nothing
+      : boardActive
+        ? renderSurface(true)
+        : guard([sessionKey], () => renderSurface(false));
+    return html`${boardActive ? nothing : chat}${boardSurface}`;
   }
 
   protected persistBoardReopenDock(board: ResolvedBoardView, dock: BoardVisibleChatDock): void {

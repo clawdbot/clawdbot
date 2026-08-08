@@ -2,7 +2,6 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { peekStoredDeviceIdentityId } from "../lib/nodes/index.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import "../components/device-auth-migration-banner.ts";
 
 export type DeviceAuthMigrationSnapshot = {
   requestId: string | null;

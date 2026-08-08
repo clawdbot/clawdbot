@@ -74,6 +74,12 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
 
+function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
+  return session.totalOutputChars > session.aggregated.length
+    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
+    : "";
+}
+
 const MAX_POLL_WAIT_MS = 30_000;
 
 type RunningSessionRuntime = {
@@ -394,8 +400,8 @@ export function createProcessTool(
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
               acknowledgeNotifyOnExit(scopedFinished);
-              // Finished polls render a bounded tail; disclose retained content so the
-              // model can recover it through paged logs instead of treating it as complete.
+              // Aggregate-cap loss is permanent; tail omission remains pageable.
+              const aggregateOutputNote = retentionCapNote(scopedFinished);
               const retainedOutputNote =
                 scopedFinished.tail.length < scopedFinished.aggregated.length
                   ? "\n\n[earlier retained output is omitted; use action=log with offset and limit to page]"
@@ -409,6 +415,7 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
+                        aggregateOutputNote +
                         retainedOutputNote +
                         `\n\nProcess exited with ${
                           scopedFinished.exitSignal
@@ -478,6 +485,7 @@ export function createProcessTool(
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
             ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
             : "";
@@ -495,6 +503,7 @@ export function createProcessTool(
                 type: "text",
                 text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
+                    aggregateOutputNote +
                     retainedOutputNote +
                     (exited
                       ? `\n\nProcess exited with ${
@@ -557,7 +566,10 @@ export function createProcessTool(
                 {
                   type: "text",
                   text:
-                    (slice || "(no output yet)") + logDefaultTailNote + buildInputWaitHint(runtime),
+                    (slice || "(no output yet)") +
+                    logDefaultTailNote +
+                    retentionCapNote(scopedSession) +
+                    buildInputWaitHint(runtime),
                 },
               ],
               details: {
@@ -583,7 +595,13 @@ export function createProcessTool(
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                {
+                  type: "text",
+                  text:
+                    (slice || "(no output recorded)") +
+                    logDefaultTailNote +
+                    retentionCapNote(scopedFinished),
+                },
               ],
               details: {
                 status,

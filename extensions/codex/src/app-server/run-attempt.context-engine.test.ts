@@ -577,20 +577,19 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       fingerprint: undefined,
     });
 
-    const secondHarness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/resume") {
-        return threadStartResult("thread-1");
-      }
-      return undefined;
-    });
     const secondRun = runCodexAppServerAttempt(firstParams);
-    await secondHarness.waitForMethod("turn/start");
+    await vi.waitFor(() => {
+      expect(
+        firstHarness.requests.filter((request) => request.method === "turn/start"),
+      ).toHaveLength(2);
+    });
 
-    expect(secondHarness.requests.map((request) => request.method)).toEqual([
-      "thread/resume",
+    expect(firstHarness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
       "turn/start",
     ]);
-    const secondInputText = getRequestInputText(secondHarness);
+    const secondInputText = getRequestInputTextAt(firstHarness, 1);
     expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
     expect(secondInputText).not.toContain("bootstrap-only context");
     expect(secondInputText).toBe("hello");
@@ -626,7 +625,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       ],
     ]);
 
-    await secondHarness.completeTurn();
+    await firstHarness.completeTurn();
     await secondRun;
   });
 

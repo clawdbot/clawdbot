@@ -7,12 +7,12 @@ import type {
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
-import { suppressOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
-import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
-  convertResponsesMessages,
-} from "./openai-responses-replay-internal.js";
+  suppressOpenAIResponsesCompaction,
+} from "./openai-responses-compaction-replay.js";
+import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
+import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
   type OpenAIResponsesStreamEvent,
@@ -649,7 +649,7 @@ describe("OpenAI Responses compaction replay", () => {
   );
 
   it.each(responseConverters)(
-    "$name drops an orphaned pre-boundary tool output and keeps the later pair valid",
+    "$name keeps a real post-compaction output whose call was compacted",
     ({ convert }) => {
       const owner = createAssistant(
         [
@@ -658,12 +658,6 @@ describe("OpenAI Responses compaction replay", () => {
             id: "call_before|fc_before",
             name: "lookup",
             arguments: { before: true },
-          },
-          {
-            type: "toolCall",
-            id: "call_after|fc_after",
-            name: "lookup",
-            arguments: { after: true },
           },
         ],
         compactionState(model, { replayIndex: 1 }),
@@ -679,29 +673,19 @@ describe("OpenAI Responses compaction replay", () => {
             isError: false,
             timestamp: 1,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_after|fc_after",
-            toolName: "lookup",
-            content: [{ type: "text", text: "after output" }],
-            isError: false,
-            timestamp: 2,
-          },
         ],
       });
 
-      expect(input.map((item) => item.type)).toEqual([
-        "compaction",
-        "function_call",
-        "function_call_output",
-      ]);
-      expect(input.filter((item) => item.type === "function_call")).toMatchObject([
-        { call_id: "call_after" },
-      ]);
+      expect(input.map((item) => item.type)).toEqual(["compaction", "function_call_output"]);
+      expect(input.some((item) => item.type === "function_call")).toBe(false);
       expect(input.filter((item) => item.type === "function_call_output")).toMatchObject([
-        { call_id: "call_after", output: "after output" },
+        { call_id: "call_before", output: "before output" },
       ]);
-      expect(JSON.stringify(input)).not.toContain("before output");
+      expect(JSON.stringify(input)).not.toContain("No result provided");
+      expect(JSON.stringify(input)).not.toContain("aborted");
+      expect(owner.content).toEqual([
+        expect.objectContaining({ type: "toolCall", id: "call_before|fc_before" }),
+      ]);
     },
   );
 
@@ -733,8 +717,10 @@ describe("OpenAI Responses compaction replay", () => {
         "function_call_output",
       ]);
       expect(input.filter((item) => item.type === "function_call_output")).toMatchObject([
-        { call_id: "call_after" },
+        { call_id: "call_after", output: "No result provided" },
       ]);
+      expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+      expect(JSON.stringify(input)).not.toContain("call_before");
     },
   );
 

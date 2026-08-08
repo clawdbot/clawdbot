@@ -39,6 +39,90 @@ async function assertPrepublishRequests(baseUrl, requestedPackage, version) {
   }
 }
 
+async function assertNoRequests(baseUrl) {
+  if (!baseUrl) {
+    throw new Error("assert-no-requests requires <base-url>");
+  }
+  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
+  if (!response.ok) {
+    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!Array.isArray(payload?.requests)) {
+    throw new Error("ClawHub fixture request ledger must contain a requests array");
+  }
+  if (payload.requests.length !== 0) {
+    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
+  }
+}
+
+function parkPrepublishAuthoredConfig(configPath, snapshotPath) {
+  if (!configPath || !snapshotPath) {
+    throw new Error("park-prepublish-auth-config requires <config-path> <snapshot-path>");
+  }
+  const authoredConfig = fs.readFileSync(configPath);
+  const config = JSON.parse(authoredConfig.toString("utf8"));
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("prepublish auth config must be a JSON object");
+  }
+  for (const key of ["plugins", "channels", "gateway"]) {
+    const value = config[key];
+    if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+      throw new Error(`prepublish auth config ${key} must be an object`);
+    }
+  }
+  if (config.plugins?.allow !== undefined && !Array.isArray(config.plugins.allow)) {
+    throw new Error("prepublish auth config plugins.allow must be an array");
+  }
+  if (
+    config.plugins?.entries !== undefined &&
+    (!config.plugins.entries ||
+      typeof config.plugins.entries !== "object" ||
+      Array.isArray(config.plugins.entries))
+  ) {
+    throw new Error("prepublish auth config plugins.entries must be an object");
+  }
+  if (
+    config.gateway?.reload !== undefined &&
+    (!config.gateway.reload ||
+      typeof config.gateway.reload !== "object" ||
+      Array.isArray(config.gateway.reload))
+  ) {
+    throw new Error("prepublish auth config gateway.reload must be an object");
+  }
+  if (Array.isArray(config.plugins?.allow)) {
+    config.plugins.allow = config.plugins.allow.filter((id) => id !== "whatsapp");
+  }
+  if (config.plugins?.entries && typeof config.plugins.entries === "object") {
+    delete config.plugins.entries.whatsapp;
+  }
+  if (config.channels && typeof config.channels === "object") {
+    delete config.channels.whatsapp;
+  }
+  config.gateway ??= {};
+  config.gateway.reload = { ...config.gateway.reload, mode: "off" };
+  fs.writeFileSync(snapshotPath, authoredConfig, { mode: 0o600 });
+  replaceFileAtomically(configPath, Buffer.from(`${JSON.stringify(config, null, 2)}\n`));
+}
+
+function restorePrepublishAuthoredConfig(configPath, snapshotPath) {
+  if (!configPath || !snapshotPath) {
+    throw new Error("restore-prepublish-auth-config requires <config-path> <snapshot-path>");
+  }
+  replaceFileAtomically(configPath, fs.readFileSync(snapshotPath));
+}
+
+function replaceFileAtomically(filePath, contents) {
+  const tempPath = `${filePath}.tmp.${process.pid}`;
+  const mode = fs.statSync(filePath).mode;
+  try {
+    fs.writeFileSync(tempPath, contents, { mode });
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
 function startPrepublishArtifactServer() {
   const manifest = JSON.parse(fs.readFileSync(artifactManifestFile, "utf8"));
   if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
@@ -625,6 +709,26 @@ if (profile === "assert-prepublish-requests") {
       process.exit(1);
     },
   );
+  return;
+}
+
+if (profile === "assert-no-requests") {
+  assertNoRequests(portFile).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
+  return;
+}
+
+if (profile === "park-prepublish-auth-config") {
+  parkPrepublishAuthoredConfig(portFile, artifactManifestFile);
+  return;
+}
+
+if (profile === "restore-prepublish-auth-config") {
+  restorePrepublishAuthoredConfig(portFile, artifactManifestFile);
   return;
 }
 

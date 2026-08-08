@@ -9,7 +9,7 @@ import { configureAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
-} from "../transports/openai-responses-replay-internal.js";
+} from "../transports/openai-responses-compaction-replay.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -988,16 +988,21 @@ describe("processResponsesStream", () => {
       buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, replayIdentity),
     );
     const context: Context = {
-      messages: [prior, { role: "user", content: "recover", timestamp: 1 }],
+      messages: [
+        { role: "user", content: "full history prefix", timestamp: 0 },
+        prior,
+        { role: "user", content: "recover", timestamp: 1 },
+      ],
     };
     const requests: ResponseCreateParamsStreaming[] = [];
     const output = createAssistantOutput();
+    const onPayload = vi.fn((request: unknown) => request);
 
     await runResponsesStreamLifecycle({
       stream: new AssistantMessageEventStream(),
       model: nativeOpenAIModel,
       output,
-      options: replayIdentity,
+      options: { ...replayIdentity, onPayload },
       createClient: () => ({
         responses: {
           create: (request) => {
@@ -1026,14 +1031,12 @@ describe("processResponsesStream", () => {
           },
         },
       }),
-      buildParams: () => ({
+      buildParams: (_model, replayMode) => ({
         model: nativeOpenAIModel.id,
-        input: convertResponsesMessages(
-          nativeOpenAIModel,
-          context,
-          testAllowedToolCallProviders,
-          replayIdentity,
-        ),
+        input: convertResponsesMessages(nativeOpenAIModel, context, testAllowedToolCallProviders, {
+          ...replayIdentity,
+          replayMode,
+        }),
         stream: true,
       }),
       formatError: (error) => (error instanceof Error ? error.message : String(error)),
@@ -1043,10 +1046,13 @@ describe("processResponsesStream", () => {
     expect(requests[0]?.input).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "compaction", id: "cmp_rejected" })]),
     );
+    expect(JSON.stringify(requests[0]?.input)).not.toContain("full history prefix");
     const retryInput = requests[1]?.input;
     expect(Array.isArray(retryInput)).toBe(true);
     const retryItems = Array.isArray(retryInput) ? retryInput : [];
     expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
+    expect(JSON.stringify(retryInput)).toContain("full history prefix");
+    expect(onPayload).toHaveBeenCalledTimes(2);
     expect(output.stopReason).toBe("stop");
     expect(output.providerReplay).toMatchObject({
       type: "openai-responses-compaction-suppression",

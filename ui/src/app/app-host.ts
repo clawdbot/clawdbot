@@ -1,6 +1,7 @@
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import "../components/app-topbar.ts";
+import "../components/device-auth-migration-banner.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/modal-dialog.ts";
 import { formatDocumentTitle, titleForRoute } from "../app-navigation.ts";

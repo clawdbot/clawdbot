@@ -1,5 +1,11 @@
 import { createRouter } from "@openclaw/uirouter";
-import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
+import type {
+  PageDefinition,
+  RouteLocation,
+  RouteMatch,
+  Router,
+  RouterHistory,
+} from "@openclaw/uirouter";
 import {
   agentRouteFromPath,
   INTERNAL_AGENT_PATH_PARAM,
@@ -51,6 +57,10 @@ import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
   render: (data: unknown) => unknown;
+  renderOwnerKey?: (
+    match: Pick<RouteMatch, "data" | "location">,
+    settled: Pick<RouteMatch, "data" | "location"> | undefined,
+  ) => string | undefined;
 };
 
 export type ApplicationRouter = Router<

@@ -4,6 +4,8 @@ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/r
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import type {
   CacheRetention,
   Context,
@@ -100,7 +102,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       return createClient(model, context, apiKey, options?.headers, cacheSessionId);
     },
-    buildParams: () => buildParams(model, context, options),
+    buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
     processStreamOptions: {
       serviceTier: options?.serviceTier,
       applyServiceTierPricing: (usage, serviceTier) =>
@@ -189,16 +191,18 @@ function buildParams(
   model: Model<"openai-responses">,
   context: Context,
   options?: OpenAIResponsesOptions,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
+    replayMode,
   });
 
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
-  const params: ResponseCreateParamsStreaming = {
+  const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
