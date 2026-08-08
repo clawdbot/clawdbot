@@ -95,6 +95,40 @@ describe("session mutation authorization store caches", () => {
     });
   });
 
+  it("fences a replaced patchMany target with padded identity fields", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:padded-batch-target";
+      await sessionAccessor.upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId: "session-original", updatedAt: 1, visibility: "shared" },
+      );
+      const target = { sessionKey: ` ${sessionKey} `, agentId: " main " };
+      const result = resolveSessionMutationAuthorization({
+        client: identifiedClient("viewer@example.com"),
+        method: "sessions.patchMany",
+        requestParams: {
+          targets: [{ key: target.sessionKey, agentId: target.agentId }],
+          patch: { unread: false },
+        },
+        context: { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never,
+      });
+
+      expect(result.error).toBeNull();
+      expect(result.authorization).toBeDefined();
+      const authorization = result.authorization!;
+      expect(() => authorization.assertTargetCurrent(target)).not.toThrow();
+
+      await sessionAccessor.upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId: "session-replacement", updatedAt: 2, visibility: "shared" },
+      );
+
+      expect(() => authorization.assertTargetCurrent(target)).toThrow(
+        "session changed before sessions.patchMany; retry the request",
+      );
+    });
+  });
+
   it("bounds malformed patchMany target discovery before schema validation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const hiddenKey = "agent:main:dashboard:incognito-over-limit";

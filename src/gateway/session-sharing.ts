@@ -583,7 +583,7 @@ export function resolveSessionMutationAuthorization(params: {
           ...currentLookupCaches,
         });
         const sameResolvedTarget =
-          expected === undefined ||
+          expected !== undefined &&
           (current === null
             ? expected.resolved === null
             : expected.resolved !== null &&
@@ -631,11 +631,20 @@ export function resolveSessionMutationAuthorization(params: {
           }
         },
         assertTargetCurrent: (targetRef: SessionMutationTarget) => {
-          const expected = authorizedTargets.find(
-            (target) =>
-              target.sessionKey === targetRef.sessionKey && target.agentId === targetRef.agentId,
-          );
-          assertTargetCurrent(targetRef, expected, params.context.getRuntimeConfig());
+          // Batch outcomes preserve caller identities, but authorization owns normalized targets.
+          // Resolve the same normalized identity so padded aliases cannot escape the snapshot fence.
+          const sessionKey = normalizeOptionalString(targetRef.sessionKey);
+          const agentId = normalizeOptionalString(targetRef.agentId);
+          const normalizedTarget = {
+            sessionKey: sessionKey ?? targetRef.sessionKey,
+            ...(agentId ? { agentId } : {}),
+          };
+          const expected = sessionKey
+            ? authorizedTargets.find(
+                (target) => target.sessionKey === sessionKey && target.agentId === agentId,
+              )
+            : undefined;
+          assertTargetCurrent(normalizedTarget, expected, params.context.getRuntimeConfig());
         },
       };
     })(),
