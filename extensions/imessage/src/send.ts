@@ -141,6 +141,7 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     return null;
   }
   const raw =
+    (typeof result.messageGuid === "string" && result.messageGuid.trim()) ||
     (typeof result.messageId === "string" && result.messageId.trim()) ||
     (typeof result.message_id === "string" && result.message_id.trim()) ||
     (typeof result.id === "string" && result.id.trim()) ||
@@ -161,17 +162,10 @@ function resolveOutboundMessageGuid(
   if (!result) {
     return null;
   }
-  const candidates = [result.guid, result.messageId, result.message_id, result.id];
-  for (const value of candidates) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    // Reject all-digit strings: they came from numeric ROWIDs coerced to
-    // strings (e.g. "12345"), not real GUIDs (which look like
-    // "p:0/ABCD-EFGH-..." or contain non-digit characters).
-    if (trimmed && !/^\d+$/.test(trimmed)) {
-      return trimmed;
+  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
+    const guid = normalizeResolvedMessageGuid(result[key]);
+    if (guid) {
+      return guid;
     }
   }
   return null;
@@ -196,7 +190,8 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
     return null;
   }
   const trimmed = value.trim();
-  return trimmed && !isNumericMessageRowId(trimmed) ? trimmed : null;
+  // Status placeholders and numeric ROWIDs cannot match inbound tapback GUIDs.
+  return isConcreteIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
 }
 
 function resolveMessageGuidFromChatDb(params: {
@@ -416,18 +411,17 @@ function createIMessageSendReceipt(params: {
   replyToId?: string;
 }): MessageReceipt {
   const messageId = params.messageId.trim();
-  const results: MessageReceiptSourceResult[] =
-    messageId && messageId !== "unknown" && messageId !== "ok"
-      ? [
-          {
-            channel: "imessage",
-            messageId,
-            meta: {
-              targetKind: params.target.kind,
-            },
+  const results: MessageReceiptSourceResult[] = isConcreteIMessageMessageId(messageId)
+    ? [
+        {
+          channel: "imessage",
+          messageId,
+          meta: {
+            targetKind: params.target.kind,
           },
-        ]
-      : [];
+        },
+      ]
+    : [];
   if (results[0]) {
     if (params.target.kind === "chat_id") {
       results[0].chatId = String(params.target.chatId);
@@ -693,7 +687,7 @@ async function trySendAttachmentForTarget(params: {
       messageId: resolvedId ?? undefined,
     });
   }
-  if (resolvedId) {
+  if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
     rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
@@ -1063,7 +1057,7 @@ export async function sendMessageIMessage(
       resultService(result.service) ??
       resultChatGuidService(providerChatGuid) ??
       (service === "imessage" || service === "sms" ? service : undefined);
-    if (resolvedId) {
+    if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
       const chatContext = chatContextFromIMessageTarget(target, confirmedService ?? service);
       rememberIMessageReplyCache({
         accountId: account.accountId,
