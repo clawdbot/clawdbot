@@ -244,8 +244,10 @@ function resolveGatewayProbeCapability(params: {
 
 export async function probeGateway(opts: {
   url: string;
-  /** Treat a loopback transport (for example an SSH tunnel) as a remote auth target. */
+  /** Treat an explicitly remote loopback URL as a stable origin-scoped auth target. */
   originScopedDeviceAuth?: boolean;
+  /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
+  suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
@@ -265,9 +267,11 @@ export async function probeGateway(opts: {
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
-  const deviceAuthScope = opts.originScopedDeviceAuth
-    ? gatewayOriginScope(opts.url)
-    : resolveProbeDeviceAuthScope(opts.url);
+  const deviceAuthScope = opts.suppressStoredDeviceAuth
+    ? undefined
+    : opts.originScopedDeviceAuth
+      ? gatewayOriginScope(opts.url)
+      : resolveProbeDeviceAuthScope(opts.url);
 
   const deviceIdentity = await (async () => {
     try {
@@ -282,18 +286,20 @@ export async function probeGateway(opts: {
       // Keep probes non-mutating: only attach a device identity when this CLI
       // already has a cached operator device token. Fresh diagnostics should not
       // create a read-only pairing baseline that later blocks admin commands.
-      const cachedOperatorToken = deviceAuthScope
-        ? loadOriginDeviceToken({
-            gatewayScope: deviceAuthScope,
-            deviceId: identity.deviceId,
-            role: "operator",
-            env: opts.env,
-          })
-        : loadDeviceAuthToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            env: opts.env,
-          });
+      const cachedOperatorToken = opts.suppressStoredDeviceAuth
+        ? null
+        : deviceAuthScope
+          ? loadOriginDeviceToken({
+              gatewayScope: deviceAuthScope,
+              deviceId: identity.deviceId,
+              role: "operator",
+              env: opts.env,
+            })
+          : loadDeviceAuthToken({
+              deviceId: identity.deviceId,
+              role: "operator",
+              env: opts.env,
+            });
       return cachedOperatorToken ? identity : null;
     } catch {
       // Read-only or restricted environments should still be able to run

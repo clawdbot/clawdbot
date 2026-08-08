@@ -90,10 +90,12 @@ async function captureProbeConnectFrame(params: {
   url: string;
   env: NodeJS.ProcessEnv;
   auth?: { token?: string; password?: string };
+  suppressStoredDeviceAuth?: boolean;
 }): Promise<ConnectFrame> {
   const probePromise = probeGateway({
     url: params.url,
     auth: params.auth,
+    suppressStoredDeviceAuth: params.suppressStoredDeviceAuth,
     env: params.env,
     timeoutMs: 2_000,
     includeDetails: false,
@@ -204,6 +206,51 @@ describe("probeGateway device auth scope", () => {
       });
 
       expect(connect.params?.auth?.token).toBe("explicit-remote-token");
+      expect(connect.params?.auth?.deviceToken).toBeUndefined();
+    });
+  });
+
+  it("does not reuse stored auth across SSH targets sharing a forwarded port", async () => {
+    await withTempDir("openclaw-probe-ssh-scope-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      const identity = loadOrCreateDeviceIdentity({ env });
+      storeDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        token: "local-device-token",
+        env,
+      });
+      storeOriginDeviceToken({
+        gatewayScope: gatewayOriginScope("ws://127.0.0.1:18789"),
+        deviceId: identity.deviceId,
+        role: "operator",
+        token: "prior-ssh-target-token",
+        env,
+      });
+
+      const connect = await captureProbeConnectFrame({
+        url: "ws://127.0.0.1:18789",
+        suppressStoredDeviceAuth: true,
+        env,
+      });
+
+      expect(connect.params?.auth?.token).toBeUndefined();
+      expect(connect.params?.auth?.deviceToken).toBeUndefined();
+      expect(connect.params?.device).toBeUndefined();
+    });
+  });
+
+  it("keeps explicit auth available through SSH forwarded transports", async () => {
+    await withTempDir("openclaw-probe-ssh-explicit-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      const connect = await captureProbeConnectFrame({
+        url: "ws://127.0.0.1:18789",
+        auth: { token: "explicit-ssh-token" },
+        suppressStoredDeviceAuth: true,
+        env,
+      });
+
+      expect(connect.params?.auth?.token).toBe("explicit-ssh-token");
       expect(connect.params?.auth?.deviceToken).toBeUndefined();
     });
   });

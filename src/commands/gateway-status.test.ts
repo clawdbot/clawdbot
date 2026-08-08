@@ -258,6 +258,7 @@ type ProbeGatewayCall = {
   };
   preauthHandshakeTimeoutMs?: number;
   originScopedDeviceAuth?: boolean;
+  suppressStoredDeviceAuth?: boolean;
   timeoutMs?: number;
   tlsFingerprint?: string;
   url?: string;
@@ -999,9 +1000,16 @@ describe("gateway-status command", () => {
     expect(probeGateway).toHaveBeenCalled();
     const tunnelCall = probeGateway.mock.calls.find(
       (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as { auth?: { token?: string }; originScopedDeviceAuth?: boolean } | undefined;
+    )?.[0] as
+      | {
+          auth?: { token?: string };
+          originScopedDeviceAuth?: boolean;
+          suppressStoredDeviceAuth?: boolean;
+        }
+      | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
-    expect(tunnelCall?.originScopedDeviceAuth).toBe(true);
+    expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
+    expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
