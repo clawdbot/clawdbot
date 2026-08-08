@@ -1,4 +1,4 @@
-// Provider-neutral live inference ladder for delegated OpenClaw sessions.
+// Provider-neutral live inference ladder for OpenClaw sessions.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
@@ -17,13 +17,14 @@ const RETRYABLE_INFERENCE_STATUSES = new Set([
   "rate_limit",
   "billing",
   "timeout",
+  "format",
   "unavailable",
 ]);
 
 // auth/billing/rate_limit failures commonly apply to one key/account/project,
 // so another credential owner of the same provider may still work. Everything
-// else retryable (timeout, unavailable) is provider-wide, so its whole provider
-// is skipped for the rest of the ladder.
+// else retryable (format, timeout, unavailable) is provider-wide, so its whole
+// provider is skipped for the rest of the ladder.
 const CREDENTIAL_SCOPED_FAILURE_STATUSES = new Set(["auth", "billing", "rate_limit"]);
 
 type InferenceFallbackDeps = {
@@ -131,7 +132,7 @@ export async function verifySystemAgentInferenceWithFallback(params: {
       return result;
     }
     lastFailure = result;
-    // Bad/empty answers and owner-integrity failures are not availability failover.
+    // Identity or owner-integrity uncertainty stays fail-closed as unknown.
     if (!RETRYABLE_INFERENCE_STATUSES.has(result.status)) {
       return result;
     }

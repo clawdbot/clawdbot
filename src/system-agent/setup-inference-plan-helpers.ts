@@ -115,17 +115,30 @@ export function extractRunTerminalError(result: RunResult): string | undefined {
   );
 }
 
-export function extractRunWinnerError(
+export async function extractRunWinnerError(
   plan: SetupInferenceTestPlan,
   result: RunResult,
-): string | undefined {
+): Promise<string | undefined> {
   const winnerProvider = result.meta?.executionTrace?.winnerProvider?.trim();
   const winnerModel = result.meta?.executionTrace?.winnerModel?.trim();
   if (!winnerProvider || !winnerModel) {
     return "The inference run did not report which provider and model produced its reply.";
   }
-  if (winnerProvider === plan.provider && winnerModel === plan.model) {
-    return undefined;
+  if (winnerProvider === plan.provider) {
+    if (winnerModel === plan.model) {
+      return undefined;
+    }
+    const { resolveDirectBundledProviderPolicySurface } =
+      await import("../plugins/provider-policy-surface.js");
+    if (
+      resolveDirectBundledProviderPolicySurface(plan.provider)?.isResponseModelEquivalent?.({
+        provider: plan.provider,
+        requestedModelId: plan.model,
+        responseModelId: winnerModel,
+      }) === true
+    ) {
+      return undefined;
+    }
   }
   return `The inference run answered through ${winnerProvider}/${winnerModel} instead of the requested ${plan.provider}/${plan.model}. Disable model-routing overrides or choose the working route directly, then retry.`;
 }
