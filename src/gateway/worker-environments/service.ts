@@ -110,6 +110,7 @@ type WorkerEnvironmentServiceOptions = {
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
   bootstrapWorker: (params: {
+    operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
     resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
@@ -563,6 +564,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     try {
       receipt = await callBootstrap((signal) =>
         options.bootstrapWorker({
+          operationId: record.provisionOperationId,
           sshEndpoint: record.sshEndpoint,
           installation,
           resolveIdentity: identityResolverFor(record, provider, record.leaseId),

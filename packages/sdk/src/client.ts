@@ -1,5 +1,6 @@
 // OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
@@ -221,10 +222,6 @@ type ChatProjection = {
   state: ChatProjectionState;
   payload: Record<string, unknown>;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
 
 function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
   const record = asRecord(params);

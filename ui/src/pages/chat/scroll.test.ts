@@ -265,6 +265,7 @@ describe("scheduleChatScroll", () => {
     });
     // distanceFromBottom = 2000 - 500 - 400 = 1100 → not near bottom
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     const originalScrollTop = container.scrollTop;
 
     scheduleChatScroll(host);
@@ -279,8 +280,9 @@ describe("scheduleChatScroll", () => {
       scrollTop: 500,
       clientHeight: 400,
     });
-    // User has scrolled up — chatUserNearBottom is false
+    // User has scrolled up, so the authoritative follow lock is set.
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true; // Already past initial load
     const originalScrollTop = container.scrollTop;
 
@@ -396,6 +398,7 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
     host.chatNewMessagesBelow = false;
 
@@ -405,19 +408,43 @@ describe("scheduleChatScroll", () => {
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
-  it("does not show new messages for a resize when the thread height did not grow", async () => {
-    const { host } = createScrollHost({
+  it("re-sticks an unlocked resize even when layout moves beyond the near-bottom threshold", async () => {
+    const { host, container } = createScrollHost({
       scrollHeight: 2000,
-      scrollTop: 500,
-      clientHeight: 400,
+      scrollTop: 1100,
+      clientHeight: 900,
     });
-    host.chatUserNearBottom = false;
     host.chatHasAutoScrolled = true;
+    host.chatUserNearBottom = false;
     host.chatLastScrollHeight = 2000;
+    container.clientHeight = 400;
 
     scheduleChatScroll(host, false, false, { source: "resize" });
     await host.updateComplete;
 
+    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("preserves a locked viewport across the same resize", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1100,
+      clientHeight: 900,
+    });
+    host.chatHasAutoScrolled = true;
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    host.chatLastScrollHeight = 2000;
+    container.clientHeight = 400;
+
+    scheduleChatScroll(host, false, false, { source: "resize" });
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1100);
+    expect(host.chatFollowLocked).toBe(true);
     expect(host.chatNewMessagesBelow).toBe(false);
   });
 
@@ -428,6 +455,7 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
     host.chatLastScrollHeight = 2000;
 
@@ -502,6 +530,7 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
 
     scheduleChatScroll(host, true, false, { source: "manual" });
@@ -553,6 +582,7 @@ describe("streaming scroll behavior", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
     const originalScrollTop = container.scrollTop;
 

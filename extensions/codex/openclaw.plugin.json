@@ -1,5 +1,11 @@
 {
   "id": "codex",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true,
+    "sessionRouteStateOwners": true,
+    "stateMigrations": true
+  },
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
   "contracts": {

@@ -159,12 +159,29 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     respond(true, result);
   },
-  "update.hold": ({ params, respond }) => {
+  "update.hold": ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateHoldParams, "update.hold", respond)) {
       return;
     }
+    const actor = resolveControlPlaneActor(client);
+    const campaignBeforeHold = gatewayUpdateCampaign.getState();
     const ok = gatewayUpdateCampaign.hold();
     const schedule = getUpdateSchedule();
+    if (ok) {
+      const heldCampaign = gatewayUpdateCampaign.getState();
+      context?.logGateway?.info(
+        `update.hold granted ${formatControlPlaneActor(actor)} holdUntilMs=${heldCampaign?.holdUntilMs} forceAtMs=${heldCampaign?.forceAtMs}`,
+      );
+    } else {
+      const reason = !campaignBeforeHold
+        ? "no campaign"
+        : campaignBeforeHold.state === "applying"
+          ? "applying"
+          : "already held";
+      context?.logGateway?.info(`update.hold refused ${formatControlPlaneActor(actor)}`, {
+        reason,
+      });
+    }
     const result = {
       ok,
       ...(schedule ? { schedule } : {}),
@@ -193,6 +210,12 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? adoptedCampaign.target.version.trim() || undefined
         : undefined;
     const actor = resolveControlPlaneActor(client);
+    if (adoptedCampaign) {
+      context?.logGateway?.info(
+        `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
+        { target: adoptedCampaign.target },
+      );
+    }
     const {
       sessionKey,
       deliveryContext: requestedDeliveryContext,
@@ -473,6 +496,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       gatewayUpdateCampaign.getState()?.id === adoptedCampaignId
     ) {
       gatewayUpdateCampaign.clear();
+      context?.logGateway?.info("update.run failed; adopted campaign cleared", {
+        campaignId: adoptedCampaignId,
+      });
     }
 
     const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({

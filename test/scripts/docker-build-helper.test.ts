@@ -115,6 +115,16 @@ const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/test-install-sh-e2e-docker.sh",
   "scripts/test-live-build-docker.sh",
 ] as const;
+
+function extractUpgradeSurvivorPayload(script: string) {
+  const marker = " bash -lc ";
+  const start = script.indexOf(marker);
+  const quoted = script.slice(start + marker.length).trimEnd();
+  if (start < 0 || !quoted.startsWith("'") || !quoted.endsWith("'")) {
+    throw new Error("upgrade survivor bash -lc payload not found");
+  }
+  return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
+}
 const BOUNDED_CLIENT_LOG_DOCKER_E2E_SCRIPTS = [
   "scripts/e2e/cron-mcp-cleanup-docker.sh",
   "scripts/e2e/mcp-channels-docker.sh",
@@ -2288,7 +2298,7 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');
   });
 
-  it("starts the upgrade survivor plugin registry before updates without ambient Feishu config", () => {
+  it("starts the upgrade survivor plugin registry before updates with scenario-owned config", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
@@ -2298,13 +2308,57 @@ docker_e2e_docker_run_cmd run demo
     expect(
       publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    expect(runner.indexOf("\nconfigure_clawhub_fixture\n")).toBeLessThan(
+      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
+    );
+    expect(
+      publishedRunner.indexOf("phase configure-clawhub-fixture configure_clawhub_fixture"),
+    ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
+      publishedRunner.indexOf("phase assert-prepublish-requests node"),
+    );
+    expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
+      publishedRunner.indexOf("phase doctor run_doctor"),
+    );
+    expect(runner.indexOf('openclaw "${update_args[@]}"')).toBeLessThan(
+      runner.indexOf(
+        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+      ),
+    );
+    expect(
+      runner.indexOf(
+        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+      ),
+    ).toBeLessThan(runner.indexOf("openclaw doctor --fix --non-interactive"));
     expect(runner).toContain(
       'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
     );
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "configured-plugin-installs" ]; then',
+        '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
+        '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
+        "fi",
+      ].join("\n"),
+    );
     for (const script of [runner, publishedRunner]) {
+      expectTextToIncludeAll(script, [
+        "prepublish-artifacts",
+        "prepublish-plugin-registry.json",
+        "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
+        'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
+        'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
+        "assert-prepublish-requests",
+      ]);
+      expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
+      expect(script).not.toContain("/__fixture__/requests");
+      expect(script).not.toContain("https://clawhub.ai");
       const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
-      const fixtureDirectoryIndex = script.indexOf('mkdir -p "$fixture_root"');
+      const fixtureDirectoryIndex = script.indexOf(
+        'mkdir -p "$fixture_root"',
+        emptyRegistryGuardIndex,
+      );
       const registryServerIndex = script.indexOf(
         "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
       );
@@ -2315,6 +2369,35 @@ docker_e2e_docker_run_cmd run demo
       expect(fixtureDirectoryIndex).toBeLessThan(registryServerIndex);
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
+    expect(publishedRunner).not.toContain(
+      '\nexport MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"\n',
+    );
+    expect(publishedRunner).not.toContain(
+      '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
+    );
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/clawhub-fixture-server\.cjs:\/tmp\/openclaw-clawhub-fixture-server\.cjs:ro"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=\/tmp\/openclaw-clawhub-fixture-server\.cjs/gu,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("keeps upgrade survivor wrappers and the embedded payload valid bash", () => {
+    for (const path of [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, UPGRADE_SURVIVOR_RUN_SCRIPT]) {
+      const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const wrapper = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const inner = spawnSync("bash", ["-n"], {
+      input: extractUpgradeSurvivorPayload(wrapper),
+      encoding: "utf8",
+    });
+    expect(inner.status, inner.stderr).toBe(0);
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {

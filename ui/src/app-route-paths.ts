@@ -66,7 +66,7 @@ const APP_ROUTE_DEFINITIONS = {
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
   tasks: { path: "/tasks" },
-  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
+  devices: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
 } as const;
 

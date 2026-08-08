@@ -1,4 +1,4 @@
-// Nodes page renders its screen content.
+// Devices page renders its screen content.
 import { html, nothing } from "lit";
 import {
   renderSettingsPage,
@@ -6,18 +6,18 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import "../../styles/nodes.css";
+import "../../styles/devices.css";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
-import { renderNodesInventory } from "./view-inventory.ts";
+import { renderDeviceInventory } from "./view-inventory.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
-import type { NodesProps } from "./view.types.ts";
+import type { DevicesProps } from "./view.types.ts";
 
-export function renderNodes(props: NodesProps) {
+export function renderDevices(props: DevicesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
   return renderSettingsPage(
     html`
-      ${renderNodesInventory(props)} ${renderExecApprovals(approvalsState)}
+      ${renderDeviceInventory(props)} ${renderExecApprovals(approvalsState)}
       ${renderBindings(bindingState)}
     `,
     { wide: true },
@@ -49,7 +49,7 @@ type BindingState = {
   formMode: "form" | "raw";
 };
 
-function resolveBindingsState(props: NodesProps): BindingState {
+function resolveBindingsState(props: DevicesProps): BindingState {
   const config = props.configForm;
   const nodes = resolveExecNodes(props.nodes);
   const { defaultBinding, agents } = resolveAgentBindings(config);
@@ -82,11 +82,11 @@ function renderBindings(state: BindingState) {
   `;
   const rows = html`
     ${state.formMode === "raw"
-      ? renderSettingsRow({ title: t("nodes.binding.formModeHint") })
+      ? renderSettingsRow({ title: t("devices.binding.formModeHint") })
       : nothing}
     ${!state.ready
       ? renderSettingsRow({
-          title: t("nodes.binding.loadConfigHint"),
+          title: t("devices.binding.loadConfigHint"),
           control: html`
             <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
               ${state.configLoading ? t("common.loading") : t("common.loadConfig")}
@@ -95,14 +95,14 @@ function renderBindings(state: BindingState) {
         })
       : html`
           ${renderSettingsRow({
-            title: t("nodes.binding.defaultBinding"),
+            title: t("devices.binding.defaultBinding"),
             description: supportsBinding
-              ? t("nodes.binding.defaultBindingHint")
-              : html`${t("nodes.binding.defaultBindingHint")} ${t("nodes.binding.noNodes")}`,
+              ? t("devices.binding.defaultBindingHint")
+              : html`${t("devices.binding.defaultBindingHint")} ${t("devices.binding.noNodes")}`,
             control: html`
               <select
                 class="settings-select"
-                aria-label=${t("nodes.binding.node")}
+                aria-label=${t("devices.binding.node")}
                 ?disabled=${state.disabled || !supportsBinding}
                 @change=${(event: Event) => {
                   const target = event.target as HTMLSelectElement;
@@ -111,7 +111,7 @@ function renderBindings(state: BindingState) {
                 }}
               >
                 <option value="" ?selected=${defaultValue === ""}>
-                  ${t("nodes.binding.anyNode")}
+                  ${t("devices.binding.anyNode")}
                 </option>
                 ${state.nodes.map(
                   (node) =>
@@ -123,14 +123,14 @@ function renderBindings(state: BindingState) {
             `,
           })}
           ${state.agents.length === 0
-            ? renderSettingsRow({ title: t("nodes.binding.noAgents") })
+            ? renderSettingsRow({ title: t("devices.binding.noAgents") })
             : state.agents.map((agent) => renderAgentBinding(agent, state))}
         `}
   `;
   return renderSettingsSection(
     {
-      title: t("nodes.binding.execNodeBinding"),
-      description: t("nodes.binding.execNodeBindingSubtitle"),
+      title: t("devices.binding.execNodeBinding"),
+      description: t("devices.binding.execNodeBindingSubtitle"),
       actions: saveButton,
     },
     rows,
@@ -144,17 +144,17 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
   return renderSettingsRow({
     title: label,
     description: html`
-      ${agent.isDefault ? t("nodes.binding.defaultAgent") : t("nodes.binding.agent")} ·
+      ${agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent")} ·
       ${bindingValue === "__default__"
-        ? t("nodes.binding.usesDefault", {
-            node: state.defaultBinding ?? t("nodes.binding.any"),
+        ? t("devices.binding.usesDefault", {
+            node: state.defaultBinding ?? t("devices.binding.any"),
           })
-        : t("nodes.binding.override", { node: agent.binding ?? "" })}
+        : t("devices.binding.override", { node: agent.binding ?? "" })}
     `,
     control: html`
       <select
         class="settings-select"
-        aria-label=${t("nodes.binding.binding")}
+        aria-label=${t("devices.binding.binding")}
         ?disabled=${state.disabled || !supportsBinding}
         @change=${(event: Event) => {
           const target = event.target as HTMLSelectElement;
@@ -163,7 +163,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
         }}
       >
         <option value="__default__" ?selected=${bindingValue === "__default__"}>
-          ${t("nodes.binding.useDefault")}
+          ${t("devices.binding.useDefault")}
         </option>
         ${state.nodes.map(
           (node) =>

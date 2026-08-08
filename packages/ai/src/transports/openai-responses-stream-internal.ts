@@ -20,6 +20,7 @@ import {
 } from "../providers/openai-responses-tool-call-tracker.js";
 import type { Api, AssistantMessage, Model, TextContent, ToolCall, Usage } from "../types.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   type FirstStreamEventInternalOptions,
   withFirstStreamEventTimeout,
@@ -287,6 +288,10 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
+      // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
+      // provider progress; keep the idle watchdog alive without exposing them,
+      // matching the completions and anthropic transports.
+      notifyLlmRequestActivity(options?.signal);
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {

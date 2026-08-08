@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeNullableString as migratedText } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   ensureMemoryChunkProvenance,
@@ -332,12 +334,8 @@ function migratedObjectField(
     : null;
 }
 
-function migratedText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function migratedNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 function migratedChatType(value: unknown): "direct" | "group" | "channel" | null {

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { installSessionPlacementResetGuard } from "../agents/session-placement-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -9,7 +9,10 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerSessionPlacementRetirementService,
+} from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 let uninstallResetGuard: (() => void) | undefined;
@@ -119,6 +122,16 @@ function sequencedPlacementReader(
   };
 }
 
+function sequencedPlacementService(
+  records: readonly WorkerSessionPlacementRecord[],
+  retire: WorkerSessionPlacementRetirementService["retireSessionPlacement"] = () => {},
+) {
+  return {
+    ...sequencedPlacementReader(records),
+    retireSessionPlacement: vi.fn(retire),
+  };
+}
+
 test("sessions.reset rechecks worker placement inside the lifecycle fence", async () => {
   await seedActiveMainSession();
   let resetGuardReadCount = 0;
@@ -142,7 +155,7 @@ test("sessions.delete rechecks worker placement before destructive cleanup", asy
   const sessionKey = "discord:group:worker-session";
   const sessionId = "sess-worker-delete";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placementReader = sequencedPlacementReader([
+  const placementService = sequencedPlacementService([
     placementRecord(sessionId, "local"),
     placementRecord(sessionId, "active"),
   ]);
@@ -151,7 +164,7 @@ test("sessions.delete rechecks worker placement before destructive cleanup", asy
     "sessions.delete",
     { key: sessionKey },
     {
-      context: { workerSessionPlacementService: placementReader },
+      context: { workerSessionPlacementService: placementService },
     },
   );
 
@@ -159,14 +172,17 @@ test("sessions.delete rechecks worker placement before destructive cleanup", asy
   expect(deleted.error?.message).toContain("cloud worker placement is active");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
 });
 
-test("sessions.delete rejects failed placement with unresolved worker ownership", async () => {
+test("sessions.delete rejects failed placement while its worker lease remains", async () => {
   await createSessionStoreDir();
   const sessionKey = "discord:group:failed-worker-session";
   const sessionId = "sess-failed-worker-delete";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placementReader = sequencedPlacementReader([terminalPlacementRecord(sessionId, "failed")]);
+  const placementService = sequencedPlacementService([
+    terminalPlacementRecord(sessionId, "failed"),
+  ]);
 
   const deleted = await directSessionReq(
     "sessions.delete",
@@ -174,10 +190,10 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
     {
       context: {
         workerEnvironmentService: {
-          get: () => ({ state: "attached" }),
+          get: () => ({ state: "failed", leaseId: "lease-1" }),
           resolveInferenceSessionForRunId: () => undefined,
         } as never,
-        workerSessionPlacementService: placementReader,
+        workerSessionPlacementService: placementService,
       },
     },
   );
@@ -186,29 +202,59 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
   expect(deleted.error?.message).toContain("cloud worker placement is failed");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
 });
 
-test("sessions.delete allows failed placement after its worker is destroyed", async () => {
+test.each([
+  { name: "local", state: "local" as const },
+  { name: "reclaimed", state: "reclaimed" as const },
+  {
+    name: "failed after proven bootstrap teardown",
+    state: "failed" as const,
+    environment: { state: "failed", leaseId: null },
+  },
+  {
+    name: "failed after worker destruction",
+    state: "failed" as const,
+    environment: { state: "destroyed" },
+  },
+  {
+    name: "failed before acquiring a worker",
+    state: "failed" as const,
+    withoutEnvironment: true,
+  },
+])("sessions.delete retires a $name placement after deleting its session", async (testCase) => {
   await createSessionStoreDir();
-  const sessionKey = "discord:group:destroyed-failed-worker-session";
-  const sessionId = "sess-destroyed-failed-worker-delete";
+  const caseId = testCase.name.replaceAll(" ", "-");
+  const sessionKey = `discord:group:${caseId}`;
+  const sessionId = `sess-${caseId}`;
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placementReader = sequencedPlacementReader([terminalPlacementRecord(sessionId, "failed")]);
+  const placement =
+    testCase.state === "local"
+      ? placementRecord(sessionId, "local")
+      : terminalPlacementRecord(sessionId, testCase.state);
+  if ("withoutEnvironment" in testCase && placement.state === "failed") {
+    placement.environmentId = null;
+  }
+  const placementService = sequencedPlacementService([placement], () => {
+    expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+  });
 
   const deleted = await directSessionReq(
     "sessions.delete",
     { key: sessionKey },
     {
       context: {
-        workerEnvironmentService: {
-          get: (environmentId: string) => {
-            expect(environmentId).toBe("worker-environment");
-            return { state: "destroyed" };
-          },
-          hasInferenceForSession: () => false,
-          resolveInferenceSessionForRunId: () => undefined,
-        } as never,
-        workerSessionPlacementService: placementReader,
+        ...("environment" in testCase
+          ? {
+              workerEnvironmentService: {
+                get: () => testCase.environment,
+                hasInferenceForSession: () => false,
+                resolveInferenceSessionForRunId: () => undefined,
+              } as never,
+            }
+          : {}),
+        workerSessionPlacementService: placementService,
       },
     },
   );
@@ -216,52 +262,11 @@ test("sessions.delete allows failed placement after its worker is destroyed", as
   expect(deleted.ok).toBe(true);
   expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
   expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
-});
-
-test("sessions.delete allows failed placement that never acquired a worker", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "discord:group:unallocated-failed-worker-session";
-  const sessionId = "sess-unallocated-failed-worker-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placement = terminalPlacementRecord(sessionId, "failed");
-  if (placement.state !== "failed") {
-    throw new Error("expected failed placement fixture");
-  }
-  placement.environmentId = null;
-
-  const deleted = await directSessionReq(
-    "sessions.delete",
-    { key: sessionKey },
-    {
-      context: { workerSessionPlacementService: sequencedPlacementReader([placement]) },
-    },
-  );
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
-  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
-});
-
-test("sessions.delete allows reclaimed placement with no live worker owner", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "discord:group:reclaimed-worker-session";
-  const sessionId = "sess-reclaimed-worker-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placementReader = sequencedPlacementReader([
-    terminalPlacementRecord(sessionId, "reclaimed"),
-  ]);
-
-  const deleted = await directSessionReq(
-    "sessions.delete",
-    { key: sessionKey },
-    {
-      context: { workerSessionPlacementService: placementReader },
-    },
-  );
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
-  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+  expect(placementService.retireSessionPlacement).toHaveBeenCalledWith({
+    sessionId,
+    expectedState: placement.state,
+    expectedGeneration: placement.generation,
+  });
 });
 
 test("sessions.compaction.restore rechecks worker placement inside the lifecycle fence", async () => {

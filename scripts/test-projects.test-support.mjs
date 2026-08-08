@@ -1830,6 +1830,7 @@ const releaseCheck = "test/release-check.test.ts";
 const installDocker = "test-install-sh-docker";
 const changedScope = "src/scripts/ci-changed-scope.test.ts";
 const changedScopeTests = [
+  "src/scripts/ci-changed-scope.contract-fixtures.test.ts",
   "src/scripts/ci-changed-scope.control-ui.test.ts",
   "src/scripts/ci-changed-scope.native-i18n.test.ts",
   changedScope,

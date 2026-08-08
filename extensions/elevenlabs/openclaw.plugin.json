@@ -1,5 +1,9 @@
 {
   "id": "elevenlabs",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true
+  },
   "icon": "https://cdn.simpleicons.org/elevenlabs",
   "activation": {
     "onStartup": false

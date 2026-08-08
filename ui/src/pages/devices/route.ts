@@ -3,41 +3,41 @@ import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
-  createInitialNodesState,
+  createInitialDevicesState,
   loadDevices,
   loadExecApprovals,
   loadNodes,
 } from "../../lib/nodes/index.ts";
-import type { NodesRouteData } from "./nodes-page.ts";
+import type { DevicesRouteData } from "./devices-page.ts";
 
-async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRouteData> {
+async function loadDevicesRouteData(context: ApplicationContext): Promise<DevicesRouteData> {
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
-  const nodes = createInitialNodesState({
+  const devices = createInitialDevicesState({
     client: gatewaySnapshot.client,
     connected: gatewaySnapshot.phase === "connected",
   });
   if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
-    return { gateway, gatewaySnapshot, nodes };
+    return { gateway, gatewaySnapshot, devices };
   }
   await Promise.all([
-    loadNodes(nodes),
+    loadNodes(devices),
     Promise.allSettled([
-      loadDevices(nodes),
+      loadDevices(devices),
       context.runtimeConfig.refresh(),
-      loadExecApprovals(nodes),
+      loadExecApprovals(devices),
     ]),
   ]);
-  return { gateway, gatewaySnapshot, nodes };
+  return { gateway, gatewaySnapshot, devices };
 }
 
 export const page = definePage({
-  ...routePageSpec("nodes"),
-  loader: loadNodesRouteData,
+  ...routePageSpec("devices"),
+  loader: loadDevicesRouteData,
   component: () =>
-    import("./nodes-page.ts").then(() => ({
+    import("./devices-page.ts").then(() => ({
       header: true,
-      render: (data: NodesRouteData | undefined) =>
-        html`<openclaw-nodes-page .routeData=${data}></openclaw-nodes-page>`,
+      render: (data: DevicesRouteData | undefined) =>
+        html`<openclaw-devices-page .routeData=${data}></openclaw-devices-page>`,
     })),
 });

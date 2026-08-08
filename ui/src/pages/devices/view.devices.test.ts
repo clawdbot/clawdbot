@@ -3,10 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
-import { renderNodes } from "./view.ts";
-import type { NodesProps } from "./view.types.ts";
+import { renderDevices } from "./view.ts";
+import type { DevicesProps } from "./view.types.ts";
 
-function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
+function baseProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
     loading: false,
     nodes: [],
@@ -56,10 +56,10 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   };
 }
 
-function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
+function renderDevicesContainer(overrides: Partial<DevicesProps>): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderNodes(baseProps(overrides)), container);
+  render(renderDevices(baseProps(overrides)), container);
   return container;
 }
 
@@ -108,9 +108,9 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
   );
 }
 
-describe("nodes devices pending rendering", () => {
+describe("devices pending rendering", () => {
   it("shows requested and approved access for a scope upgrade", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
@@ -142,7 +142,7 @@ describe("nodes devices pending rendering", () => {
   });
 
   it("normalizes pending device ids before matching paired access", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
@@ -171,7 +171,7 @@ describe("nodes devices pending rendering", () => {
   });
 
   it("does not show upgrade context for key-mismatched pending requests", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
@@ -205,7 +205,7 @@ describe("nodes devices pending rendering", () => {
   });
 
   it("falls back to roles when role is absent", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
@@ -225,9 +225,9 @@ describe("nodes devices pending rendering", () => {
   });
 });
 
-describe("nodes inventory rendering", () => {
+describe("devices inventory rendering", () => {
   it("pins the Gateway self beacon before paired devices", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       presence: [
         {
           instanceId: "gateway-1",
@@ -244,7 +244,7 @@ describe("nodes inventory rendering", () => {
         paired: [{ deviceId: "device-1", displayName: "Device One", roles: ["operator"] }],
       },
     });
-    const entries = getInventorySection(container).querySelectorAll(".nodes-entry");
+    const entries = getInventorySection(container).querySelectorAll(".device-entry");
     const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
 
     expect(statusesByText(gatewayEntry, "gateway")).toHaveLength(1);
@@ -256,7 +256,7 @@ describe("nodes inventory rendering", () => {
   });
 
   it("keeps the paired-devices empty state when only other sections have rows", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
@@ -278,7 +278,7 @@ describe("nodes inventory rendering", () => {
   });
 
   it("renders one row per machine with duplicates collapsed", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [],
         paired: [
@@ -305,7 +305,7 @@ describe("nodes inventory rendering", () => {
       title.textContent?.trim(),
     );
     expect(titles).toEqual(["MacBook", "MacBook"]);
-    const dups = section.querySelector(".nodes-group__dups");
+    const dups = section.querySelector(".device-group__dups");
     expect(dups?.querySelector("summary")?.textContent).toContain("1 older pairing");
     expect(dups?.textContent).toContain("mac-old");
     expect(findButton(section, "Clean up 1 stale")).toBeInstanceOf(HTMLButtonElement);
@@ -313,7 +313,7 @@ describe("nodes inventory rendering", () => {
 
   it("wires the remove icon button to the removal routing for the entry roles", () => {
     const removed: InventoryRemovalRequest[] = [];
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [],
         paired: [
@@ -340,7 +340,7 @@ describe("nodes inventory rendering", () => {
 
   it("renders approve and reject actions for pending node approvals", () => {
     const approvals: string[] = [];
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       nodes: [
         {
           nodeId: "node-pending",
@@ -360,8 +360,8 @@ describe("nodes inventory rendering", () => {
     expect(approvals).toEqual(["node-req-1"]);
   });
 
-  it("shows node and Gateway version drift", () => {
-    const container = renderNodesContainer({
+  it("shows device and Gateway version drift", () => {
+    const container = renderDevicesContainer({
       gatewayVersion: "2026.7.2",
       nodes: [
         {
@@ -411,14 +411,14 @@ describe("nodes inventory rendering", () => {
         .map((status) => status.getAttribute("title"))
         .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
     ).toEqual([
-      "Node 2026.6.10; Gateway 2026.7.2. Update the older component to align the fleet.",
-      "Node 2026.6.11; Gateway 2026.7.2. Update the older component to align the fleet.",
-      "Node 2026.8.1; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Device 2026.6.10; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Device 2026.6.11; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Device 2026.8.1; Gateway 2026.7.2. Update the older component to align the fleet.",
     ]);
   });
 
-  it("shows when an offline Windows node requires manual wake", () => {
-    const container = renderNodesContainer({
+  it("shows when an offline Windows device requires manual wake", () => {
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [],
         paired: [
@@ -472,14 +472,14 @@ describe("nodes inventory rendering", () => {
     expect(statusesByText(section, "offline").length).toBeGreaterThan(0);
     expect(wakeStatuses).toHaveLength(1);
     expect(wakeStatuses[0]?.getAttribute("title")).toBe(
-      "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection.",
+      "The Gateway cannot wake an offline Windows device. Start the machine or restore its network connection.",
     );
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {
     const rotations: Array<{ deviceId: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [],
         paired: [
@@ -504,7 +504,7 @@ describe("nodes inventory rendering", () => {
   });
 
   it("always renders private identifiers in Details and status as a dot with text", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [],
         paired: [
@@ -518,7 +518,7 @@ describe("nodes inventory rendering", () => {
         ],
       },
     });
-    const entry = getInventorySection(container).querySelector(".nodes-entry");
+    const entry = getInventorySection(container).querySelector(".device-entry");
 
     expect(entry?.querySelector(".settings-row__desc")?.textContent).toContain("macOS 26.5.2");
     expect(entry?.querySelector(".settings-row__desc")?.textContent).not.toContain(
@@ -531,7 +531,7 @@ describe("nodes inventory rendering", () => {
   });
 
   it("lists live unpaired presence beacons as display-only rows", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       presence: [
         {
           instanceId: "webchat-1",
@@ -554,7 +554,7 @@ describe("nodes inventory rendering", () => {
     const section = getSection(container, "Connected without pairing");
 
     expect(section.textContent).not.toContain("gone");
-    const entry = Array.from(section.querySelectorAll(".nodes-entry")).find((candidate) =>
+    const entry = Array.from(section.querySelectorAll(".device-entry")).find((candidate) =>
       candidate.textContent?.includes("browser-session"),
     );
     expect(entry?.textContent).toContain("unpaired");
@@ -564,7 +564,7 @@ describe("nodes inventory rendering", () => {
   });
 
   it("brands platform names instead of naive capitalization", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       devicesList: {
         pending: [],
         paired: [
@@ -574,7 +574,7 @@ describe("nodes inventory rendering", () => {
       },
     });
     const subs = Array.from(
-      getInventorySection(container).querySelectorAll(".nodes-entry .settings-row__desc"),
+      getInventorySection(container).querySelectorAll(".device-entry .settings-row__desc"),
       (node) => node.textContent ?? "",
     );
 
@@ -584,10 +584,10 @@ describe("nodes inventory rendering", () => {
   });
 });
 
-describe("nodes exec approvals rendering", () => {
+describe("devices exec approvals rendering", () => {
   it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
     const onExecApprovalsSelectAgent = vi.fn();
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       configForm: {
         agents: {
           entries: {
@@ -626,7 +626,7 @@ describe("nodes exec approvals rendering", () => {
   });
 
   it("renders host-native Windows policies as read-only", () => {
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       nodes: [
         {
           id: "windows-node",
@@ -653,10 +653,10 @@ describe("nodes exec approvals rendering", () => {
   });
 });
 
-describe("nodes agent bindings", () => {
+describe("devices agent bindings", () => {
   it("reports the keyed agent id when a binding changes", () => {
     const onBindAgent = vi.fn();
-    const container = renderNodesContainer({
+    const container = renderDevicesContainer({
       nodes: [
         {
           nodeId: "worker-node",

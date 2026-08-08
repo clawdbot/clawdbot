@@ -15,8 +15,8 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import { renderDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
@@ -508,7 +508,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         onClose: () => context.overlays.closeDevicePairSetup(),
         onManageDevices: () => {
           context.overlays.closeDevicePairSetup();
-          host.navigate("nodes");
+          host.navigate("devices");
         },
         onGetApps: () => {
           context.overlays.closeDevicePairSetup();

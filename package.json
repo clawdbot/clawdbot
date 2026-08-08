@@ -107,8 +107,11 @@
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-fs.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-schema.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-core.d.ts",
@@ -178,6 +181,7 @@
     "!dist/plugin-sdk/request-url.d.ts",
     "!dist/plugin-sdk/response-limit-runtime.d.ts",
     "!dist/plugin-sdk/retry-runtime.d.ts",
+    "!dist/plugin-sdk/runtime-doctor-migrations.d.ts",
     "!dist/plugin-sdk/runtime-doctor.d.ts",
     "!dist/plugin-sdk/runtime-fetch.d.ts",
     "!dist/plugin-sdk/sandbox.d.ts",
@@ -399,6 +403,9 @@
     },
     "./plugin-sdk/runtime-doctor": {
       "default": "./dist/plugin-sdk/runtime-doctor.js"
+    },
+    "./plugin-sdk/runtime-doctor-migrations": {
+      "default": "./dist/plugin-sdk/runtime-doctor-migrations.js"
     },
     "./plugin-sdk/runtime-env": {
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
@@ -676,6 +683,10 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/agent-scope-runtime": {
+      "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-scope-runtime.js"
     },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
@@ -1183,12 +1194,21 @@
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
     },
+    "./plugin-sdk/memory-core-host-engine-curated": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-curated.js"
+    },
     "./plugin-sdk/memory-core-host-engine-foundation": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
     },
+    "./plugin-sdk/memory-core-host-engine-fs": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-fs.js"
+    },
     "./plugin-sdk/memory-core-host-engine-qmd": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-schema": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-schema.js"
     },
     "./plugin-sdk/memory-core-host-engine-storage": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
@@ -1905,7 +1925,7 @@
     "test:unit:fast:audit": "node scripts/test-unit-fast-audit.mjs",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
-    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ssh-client.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/fs-safe-remove.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/commands/backup-verify.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/test-utils/openclaw-test-state.test.ts src/agents/sessions/windows-git-bash-path.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
+    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/config/sessions/session-accessor.sqlite-archive.worker.test.ts src/commands/doctor-gateway-auth-token.windows.test.ts src/infra/sqlite-snapshot.test.ts src/infra/ssh-client.windows.test.ts src/infra/update-managed-service-handoff-command.test.ts src/infra/update-managed-service-handoff-lifecycle.test.ts src/infra/exec-allowlist-pattern.test.ts src/infra/fs-safe-remove.test.ts src/snapshot/local-repository.windows.test.ts src/state/openclaw-database-paths.windows.test.ts src/commands/backup-verify.test.ts src/infra/state-migrations.legacy-session-store.test.ts src/test-utils/openclaw-test-state.test.ts src/agents/sessions/windows-git-bash-path.test.ts src/agents/bash-tools.exec.script-preflight.test.ts src/process/exec.windows.test.ts src/process/exec.windows.integration.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts extensions/mxc/test/mxc-backend.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts test/scripts/direct-run-entrypoints.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
     "test:windows:schtasks:integration": "node scripts/run-with-env.mjs CI_WINDOWS_SCHTASKS_INTEGRATION=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs src/daemon/schtasks.integration.e2e.test.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",

@@ -1,4 +1,4 @@
-// Nodes page renders the mobile device pairing setup dialog.
+// Devices page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
@@ -27,9 +27,9 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   if (!props.open) {
     return nothing;
   }
-  const title = t("nodes.pairing.title");
-  const description = t("nodes.pairing.subtitle");
-  const copyLabel = t("nodes.pairing.copySetupCode");
+  const title = t("devices.pairing.title");
+  const description = t("devices.pairing.subtitle");
+  const copyLabel = t("devices.pairing.copySetupCode");
   const setup = props.setup;
   const pendingCount = props.pendingCount;
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
@@ -43,8 +43,10 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
             <h2>${title}</h2>
             <p>${description}</p>
             <p class="device-pair-setup__get-apps">
-              ${t("nodes.pairing.noApp")}
-              <button type="button" @click=${props.onGetApps}>${t("nodes.pairing.getApps")}</button>
+              ${t("devices.pairing.noApp")}
+              <button type="button" @click=${props.onGetApps}>
+                ${t("devices.pairing.getApps")}
+              </button>
             </p>
           </div>
           <button
@@ -59,7 +61,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
 
         <div class="device-pair-setup__body">
           <fieldset class="device-pair-setup__access" ?disabled=${props.loading || setup !== null}>
-            <legend>${t("nodes.pairing.accessTitle")}</legend>
+            <legend>${t("devices.pairing.accessTitle")}</legend>
             <label>
               <input
                 type="radio"
@@ -68,8 +70,8 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 @change=${() => props.onAccessChange("full")}
               />
               <span>
-                <strong>${t("nodes.pairing.fullAccess")}</strong>
-                <small>${t("nodes.pairing.fullAccessHint")}</small>
+                <strong>${t("devices.pairing.fullAccess")}</strong>
+                <small>${t("devices.pairing.fullAccessHint")}</small>
               </span>
             </label>
             <label>
@@ -80,15 +82,15 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 @change=${() => props.onAccessChange("limited")}
               />
               <span>
-                <strong>${t("nodes.pairing.limitedAccess")}</strong>
-                <small>${t("nodes.pairing.limitedAccessHint")}</small>
+                <strong>${t("devices.pairing.limitedAccess")}</strong>
+                <small>${t("devices.pairing.limitedAccessHint")}</small>
               </span>
             </label>
           </fieldset>
           ${!setup && !props.loading && !props.error
             ? html`
                 <button class="btn primary" type="button" @click=${props.onRefresh}>
-                  ${icons.smartphone} ${t("nodes.pairing.generateCode")}
+                  ${icons.smartphone} ${t("devices.pairing.generateCode")}
                 </button>
               `
             : nothing}
@@ -96,14 +98,14 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
             ? html`
                 <div class="device-pair-setup__loading" role="status">
                   <span class="device-pair-setup__spinner" aria-hidden="true"></span>
-                  <span>${t("nodes.pairing.generating")}</span>
+                  <span>${t("devices.pairing.generating")}</span>
                 </div>
               `
             : nothing}
           ${props.error
             ? html`
                 <div class="callout danger device-pair-setup__error" role="alert">
-                  <strong>${t("nodes.pairing.failed")}</strong>
+                  <strong>${t("devices.pairing.failed")}</strong>
                   <span>${props.error}</span>
                 </div>
                 <button
@@ -123,11 +125,11 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                     ? html`<img
                         class="device-pair-setup__qr"
                         src=${setup.qrDataUrl}
-                        alt=${t("nodes.pairing.qrAlt")}
+                        alt=${t("devices.pairing.qrAlt")}
                         draggable="false"
                       />`
                     : html`<div class="device-pair-setup__qr-unavailable">
-                        ${t("nodes.pairing.qrUnavailable")}
+                        ${t("devices.pairing.qrUnavailable")}
                       </div>`}
                 </div>
 
@@ -150,8 +152,8 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 ${setup.accessDowngraded
                   ? html`
                       <div class="callout warn device-pair-setup__access-warning" role="status">
-                        <strong>${t("nodes.pairing.transportLimitedTitle")}</strong>
-                        <span>${t("nodes.pairing.transportLimitedHint")}</span>
+                        <strong>${t("devices.pairing.transportLimitedTitle")}</strong>
+                        <span>${t("devices.pairing.transportLimitedHint")}</span>
                       </div>
                     `
                   : nothing}
@@ -172,12 +174,12 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                     @click=${props.onRefresh}
                   >
                     ${icons.refresh}
-                    ${props.loading ? t("common.refreshing") : t("nodes.pairing.newCode")}
+                    ${props.loading ? t("common.refreshing") : t("devices.pairing.newCode")}
                   </button>
                 </div>
 
                 <details class="device-pair-setup__fallback">
-                  <summary>${t("nodes.pairing.showSetupCode")}</summary>
+                  <summary>${t("devices.pairing.showSetupCode")}</summary>
                   <code>${setup.setupCode}</code>
                 </details>
 
@@ -185,24 +187,24 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                   ? html`
                       <div class="callout warn device-pair-setup__pending">
                         <span>
-                          ${t("nodes.pairing.pending", { count: String(pendingCount) })}
+                          ${t("devices.pairing.pending", { count: String(pendingCount) })}
                         </span>
                         <button class="btn btn--sm" @click=${props.onManageDevices}>
-                          ${t("nodes.pairing.review")}
+                          ${t("devices.pairing.review")}
                         </button>
                       </div>
                     `
-                  : html`<p class="device-pair-setup__waiting">${t("nodes.pairing.waiting")}</p>`}
+                  : html`<p class="device-pair-setup__waiting">${t("devices.pairing.waiting")}</p>`}
               `
             : nothing}
         </div>
 
         <footer class="device-pair-setup__footer">
           <a href=${PAIRING_DOCS_URL} target="_blank" rel="noreferrer">
-            ${t("nodes.pairing.help")}
+            ${t("devices.pairing.help")}
           </a>
           <button class="btn btn--ghost" type="button" @click=${props.onManageDevices}>
-            ${t("nodes.pairing.manageDevices")}
+            ${t("devices.pairing.manageDevices")}
           </button>
         </footer>
       </section>

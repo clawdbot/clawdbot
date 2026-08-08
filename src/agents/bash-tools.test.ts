@@ -658,6 +658,7 @@ const seedFinishedLogSession = (lines: string[]) => {
     pendingStderr: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
+    pendingOutputDropped: false,
     totalOutputChars: 0,
     aggregated: "",
     tail: "",

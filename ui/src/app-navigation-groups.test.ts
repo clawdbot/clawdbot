@@ -76,8 +76,8 @@ describe("sidebar entries", () => {
   });
 
   it("keeps devices in connection settings and drops stale pinned entries", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
-    expect(settingsRoutes).toContain("nodes");
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("devices");
+    expect(settingsRoutes).toContain("devices");
     expect(normalizeSidebarEntries(["route:nodes", "route:usage"])).toEqual(["route:usage"]);
   });
 

@@ -28,6 +28,7 @@ import {
   renderTailscaleSshProxy,
   runCommand,
   runSutContainerAction,
+  selectCrabboxSshPort,
   signalCommandTree,
   stageFullSessionArtifacts,
   startLocalSut,
@@ -267,6 +268,48 @@ describe("telegram user Crabbox proof log polling", () => {
   it("allows cold remote setup to outlive ordinary command timeouts", () => {
     expect(REMOTE_SETUP_COMMAND_TIMEOUT_MS).toBeGreaterThan(COMMAND_TIMEOUT_MS);
     expect(REMOTE_SETUP_COMMAND_TIMEOUT_MS).toBeGreaterThanOrEqual(90 * 60 * 1000);
+  });
+
+  it.each([
+    {
+      inspect: { sshFallbackPorts: ["22", "2222", " 2200 ", "22"], sshPort: "2222" },
+      ports: ["2222", "22", "2200"],
+    },
+    {
+      inspect: { sshFallbackPorts: ["2200", "22", "2200"] },
+      ports: ["22", "2200"],
+    },
+    { inspect: {}, ports: ["22"] },
+  ])("selects ordered, deduplicated SSH candidates: $ports", async ({ inspect, ports }) => {
+    const probes: string[] = [];
+
+    await expect(
+      selectCrabboxSshPort({
+        inspect,
+        probe: async (port) => {
+          probes.push(port);
+          if (port !== ports.at(-1)) {
+            throw new Error("Connection refused");
+          }
+        },
+      }),
+    ).resolves.toBe(ports.at(-1));
+    expect(probes).toEqual(ports);
+  });
+
+  it("does not try a fallback after a non-connection failure", async () => {
+    const probes: string[] = [];
+
+    await expect(
+      selectCrabboxSshPort({
+        inspect: { sshFallbackPorts: ["22"], sshPort: "2222" },
+        probe: async (port) => {
+          probes.push(port);
+          throw new Error("Permission denied (publickey)");
+        },
+      }),
+    ).rejects.toThrow("Permission denied");
+    expect(probes).toEqual(["2222"]);
   });
 
   it("rejects loose numeric log tail limits instead of parsing prefixes", () => {
@@ -532,11 +575,29 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(rejected.stderr).toContain("unsupported proof Tailscale command");
   });
 
-  posixIt("prefers the inspect SSH host over the public host", () => {
+  posixIt("keeps the inspect SSH host when selecting a fallback port", async () => {
     const root = makeTempDir();
     const sshPath = path.join(root, "ssh");
     const argvPath = path.join(root, "ssh-argv.json");
     const proxyPath = path.join(root, "tailscale");
+    const inspect = {
+      host: "public.example",
+      sshFallbackPorts: ["22"],
+      sshHost: "ssh.example",
+      sshKey: "/tmp/proof-key",
+      sshPort: "2222",
+      sshUser: "proof",
+    };
+    const probes: string[] = [];
+    const sshPort = await selectCrabboxSshPort({
+      inspect,
+      probe: async (port) => {
+        probes.push(port);
+        if (port === "2222") {
+          throw new Error("Connection refused");
+        }
+      },
+    });
     writeExecutable(
       sshPath,
       `#!/usr/bin/env node\nimport fs from "node:fs";\nfs.writeFileSync(process.env.ARGV_PATH, JSON.stringify(process.argv.slice(2)));\n`,
@@ -545,13 +606,7 @@ describe("telegram user Crabbox proof log polling", () => {
       proxyPath,
       renderTailscaleSshProxy({
         gatewayPort: 19042,
-        inspect: {
-          host: "public.example",
-          sshHost: "ssh.example",
-          sshKey: "/tmp/proof-key",
-          sshPort: "2222",
-          sshUser: "proof",
-        },
+        inspect: { ...inspect, sshPort },
       }),
     );
 
@@ -566,8 +621,11 @@ describe("telegram user Crabbox proof log polling", () => {
 
     expect(result.status).toBe(0);
     const argv = JSON.parse(fs.readFileSync(argvPath, "utf8"));
+    expect(probes).toEqual(["2222", "22"]);
     expect(argv).toContain("proof@ssh.example");
     expect(argv).not.toContain("proof@public.example");
+    const portFlagIndex = argv.indexOf("-p");
+    expect(argv.slice(portFlagIndex, portFlagIndex + 2)).toEqual(["-p", "22"]);
   });
 
   it("reads only the requested log tail", () => {

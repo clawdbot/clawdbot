@@ -1,4 +1,4 @@
-// Nodes page renders the pending device pairing-request rows.
+// Devices page renders the pending device pairing-request rows.
 import { html, nothing } from "lit";
 import {
   resolvePendingDeviceApprovalState,
@@ -11,12 +11,12 @@ import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
 import type { PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderDeviceTile } from "./view-shared.ts";
-import type { NodesProps } from "./view.types.ts";
+import type { DevicesProps } from "./view.types.ts";
 
 export function renderPendingDeviceRows(
   pending: PendingDevice[],
   paired: PairedDevice[],
-  props: NodesProps,
+  props: DevicesProps,
 ) {
   const pairedByDeviceId = new Map(
     paired
@@ -50,9 +50,9 @@ function lookupPairedDevice(
 
 function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
   if (!access) {
-    return t("nodes.inventory.none");
+    return t("devices.inventory.none");
   }
-  return t("nodes.inventory.rolesAndScopes", {
+  return t("devices.inventory.rolesAndScopes", {
     roles: formatList(access.roles),
     scopes: formatList(access.scopes),
   });
@@ -61,46 +61,46 @@ function formatAccessSummary(access: DevicePairingAccessSummary | null): string 
 function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
   switch (kind) {
     case "scope-upgrade":
-      return t("nodes.inventory.scopeUpgrade");
+      return t("devices.inventory.scopeUpgrade");
     case "role-upgrade":
-      return t("nodes.inventory.roleUpgrade");
+      return t("devices.inventory.roleUpgrade");
     case "re-approval":
-      return t("nodes.inventory.reapproval");
+      return t("devices.inventory.reapproval");
     case "new-pairing":
-      return t("nodes.inventory.newPairing");
+      return t("devices.inventory.newPairing");
   }
   const exhaustiveKind: never = kind;
   void exhaustiveKind;
   throw new Error("unsupported pending approval kind");
 }
 
-function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: PairedDevice) {
+function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: PairedDevice) {
   const name = normalizeOptionalString(req.displayName) || req.deviceId;
   const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
   const approval = resolvePendingDeviceApprovalState(req, paired);
-  const repair = req.isRepair ? ` · ${t("nodes.inventory.repair")}` : "";
+  const repair = req.isRepair ? ` · ${t("devices.inventory.repair")}` : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
-    <div class="settings-row nodes-entry">
+    <div class="settings-row device-entry">
       ${renderDeviceTile(icons.monitorSmartphone)}
       <div class="settings-row__text">
         <span class="settings-row__title">${name}</span>
         <span class="settings-row__desc">${req.deviceId}${ip}</span>
         <span class="settings-row__desc">
-          ${t("nodes.inventory.requestedAt", {
+          ${t("devices.inventory.requestedAt", {
             note: renderPendingApprovalNote(approval.kind),
             time: age,
           })}${repair}
         </span>
         <span class="settings-row__desc">
-          ${t("nodes.inventory.requestedAccess", {
+          ${t("devices.inventory.requestedAccess", {
             access: formatAccessSummary(approval.requested),
           })}
         </span>
         ${approval.approved
           ? html`
               <span class="settings-row__desc">
-                ${t("nodes.inventory.approvedAccess", {
+                ${t("devices.inventory.approvedAccess", {
                   access: formatAccessSummary(approval.approved),
                 })}
               </span>
@@ -109,10 +109,10 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
       </div>
       <div class="settings-row__control">
         <button class="btn btn--sm" @click=${() => props.onDeviceApprove(req.requestId)}>
-          ${t("nodes.inventory.approve")}
+          ${t("devices.inventory.approve")}
         </button>
         <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
-          ${t("nodes.inventory.reject")}
+          ${t("devices.inventory.reject")}
         </button>
       </div>
     </div>
