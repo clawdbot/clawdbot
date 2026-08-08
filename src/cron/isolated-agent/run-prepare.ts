@@ -6,6 +6,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -603,9 +604,8 @@ export async function prepareCronRunContext(params: {
       job: input.job,
       cronSession,
     });
-    const hasSessionAuthProfileOverride = Boolean(
-      cronSession.sessionEntry.authProfileOverride?.trim(),
-    );
+    const storedAuthProfileId = cronSession.sessionEntry.authProfileOverride?.trim();
+    const hasSessionAuthProfileOverride = Boolean(storedAuthProfileId);
     const authProfileId =
       !hasSessionAuthProfileOverride &&
       !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
@@ -640,7 +640,9 @@ export async function prepareCronRunContext(params: {
       }),
       authProfileId,
       authProfileIdSource: authProfileId
-        ? cronSession.sessionEntry.authProfileOverrideSource
+        ? authProfileId === storedAuthProfileId
+          ? resolveSessionAuthProfileOverrideSource(cronSession.sessionEntry)
+          : "auto"
         : undefined,
     };
     const runtimePluginCandidates =

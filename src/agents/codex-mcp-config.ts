@@ -18,6 +18,7 @@ import {
   normalizeBundleMcpServerConfig,
   normalizeStringRecord,
 } from "./bundle-mcp-adapter.js";
+import { prepareOwnedBundleMcpDataDirs } from "./bundle-mcp-config.js";
 import type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
@@ -229,7 +230,7 @@ export function loadCodexBundleMcpThreadConfig(
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const serverOverrides = params.toolOverrides?.mcpServers;
-  const mcpServers = buildCodexMcpServersConfig({
+  const effectiveConfig: BundleMcpConfig = {
     mcpServers: Object.fromEntries(
       Object.entries(bundleMcp.config.mcpServers)
         .filter(([name]) => {
@@ -246,10 +247,16 @@ export function loadCodexBundleMcpThreadConfig(
           applyCodexSessionMcpToolDenials(name, server, params.toolOverrides),
         ]),
     ),
+  };
+  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+    config: effectiveConfig,
+    prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });
+  const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
+  const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config);
   if (Object.keys(mcpServers).length === 0) {
     return {
-      diagnostics: bundleMcp.diagnostics,
+      diagnostics,
       evaluated: true,
     };
   }
@@ -257,7 +264,7 @@ export function loadCodexBundleMcpThreadConfig(
     configPatch: {
       mcp_servers: mcpServers,
     },
-    diagnostics: bundleMcp.diagnostics,
+    diagnostics,
     evaluated: true,
     fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
   };

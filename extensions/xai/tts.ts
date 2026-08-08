@@ -2,11 +2,10 @@
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
-  assertProviderBinaryResponseContent,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { asObject, trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
@@ -482,22 +481,13 @@ export async function xaiTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    try {
-      assertProviderBinaryResponseContent(response, "xAI TTS API error", "audio");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const audio = await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
-        new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
-    });
-    if (audio.byteLength === 0) {
-      throw new Error("xAI TTS API error: malformed audio response");
-    }
-    return audio;
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "xAI TTS API error", "audio", {
+        maxBytes,
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+      }),
+    );
   } finally {
     await release();
   }

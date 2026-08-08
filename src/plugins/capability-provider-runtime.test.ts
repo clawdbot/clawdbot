@@ -1123,7 +1123,7 @@ describe("resolvePluginCapabilityProviders", () => {
   it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.speechProviders.push({
-      pluginId: "fish-audio",
+      pluginId: "fish-audio-speech",
       pluginName: "Fish Audio",
       source: "test",
       provider: {
@@ -1134,12 +1134,12 @@ describe("resolvePluginCapabilityProviders", () => {
       },
     } as never);
     mocks.loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [{ pluginId: "fish-audio", origin: "global", enabled: true }],
+      plugins: [{ pluginId: "fish-audio-speech", origin: "global", enabled: true }],
     });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
-          id: "fish-audio",
+          id: "fish-audio-speech",
           origin: "global",
           enabledByDefault: false,
           contracts: { speechProviders: ["fish-audio"] },
@@ -1165,14 +1165,14 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expect(provider?.id).toBe("fish-audio");
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      onlyPluginIds: ["fish-audio"],
+      onlyPluginIds: ["fish-audio-speech"],
     });
     const inactiveLookup = requireRuntimeRegistryLookup({
       activate: false,
-      onlyPluginIds: ["fish-audio"],
+      onlyPluginIds: ["fish-audio-speech"],
     });
     expect(inactiveLookup.activate).toBe(false);
-    expect(inactiveLookup.onlyPluginIds).toEqual(["fish-audio"]);
+    expect(inactiveLookup.onlyPluginIds).toEqual(["fish-audio-speech"]);
     expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 

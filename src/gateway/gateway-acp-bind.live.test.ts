@@ -47,7 +47,7 @@ const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
+  return snapshotLiveEnv(["CODEX_HOME"]);
 }
 
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {

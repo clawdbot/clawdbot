@@ -20,6 +20,8 @@ const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_RETRY_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_TIMEOUT_MS = 120_000;
 const EXPERIENCE_REVIEW_MAX_PENDING = 32;
+const EXPERIENCE_REVIEW_MAX_SHALLOW_SESSIONS = 256;
+const EXPERIENCE_REVIEW_MAX_SHALLOW_MESSAGES = 40;
 const EXPERIENCE_REVIEW_SESSION_SEGMENT = "skill-workshop-review";
 const EXPERIENCE_REVIEW_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
 const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set([
@@ -204,6 +206,20 @@ export async function prepareSkillExperienceReviewCandidate(
 
 export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSchedulerDeps) {
   const pendingBySession = new Map<string, PendingExperienceReview>();
+  // Shallow turns (quick corrections, short answers) never clear the per-turn depth bar
+  // alone; their iterations and messages accumulate per session until enough unreviewed
+  // work exists. CLI events carry only the current turn, so the accumulated messages are
+  // the sole record of the earlier corrections that qualify the eventual review.
+  const shallowBySession = new Map<
+    string,
+    {
+      senderScope: string;
+      iterations: number;
+      messages: unknown[];
+      aborted: boolean;
+      lastRunId?: string;
+    }
+  >();
   let reviewInFlight = false;
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = deps.clearTimer ?? clearTimeout;
@@ -290,6 +306,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           clearTimer(existing.timer);
         }
         pendingBySession.delete(sessionKey);
+        shallowBySession.delete(sessionKey);
         return;
       }
       // Quiet time follows all later foreground work in the session. Candidate
@@ -298,6 +315,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
       if (errored) {
+        // The provider/prompt-error exclusion covers the whole segment: shallow
+        // evidence accumulated before the error must not seed a later review.
+        shallowBySession.delete(sessionKey);
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
@@ -324,7 +344,82 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
             ? reportedModelIterations
             : 0;
+      let reviewIterations = modelIterations;
+      let reviewMessages = turnMessages;
+      let reviewAborted = !params.event.success;
       if (modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+        shallowBySession.delete(sessionKey);
+      } else {
+        if (modelIterations < 1) {
+          // Zero is the no-provider-work contract; it neither accumulates nor
+          // clears prior shallow work.
+          log.debug(`experience review skipped: reason=no-model-iterations session=${sessionKey}`);
+          return;
+        }
+        // Group sessions share one session key across senders with distinct tool
+        // policies, and the eventual review submits the whole accumulated transcript
+        // to the resolved provider under the resolved auth identity. A change in
+        // either restarts accumulation so no participant's turns are reviewed under
+        // another participant's authorization or disclosed to a different provider.
+        const senderIdentity = [
+          params.ctx.senderId ?? "",
+          params.ctx.senderUsername ?? "",
+          params.ctx.senderName ?? "",
+          params.ctx.senderE164 ?? "",
+        ];
+        if (params.ctx.chatType === "group" && senderIdentity.every((field) => !field)) {
+          // Group turns without any sender identity cannot be scoped to one
+          // participant; fail closed instead of blending transcripts.
+          log.debug(
+            `experience review skipped: reason=ambiguous-group-sender session=${sessionKey}`,
+          );
+          return;
+        }
+        const senderScope = JSON.stringify([
+          ...senderIdentity,
+          params.ctx.modelProviderId ?? "",
+          params.ctx.modelId ?? "",
+          params.ctx.authProfileId ?? "",
+        ]);
+        let accumulator = shallowBySession.get(sessionKey);
+        if (accumulator && accumulator.senderScope !== senderScope) {
+          accumulator = undefined;
+          shallowBySession.delete(sessionKey);
+        }
+        if (!accumulator) {
+          if (shallowBySession.size >= EXPERIENCE_REVIEW_MAX_SHALLOW_SESSIONS) {
+            const oldestKey = shallowBySession.keys().next().value;
+            if (oldestKey !== undefined) {
+              shallowBySession.delete(oldestKey);
+            }
+          }
+          accumulator = { senderScope, iterations: 0, messages: [], aborted: false };
+          shallowBySession.set(sessionKey, accumulator);
+        }
+        const runId = params.ctx.runId?.trim();
+        if (runId && accumulator.lastRunId === runId) {
+          // A duplicate terminal report for the same run carries no new work.
+          log.debug(`experience review skipped: reason=duplicate-run-report session=${sessionKey}`);
+          return;
+        }
+        accumulator.lastRunId = runId;
+        accumulator.iterations += modelIterations;
+        accumulator.aborted = accumulator.aborted || !params.event.success;
+        accumulator.messages = [...accumulator.messages, ...turnMessages].slice(
+          -EXPERIENCE_REVIEW_MAX_SHALLOW_MESSAGES,
+        );
+        if (accumulator.iterations < EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+          log.debug(
+            `experience review deferred: reason=below-depth-bar iterations=${modelIterations} accumulated=${accumulator.iterations} session=${sessionKey}`,
+          );
+          return;
+        }
+        shallowBySession.delete(sessionKey);
+        reviewIterations = accumulator.iterations;
+        reviewMessages = accumulator.messages;
+        reviewAborted = accumulator.aborted;
+      }
+      {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as
             | [string, PendingExperienceReview]
@@ -365,20 +460,16 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             senderIsOwner: params.ctx.senderIsOwner,
           },
           ...(params.config ? { config: params.config } : {}),
-          transcript: formatSkillExperienceReviewTranscript(turnMessages),
-          modelIterations,
-          turnAborted: !params.event.success,
+          transcript: formatSkillExperienceReviewTranscript(reviewMessages),
+          modelIterations: reviewIterations,
+          turnAborted: reviewAborted,
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;
         pendingBySession.set(sessionKey, pending);
         arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
         log.debug(
-          `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
-        );
-      } else {
-        log.debug(
-          `experience review skipped: reason=below-depth-bar iterations=${modelIterations} session=${sessionKey}`,
+          `experience review scheduled: session=${sessionKey} iterations=${reviewIterations} aborted=${reviewAborted}`,
         );
       }
     },
@@ -389,6 +480,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         }
       }
       pendingBySession.clear();
+      shallowBySession.clear();
     },
   };
 }
@@ -420,9 +512,13 @@ async function runSkillExperienceReviewInner(
   }
 
   const sessionId = randomUUID();
-  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
+    remaining: 1,
+    patchProposalIds: new Set(),
+    readSkillHashes: new Map(),
+  };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
-  const { listWritableWorkspaceSkillSummaries } = await import("./service.js");
+  const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
   const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
     config: candidate.config,
     agentId: candidate.ctx.agentId,
@@ -510,12 +606,15 @@ async function runSkillExperienceReviewInner(
     ) {
       continue;
     }
-    // The reviewer drafts update bodies from name/description summaries without the live
-    // skill content, so applying one unseen would replace user-authored sections. Update
-    // proposals stay pending for operator review; only create proposals auto-apply.
-    if (proposal.record.kind === "update") {
+    // Patch proposals auto-apply: the service composed them by replacing only the span
+    // the reviewer quoted from the live body (or appending), so untouched content
+    // survives by construction. Full-body update proposals stay pending for review.
+    if (
+      proposal.record.kind === "update" &&
+      proposalMutationBudget.patchProposalIds?.has(proposalId) !== true
+    ) {
       log.info(
-        `skill experience review left update proposal ${proposalId} pending for operator review`,
+        `skill experience review left full-body update proposal ${proposalId} pending for operator review`,
       );
       continue;
     }

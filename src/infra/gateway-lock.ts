@@ -293,17 +293,17 @@ function canonicalizeStateDir(stateDir: string): string {
   }
 }
 
-function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
+function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = canonicalizeStateDir(resolvedStateDir);
+  const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
   const configHash = sha256HexPrefix(configPath, 8);
-  const stateHash = sha256HexPrefix(stateDir, 8);
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
     stateDir,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    stateLockPath: path.join(lockDir, "gateway.state.lock"),
   };
 }
 

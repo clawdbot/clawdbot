@@ -194,6 +194,31 @@ describe("live model switch", () => {
     });
   });
 
+  it.each([
+    {
+      name: "legacy source-less user",
+      authProfileOverrideCompactionCount: undefined,
+      expectedSource: "user",
+    },
+    {
+      name: "legacy source-less automatic",
+      authProfileOverrideCompactionCount: 0,
+      expectedSource: "auto",
+    },
+  ])("projects $name auth provenance", ({ authProfileOverrideCompactionCount, expectedSource }) => {
+    expect(
+      resolvePendingSelection({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "profile-gpt",
+        authProfileOverrideCompactionCount,
+      }),
+    ).toMatchObject({
+      authProfileId: "profile-gpt",
+      authProfileIdSource: expectedSource,
+    });
+  });
+
   it("prefers persisted session overrides ahead of stale runtime model fields", () => {
     expect(
       resolvePendingSelection(

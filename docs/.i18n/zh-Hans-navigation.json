@@ -501,7 +501,12 @@
         {
           "group": "项目",
           "pages": ["zh-CN/reference/credits"]
-        },
+        }
+      ]
+    },
+    {
+      "tab": "发布与 CI",
+      "groups": [
         {
           "group": "发布策略",
           "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]

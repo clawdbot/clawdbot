@@ -18,6 +18,7 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
@@ -120,11 +121,11 @@ vi.mock("../../../../src/gateway/server-request-context.js", async () => {
 
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",

@@ -1017,7 +1017,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ).rejects.toThrow(/use append(?:Sqlite)?TranscriptMessage instead/);
     });
 
-    it("returns existing SQLite transcript messages after default idempotency dedupe", async () => {
+    it("rejects conflicting SQLite transcript messages after default idempotency dedupe", async () => {
       const scope = sqliteAdapter.transcriptScope(paths, "session-unchecked-dedupe");
       const message = {
         role: "assistant",
@@ -1026,12 +1026,15 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       };
 
       const appended = await appendSqliteTranscriptMessage(scope, { message });
-      const replayed = await appendSqliteTranscriptMessage(scope, {
-        message: {
-          ...message,
-          content: "unchecked replay",
-        },
-      });
+      const replayed = await appendSqliteTranscriptMessage(scope, { message });
+      await expect(
+        appendSqliteTranscriptMessage(scope, {
+          message: {
+            ...message,
+            content: "unchecked replay",
+          },
+        }),
+      ).rejects.toThrow(/conflicts with the admitted message/u);
 
       const events = await loadSqliteTranscriptEvents(scope);
       const keyedEvents = events.filter((event): event is { message: typeof message } => {
@@ -1067,9 +1070,18 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         eventId,
         message: {
           role: "assistant",
-          content: "retry attempt",
+          content: "first attempt",
         },
       });
+      await expect(
+        appendSqliteTranscriptMessage(scope, {
+          eventId,
+          message: {
+            role: "assistant",
+            content: "retry attempt",
+          },
+        }),
+      ).rejects.toThrow(/conflicts with the admitted message/u);
 
       expect(appended).toMatchObject({
         appended: true,
@@ -1111,7 +1123,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         idempotencyLookup: "scan",
         message: {
           role: "assistant",
-          content: "hello again",
+          content: "hello",
           idempotencyKey: "assistant-once",
         },
       });
@@ -1124,11 +1136,24 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       unsubscribe();
 
       expect(appended).toMatchObject({
+        anchor: {
+          entryId: expect.any(String),
+          agentId: "main",
+          activeMessagePosition: expect.any(Number),
+          effectiveParentId: null,
+          generation: expect.any(String),
+          idempotencyKey: "assistant-once",
+          rawSeq: expect.any(Number),
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+          storePath: expect.stringContaining("openclaw-agent.sqlite"),
+        },
         appended: true,
         message: expect.objectContaining({ content: "hello" }),
         messageId: expect.any(String),
       });
       expect(replayed).toMatchObject({
+        anchor: appended?.anchor,
         appended: false,
         message: expect.objectContaining({
           content: "hello",
@@ -1136,6 +1161,19 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         }),
         messageId: appended?.messageId,
       });
+      expect(replayed?.anchor).toBeDefined();
+      expect(replayed?.anchor).toEqual(appended?.anchor);
+      await expect(
+        adapter.appendTranscriptMessage(scope, {
+          cwd: paths.tempDir,
+          idempotencyLookup: "scan",
+          message: {
+            role: "assistant",
+            content: "conflicting replay",
+            idempotencyKey: "assistant-once",
+          },
+        }),
+      ).rejects.toThrow(/conflicts with the admitted message/u);
       await expect(adapter.loadTranscriptEvents(scope)).resolves.toEqual([
         expect.objectContaining({ type: "session" }),
         expect.objectContaining({

@@ -3,6 +3,7 @@ import type { StreamEvent } from "./mock-openai-contracts.js";
 import {
   buildAssistantEvents,
   buildAssistantThenToolCallEvents,
+  buildFailedResponseEvents,
   buildReasoningAndAssistantEvents,
   buildReasoningOnlyEvents,
 } from "./mock-openai-events.js";
@@ -29,6 +30,16 @@ function readOutputItemSlots(events: StreamEvent[]) {
 }
 
 describe("mock OpenAI Responses output item slots", () => {
+  it("emits the provider no-details failure used by repeated-request recovery QA", () => {
+    expect(buildFailedResponseEvents()).toEqual([
+      expect.objectContaining({ type: "response.created" }),
+      expect.objectContaining({
+        type: "response.failed",
+        response: expect.not.objectContaining({ error: expect.anything() }),
+      }),
+    ]);
+  });
+
   it("indexes preview deltas and the final answer on the same assistant slot", () => {
     const events = buildAssistantEvents([
       {

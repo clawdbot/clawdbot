@@ -2,6 +2,7 @@
  * Regression coverage for process-tool supervisor cancellation.
  * Verifies managed session cancellation, process-tree fallback, and registry state.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
@@ -43,12 +44,7 @@ function createBackgroundSession(id: string, pid?: number) {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
   const session = requireRecord(getSession(sessionId), sessionId);

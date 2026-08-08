@@ -1,7 +1,10 @@
 import {
+  createChildDiagnosticTraceContext,
+  createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticEventPayload,
   type DiagnosticTraceContext,
+  waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -9,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import type { OpenClawPluginServiceContext } from "../api.js";
+import type { ExporterHealthUpdate } from "./service-exporter-health.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
@@ -27,6 +31,48 @@ export const MODEL_FIXTURE = {
 } as const;
 export const RUN_FIXTURE = { runId: "run-1", ...MODEL_FIXTURE } as const;
 export const MODEL_CALL_FIXTURE = { ...RUN_FIXTURE, callId: "call-1" } as const;
+
+const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
+  emitTrustedDiagnosticEventWithPrivateData(event, {});
+
+export async function emitRealSdkSignals(generation = "1") {
+  // Owned mode keeps trace and metric providers private to the service, so the
+  // global API is a no-op there. Emit through the diagnostic event recorders,
+  // which create real SDK spans and metrics via the service's private handles.
+  const traceContext = createDiagnosticTraceContext();
+  const modelTraceContext = createChildDiagnosticTraceContext(traceContext);
+  const run = { ...RUN_FIXTURE, runId: `run-${generation}` };
+  emit({ type: "run.started", ...run, trace: traceContext });
+  emit({
+    type: "model.call.started",
+    ...run,
+    callId: `call-${generation}`,
+    trace: modelTraceContext,
+  });
+  emit({
+    type: "model.call.completed",
+    ...run,
+    callId: `call-${generation}`,
+    durationMs: 10,
+    usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, total: 8 },
+    trace: modelTraceContext,
+  });
+  emit({
+    type: "log.record",
+    level: "INFO",
+    message: `OTLP routing test ${generation}`,
+    trace: traceContext,
+  });
+  emit({
+    type: "run.completed",
+    ...run,
+    outcome: "completed",
+    durationMs: 25,
+    trace: traceContext,
+  });
+  await waitForDiagnosticEventsDrained();
+  return traceContext;
+}
 type OtelConfig = NonNullable<
   NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
 >;
@@ -42,6 +88,12 @@ type StartOtelServiceOptions = OtelContextFlags & {
 type InternalDiagnosticListener = Parameters<
   NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["onEvent"]
 >[0];
+export type ReportedExporterHealth = Omit<ExporterHealthUpdate, "exporter">;
+type TrustedExporterInternalDiagnostics = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
+  reportExporterHealth?: (update: ReportedExporterHealth) => void;
+};
 type ModelUsageEventInput = Omit<
   Extract<DiagnosticEventPayload, { type: "model.usage" }>,
   "seq" | "ts"
@@ -53,6 +105,7 @@ type StartedService = {
 };
 
 const startedServices = new Set<StartedService>();
+const exporterHealthReports = new WeakMap<OpenClawPluginServiceContext, ReportedExporterHealth[]>();
 
 export function createOtelContext(
   endpoint: string,
@@ -65,7 +118,14 @@ export function createOtelContext(
     captureContent,
   }: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
-  return {
+  const reports: ReportedExporterHealth[] = [];
+  const internalDiagnostics: TrustedExporterInternalDiagnostics = {
+    emit: emitTrustedDiagnosticEventWithPrivateData,
+    onEvent: onTrustedInternalDiagnosticEvent,
+    registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
+    reportExporterHealth: (update) => reports.push(update),
+  };
+  const ctx: OpenClawPluginServiceContext = {
     config: {
       diagnostics: {
         enabled: true,
@@ -88,12 +148,16 @@ export function createOtelContext(
       debug: vi.fn(),
     },
     stateDir: OTEL_TEST_STATE_DIR,
-    internalDiagnostics: {
-      emit: emitTrustedDiagnosticEventWithPrivateData,
-      onEvent: onTrustedInternalDiagnosticEvent,
-      registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
-    },
+    internalDiagnostics,
   };
+  exporterHealthReports.set(ctx, reports);
+  return ctx;
+}
+
+export function getReportedExporterHealth(
+  ctx: OpenClawPluginServiceContext,
+): ReportedExporterHealth[] {
+  return exporterHealthReports.get(ctx) ?? [];
 }
 
 export async function startOtelService({

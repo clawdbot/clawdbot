@@ -21,6 +21,7 @@ export {
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
@@ -36,9 +37,6 @@ type SessionListDeliveryContext = {
   accountId?: string;
   threadId?: string | number;
 };
-
-/** Compact run status shown by session tools. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
 /** Full Gateway session row consumed by session orchestration internals. */
 export type GatewaySessionListRow = {

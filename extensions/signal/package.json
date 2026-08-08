@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
@@ -44,7 +44,10 @@
           {
             "key": "signalTransport",
             "kind": "choice",
-            "choices": ["external-native", "container"],
+            "choices": [
+              "external-native",
+              "container"
+            ],
             "cli": {
               "flags": "--signal-transport <kind>",
               "description": "Signal HTTP transport (external-native or container)"
@@ -93,10 +96,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2",
+      "openclawVersion": "2026.8.1",
       "bundledDist": false
     },
     "release": {

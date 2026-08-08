@@ -1,3 +1,4 @@
+import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionProjectionTarget = {
@@ -12,6 +13,7 @@ export function inheritSessionSelection(
   if (!parentEntry) {
     return {};
   }
+  const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
   return {
     ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
     ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
@@ -31,12 +33,10 @@ export function inheritSessionSelection(
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
     ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
-    ...(parentEntry.authProfileOverride
+    ...(authProfileOverrideSource && parentEntry.authProfileOverride
       ? { authProfileOverride: parentEntry.authProfileOverride }
       : {}),
-    ...(parentEntry.authProfileOverrideSource
-      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
-      : {}),
+    ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
   };
 }
 

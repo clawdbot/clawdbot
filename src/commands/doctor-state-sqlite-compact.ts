@@ -7,6 +7,7 @@ import {
   clearOpenClawStateDatabaseOpenFailure,
   ensureOpenClawStatePermissions,
   isOpenClawStateDatabaseOpen,
+  STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -85,7 +86,10 @@ export async function runDoctorStateSqliteCompact(
         ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
         sqlitePath,
         validateBeforeMutation: (database) =>
-          assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath }),
+          assertOpenClawStateDatabaseForMaintenance(database, {
+            pathname: sqlitePath,
+            allowedMissingColumns: STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
+          }),
       });
       return {
         ...compact,

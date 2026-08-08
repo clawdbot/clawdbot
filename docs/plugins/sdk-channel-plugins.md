@@ -77,6 +77,14 @@ and `verifyChannelMessageLiveFinalizerProofs(...)` tests so native preview,
 progress, edit, fallback/retention, cleanup, and receipt behavior cannot drift
 silently.
 
+### Progress visibility acceptance
+
+Progress callbacks report what the operator can see, not merely what a plugin queued. Return
+`true` after accepting visible progress and `false` while delivery is pending or when no visible
+update occurred. Existing synchronous and asynchronous callbacks that return `void` remain
+backward-compatible and are treated as visible; new acceptance-aware implementations should use
+an explicit boolean.
+
 Inbound receivers that defer platform acknowledgements should declare
 `message.receive.defaultAckPolicy` and `supportedAckPolicies` instead of hiding
 ack timing in monitor-local state. Cover every declared policy with

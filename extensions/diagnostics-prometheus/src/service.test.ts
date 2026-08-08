@@ -4,10 +4,22 @@ import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-
 // Diagnostics Prometheus tests cover service plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type { OpenClawPluginServiceContext } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
 
 const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
 const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
+type ExporterHealthReport = {
+  signal: "metrics";
+  transport: "prometheus-scrape";
+  status: "started" | "dropped";
+  reason?: "configured";
+};
+type TrustedExporterInternalDiagnostics = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
+  reportExporterHealth?: (update: ExporterHealthReport) => void;
+};
 
 function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
   return { seq: 1, ts: 1700000000000 };
@@ -39,7 +51,8 @@ function createMetricsHarness() {
           listener = undefined;
         };
       },
-    },
+      reportExporterHealth() {},
+    } as TrustedExporterInternalDiagnostics,
   });
   return {
     record(event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) {
@@ -233,6 +246,30 @@ describe("diagnostics-prometheus service", () => {
       'openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2',
     );
     expect(rendered).toContain("openclaw_diagnostic_async_queue_length 0");
+  });
+
+  it("records one metric for one signal-level exporter lifecycle fact", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record(
+      {
+        ...baseEvent(),
+        type: "telemetry.exporter",
+        exporter: "diagnostics-otel",
+        signal: "logs",
+        status: "started",
+        reason: "configured",
+      },
+      trusted,
+    );
+
+    const rendered = metrics.render();
+    expect(rendered).toContain(
+      'openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 1',
+    );
+    expect(rendered).not.toContain(
+      'openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 2',
+    );
   });
 
   it("redacts and bounds label values", () => {
@@ -759,6 +796,7 @@ describe("diagnostics-prometheus service", () => {
       ) => void
     > = [];
     const emitted: unknown[] = [];
+    const healthReports: ExporterHealthReport[] = [];
     const error = vi.fn();
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
@@ -778,7 +816,11 @@ describe("diagnostics-prometheus service", () => {
           listeners.push(listener);
           return unsubscribe;
         },
-      },
+        reportExporterHealth: (update) => {
+          healthReports.push(update);
+          throw new Error("private exporter health callback failure");
+        },
+      } as TrustedExporterInternalDiagnostics,
     });
 
     expect(listeners).toHaveLength(1);
@@ -799,6 +841,14 @@ describe("diagnostics-prometheus service", () => {
         type: "telemetry.exporter",
         exporter: "diagnostics-prometheus",
         signal: "metrics",
+        status: "started",
+        reason: "configured",
+      },
+    ]);
+    expect(healthReports).toStrictEqual([
+      {
+        signal: "metrics",
+        transport: "prometheus-scrape",
         status: "started",
         reason: "configured",
       },
@@ -832,6 +882,17 @@ describe("diagnostics-prometheus service", () => {
     exporter.service.stop?.();
 
     expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(emitted.at(-1)).toStrictEqual({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-prometheus",
+      signal: "metrics",
+      status: "dropped",
+    });
+    expect(healthReports.at(-1)).toStrictEqual({
+      signal: "metrics",
+      transport: "prometheus-scrape",
+      status: "dropped",
+    });
     expect(exporter.render()).toBe("");
   });
 });

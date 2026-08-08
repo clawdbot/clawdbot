@@ -96,26 +96,38 @@ export async function cleanupCodexAttempt(
     resourceState.thread.connectionScope !== "supervision" &&
     !resourceState.thread.ringZeroConfigFingerprint &&
     !resourceState.thread.contextEngine
-      ? await retainCodexAppServerLiveThread(
-          resourceState.client,
-          resourceState.thread.threadId,
-          async (previousThreadId) => {
-            const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
-              threadId: previousThreadId,
-              timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-            });
-            if (!released) {
-              await closeCodexStartupClientBestEffort(resourceState.client);
-              throw new CodexAppServerUnsafeSubscriptionError(
-                `Codex retained thread subscription could not be released: ${previousThreadId}`,
-              );
-            }
-          },
-          resourceState.thread.liveThreadConfigFingerprint,
-        )
-      : undefined;
-  // Replacement waits for the prior unsubscribe before publishing a new slot.
-  const retainLiveThread = retainLiveIncognitoThread || retainedPersistentThread !== undefined;
+      ? (await bindingStore.read(bindingIdentity))?.threadId === resourceState.thread.threadId &&
+        (await bindingStore.withLease(bindingIdentity, async () => {
+          // Reset/end uses this same generation lease. Never publish an old
+          // active turn after its session binding has already been retired.
+          if (
+            (await bindingStore.read(bindingIdentity))?.threadId !== resourceState.thread.threadId
+          ) {
+            return false;
+          }
+          return await retainCodexAppServerLiveThread(
+            resourceState.client,
+            resourceState.thread.threadId,
+            async (threadId) => {
+              const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
+                threadId,
+                timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+              });
+              if (!released) {
+                await closeCodexStartupClientBestEffort(resourceState.client);
+                throw new CodexAppServerUnsafeSubscriptionError(
+                  `Codex retained thread subscription could not be released: ${threadId}`,
+                );
+              }
+            },
+            resourceState.thread.liveThreadConfigFingerprint,
+            connection.mutable.pluginAppServer.serviceTier,
+          );
+        }))
+      : false;
+  // Codex keeps approvals in its native session; independent conversations
+  // must retain their own subscriptions instead of evicting one another.
+  const retainLiveThread = retainLiveIncognitoThread || retainedPersistentThread;
   const bindingReleased =
     isIncognitoSessionKey(params.sessionKey) && !retainLiveIncognitoThread
       ? await bindingStore.mutate(bindingIdentity, {

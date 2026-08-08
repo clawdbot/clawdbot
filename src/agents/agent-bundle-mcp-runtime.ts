@@ -684,9 +684,13 @@ export function createSessionMcpRuntime(params: {
           const transportSource = override
             ? applyMcpConnectionOverride(rawServer, override)
             : rawServer;
+          const dataDirOwnership = Object.hasOwn(loaded.prepareDataDirsByServer ?? {}, serverName)
+            ? loaded.prepareDataDirsByServer?.[serverName]
+            : undefined;
           const resolved = resolveMcpTransport(serverName, transportSource, {
             cfg: params.cfg,
             agentDir: params.agentDir,
+            prepareDataDir: dataDirOwnership?.dataDir,
           });
           if (!resolved) {
             continue;

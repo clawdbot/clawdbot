@@ -17,7 +17,15 @@ export async function prepareAndAdmitChatSend(
 ) {
   const normalizedRequest = normalizeChatSendRequest({ params, client });
   if (!normalizedRequest.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalizedRequest.error));
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        normalizedRequest.error,
+        normalizedRequest.reason ? { details: { reason: normalizedRequest.reason } } : undefined,
+      ),
+    );
     return undefined;
   }
   const preparedSession = prepareChatSendSession({

@@ -969,6 +969,37 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("blocks catalog-declared plugin id migration before updater side effects", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "fish-audio": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    primeBlockedUpdateConfig("plugins", cfg);
+    setInstalledPluginIndexInstallRecords({
+      "fish-audio": {
+        source: "npm",
+        spec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+        resolvedName: "@openclaw/fish-audio-speech",
+        resolvedSpec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+        installPath: "/tmp/fish-audio",
+      },
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "fish-audio"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Config plugins are stored in an external or unresolved top-level $include",
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("blocks managed npm load-path reconciliation before updater side effects", async () => {
     const installPath = "/tmp/openclaw/npm/projects/demo-v1/node_modules/demo";
     const cfg = {

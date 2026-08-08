@@ -97,6 +97,13 @@ export function resolveDiscordMessageFlags(params: {
   return flags || undefined;
 }
 
+export function resolveDiscordSuppressEmbeds(params: {
+  configured?: boolean;
+  override?: boolean;
+}): boolean {
+  return params.override ?? params.configured ?? true;
+}
+
 type DiscordMessageRequestParams = {
   text: string;
   components?: TopLevelComponents[];

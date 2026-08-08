@@ -5931,7 +5931,8 @@ td.data-table-key-col {
 }
 
 .provider-brand-icon[data-provider-icon="opencode"],
-.provider-brand-icon[data-provider-icon="opencodego"] {
+.provider-brand-icon[data-provider-icon="opencodego"],
+.provider-brand-icon[data-provider-icon="pi"] {
   color: var(--text-strong);
 }
 /* Shared working-claw motion: chat and settings use the same body flex and

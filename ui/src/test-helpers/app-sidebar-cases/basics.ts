@@ -343,7 +343,7 @@ describe("AppSidebar brand actions", () => {
     const agentsList = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "research" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -465,7 +465,7 @@ describe("AppSidebar agent chip", () => {
     const agents = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "settings" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(

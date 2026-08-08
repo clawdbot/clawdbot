@@ -67,7 +67,11 @@ import {
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
+import {
+  normalizeQaTransportId,
+  qaTransportSupportsModuleFlows,
+  type QaTransportId,
+} from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -663,6 +667,8 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
           ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
         ]
       : taxonomyScenarios;
+  const liveAdapterFactories =
+    profileReport.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
@@ -672,6 +678,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
     supportsChannel:
       profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
+    resolveModuleFlowSupport:
+      profileReport.channelDriver === "live"
+        ? (channel) =>
+            channel
+              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
+                  channelId: channel,
+                  driver: "live",
+                })
+              : false
+        : undefined,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios
@@ -852,6 +868,19 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     parityPack: opts.parityPack,
     scenarioIds: opts.scenarioIds,
   });
+  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
+  const liveAdapterFactories =
+    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const resolveModuleFlowSupport =
+    channelDriver === "live"
+      ? (channel?: string) =>
+          channel
+            ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
+                channelId: channel,
+                driver: "live",
+              })
+            : false
+      : undefined;
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
     channel: opts.channel,
@@ -863,6 +892,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: explicitScenarioIds,
     runtimePairLanes,
     runtimePair: runtimePair !== undefined,
+    resolveModuleFlowSupport,
   });
   const scenarioIds = runtimePairLaneSelection.scenarioIds;
   if (runtimePair) {
@@ -882,9 +912,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (opts.channel?.trim() && channelDriver !== "crabline" && channelDriver !== "live") {
     throw new Error("--channel override requires --channel-driver crabline or live.");
   }
-  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
-  const liveAdapterFactories =
-    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const liveAdapterFactory = liveChannelId
     ? liveAdapterFactories?.find((factory) => factory.id === liveChannelId)
     : undefined;

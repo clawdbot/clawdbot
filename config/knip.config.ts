@@ -119,6 +119,8 @@ const rootEntries = [
   "scripts/openclaw-cross-os-release-checks.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
+  // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
+  "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
