@@ -70,7 +70,7 @@ describe("telegram reply-quote media cache", () => {
         size: PNG_BYTES.byteLength,
         contentType: "image/png",
       });
-      const getFileSpy = vi.fn(async () => ({ file_path: "photos/reply-quote.png" }));
+      const getFileSpy = vi.fn().mockResolvedValue({ file_path: "photos/reply-quote.png" });
 
       await handler({
         message: {
@@ -146,7 +146,7 @@ describe("telegram reply-quote media cache", () => {
 
       // Control: an uncached file under the small limit is rejected by the
       // download path; the cached call below must fail the same way.
-      const controlGetFile = vi.fn(async () => ({ file_path: "photos/limit-control.png" }));
+      const controlGetFile = vi.fn().mockResolvedValue({ file_path: "photos/limit-control.png" });
       const controlError = await resolveMedia({
         ctx: makePhotoCtx("limit-control-u1", controlGetFile),
         maxBytes: smallMaxBytes,
@@ -164,7 +164,7 @@ describe("telegram reply-quote media cache", () => {
         size: PNG_BYTES.byteLength,
         contentType: "image/png",
       });
-      const cachedGetFile = vi.fn(async () => ({ file_path: "photos/limit-cached.png" }));
+      const cachedGetFile = vi.fn().mockResolvedValue({ file_path: "photos/limit-cached.png" });
       const first = await resolveMedia({
         ctx: makePhotoCtx("limit-cached-u1", cachedGetFile),
         maxBytes: largeMaxBytes,
@@ -210,7 +210,7 @@ describe("telegram reply-quote media cache", () => {
           contentType: "image/png",
           fileName: params.filePathHint,
         }));
-        const getFile = vi.fn(async () => ({ file_path: "photos/expiry.png" }));
+        const getFile = vi.fn().mockResolvedValue({ file_path: "photos/expiry.png" });
         const firstPath = "/tmp/media/inbound/expiry-first.png";
         setNextSavedMediaPath({
           path: firstPath,

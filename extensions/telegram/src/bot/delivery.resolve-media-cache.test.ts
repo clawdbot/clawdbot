@@ -89,7 +89,7 @@ afterEach(() => {
 describe("resolveMedia media file cache", () => {
   it("reuses the session download when the same file is resolved again", async () => {
     saveRemoteMedia.mockReset();
-    const getFile = vi.fn(async () => ({ file_path: "media/reuse.jpg" }));
+    const getFile = vi.fn().mockResolvedValue({ file_path: "media/reuse.jpg" });
     mockNextDownload();
 
     const first = await resolveMedia({
@@ -111,7 +111,7 @@ describe("resolveMedia media file cache", () => {
 
   it("enforces the caller media limit on cache hits without evicting the entry", async () => {
     saveRemoteMedia.mockReset();
-    const getFile = vi.fn(async () => ({ file_path: "media/limit.jpg" }));
+    const getFile = vi.fn().mockResolvedValue({ file_path: "media/limit.jpg" });
     mockNextDownload();
 
     // The first account's larger limit admits and caches the file.
@@ -152,7 +152,7 @@ describe("resolveMedia media file cache", () => {
   it("re-downloads after the cache entry expires", async () => {
     vi.useFakeTimers();
     saveRemoteMedia.mockReset();
-    const getFile = vi.fn(async () => ({ file_path: "media/expiry.jpg" }));
+    const getFile = vi.fn().mockResolvedValue({ file_path: "media/expiry.jpg" });
     mockNextDownload();
 
     const first = await resolveMedia({
