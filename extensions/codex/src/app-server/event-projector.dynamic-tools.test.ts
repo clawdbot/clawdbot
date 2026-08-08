@@ -17,6 +17,9 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
     const projector = await createProjector(undefined, {
@@ -76,6 +79,63 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     ).toMatchObject({
       turnTainted: true,
     });
+  });
+
+  it("preserves validated dynamic tool images in mirrored transcript snapshots", async () => {
+    const projector = await createProjector();
+    const imageUrl = `data:image/png;base64,${PNG_1X1}`;
+
+    projector.recordDynamicToolCall({
+      callId: "call-computer-screenshot",
+      tool: "computer",
+      arguments: { action: "screenshot" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-computer-screenshot",
+      tool: "computer",
+      success: true,
+      contentItems: [
+        { type: "inputText", text: "screenshot 1x1" },
+        { type: "inputImage", imageUrl },
+      ],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(
+      result.messagesSnapshot.find((message) => message.role === "toolResult"),
+      "tool result message",
+    );
+    expect(requireArray(toolResultMessage.content, "tool result content")).toEqual([
+      expect.objectContaining({
+        type: "toolResult",
+        toolCallId: "call-computer-screenshot",
+        text: "screenshot 1x1",
+      }),
+      { type: "image", url: imageUrl },
+    ]);
+  });
+
+  it("replaces invalid dynamic tool transcript images with safe text", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolResult({
+      callId: "call-invalid-image",
+      tool: "computer",
+      success: true,
+      contentItems: [{ type: "inputImage", imageUrl: "data:image/png;base64,not base64!" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(
+      result.messagesSnapshot.find((message) => message.role === "toolResult"),
+      "tool result message",
+    );
+    const content = requireArray(toolResultMessage.content, "tool result content");
+    expect(content).toHaveLength(1);
+    expect(requireRecord(content[0], "tool result content item").text).toContain(
+      "invalid inline image data",
+    );
+    expect(JSON.stringify(content)).not.toContain("not base64!");
   });
 
   it("retains MCP App preview details in mirrored dynamic tool results", async () => {

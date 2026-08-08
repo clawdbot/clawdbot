@@ -44,6 +44,7 @@ import {
 import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+  CHAT_HISTORY_MAX_IMAGE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
@@ -328,6 +329,7 @@ async function handleChatHistoryRequest({
   const replaced = replaceOversizedChatHistoryMessages({
     messages: normalized,
     maxSingleMessageBytes: perMessageHardCap,
+    maxImageMessageBytes: Math.min(CHAT_HISTORY_MAX_IMAGE_MESSAGE_BYTES, maxHistoryBytes),
   });
   scheduleChatHistoryManagedMediaCleanup({
     sessionKey,

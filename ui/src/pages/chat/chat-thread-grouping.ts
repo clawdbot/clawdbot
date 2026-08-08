@@ -9,6 +9,7 @@ import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/messa
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { messageHasVisibleImage } from "./chat-message-visible-content.ts";
 import {
   resolveMessageToolUseId,
   resolveToolBlockId,
@@ -554,7 +555,14 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
     return false;
   }
   const role = item.role.toLowerCase();
-  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
+  return (
+    (role === "tool" && !toolGroupHasVisibleImage(item)) ||
+    (role === "assistant" && !assistantGroupIsForwardedBoundary(item))
+  );
+}
+
+function toolGroupHasVisibleImage(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => messageHasVisibleImage(message));
 }
 
 // Attachment/canvas/media-only replies carry no text but are still the turn's
@@ -741,7 +749,11 @@ export function coalesceActivityRuns(
     groups = [];
   };
   for (const item of items) {
-    if (item.kind === "group" && item.role.toLowerCase() === "tool") {
+    if (
+      item.kind === "group" &&
+      item.role.toLowerCase() === "tool" &&
+      !toolGroupHasVisibleImage(item)
+    ) {
       groups.push(item);
       continue;
     }

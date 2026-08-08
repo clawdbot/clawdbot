@@ -67,6 +67,7 @@ export type ToolTranscriptResultInput = {
   id: string;
   name: string;
   text?: string;
+  images?: Array<{ url: string }>;
   isError: boolean;
   details?: unknown;
   resultContentSource?: "network";

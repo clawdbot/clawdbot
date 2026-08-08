@@ -701,6 +701,87 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireGroup(items[2]).role).toBe("assistant");
   });
 
+  it("keeps image-bearing tool results outside completed-work and activity rollups", () => {
+    const items = collapsedItems({
+      messages: [
+        userMessage("capture it", 1_000),
+        toolResultMessage(
+          "call-screenshot",
+          "computer",
+          [
+            {
+              type: "toolResult",
+              id: "call-screenshot",
+              name: "computer",
+              text: "screenshot 1x1",
+            },
+            { type: "image", url: "data:image/png;base64,cG5n" },
+          ],
+          2_000,
+        ),
+        assistantMessage("Captured.", 3_000),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "group", "group"]);
+    expect(requireGroup(items[1]).role).toBe("tool");
+    expect(coalesceActivityRuns(items).map((item) => item.kind)).toEqual([
+      "group",
+      "group",
+      "group",
+    ]);
+  });
+
+  it("keeps persisted image output when tool calls are hidden", () => {
+    const groups = messageGroups({
+      messages: [
+        userMessage("capture it", 1_000),
+        toolResultMessage(
+          "call-screenshot",
+          "computer",
+          [
+            {
+              type: "toolResult",
+              id: "call-screenshot",
+              name: "computer",
+              text: "screenshot 1x1",
+            },
+            { type: "image", url: "data:image/png;base64,cG5n" },
+          ],
+          2_000,
+        ),
+      ],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(firstMessageContent(groupAt(groups, 1))).toContainEqual({
+      type: "image",
+      url: "data:image/png;base64,cG5n",
+    });
+  });
+
+  it("keeps live image output when tool calls are hidden", () => {
+    const groups = messageGroups({
+      toolMessages: [
+        toolResultMessage(
+          "call-live-screenshot",
+          "computer",
+          [{ type: "image", url: "data:image/png;base64,cG5n" }],
+          2_000,
+        ),
+      ],
+      showToolCalls: false,
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("tool");
+    expect(firstMessageContent(groupAt(groups, 0))).toContainEqual({
+      type: "image",
+      url: "data:image/png;base64,cG5n",
+    });
+  });
+
   it("keeps search matches visible instead of folding them into a rollup", () => {
     const items = collapseCompletedTurnWork(
       coalesceStreamRuns(

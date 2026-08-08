@@ -2148,6 +2148,35 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
+  it("renders tool result images while their detail disclosure is collapsed", () => {
+    const container = document.createElement("div");
+    const imageUrl = "data:image/png;base64,cG5n";
+    const group = createToolGroup("tool-image-group", [
+      createMessageEntry(
+        "tool-image-message",
+        createToolResultMessage("call-screenshot", "computer", [
+          createToolResultBlock("call-screenshot", "computer", "screenshot 1x1"),
+          createMediaBlock({ url: imageUrl, alt: "Computer screenshot" }),
+        ]),
+      ),
+    ]);
+
+    renderMessageGroups(container, [group], {
+      showToolCalls: false,
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(
+      expectElement(container, ".chat-message-image", HTMLImageElement).getAttribute("src"),
+    ).toBe(imageUrl);
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(
+      expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("false");
+  });
+
   it("collapses paired parallel tool cards from one message into an activity group", () => {
     const container = document.createElement("div");
     const group = createToolGroup("parallel-tool-group", [

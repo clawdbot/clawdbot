@@ -2,6 +2,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+export const CHAT_HISTORY_MAX_IMAGE_MESSAGE_BYTES = 1024 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
   "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
@@ -59,6 +60,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
 export function replaceOversizedChatHistoryMessages(params: {
   messages: unknown[];
   maxSingleMessageBytes: number;
+  maxImageMessageBytes?: number;
 }): { messages: unknown[]; replacedCount: number } {
   const { messages, maxSingleMessageBytes } = params;
   if (messages.length === 0) {
@@ -66,7 +68,26 @@ export function replaceOversizedChatHistoryMessages(params: {
   }
   let replacedCount = 0;
   const next = messages.map((message) => {
-    if (jsonUtf8Bytes(message) <= maxSingleMessageBytes) {
+    const content =
+      message && typeof message === "object"
+        ? (message as { content?: unknown }).content
+        : undefined;
+    const hasImage =
+      Array.isArray(content) &&
+      content.some((block) => {
+        const type =
+          block && typeof block === "object" ? (block as { type?: unknown }).type : undefined;
+        return (
+          type === "image" ||
+          type === "image_url" ||
+          type === "input_image" ||
+          type === "openclaw_pairing_qr"
+        );
+      });
+    const messageLimit = hasImage
+      ? Math.max(maxSingleMessageBytes, params.maxImageMessageBytes ?? maxSingleMessageBytes)
+      : maxSingleMessageBytes;
+    if (jsonUtf8Bytes(message) <= messageLimit) {
       return message;
     }
     replacedCount += 1;
