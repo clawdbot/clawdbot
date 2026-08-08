@@ -3670,9 +3670,9 @@ describe("startGatewayConfigReloader", () => {
     harness.emitWrite(makeWrite(configC, "hash-c", { mode: "none", reason: "source-only" }));
     await vi.runAllTimersAsync();
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
-    expect(onConfigAccepted.mock.calls.some((call) => call[3]?.runtimeApplied === false)).toBe(
-      true,
-    );
+    expect(
+      onConfigAccepted.mock.calls.some((call) => call[3] !== undefined && !call[3].runtimeApplied),
+    ).toBe(true);
 
     // The provenance is gone, so an ordinary revert to the running config
     // cancels the (already retired) pending restart instead of re-arming it.
