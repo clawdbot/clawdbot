@@ -210,7 +210,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     expect(readConnectAuth(otherOrigin.connect)?.token).toBeUndefined();
     expect(readConnectAuth(otherOrigin.connect)?.deviceToken).toBeUndefined();
 
-    const wilfredNodes = await openGatewayPage({
+    const wilfredDevices = await openGatewayPage({
       appBaseUrl: server.baseUrl,
       context,
       deviceToken: WILFRED_DEVICE_TOKEN,
@@ -237,20 +237,21 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
         "device.token.revoke": {},
         "node.list": { nodes: [] },
       },
+      // Exercise the legacy /nodes alias while asserting the renamed Devices surface.
       route: "nodes",
     });
-    expect(requireConnectAuth(wilfredNodes.connect).token).toBe(WILFRED_DEVICE_TOKEN);
-    await wilfredNodes.gateway.waitForRequest("device.pair.list");
-    const deviceEntry = wilfredNodes.page.locator(".nodes-entry").filter({
-      has: wilfredNodes.page.getByText("This browser", { exact: true }),
+    expect(requireConnectAuth(wilfredDevices.connect).token).toBe(WILFRED_DEVICE_TOKEN);
+    await wilfredDevices.gateway.waitForRequest("device.pair.list");
+    const deviceEntry = wilfredDevices.page.locator(".device-entry").filter({
+      has: wilfredDevices.page.getByText("This browser", { exact: true }),
     });
     await deviceEntry.waitFor();
-    await deviceEntry.locator("details.nodes-entry__details > summary").click();
+    await deviceEntry.locator("details.device-entry__details > summary").click();
     const revokeButton = deviceEntry.getByRole("button", { name: "Revoke", exact: true });
     await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
-    await captureProof(wilfredNodes.page, "wilfred-before-revoke.png");
-    const dialogPromise = wilfredNodes.page.waitForEvent("dialog");
+    await captureProof(wilfredDevices.page, "wilfred-before-revoke.png");
+    const dialogPromise = wilfredDevices.page.waitForEvent("dialog");
     await Promise.all([
       dialogPromise.then(async (dialog) => {
         expect(dialog.type()).toBe("confirm");
@@ -259,13 +260,13 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       }),
       revokeButton.click(),
     ]);
-    const revoke = await wilfredNodes.gateway.waitForRequest("device.token.revoke");
+    const revoke = await wilfredDevices.gateway.waitForRequest("device.token.revoke");
     expect(revoke.params).toEqual({ deviceId, role: "operator" });
     const wilfredStoreKey =
       `openclaw.device.auth.v1:` + normalizeGatewayCredentialScope(WILFRED_GATEWAY_URL);
     await expect
       .poll(() =>
-        wilfredNodes.page.evaluate((key) => {
+        wilfredDevices.page.evaluate((key) => {
           const raw = localStorage.getItem(key);
           if (!raw) {
             return undefined;

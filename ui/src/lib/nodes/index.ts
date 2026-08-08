@@ -159,7 +159,7 @@ type ExecApprovalsState = NodesRequestState & {
   chatError?: string | null;
 };
 
-export type NodesPageDataState = NodesState & DevicesState & ExecApprovalsState;
+export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
 
 type StoredIdentity = {
   version: 1;
@@ -179,9 +179,9 @@ const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
-export function createInitialNodesState(
+export function createInitialDevicesState(
   snapshot: Partial<NodesGatewaySnapshot> = {},
-): NodesPageDataState {
+): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,

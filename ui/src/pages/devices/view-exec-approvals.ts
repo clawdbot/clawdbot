@@ -22,7 +22,7 @@ import {
   resolveNodeTargets,
   type NodeTargetOption,
 } from "./view-shared.ts";
-import type { NodesProps } from "./view.types.ts";
+import type { DevicesProps } from "./view.types.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
@@ -69,15 +69,15 @@ type ExecApprovalsState = {
 const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
 
 const SECURITY_OPTIONS: Array<{ value: ExecSecurity; labelKey: string }> = [
-  { value: "deny", labelKey: "nodes.execApprovals.options.deny" },
-  { value: "allowlist", labelKey: "nodes.execApprovals.options.allowlist" },
-  { value: "full", labelKey: "nodes.execApprovals.options.full" },
+  { value: "deny", labelKey: "devices.execApprovals.options.deny" },
+  { value: "allowlist", labelKey: "devices.execApprovals.options.allowlist" },
+  { value: "full", labelKey: "devices.execApprovals.options.full" },
 ];
 
 const ASK_OPTIONS: Array<{ value: ExecAsk; labelKey: string }> = [
-  { value: "off", labelKey: "nodes.execApprovals.options.off" },
-  { value: "on-miss", labelKey: "nodes.execApprovals.options.onMiss" },
-  { value: "always", labelKey: "nodes.execApprovals.options.always" },
+  { value: "off", labelKey: "devices.execApprovals.options.off" },
+  { value: "on-miss", labelKey: "devices.execApprovals.options.onMiss" },
+  { value: "always", labelKey: "devices.execApprovals.options.always" },
 ];
 
 function normalizeSecurity(value?: string): ExecSecurity {
@@ -159,7 +159,7 @@ function resolveExecApprovalsScope(
   return EXEC_APPROVALS_DEFAULT_SCOPE;
 }
 
-export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
+export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsState {
   const snapshot = props.execApprovalsSnapshot;
   const nativePolicy = isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const fileSnapshot = snapshot && !isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
@@ -223,7 +223,7 @@ export function renderExecApprovals(state: ExecApprovalsState) {
     ${renderExecApprovalsTarget(state)}
     ${!ready
       ? renderSettingsRow({
-          title: t("nodes.execApprovals.loadHint"),
+          title: t("devices.execApprovals.loadHint"),
           control: html`
             <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
               ${state.loading ? t("common.loading") : t("common.loadApprovals")}
@@ -237,9 +237,9 @@ export function renderExecApprovals(state: ExecApprovalsState) {
   return html`
     ${renderSettingsSection(
       {
-        title: t("nodes.execApprovals.title"),
+        title: t("devices.execApprovals.title"),
         description: html`
-          ${t("nodes.execApprovals.subtitlePrefix")}
+          ${t("devices.execApprovals.subtitlePrefix")}
           <span class="mono">exec host=gateway/node</span>.
         `,
         actions: saveButton,
@@ -259,15 +259,15 @@ function renderNativeExecApprovals(snapshot: NativeExecApprovalsSnapshot) {
     : (snapshot.message ?? "unavailable");
   return html`
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.hostNativePolicy"),
-      description: t("nodes.execApprovals.hostNativeHint"),
-      control: renderSettingsValue(t("nodes.execApprovals.native")),
+      title: t("devices.execApprovals.hostNativePolicy"),
+      description: t("devices.execApprovals.hostNativeHint"),
+      control: renderSettingsValue(t("devices.execApprovals.native")),
     })}
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.defaultAction"),
+      title: t("devices.execApprovals.defaultAction"),
       description: defaultAction,
       control: renderSettingsValue(
-        t(rules.length === 1 ? "nodes.execApprovals.rule" : "nodes.execApprovals.rules", {
+        t(rules.length === 1 ? "devices.execApprovals.rule" : "devices.execApprovals.rules", {
           count: String(rules.length),
         }),
       ),
@@ -276,8 +276,8 @@ function renderNativeExecApprovals(snapshot: NativeExecApprovalsSnapshot) {
       renderSettingsRow({
         title: rule.pattern,
         description: html`
-          ${rule.action} · ${rule.shells?.join(", ") || t("nodes.execApprovals.allShells")} ·
-          ${rule.enabled === false ? t("nodes.execApprovals.off") : t("nodes.execApprovals.on")}
+          ${rule.action} · ${rule.shells?.join(", ") || t("devices.execApprovals.allShells")} ·
+          ${rule.enabled === false ? t("devices.execApprovals.off") : t("devices.execApprovals.on")}
           ${rule.description ? html`<br />${clampText(rule.description, 120)}` : nothing}
         `,
       }),
@@ -290,12 +290,12 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
   const nodeValue = state.targetNodeId ?? "";
   return html`
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.target"),
-      description: t("nodes.execApprovals.targetHint"),
+      title: t("devices.execApprovals.target"),
+      description: t("devices.execApprovals.targetHint"),
       control: html`
         <select
           class="settings-select"
-          aria-label=${t("nodes.execApprovals.host")}
+          aria-label=${t("devices.execApprovals.host")}
           ?disabled=${state.disabled}
           @change=${(event: Event) => {
             const target = event.target as HTMLSelectElement;
@@ -309,22 +309,22 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
           }}
         >
           <option value="gateway" ?selected=${state.target === "gateway"}>
-            ${t("nodes.execApprovals.gateway")}
+            ${t("devices.execApprovals.gateway")}
           </option>
           <option value="node" ?selected=${state.target === "node"}>
-            ${t("nodes.execApprovals.node")}
+            ${t("devices.execApprovals.node")}
           </option>
         </select>
       `,
     })}
     ${state.target === "node"
       ? renderSettingsRow({
-          title: t("nodes.execApprovals.node"),
-          description: hasNodes ? undefined : t("nodes.execApprovals.noNodes"),
+          title: t("devices.execApprovals.node"),
+          description: hasNodes ? undefined : t("devices.execApprovals.noNodes"),
           control: html`
             <select
               class="settings-select"
-              aria-label=${t("nodes.execApprovals.node")}
+              aria-label=${t("devices.execApprovals.node")}
               ?disabled=${state.disabled || !hasNodes}
               @change=${(event: Event) => {
                 const target = event.target as HTMLSelectElement;
@@ -333,7 +333,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
               }}
             >
               <option value="" ?selected=${nodeValue === ""}>
-                ${t("nodes.execApprovals.selectNode")}
+                ${t("devices.execApprovals.selectNode")}
               </option>
               ${state.targetNodes.map(
                 (node) =>
@@ -352,7 +352,7 @@ function renderExecApprovalsScope(state: ExecApprovalsState) {
   const options = [
     {
       value: EXEC_APPROVALS_DEFAULT_SCOPE,
-      label: t("nodes.execApprovals.defaults"),
+      label: t("devices.execApprovals.defaults"),
       icon: icons.settings,
     },
     ...state.agents.map((agent) => ({
@@ -363,14 +363,14 @@ function renderExecApprovalsScope(state: ExecApprovalsState) {
     })),
   ];
   return renderSettingsRow({
-    title: t("nodes.execApprovals.scope"),
+    title: t("devices.execApprovals.scope"),
     stacked: true,
     control: html`
       <openclaw-agent-select
         class="agent-select--settings"
         .options=${options}
         .value=${state.selectedScope}
-        .accessibleLabel=${t("nodes.execApprovals.scope")}
+        .accessibleLabel=${t("devices.execApprovals.scope")}
         .disabled=${state.disabled}
         .onSelect=${state.onSelectScope}
       ></openclaw-agent-select>
@@ -407,7 +407,7 @@ function renderPolicySelect(
     >
       ${!options.isDefaults
         ? html`<option value="__default__" ?selected=${options.currentValue === "__default__"}>
-            ${t("nodes.execApprovals.useDefaultValue", { value: options.defaultValue })}
+            ${t("devices.execApprovals.useDefaultValue", { value: options.defaultValue })}
           </option>`
         : nothing}
       ${options.values.map(
@@ -438,13 +438,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
 
   return html`
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.security"),
+      title: t("devices.execApprovals.security"),
       description: isDefaults
-        ? t("nodes.execApprovals.defaultSecurity")
-        : t("nodes.execApprovals.defaultValue", { value: defaults.security }),
+        ? t("devices.execApprovals.defaultSecurity")
+        : t("devices.execApprovals.defaultValue", { value: defaults.security }),
       control: renderPolicySelect(state, {
         key: "security",
-        ariaLabel: t("nodes.execApprovals.mode"),
+        ariaLabel: t("devices.execApprovals.mode"),
         values: SECURITY_OPTIONS,
         currentValue: securityValue,
         defaultValue: defaults.security,
@@ -453,13 +453,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       }),
     })}
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.ask"),
+      title: t("devices.execApprovals.ask"),
       description: isDefaults
-        ? t("nodes.execApprovals.defaultPrompt")
-        : t("nodes.execApprovals.defaultValue", { value: defaults.ask }),
+        ? t("devices.execApprovals.defaultPrompt")
+        : t("devices.execApprovals.defaultValue", { value: defaults.ask }),
       control: renderPolicySelect(state, {
         key: "ask",
-        ariaLabel: t("nodes.execApprovals.mode"),
+        ariaLabel: t("devices.execApprovals.mode"),
         values: ASK_OPTIONS,
         currentValue: askValue,
         defaultValue: defaults.ask,
@@ -468,13 +468,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       }),
     })}
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.askFallback"),
+      title: t("devices.execApprovals.askFallback"),
       description: isDefaults
-        ? t("nodes.execApprovals.promptUnavailable")
-        : t("nodes.execApprovals.defaultValue", { value: defaults.askFallback }),
+        ? t("devices.execApprovals.promptUnavailable")
+        : t("devices.execApprovals.defaultValue", { value: defaults.askFallback }),
       control: renderPolicySelect(state, {
         key: "askFallback",
-        ariaLabel: t("nodes.execApprovals.fallback"),
+        ariaLabel: t("devices.execApprovals.fallback"),
         values: SECURITY_OPTIONS,
         currentValue: askFallbackValue,
         defaultValue: defaults.askFallback,
@@ -483,17 +483,17 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
       }),
     })}
     ${renderSettingsRow({
-      title: t("nodes.execApprovals.autoAllowSkills"),
+      title: t("devices.execApprovals.autoAllowSkills"),
       description: isDefaults
-        ? t("nodes.execApprovals.autoAllowSkillsHint")
+        ? t("devices.execApprovals.autoAllowSkillsHint")
         : autoIsDefault
-          ? t("nodes.execApprovals.usingDefault", {
+          ? t("devices.execApprovals.usingDefault", {
               value: defaults.autoAllowSkills
-                ? t("nodes.execApprovals.on")
-                : t("nodes.execApprovals.off"),
+                ? t("devices.execApprovals.on")
+                : t("devices.execApprovals.off"),
             })
-          : t("nodes.execApprovals.override", {
-              value: autoEffective ? t("nodes.execApprovals.on") : t("nodes.execApprovals.off"),
+          : t("devices.execApprovals.override", {
+              value: autoEffective ? t("devices.execApprovals.on") : t("devices.execApprovals.off"),
             }),
       control: html`
         ${!isDefaults && !autoIsDefault
@@ -502,13 +502,13 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               ?disabled=${state.disabled}
               @click=${() => state.onRemove([...basePath, "autoAllowSkills"])}
             >
-              ${t("nodes.execApprovals.useDefault")}
+              ${t("devices.execApprovals.useDefault")}
             </button>`
           : nothing}
         ${renderSettingsToggle({
           checked: autoEffective,
           disabled: state.disabled,
-          ariaLabel: t("nodes.execApprovals.autoAllowSkills"),
+          ariaLabel: t("devices.execApprovals.autoAllowSkills"),
           onChange: (checked) => state.onPatch([...basePath, "autoAllowSkills"], checked),
         })}
       `,
@@ -521,8 +521,8 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
   const entries = state.allowlist;
   return renderSettingsSection(
     {
-      title: t("nodes.execApprovals.allowlist"),
-      description: t("nodes.execApprovals.allowlistHint"),
+      title: t("devices.execApprovals.allowlist"),
+      description: t("devices.execApprovals.allowlistHint"),
       actions: html`
         <button
           class="btn btn--sm"
@@ -532,12 +532,12 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
             state.onPatch(allowlistPath, next);
           }}
         >
-          ${t("nodes.execApprovals.addPattern")}
+          ${t("devices.execApprovals.addPattern")}
         </button>
       `,
     },
     entries.length === 0
-      ? renderSettingsEmpty(t("nodes.execApprovals.emptyAllowlist"))
+      ? renderSettingsEmpty(t("devices.execApprovals.emptyAllowlist"))
       : entries.map((entry, index) => renderAllowlistEntry(state, entry, index)),
   );
 }
@@ -551,9 +551,9 @@ function renderAllowlistEntry(
   const lastCommand = entry.lastUsedCommand ? clampText(entry.lastUsedCommand, 120) : null;
   const lastPath = entry.lastResolvedPath ? clampText(entry.lastResolvedPath, 120) : null;
   return renderSettingsRow({
-    title: entry.pattern?.trim() ? entry.pattern : t("nodes.execApprovals.newPattern"),
+    title: entry.pattern?.trim() ? entry.pattern : t("devices.execApprovals.newPattern"),
     description: html`
-      ${t("nodes.execApprovals.lastUsed", { time: lastUsed })}
+      ${t("devices.execApprovals.lastUsed", { time: lastUsed })}
       ${lastCommand ? html`<br /><span class="mono">${lastCommand}</span>` : nothing}
       ${lastPath ? html`<br /><span class="mono">${lastPath}</span>` : nothing}
     `,
@@ -561,7 +561,7 @@ function renderAllowlistEntry(
       <input
         class="settings-input"
         type="text"
-        aria-label=${t("nodes.execApprovals.pattern")}
+        aria-label=${t("devices.execApprovals.pattern")}
         .value=${entry.pattern ?? ""}
         ?disabled=${state.disabled}
         @input=${(event: Event) => {
@@ -583,7 +583,7 @@ function renderAllowlistEntry(
           state.onRemove(["agents", state.selectedScope, "allowlist", index]);
         }}
       >
-        ${t("nodes.execApprovals.remove")}
+        ${t("devices.execApprovals.remove")}
       </button>
     `,
   });

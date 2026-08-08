@@ -1,13 +1,13 @@
-/* Nodes page: inventory-entry extras that the settings row primitives cannot
+/* Devices page: inventory-entry extras that the settings row primitives cannot
    express — the device form-factor tile, inline Details disclosure, collapsed
    older-pairing duplicates, and token action rows inside the disclosure. */
 
 /* Rows can grow multi-line (Details disclosure); keep tile/control pinned top. */
-.nodes-entry {
+.device-entry {
   align-items: flex-start;
 }
 
-.nodes-entry__tile {
+.device-entry__tile {
   width: 38px;
   height: 38px;
   display: flex;
@@ -20,11 +20,11 @@
   color: var(--muted);
 }
 
-.nodes-entry__tile-icon {
+.device-entry__tile-icon {
   display: flex;
 }
 
-.nodes-entry__tile-icon svg {
+.device-entry__tile-icon svg {
   width: 18px;
   height: 18px;
   stroke: currentColor;
@@ -34,27 +34,27 @@
   stroke-linejoin: round;
 }
 
-.nodes-entry__details {
+.device-entry__details {
   margin-top: var(--space-1);
   font-size: var(--control-ui-text-sm);
 }
 
-.nodes-entry__details > summary {
+.device-entry__details > summary {
   color: var(--muted);
   user-select: none;
   cursor: pointer;
 }
 
-.nodes-entry__details > summary:hover {
+.device-entry__details > summary:hover {
   color: var(--text);
 }
 
-.nodes-entry__details > .muted {
+.device-entry__details > .muted {
   margin-top: var(--space-2);
   overflow-wrap: anywhere;
 }
 
-.nodes-entry__token {
+.device-entry__token {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -63,22 +63,22 @@
   margin-top: var(--space-2);
 }
 
-.nodes-entry__token-actions {
+.device-entry__token-actions {
   display: inline-flex;
   gap: var(--space-2);
 }
 
 /* Older pairings collapse under the primary machine row; the wrapper sits
    between .settings-row siblings, so it re-adds the hairline dividers. */
-.nodes-group__dups {
+.device-group__dups {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-.nodes-group__dups + .settings-row {
+.device-group__dups + .settings-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-.nodes-group__dups > summary {
+.device-group__dups > summary {
   padding: var(--space-2) var(--space-4);
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
@@ -86,11 +86,11 @@
   cursor: pointer;
 }
 
-.nodes-group__dups > summary:hover {
+.device-group__dups > summary:hover {
   color: var(--text);
 }
 
-.nodes-group__dups .settings-row {
+.device-group__dups .settings-row {
   opacity: 0.75;
   padding-left: var(--space-7);
 }

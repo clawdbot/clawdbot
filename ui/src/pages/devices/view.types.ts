@@ -1,4 +1,4 @@
-// Nodes page view contracts.
+// Devices page view contracts.
 import type { PresenceEntry } from "../../api/types.ts";
 import type {
   DevicePairingList,
@@ -7,7 +7,7 @@ import type {
   InventoryRemovalRequest,
 } from "../../lib/nodes/index.ts";
 
-export type NodesProps = {
+export type DevicesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
   presence: PresenceEntry[];

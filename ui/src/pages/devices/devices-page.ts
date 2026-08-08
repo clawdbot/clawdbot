@@ -19,7 +19,7 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import {
   approveDevicePairing,
   approveNodePairingRequest,
-  createInitialNodesState,
+  createInitialDevicesState,
   loadDevices,
   loadExecApprovals,
   loadNodes,
@@ -34,7 +34,7 @@ import {
   updateExecApprovalsFormValue,
   type ExecApprovalsTarget,
   type InventoryRemovalRequest,
-  type NodesPageDataState,
+  type DevicesPageDataState,
 } from "../../lib/nodes/index.ts";
 import {
   GatewayPageController,
@@ -43,18 +43,18 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { renderNodes } from "./view.ts";
+import { renderDevices } from "./view.ts";
 
-const NODES_DOCS_URL = "https://docs.openclaw.ai/nodes";
+const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
-export type NodesRouteData = {
+export type DevicesRouteData = {
   // Client identity alone cannot distinguish provider replacement or reconnect epochs.
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
-  nodes: NodesPageDataState;
+  devices: DevicesPageDataState;
 };
 
-const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
+const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
 type InventoryRemovalPrompt =
   | { kind: "entry"; entry: InventoryRemovalRequest }
@@ -78,14 +78,14 @@ function presenceConnectivitySignature(entries: PresenceEntry[]): string {
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
-class NodesPage extends OpenClawLightDomElement {
+class DevicesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeData?: NodesRouteData;
+  @property({ attribute: false }) routeData?: DevicesRouteData;
 
   @state() presence: PresenceEntry[] = [];
-  @state() private nodeState = createInitialNodesState();
+  @state() private pageState = createInitialDevicesState();
   @state() private canPairDevice = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
@@ -96,7 +96,7 @@ class NodesPage extends OpenClawLightDomElement {
     getGateway: () => this.context?.gateway,
     onIdentityChange: (change) => this.resetServerState(change.snapshot),
     invalidateRequests: (change) => {
-      this.nodeState.requestGeneration = this.gateway.epoch;
+      this.pageState.requestGeneration = this.gateway.epoch;
       if (!change.identityChanged && change.snapshot.phase !== "connected") {
         this.resetServerState(change.snapshot);
       }
@@ -128,10 +128,10 @@ class NodesPage extends OpenClawLightDomElement {
   });
   private readonly polling = new PollController(
     this,
-    NODES_ACTIVE_POLL_INTERVAL_MS,
+    DEVICES_ACTIVE_POLL_INTERVAL_MS,
     () => {
-      void this.runNodeTask((nodeState) => loadNodes(nodeState, { quiet: true }));
-      void this.runNodeTask((nodeState) => loadDevices(nodeState, { quiet: true }));
+      void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
+      void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
     },
     false,
   );
@@ -155,15 +155,15 @@ class NodesPage extends OpenClawLightDomElement {
             void this.presenceTask.run([null, null]);
             this.presence = presence;
             if (connectivityChanged) {
-              void this.runNodeTask((nodeState) => loadDevices(nodeState, { quiet: true }));
-              void this.runNodeTask((nodeState) => loadNodes(nodeState, { quiet: true }));
+              void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+              void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
             }
           }
           if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-            void this.runNodeTask((nodeState) => loadDevices(nodeState, { quiet: true }));
+            void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
           }
           if (event.event === "node.pair.requested" || event.event === "node.pair.resolved") {
-            void this.runNodeTask((nodeState) => loadNodes(nodeState, { quiet: true }));
+            void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
           }
         }),
     );
@@ -190,14 +190,14 @@ class NodesPage extends OpenClawLightDomElement {
   }
 
   get requestGeneration(): number {
-    return this.nodeState.requestGeneration;
+    return this.pageState.requestGeneration;
   }
 
   private handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
-    this.nodeState.client = snapshot.client;
-    this.nodeState.connected = snapshot.phase === "connected";
-    this.nodeState.requestGeneration = this.gateway.epoch;
+    this.pageState.client = snapshot.client;
+    this.pageState.connected = snapshot.phase === "connected";
+    this.pageState.requestGeneration = this.gateway.epoch;
     this.syncGatewayState(snapshot);
     if (
       this.routeDataInitialized &&
@@ -231,8 +231,8 @@ class NodesPage extends OpenClawLightDomElement {
       this.ensureInitialData();
       return;
     }
-    this.nodeState = {
-      ...data.nodes,
+    this.pageState = {
+      ...data.devices,
       client: snapshot.client,
       connected: snapshot.phase === "connected",
       requestGeneration: this.gateway.epoch,
@@ -246,51 +246,51 @@ class NodesPage extends OpenClawLightDomElement {
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
     this.cancelInventoryRemovalConfirmation();
-    this.nodeState.requestGeneration += 1;
-    const next = createInitialNodesState({
+    this.pageState.requestGeneration += 1;
+    const next = createInitialDevicesState({
       client: snapshot.client,
       connected: snapshot.phase === "connected",
     });
     next.requestGeneration = this.gateway.epoch;
-    this.nodeState = next;
+    this.pageState = next;
     void this.presenceTask.run([null, null]);
     this.presence = [];
   }
 
-  private async runNodeTask<T>(
-    task: (nodeState: NodesPageDataState) => T | Promise<T>,
+  private async runPageTask<T>(
+    task: (pageState: DevicesPageDataState) => T | Promise<T>,
   ): Promise<T> {
-    const nodeState = this.nodeState;
+    const pageState = this.pageState;
     try {
-      const result = task(nodeState);
-      if (this.nodeState === nodeState) {
+      const result = task(pageState);
+      if (this.pageState === pageState) {
         this.requestUpdate();
       }
       return await result;
     } finally {
-      if (this.nodeState === nodeState) {
+      if (this.pageState === pageState) {
         this.requestUpdate();
       }
     }
   }
 
   private ensureInitialData() {
-    const nodeState = this.nodeState;
-    if (!nodeState.connected || !nodeState.client || !this.routeDataInitialized) {
+    const pageState = this.pageState;
+    if (!pageState.connected || !pageState.client || !this.routeDataInitialized) {
       return;
     }
-    if (!nodeState.nodes.length && !nodeState.nodesLoading) {
-      void this.runNodeTask((current) => loadNodes(current));
+    if (!pageState.nodes.length && !pageState.nodesLoading) {
+      void this.runPageTask((current) => loadNodes(current));
     }
-    if (!nodeState.devicesList && !nodeState.devicesLoading) {
-      void this.runNodeTask((current) => loadDevices(current));
+    if (!pageState.devicesList && !pageState.devicesLoading) {
+      void this.runPageTask((current) => loadDevices(current));
     }
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig.refresh();
     }
-    if (!nodeState.execApprovalsSnapshot && !nodeState.execApprovalsLoading) {
-      void this.runNodeTask((current) =>
+    if (!pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
+      void this.runPageTask((current) =>
         loadExecApprovals(current, this.resolveExecApprovalsTarget()),
       );
     }
@@ -328,25 +328,25 @@ class NodesPage extends OpenClawLightDomElement {
     const client = this.gateway.client;
     const title =
       prompt.kind === "entry"
-        ? t("nodes.inventory.removePromptTitle", { name: prompt.entry.name })
+        ? t("devices.inventory.removePromptTitle", { name: prompt.entry.name })
         : t(
             prompt.entries.length === 1
-              ? "nodes.inventory.removeStalePromptTitleOne"
-              : "nodes.inventory.removeStalePromptTitle",
+              ? "devices.inventory.removeStalePromptTitleOne"
+              : "devices.inventory.removeStalePromptTitle",
             { count: String(prompt.entries.length) },
           );
     const confirmed = await showConfirmDialog({
       title,
       message: t(
         prompt.kind === "entry"
-          ? "nodes.inventory.removePromptBody"
-          : "nodes.inventory.removeStalePromptBody",
+          ? "devices.inventory.removePromptBody"
+          : "devices.inventory.removeStalePromptBody",
       ),
       details:
         prompt.kind === "entry"
-          ? t("nodes.inventory.deviceId", { id: prompt.entry.id })
+          ? t("devices.inventory.deviceId", { id: prompt.entry.id })
           : undefined,
-      confirmLabel: t("nodes.inventory.remove"),
+      confirmLabel: t("devices.inventory.remove"),
       danger: true,
       signal: controller.signal,
     });
@@ -363,10 +363,10 @@ class NodesPage extends OpenClawLightDomElement {
       return;
     }
     if (prompt.kind === "entry") {
-      void this.runNodeTask((nodeState) => removeInventoryEntry(nodeState, prompt.entry));
+      void this.runPageTask((pageState) => removeInventoryEntry(pageState, prompt.entry));
       return;
     }
-    void this.runNodeTask((nodeState) => removeStaleInventoryEntries(nodeState, prompt.entries));
+    void this.runPageTask((pageState) => removeStaleInventoryEntries(pageState, prompt.entries));
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -376,7 +376,7 @@ class NodesPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    const nodes = this.nodeState;
+    const devices = this.pageState;
     const config = this.context.runtimeConfig.state;
     const gatewaySnapshot = this.context.gateway.snapshot;
     const gatewayVersion =
@@ -386,45 +386,46 @@ class NodesPage extends OpenClawLightDomElement {
     return html`
       <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("nodes")}</div>
+          <div class="page-title">${titleForRoute("devices")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("nodes")} ${renderDocsLink(NODES_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("devices")}
+            ${renderDocsLink(DEVICES_DOCS_URL, t("common.learnMore"))}
           </div>
         </div>
       </section>
       ${renderSettingsWorkspace(
-        renderNodes({
-          loading: nodes.nodesLoading,
-          nodes: nodes.nodes,
+        renderDevices({
+          loading: devices.nodesLoading,
+          nodes: devices.nodes,
           presence: this.presence,
           gatewayVersion,
-          lastError: nodes.lastError,
-          devicesLoading: nodes.devicesLoading,
-          devicesError: nodes.devicesError,
-          devicesList: nodes.devicesList,
+          lastError: devices.lastError,
+          devicesLoading: devices.devicesLoading,
+          devicesError: devices.devicesError,
+          devicesList: devices.devicesList,
           canPairDevice: this.canPairDevice,
           configForm: currentConfigObject(config),
           configLoading: config.configLoading,
           configSaving: config.configSaving,
           configDirty: config.configFormDirty,
           configFormMode: config.configFormMode,
-          execApprovalsLoading: nodes.execApprovalsLoading,
-          execApprovalsSaving: nodes.execApprovalsSaving,
-          execApprovalsDirty: nodes.execApprovalsDirty,
-          execApprovalsSnapshot: nodes.execApprovalsSnapshot,
-          execApprovalsForm: nodes.execApprovalsForm,
-          execApprovalsSelectedAgent: nodes.execApprovalsSelectedAgent,
+          execApprovalsLoading: devices.execApprovalsLoading,
+          execApprovalsSaving: devices.execApprovalsSaving,
+          execApprovalsDirty: devices.execApprovalsDirty,
+          execApprovalsSnapshot: devices.execApprovalsSnapshot,
+          execApprovalsForm: devices.execApprovalsForm,
+          execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
           onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) =>
-            void this.runNodeTask((nodeState) => approveDevicePairing(nodeState, requestId)),
+            void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId)),
           onDeviceReject: (requestId) =>
-            void this.runNodeTask((nodeState) => rejectDevicePairing(nodeState, requestId)),
+            void this.runPageTask((pageState) => rejectDevicePairing(pageState, requestId)),
           onNodeApprove: (requestId) =>
-            void this.runNodeTask((nodeState) => approveNodePairingRequest(nodeState, requestId)),
+            void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId)),
           onNodeReject: (requestId) =>
-            void this.runNodeTask((nodeState) => rejectNodePairingRequest(nodeState, requestId)),
+            void this.runPageTask((pageState) => rejectNodePairingRequest(pageState, requestId)),
           onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
             if (entries.length > 0) {
@@ -432,8 +433,8 @@ class NodesPage extends OpenClawLightDomElement {
             }
           },
           onDeviceRotate: (deviceId, role, scopes) =>
-            void this.runNodeTask((nodeState) =>
-              rotateDeviceToken(nodeState, {
+            void this.runPageTask((pageState) =>
+              rotateDeviceToken(pageState, {
                 deviceId,
                 gatewayUrl: this.context.gateway.connection.gatewayUrl,
                 role,
@@ -441,8 +442,8 @@ class NodesPage extends OpenClawLightDomElement {
               }),
             ),
           onDeviceRevoke: (deviceId, role) =>
-            void this.runNodeTask((nodeState) =>
-              revokeDeviceToken(nodeState, {
+            void this.runPageTask((pageState) =>
+              revokeDeviceToken(pageState, {
                 deviceId,
                 gatewayUrl: this.context.gateway.connection.gatewayUrl,
                 role,
@@ -451,8 +452,8 @@ class NodesPage extends OpenClawLightDomElement {
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>
-            void this.runNodeTask((nodeState) =>
-              loadExecApprovals(nodeState, this.resolveExecApprovalsTarget()),
+            void this.runPageTask((pageState) =>
+              loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
             ),
           onBindDefault: (nodeId) => {
             if (nodeId) {
@@ -479,25 +480,25 @@ class NodesPage extends OpenClawLightDomElement {
           onExecApprovalsTargetChange: (kind, nodeId) => {
             this.execApprovalsTarget = kind;
             this.execApprovalsTargetNodeId = nodeId;
-            nodes.execApprovalsSnapshot = null;
-            nodes.execApprovalsForm = null;
-            nodes.execApprovalsDirty = false;
-            nodes.execApprovalsSelectedAgent = null;
+            devices.execApprovalsSnapshot = null;
+            devices.execApprovalsForm = null;
+            devices.execApprovalsDirty = false;
+            devices.execApprovalsSelectedAgent = null;
             this.requestUpdate();
           },
           onExecApprovalsSelectAgent: (agentId) => {
-            nodes.execApprovalsSelectedAgent = agentId;
+            devices.execApprovalsSelectedAgent = agentId;
             this.requestUpdate();
           },
           onExecApprovalsPatch: (path, value) =>
-            void this.runNodeTask((nodeState) =>
-              updateExecApprovalsFormValue(nodeState, path, value),
+            void this.runPageTask((pageState) =>
+              updateExecApprovalsFormValue(pageState, path, value),
             ),
           onExecApprovalsRemove: (path) =>
-            void this.runNodeTask((nodeState) => removeExecApprovalsFormValue(nodeState, path)),
+            void this.runPageTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
           onSaveExecApprovals: () =>
-            void this.runNodeTask((nodeState) =>
-              saveExecApprovals(nodeState, this.resolveExecApprovalsTarget()),
+            void this.runPageTask((pageState) =>
+              saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
             ),
         }),
       )}
@@ -505,6 +506,6 @@ class NodesPage extends OpenClawLightDomElement {
   }
 }
 
-if (!customElements.get("openclaw-nodes-page")) {
-  customElements.define("openclaw-nodes-page", NodesPage);
+if (!customElements.get("openclaw-devices-page")) {
+  customElements.define("openclaw-devices-page", DevicesPage);
 }
