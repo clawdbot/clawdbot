@@ -12,6 +12,7 @@ import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
+  getInternalSyncSteeringGetter,
   takeInternalToolBatchLifecycle,
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -69,8 +70,12 @@ const STEERING_TOOL_SKIP_MESSAGE = "Skipped due to queued user message.";
 
 function getSteeringAtCheckpoint(
   config: AgentLoopConfig,
-): AgentMessage[] | PromiseLike<AgentMessage[]> {
-  return config.getSteeringMessages?.() ?? [];
+): AgentMessage[] | Promise<AgentMessage[]> {
+  const callback = config.getSteeringMessages;
+  if (!callback) {
+    return [];
+  }
+  return getInternalSyncSteeringGetter(callback)?.() ?? callback();
 }
 
 function appendTextDeltaToAssistantMessage(
@@ -896,7 +901,10 @@ async function executeToolCallsSequential(
           ? { args: skippedPrepared.args, startEmitted: true }
           : {}),
         ...(isSteeringSkip
-          ? { errorKind: "steering" as const, message: STEERING_TOOL_SKIP_MESSAGE }
+          ? {
+              details: { status: "skipped", deniedReason: "steering" },
+              message: STEERING_TOOL_SKIP_MESSAGE,
+            }
           : {}),
       },
     );
@@ -1016,7 +1024,7 @@ async function executeToolCallsParallel(
         emit,
         {
           args: entry.args,
-          errorKind: "steering",
+          details: { status: "skipped", deniedReason: "steering" },
           message: STEERING_TOOL_SKIP_MESSAGE,
           startEmitted: true,
         },
@@ -1118,7 +1126,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
-  errorKind?: "argument-validation" | "steering";
+  errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
 };
@@ -1612,7 +1620,7 @@ async function completeUnstartedToolCall(
   emit: AgentEventSink,
   options: {
     args?: unknown;
-    errorKind?: "steering";
+    details?: unknown;
     message?: string;
     startEmitted?: boolean;
   } = {},
@@ -1636,10 +1644,9 @@ async function completeUnstartedToolCall(
     assistantMessage,
     {
       toolCall,
-      result: createErrorToolResult(options.message ?? "Operation aborted"),
+      result: createErrorToolResult(options.message ?? "Operation aborted", options.details),
       isError: true,
       executionStarted: false,
-      ...(options.errorKind ? { errorKind: options.errorKind } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
     "args" in options ? options.args : toolCall.arguments,
@@ -1651,10 +1658,10 @@ async function completeUnstartedToolCall(
   return { finalized, message };
 }
 
-function createErrorToolResult(message: string): AgentToolResult<unknown> {
+function createErrorToolResult(message: string, details: unknown = {}): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: message }],
-    details: {},
+    details,
   };
 }
 

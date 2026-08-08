@@ -8,7 +8,7 @@ function outcome(params: {
   result: AgentToolResult<unknown>;
   isError?: boolean;
   executionStarted?: boolean;
-  errorKind?: "argument-validation" | "steering";
+  errorKind?: "argument-validation";
 }): AfterToolOutcomeContext {
   return {
     assistantMessage:
@@ -96,7 +96,7 @@ describe("installCodeModeRepairHook", () => {
     const agent = createAgent();
     const skipped = {
       content: [{ type: "text" as const, text: "Skipped due to queued user message." }],
-      details: {},
+      details: { status: "skipped", deniedReason: "steering" },
     };
 
     await expect(
@@ -105,7 +105,6 @@ describe("installCodeModeRepairHook", () => {
           result: skipped,
           isError: true,
           executionStarted: false,
-          errorKind: "steering",
         }),
       ),
     ).resolves.toBeUndefined();

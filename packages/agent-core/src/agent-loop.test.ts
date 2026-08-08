@@ -6,6 +6,7 @@ import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
 import {
+  attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
@@ -22,6 +23,7 @@ import {
   type AgentToolExecutionContext,
 } from "./tool-execution-context.js";
 import type {
+  AfterToolOutcomeContext,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -1080,7 +1082,7 @@ describe("agentLoop tool termination", () => {
       ],
       requestMessages,
     );
-    const afterToolOutcome = vi.fn(async () => undefined);
+    const afterToolOutcome = vi.fn(async (_context: AfterToolOutcomeContext) => undefined);
     const commitReadyCalls = vi.fn();
     const releaseSkippedCalls = vi.fn();
     const events: AgentEvent[] = [];
@@ -1138,6 +1140,7 @@ describe("agentLoop tool termination", () => {
         toolCallId: "call-second",
         isError: true,
         content: [{ type: "text", text: "Skipped due to queued user message." }],
+        details: { status: "skipped", deniedReason: "steering" },
       },
       firstSteer,
     ]);
@@ -1152,10 +1155,16 @@ describe("agentLoop tool termination", () => {
         toolCall: expect.objectContaining({ id: "call-second" }),
         isError: true,
         executionStarted: false,
-        errorKind: "steering",
+        result: expect.objectContaining({
+          details: { status: "skipped", deniedReason: "steering" },
+        }),
       }),
       expect.any(AbortSignal),
     );
+    const skippedOutcome = afterToolOutcome.mock.calls.find(
+      ([outcome]) => outcome.toolCall.id === "call-second",
+    )?.[0];
+    expect(skippedOutcome).not.toHaveProperty("errorKind");
     expect(
       events
         .filter((event) => event.type === "tool_execution_start")
@@ -1169,6 +1178,67 @@ describe("agentLoop tool termination", () => {
       { id: "call-first", started: true },
       { id: "call-second", started: false },
     ]);
+    const skippedEnd = events.find(
+      (event) => event.type === "tool_execution_end" && event.toolCallId === "call-second",
+    );
+    expect(skippedEnd).toMatchObject({
+      result: { details: { status: "skipped", deniedReason: "steering" } },
+    });
+    expect(skippedEnd).not.toHaveProperty("errorKind");
+  });
+
+  it("uses a private synchronous steer at the scheduler without invoking the public fallback", async () => {
+    const steer = { role: "user" as const, content: "redirect", timestamp: 2 };
+    let steerReady = false;
+    let steerDrained = false;
+    const firstExecute = vi.fn(async () => {
+      steerReady = true;
+      return { content: [], details: {} };
+    });
+    const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const publicGetter = vi.fn(async (): Promise<AgentMessage[]> => {
+      throw new Error("public steering fallback should not run");
+    });
+    const syncGetter = vi.fn((): AgentMessage[] => {
+      if (!steerReady || steerDrained) {
+        return [];
+      }
+      steerDrained = true;
+      return [steer];
+    });
+    const getSteeringMessages = attachInternalSyncSteeringGetter(publicGetter, syncGetter);
+    const requestMessages: Message[][] = [];
+
+    await runAgentLoop(
+      [{ role: "user", content: "start", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          { ...makeTool("first", []), execute: firstExecute },
+          { ...makeTool("second", []), execute: secondExecute },
+        ],
+      },
+      { ...config, getSteeringMessages, toolExecution: "sequential" },
+      () => {},
+      undefined,
+      createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "sync-first", name: "first", arguments: {} },
+            { type: "toolCall", id: "sync-second", name: "second", arguments: {} },
+          ],
+          [{ type: "text", text: "done" }],
+        ],
+        requestMessages,
+      ),
+    );
+
+    expect(firstExecute).toHaveBeenCalledOnce();
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(requestMessages[1]?.at(-1)).toBe(steer);
+    expect(syncGetter).toHaveBeenCalled();
+    expect(publicGetter).not.toHaveBeenCalled();
   });
 
   it("delivers async steering between tools before shouldStopAfterTurn", async () => {
@@ -1188,6 +1258,7 @@ describe("agentLoop tool termination", () => {
     );
     const shouldStopAfterTurn = vi.fn(() => true);
 
+    const getSteeringMessages = vi.fn(async () => queued.splice(0, 1));
     await runAgentLoop(
       [{ role: "user", content: "start", timestamp: 1 }],
       {
@@ -1207,7 +1278,7 @@ describe("agentLoop tool termination", () => {
       {
         ...config,
         toolExecution: "sequential",
-        getSteeringMessages: async () => queued.splice(0, 1),
+        getSteeringMessages,
         shouldStopAfterTurn,
       },
       () => {},
@@ -1219,6 +1290,7 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages[1]?.at(-1)).toBe(steer);
     expect(secondExecute).not.toHaveBeenCalled();
     expect(shouldStopAfterTurn).toHaveBeenCalledOnce();
+    expect(getSteeringMessages).toHaveBeenCalled();
   });
 
   it("suppresses sequential tools when steering arrives from awaited message_end", async () => {
@@ -1405,6 +1477,7 @@ describe("agentLoop tool termination", () => {
         toolCallId: "prepared",
         isError: true,
         content: [{ type: "text", text: "Skipped due to queued user message." }],
+        details: { status: "skipped", deniedReason: "steering" },
       },
       steer,
     ]);
@@ -1414,7 +1487,7 @@ describe("agentLoop tool termination", () => {
         .map((event) => ({ id: event.toolCallId, kind: event.errorKind })),
     ).toEqual([
       { id: "invalid", kind: "argument-validation" },
-      { id: "prepared", kind: "steering" },
+      { id: "prepared", kind: undefined },
     ]);
   });
 

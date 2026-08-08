@@ -1,4 +1,9 @@
-import type { InternalBeforeToolBatchContext, InternalBeforeToolBatchResult } from "./types.js";
+import type {
+  AgentLoopConfig,
+  AgentMessage,
+  InternalBeforeToolBatchContext,
+  InternalBeforeToolBatchResult,
+} from "./types.js";
 
 export type InternalBeforeToolBatchHook = (
   context: InternalBeforeToolBatchContext,
@@ -17,6 +22,13 @@ export type InternalToolBatchLifecycle = {
 const toolBatchLifecycleByResult = new WeakMap<
   InternalBeforeToolBatchResult,
   InternalToolBatchLifecycle
+>();
+
+type InternalSteeringGetter = NonNullable<AgentLoopConfig["getSteeringMessages"]>;
+type InternalSyncSteeringGetter = () => AgentMessage[];
+const syncSteeringGetterByCallback = new WeakMap<
+  InternalSteeringGetter,
+  InternalSyncSteeringGetter
 >();
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
@@ -50,4 +62,19 @@ export function takeInternalToolBatchLifecycle(
   const lifecycle = toolBatchLifecycleByResult.get(result);
   toolBatchLifecycleByResult.delete(result);
   return lifecycle;
+}
+
+/** Attach Agent-owned synchronous draining to the exact public async callback identity. */
+export function attachInternalSyncSteeringGetter(
+  callback: InternalSteeringGetter,
+  syncGetter: InternalSyncSteeringGetter,
+): InternalSteeringGetter {
+  syncSteeringGetterByCallback.set(callback, syncGetter);
+  return callback;
+}
+
+export function getInternalSyncSteeringGetter(
+  callback: InternalSteeringGetter,
+): InternalSyncSteeringGetter | undefined {
+  return syncSteeringGetterByCallback.get(callback);
 }

@@ -168,7 +168,7 @@ export interface AfterToolOutcomeContext {
   /** Whether the tool implementation started executing. */
   executionStarted: boolean;
   /** Typed pre-execution failure provenance when available. */
-  errorKind?: "argument-validation" | "steering";
+  errorKind?: "argument-validation";
   /** Current agent context at the time the tool outcome is finalized. */
   context: AgentContext;
 }
@@ -303,11 +303,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    *
    * Use this for "steering" the agent while it's working.
    *
-   * Returning an array keeps queue drain and tool launch in one synchronous
-   * checkpoint. Promise-compatible results are awaited before launch.
-   * Contract: must not throw or reject. Return [] when no steering messages are available.
+   * Contract: must not throw or reject. Resolve to [] when no steering messages are available.
    */
-  getSteeringMessages?: () => AgentMessage[] | PromiseLike<AgentMessage[]>;
+  getSteeringMessages?: () => Promise<AgentMessage[]>;
 
   /**
    * Returns follow-up messages to process after the agent would otherwise stop.
@@ -636,6 +634,6 @@ export type AgentEvent =
       /** False when resolution, preparation, validation, policy, or queued steering prevented execution. */
       executionStarted?: boolean;
       /** Typed pre-execution failure provenance for safe downstream diagnostics. */
-      errorKind?: "argument-validation" | "steering";
+      errorKind?: "argument-validation";
       hideFromChannelProgress?: boolean;
     };
