@@ -281,6 +281,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         const nextParams = state.pendingParams;
         state.pendingParams = undefined;
         state.hasPending = false;
+        if (state.hasRejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
+          // A different value reopens publication. Keeping the old rejection
+          // would drop a later return to that value while this request is in flight.
+          state.hasRejectedParams = false;
+          state.rejectedParams = undefined;
+        }
         try {
           await client.request(method, nextParams);
           // Request settlement races reconnect teardown. Stale completions must

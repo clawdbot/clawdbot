@@ -361,6 +361,59 @@ describe("runNodeHost optional publications", () => {
     });
   });
 
+  it("retains the latest inventory when it returns to a previously rejected value", async () => {
+    const initialPluginTools = [...mocks.nodePluginTools];
+    let pluginPublicationCount = 0;
+    let rejectFirstPluginPublication: ((error: Error) => void) | undefined;
+    let resolveSecondPluginPublication: (() => void) | undefined;
+    await withReadyNodeHost(async ({ client, options }) => {
+      client.request.mockImplementation((method: string) => {
+        if (method !== NODE_PLUGIN_TOOLS_UPDATE_METHOD) {
+          return Promise.resolve({});
+        }
+        pluginPublicationCount += 1;
+        if (pluginPublicationCount === 1) {
+          return new Promise((_resolve, reject) => {
+            rejectFirstPluginPublication = reject;
+          });
+        }
+        if (pluginPublicationCount === 2) {
+          return new Promise((resolve) => {
+            resolveSecondPluginPublication = () => resolve({});
+          });
+        }
+        return Promise.resolve({});
+      });
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() => expect(rejectFirstPluginPublication).toBeDefined());
+
+      mocks.nodePluginTools = [];
+      mocks.availabilityChanged?.();
+      rejectFirstPluginPublication?.(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "temporary validation failure",
+        }),
+      );
+      await vi.waitFor(() => expect(resolveSecondPluginPublication).toBeDefined());
+
+      mocks.nodePluginTools = initialPluginTools;
+      mocks.availabilityChanged?.();
+      resolveSecondPluginPublication?.();
+
+      await vi.waitFor(() => {
+        const pluginPublications = client.request.mock.calls.filter(
+          ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+        );
+        expect(pluginPublications).toHaveLength(3);
+        expect(pluginPublications.at(-1)?.[1]).toEqual({ tools: initialPluginTools });
+      });
+    });
+  });
+
   it.each([true, false])("retires inventory before manifest reconnect", async (deferInitial) => {
     let resolveInitialPublication: (() => void) | undefined;
     await withReadyNodeHost(async ({ client, options }) => {
