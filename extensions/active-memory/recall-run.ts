@@ -337,6 +337,7 @@ async function runRecallSubagent(params: {
       throw abortErr;
     }
     const rawReply = (result.payloads ?? [])
+      .filter((payload) => payload.isError !== true)
       .map((payload) => payload.text?.trim() ?? "")
       .filter(Boolean)
       .join("\n")
@@ -356,6 +357,7 @@ async function runRecallSubagent(params: {
       transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
+      resultStatus: result.meta.error ? "failed" : undefined,
       transcriptPath: params.config.persistTranscripts ? artifactSessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,

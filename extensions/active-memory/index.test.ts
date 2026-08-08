@@ -4485,6 +4485,60 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
+  it("does not inject error payloads after usable harness memory evidence", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_search"], logging: true });
+    const sessionKey = "agent:main:harness-tool-error-payload";
+    seedSession(sessionKey, "s-harness-tool-error-payload", 0);
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        onAgentToolResult?: (event: {
+          toolName: string;
+          result: unknown;
+          isError: boolean;
+        }) => void;
+      }) => {
+        params.onAgentToolResult?.({
+          toolName: "memory_search",
+          isError: false,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: '{"results":[{"text":"User usually orders ramen."}]}',
+              },
+            ],
+            details: { results: [{ text: "User usually orders ramen." }] },
+          },
+        });
+        return {
+          payloads: [
+            {
+              text: "⚠️ Agent couldn't generate a response. Please try again.",
+              isError: true,
+            },
+          ],
+          meta: {
+            durationMs: 0,
+            error: {
+              kind: "incomplete_turn",
+              message: "Agent couldn't generate a response.",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await runPromptBuild(
+      { prompt: "what food do i usually order? harness error payload" },
+      { sessionKey },
+    );
+
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=failed");
+  });
+
   it("rejects completed output after a configured custom tool reports a content-only timeout", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
