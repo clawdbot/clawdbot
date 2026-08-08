@@ -16,7 +16,7 @@ const getFallbackGatewayContextState = () =>
     resolveContext: undefined,
   }));
 
-export type FallbackGatewayContextReadyListener = () => void;
+type FallbackGatewayContextReadyListener = () => void;
 
 const fallbackGatewayContextReadyListeners = new Set<FallbackGatewayContextReadyListener>();
 

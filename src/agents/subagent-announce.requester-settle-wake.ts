@@ -622,4 +622,3 @@ function formatWakeError(error: unknown): string {
 onFallbackGatewayContextReady(() => {
   rearmNoScopeDeferredRequesterSettleWakes();
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
