@@ -354,6 +354,9 @@ function recoverTransactions() {
     }
   }
 }
+function writeSettlementOutcome(outcome) {
+  process.stdout.write(JSON.stringify({ version: 1, outcome }) + "\n");
+}
 function runAction() {
   if (action === "begin") {
     const paths = parsePaths(fs.readFileSync(0, "utf8"));
@@ -449,13 +452,28 @@ function runAction() {
       const phase = normalizeRecoveredPhase(cleanup, true);
       if (phase === "applied") transitionPhase(cleanup, phase, "applied", "committed");
       else if (phase !== "committed") throw new Error("invalid accepted workspace cleanup phase");
+      writeSettlementOutcome("committed");
       return;
     }
-    if (!exists(transaction)) throw new Error("accepted workspace transaction is not applied");
+    if (!exists(transaction)) {
+      writeSettlementOutcome("rolled-back");
+      return;
+    }
     const phase = normalizeRecoveredPhase(transaction);
-    if (phase === "applied") return;
-    if (phase === "applying") restoreTransaction(transaction);
-    throw new Error("accepted workspace transaction is not applied");
+    if (phase === "applied") {
+      writeSettlementOutcome("applied");
+      return;
+    }
+    if (phase === "applying") {
+      restoreTransaction(transaction);
+      writeSettlementOutcome("rolled-back");
+      return;
+    }
+    if (phase === "begun") {
+      writeSettlementOutcome("begun");
+      return;
+    }
+    throw new Error("invalid accepted workspace settlement phase");
   }
   if (action === "commit") {
     if (exists(transaction) && exists(cleanup)) {

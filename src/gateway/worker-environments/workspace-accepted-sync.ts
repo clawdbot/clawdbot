@@ -5,6 +5,12 @@ import path from "node:path";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
+  AcceptedWorkspacePublicationIndeterminateError,
+  isAcceptedWorkspacePublicationIndeterminateError,
+  parseAcceptedWorkspaceSettlement,
+  type AcceptedWorkspaceSettlementOutcome,
+} from "./workspace-accepted-publication.js";
+import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
@@ -19,7 +25,7 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
-function isIndeterminateWorkspaceApplyResult(result: SpawnResult): boolean {
+function isIndeterminateWorkspaceCommandResult(result: SpawnResult): boolean {
   return result.termination !== "exit" || result.code === 255;
 }
 
@@ -131,6 +137,67 @@ function createAcceptedWorkspacePublisher(params: {
           transactionNonce,
         ],
       });
+    const settleIndeterminatePublication = async (
+      operation: "apply" | "commit",
+      publicationFailure: unknown,
+    ): Promise<AcceptedWorkspaceSettlementOutcome> => {
+      let settled: SpawnResult;
+      try {
+        settled = await transactionCommand("settle");
+      } catch (observationFailure) {
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          operation,
+          publicationFailure,
+          observationFailure,
+        );
+      }
+      if (!workerWorkspaceCommandSucceeded(settled)) {
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          operation,
+          publicationFailure,
+          workspaceSyncError(settled),
+        );
+      }
+      try {
+        return parseAcceptedWorkspaceSettlement(settled.stdout);
+      } catch (observationFailure) {
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          operation,
+          publicationFailure,
+          observationFailure,
+        );
+      }
+    };
+    const finishIndeterminateCommit = async (commitFailure: unknown): Promise<void> => {
+      const outcome = await settleIndeterminatePublication("commit", commitFailure);
+      if (outcome === "committed") {
+        return;
+      }
+      if (outcome !== "applied") {
+        throw commitFailure;
+      }
+      let retried: SpawnResult;
+      try {
+        retried = await transactionCommand("commit");
+      } catch (observationFailure) {
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          "commit",
+          commitFailure,
+          observationFailure,
+        );
+      }
+      if (!workerWorkspaceCommandSucceeded(retried)) {
+        const retryFailure = workspaceSyncError(retried);
+        if (!isIndeterminateWorkspaceCommandResult(retried)) {
+          throw retryFailure;
+        }
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          "commit",
+          commitFailure,
+          retryFailure,
+        );
+      }
+    };
     let transactionBegun = false;
     try {
       const begun = await params.runWorkspaceCommand({
@@ -191,29 +258,47 @@ function createAcceptedWorkspacePublisher(params: {
         }
       }
 
-      const applied = await transactionCommand("apply");
-      if (!workerWorkspaceCommandSucceeded(applied)) {
-        const applyFailure = workspaceSyncError(applied);
-        let settlementProvedApplied = false;
-        if (isIndeterminateWorkspaceApplyResult(applied)) {
-          try {
-            const settled = await transactionCommand("settle");
-            settlementProvedApplied = workerWorkspaceCommandSucceeded(settled);
-          } catch {
-            // The original apply result remains the primary failure; rollback
-            // still serializes with an unobserved live apply under the remote lock.
-          }
+      let applied: SpawnResult | undefined;
+      try {
+        applied = await transactionCommand("apply");
+      } catch (applyFailure) {
+        const outcome = await settleIndeterminatePublication("apply", applyFailure);
+        if (outcome !== "applied" && outcome !== "committed") {
+          throw applyFailure;
         }
-        if (!settlementProvedApplied) {
+      }
+      if (applied && !workerWorkspaceCommandSucceeded(applied)) {
+        const applyFailure = workspaceSyncError(applied);
+        if (!isIndeterminateWorkspaceCommandResult(applied)) {
+          throw applyFailure;
+        }
+        const outcome = await settleIndeterminatePublication("apply", applyFailure);
+        if (outcome !== "applied" && outcome !== "committed") {
           throw applyFailure;
         }
       }
       await verifyAcceptedWorkspace();
-      const committed = await transactionCommand("commit");
+      let committed: SpawnResult;
+      try {
+        committed = await transactionCommand("commit");
+      } catch (commitFailure) {
+        await finishIndeterminateCommit(commitFailure);
+        return;
+      }
       if (!workerWorkspaceCommandSucceeded(committed)) {
-        throw workspaceSyncError(committed);
+        const commitFailure = workspaceSyncError(committed);
+        if (isIndeterminateWorkspaceCommandResult(committed)) {
+          await finishIndeterminateCommit(commitFailure);
+          return;
+        }
+        throw commitFailure;
       }
     } catch (error) {
+      // Transport or settlement timeouts are observation evidence, never authority
+      // for an inverse operation; recovery owns restoring both sides.
+      if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+        throw error;
+      }
       if (transactionBegun) {
         try {
           const rolledBack = await transactionCommand("rollback");

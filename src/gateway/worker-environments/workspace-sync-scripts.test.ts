@@ -383,6 +383,72 @@ describe("remote workspace manifest script", () => {
     await fs.chmod(path.join(workspace, "parent"), 0o700);
   });
 
+  it("reports strict settlement outcomes for each durable transaction phase", async () => {
+    const root = tempDirs.make("openclaw-accepted-settlement-outcomes-");
+    let workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace);
+    workspace = await fs.realpath(workspace);
+    await fs.writeFile(path.join(workspace, "result.txt"), "old\n");
+    const runTransaction = async (action: string, nonce: string, input?: string) =>
+      await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          action,
+          workspace,
+          nonce,
+        ],
+        { timeoutMs: 10_000, input },
+      );
+    const expectSettlement = (
+      value: Awaited<ReturnType<typeof runTransaction>>,
+      outcome: "begun" | "rolled-back" | "applied" | "committed",
+    ) => {
+      expect(value).toMatchObject({
+        code: 0,
+        stderr: "",
+        stdout: `${JSON.stringify({ version: 1, outcome })}\n`,
+      });
+    };
+
+    const begunNonce = "a".repeat(32);
+    expect(await runTransaction("begin", begunNonce, JSON.stringify(["result.txt"]))).toMatchObject(
+      { code: 0 },
+    );
+    expectSettlement(await runTransaction("settle", begunNonce), "begun");
+    expect(await runTransaction("rollback", begunNonce)).toMatchObject({ code: 0 });
+
+    const appliedNonce = "b".repeat(32);
+    const appliedBegin = await runTransaction(
+      "begin",
+      appliedNonce,
+      JSON.stringify(["result.txt"]),
+    );
+    await fs.writeFile(path.join(appliedBegin.stdout.trim(), "result.txt"), "applied\n");
+    expect(await runTransaction("apply", appliedNonce)).toMatchObject({ code: 0 });
+    expectSettlement(await runTransaction("settle", appliedNonce), "applied");
+    expect(await runTransaction("rollback", appliedNonce)).toMatchObject({ code: 0 });
+
+    const committedNonce = "c".repeat(32);
+    const committedBegin = await runTransaction(
+      "begin",
+      committedNonce,
+      JSON.stringify(["result.txt"]),
+    );
+    await fs.writeFile(path.join(committedBegin.stdout.trim(), "result.txt"), "committed\n");
+    expect(await runTransaction("apply", committedNonce)).toMatchObject({ code: 0 });
+    expect(await runTransaction("commit", committedNonce)).toMatchObject({ code: 0 });
+    expectSettlement(await runTransaction("settle", committedNonce), "committed");
+    expect(await runTransaction("recover", "d".repeat(32))).toMatchObject({ code: 0 });
+    await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+      "committed\n",
+    );
+    expect(
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+    ).toEqual([]);
+  });
+
   it("serializes a live apply against rollback and recovery", async () => {
     for (const contender of ["rollback", "recover"] as const) {
       const root = tempDirs.make(`openclaw-accepted-${contender}-`);
@@ -546,7 +612,11 @@ process.kill = function(pid, signal) {
 
     const settled = await runTransaction("settle");
 
-    expect(settled.code).not.toBe(0);
+    expect(settled).toMatchObject({
+      code: 0,
+      stderr: "",
+      stdout: `${JSON.stringify({ version: 1, outcome: "rolled-back" })}\n`,
+    });
     await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe("old\n");
     expect(
       (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
