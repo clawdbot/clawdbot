@@ -2858,6 +2858,38 @@ describe("agent event handler", () => {
     ).toBe(false);
   });
 
+  it("skips the session entry read for non-lifecycle events and resolves restart recovery only on lifecycle events", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery-lazy",
+    });
+    registerChatRun(chatRunState, "run-lazy", "session-recovery-lazy", "client-lazy");
+    vi.mocked(loadSessionEntry).mockClear();
+
+    // High-volume chat delta events must not touch the session store:
+    // restart-recovery state is consumed only by lifecycle-phase handling.
+    for (let seq = 1; seq <= 5; seq++) {
+      emitAgentEvent(
+        handler,
+        "run-lazy",
+        "assistant",
+        { text: `message ${seq}` },
+        { seq, ts: Date.now() + seq * 200 },
+      );
+    }
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+    expect(chatBroadcastCalls(broadcast).length).toBeGreaterThanOrEqual(1);
+
+    // Lifecycle events still resolve restart-recovery state through the store.
+    emitAgentEvent(
+      handler,
+      "run-lazy",
+      "lifecycle",
+      { phase: "end", endedAt: Date.now() },
+      { seq: 6, sessionKey: "session-recovery-lazy" },
+    );
+    expect(loadSessionEntry).toHaveBeenCalled();
+  });
+
   it("clears tracked active runs before terminal sessions.changed broadcasts", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",

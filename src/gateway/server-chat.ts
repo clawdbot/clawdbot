@@ -1326,9 +1326,18 @@ export function createAgentEventHandler({
       isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.runs.get(evt.runId)?.abortMarker, chatLink);
 
-    const restartRecoveryState = restartRecoverySessionKey
-      ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
-      : undefined;
+    // Restart-recovery state is consumed only by lifecycle-phase handling
+    // (suppression and terminal projection). Resolving it on every event runs
+    // a session-store read per stream delta; short-circuit non-lifecycle
+    // events the same way resolveSpawnedBy does above.
+    const restartRecoveryState =
+      lifecyclePhase !== null && restartRecoverySessionKey
+        ? resolveRestartRecoveryLifecycleState(
+            restartRecoverySessionKey,
+            restartRecoveryAgentId,
+            evt,
+          )
+        : undefined;
     const suppressRestartRecoveryLifecycle =
       lifecyclePhase !== null &&
       (Boolean(
