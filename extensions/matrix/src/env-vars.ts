@@ -49,8 +49,7 @@ function decodeMatrixEnvAccountToken(token: string): string | undefined {
     if (hexEscape) {
       const hex = hexEscape[1];
       const codePoint = hex ? Number.parseInt(hex, 16) : Number.NaN;
-      // Guard String.fromCodePoint's Unicode range so one malformed env token
-      // cannot abort discovery of every Matrix account.
+      // Reject invalid code points so one malformed env token cannot abort Matrix discovery.
       if (!Number.isInteger(codePoint) || codePoint > 0x10ffff) {
         return undefined;
       }
