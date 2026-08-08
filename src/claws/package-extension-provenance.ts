@@ -46,7 +46,7 @@ export type PackageRefRow = {
   updated_at_ms: number | bigint;
 };
 
-export function parsePackageRefExtension(row: PackageRefRow): ClawAppliedExtension | undefined {
+function parsePackageRefExtension(row: PackageRefRow): ClawAppliedExtension | undefined {
   const values = [
     row.extension_id,
     row.extension_format,

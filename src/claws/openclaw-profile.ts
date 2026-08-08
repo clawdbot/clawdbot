@@ -6,7 +6,7 @@ import { parseClawOpenClawProfile } from "./schema.js";
 import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
-export const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
+const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
 const LEGACY_PROFILE_POINTER_KEY = "openclaw.config";
 const LEGACY_PROFILE_POINTER_PATH = "$.metadata.openclaw.config";
 const CONVENTIONAL_PROFILE_PATH = "$.profiles.openclaw";

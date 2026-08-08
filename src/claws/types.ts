@@ -29,7 +29,7 @@ type ClawAgent = {
   };
 };
 
-export type ClawExtensionFormat = "openclaw" | "claude" | "codex" | "cursor";
+type ClawExtensionFormat = "openclaw" | "claude" | "codex" | "cursor";
 
 export type ClawOpenClawExtension = {
   id: string;

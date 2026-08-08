@@ -1,7 +1,7 @@
 import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 
-export type PluginArtifactFormat = "openclaw" | PluginBundleFormat;
+type PluginArtifactFormat = "openclaw" | PluginBundleFormat;
 
 export const PLUGIN_ARTIFACT_ADAPTER_IDENTITY = "openclaw/v1" as const;
 

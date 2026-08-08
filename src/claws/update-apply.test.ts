@@ -374,7 +374,9 @@ describe("applyClawUpdatePlan", () => {
           readInstall: vi.fn(() => install),
           applyPackage: vi.fn(async (phase) => {
             order.push("requirement");
-            expect(phase.actions.map((action) => action.id)).toEqual(["plugin:github"]);
+            expect(
+              phase.actions.map((action: ClawAddPlan["actions"][number]) => action.id),
+            ).toEqual(["plugin:github"]);
             return { appliedIds: ["plugin:github"], rollback: requirementRollback };
           }),
           applyWorkspace: vi.fn(async () => {
