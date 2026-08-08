@@ -39,11 +39,13 @@ function decodeTextFrame(data: RawData): string {
   return data.toString("utf8");
 }
 
-async function createBrowserOffer(page: Page): Promise<string> {
-  return await page.evaluate(async () => {
+async function createBrowserOffer(page: Page, includeDataChannel = true): Promise<string> {
+  return await page.evaluate(async (shouldCreateDataChannel) => {
     const peer = new RTCPeerConnection();
     peer.addTransceiver("audio", { direction: "sendrecv" });
-    peer.createDataChannel("oai-events");
+    if (shouldCreateDataChannel) {
+      peer.createDataChannel("oai-events");
+    }
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
     const sdp = offer.sdp;
@@ -53,7 +55,7 @@ async function createBrowserOffer(page: Page): Promise<string> {
     }
     (globalThis as BrowserWithGptLivePeer).openclawGptLivePeer = peer;
     return sdp;
-  });
+  }, includeDataChannel);
 }
 
 async function applyBrowserAnswer(page: Page, sdp: string): Promise<void> {
@@ -290,7 +292,7 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
         if (reservation.transport !== "webrtc" || !reservation.offerUrl) {
           throw new Error("GA Gateway control did not return a WebRTC broker reservation");
         }
-        const offerSdp = await createBrowserOffer(page);
+        const offerSdp = await createBrowserOffer(page, false);
         expect(offerSdp).not.toMatch(/^m=application /m);
         const brokerResponse = await page.evaluate(
           async ({ offerUrl, token, sdp }) => {
