@@ -1,10 +1,10 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RawData, WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import {
   createRelayProof,
   randomRelayNonce,
@@ -14,7 +14,9 @@ import {
 import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,
   BROWSER_RELAY_AUTH_COMPLETE_PATH,
+  BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
   BrowserRelayAuthV2Authority,
+  getBrowserRelayAuthV2Authority,
   invalidateBrowserRelayAuthV2Authority,
 } from "./auth-v2.js";
 import {
@@ -189,6 +191,59 @@ function attachTestExtension(handle: ExtensionRelayHandle): void {
   );
 }
 
+function rawDataText(data: RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString("utf8");
+  }
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+}
+
+async function openExtensionSocket(
+  handle: ExtensionRelayHandle,
+  protocols: string | string[],
+): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/extension`, protocols, {
+    origin: "chrome-extension://relay-auth-v2-test",
+  });
+  ws.on("error", () => {});
+  await once(ws, "open");
+  return ws;
+}
+
+async function authenticateV2Extension(handle: ExtensionRelayHandle): Promise<WebSocket> {
+  const ws = await openExtensionSocket(handle, BROWSER_RELAY_EXTENSION_SUBPROTOCOL);
+  const challengeMessage = once(ws, "message");
+  ws.send(
+    JSON.stringify({
+      type: "auth.hello",
+      v: 2,
+      keyId: relayKeyIdFromHex(KEY),
+      clientNonce: randomRelayNonce(),
+    }),
+  );
+  const [challengeData] = (await challengeMessage) as [RawData];
+  const challenge = JSON.parse(rawDataText(challengeData)) as BrowserRelayAuthChallenge;
+  const okMessage = once(ws, "message");
+  ws.send(
+    JSON.stringify({
+      type: "auth.response",
+      v: 2,
+      sessionId: challenge.sessionId,
+      clientProof: createRelayProof(KEY, "client", challenge),
+    }),
+  );
+  const [okData] = (await okMessage) as [RawData];
+  expect(JSON.parse(rawDataText(okData))).toMatchObject({
+    type: "auth.ok",
+    v: 2,
+    sessionId: challenge.sessionId,
+  });
+  return ws;
+}
+
 function createWebSocketAuthHarness() {
   const close = vi.fn();
   const send = vi.fn();
@@ -244,6 +299,27 @@ describe("extension relay WebSocket auth v2 frame boundary", () => {
     expect(harness.prepareAuthenticated).not.toHaveBeenCalled();
     harness.socket.emit("close");
   });
+
+  it("releases a timed-out pending socket without disturbing active capacity", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createWebSocketAuthHarness();
+      const activeInvalidated = vi.fn();
+      expect(harness.authority.registerAuthenticatedConnection({}, activeInvalidated)).toBe(true);
+      for (let index = 0; index < 127; index += 1) {
+        expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(true);
+      }
+      expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.close).toHaveBeenCalledWith(4008, "browser relay auth timeout");
+      harness.socket.emit("close");
+      expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(true);
+      expect(activeInvalidated).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe.sequential("extension relay HTTP auth v2", () => {
@@ -278,7 +354,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("keeps challenge, complete, version, and CDP upgrade on one socket", async () => {
+  it("keeps the same-socket CDP upgrade active and rotation-bound", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
     attachTestExtension(handle);
     const connection = await RawHttpConnection.connect(handle.port);
@@ -289,8 +365,72 @@ describe.sequential("extension relay HTTP auth v2", () => {
     const upgraded = await connection.upgrade("/cdp");
     expect(upgraded.status).toBe(101);
     expect(handle.bridge.cdpClientCount).toBe(1);
+    const closed = once(connection.socket, "close");
+    getBrowserRelayAuthV2Authority("f".repeat(64));
+    await closed;
+    await vi.waitFor(() => expect(handle?.bridge.cdpClientCount).toBe(0));
     connection.close();
   });
+
+  it("keeps an active extension while pending admission is full and recovers after release", async () => {
+    handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: true });
+    const active = await openExtensionSocket(handle, [
+      "openclaw-extension-relay",
+      `openclaw-extension-token.${KEY}`,
+    ]);
+    active.send(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "test",
+        browserVersion: "Chrome/test",
+        extensionVersion: "2",
+        tabs: [],
+      }),
+    );
+    await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
+
+    const pending = await Promise.all(
+      Array.from({ length: 128 }, () =>
+        openExtensionSocket(handle!, BROWSER_RELAY_EXTENSION_SUBPROTOCOL),
+      ),
+    );
+    expect(active.readyState).toBe(WebSocket.OPEN);
+    expect(handle.bridge.extensionConnected).toBe(true);
+
+    const overflow = new WebSocket(
+      `ws://127.0.0.1:${handle.port}/extension`,
+      BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
+      { origin: "chrome-extension://relay-auth-v2-test" },
+    );
+    overflow.on("error", () => {});
+    const overflowClosed = once(overflow, "close");
+    await once(overflow, "open");
+    const [overflowCode] = (await overflowClosed) as [number, Buffer];
+    expect(overflowCode).toBe(4013);
+    expect(active.readyState).toBe(WebSocket.OPEN);
+    expect(handle.bridge.extensionConnected).toBe(true);
+
+    const released = once(pending[0]!, "close");
+    pending[0]!.close();
+    await released;
+    const promoted = await authenticateV2Extension(handle);
+    promoted.send(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "test-v2",
+        browserVersion: "Chrome/test-v2",
+        extensionVersion: "2",
+        tabs: [],
+      }),
+    );
+    await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
+
+    promoted.close();
+    active.close();
+    for (const socket of pending.slice(1)) {
+      socket.close();
+    }
+  }, 30_000);
 
   it("rejects completion on another socket without consuming the original challenge", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY });

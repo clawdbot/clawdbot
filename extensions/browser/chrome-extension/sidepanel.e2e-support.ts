@@ -116,7 +116,7 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
           clientProof?: string;
         }
       | { kind: "authenticated" } = { kind: "hello" };
-    socket.on("message", async (data) => {
+    const handleMessage = async (data: RawData) => {
       const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
       if (authState.kind === "hello") {
         if (
@@ -206,6 +206,9 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
       } else {
         pending.resolve(message.result);
       }
+    };
+    socket.on("message", (data) => {
+      void handleMessage(data);
     });
     socket.on("close", () => authenticated.delete(socket));
   });

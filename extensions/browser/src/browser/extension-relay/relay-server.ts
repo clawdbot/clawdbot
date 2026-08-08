@@ -210,7 +210,11 @@ function boundedRawDataByteLength(data: RawData, limit: number): number {
 }
 
 function trackAuthenticatedSocket(authority: BrowserRelayAuthV2Authority, ws: WebSocket): boolean {
-  if (!authority.registerConnection(ws, () => ws.close(4003, "browser relay key rotated"))) {
+  if (
+    !authority.registerAuthenticatedConnection(ws, () =>
+      ws.close(4003, "browser relay key rotated"),
+    )
+  ) {
     ws.terminate();
     return false;
   }
@@ -261,7 +265,7 @@ export function authenticateExtensionWebSocket(params: {
     clearTimeout(timer);
     authority.releaseConnection(ws);
   };
-  if (!authority.registerConnection(ws, () => ws.close(4003, "browser relay key rotated"))) {
+  if (!authority.registerPendingConnection(ws, () => ws.close(4003, "browser relay key rotated"))) {
     ws.close(4013, "browser relay auth capacity reached");
     return;
   }
@@ -402,7 +406,7 @@ export async function startExtensionRelayServer(params: {
     if (authSockets.has(socket)) {
       return true;
     }
-    if (!authority.registerConnection(socket, () => socket.destroy())) {
+    if (!authority.registerPendingConnection(socket, () => socket.destroy())) {
       return false;
     }
     authSockets.add(socket);

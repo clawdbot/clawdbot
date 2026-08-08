@@ -165,7 +165,11 @@ export async function handleGatewayExtensionUpgrade(
   }
   const authority = getBrowserRelayAuthV2Authority(token);
   getWss().handleUpgrade(req, socket, head, (ws) => {
-    if (!authority.registerConnection(ws, () => ws.close(4003, "browser relay key rotated"))) {
+    if (
+      !authority.registerAuthenticatedConnection(ws, () =>
+        ws.close(4003, "browser relay key rotated"),
+      )
+    ) {
       ws.terminate();
       return;
     }

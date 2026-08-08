@@ -17,7 +17,8 @@ export const BROWSER_RELAY_AUTH_CHALLENGE_PATH = "/_openclaw/relay/auth/v2/chall
 export const BROWSER_RELAY_AUTH_COMPLETE_PATH = "/_openclaw/relay/auth/v2/complete";
 export const BROWSER_RELAY_CHALLENGE_TTL_MS = 10_000;
 
-const MAX_AUTH_CONNECTIONS = 128;
+const MAX_PENDING_AUTH_CONNECTIONS = 128;
+const MAX_AUTHENTICATED_CONNECTIONS = 128;
 const MAX_REPLAY_ENTRIES = 1_024;
 
 type BrowserRelayAuthHello = {
@@ -283,7 +284,8 @@ export class BrowserRelayAuthV2Authority {
   readonly keyId: string;
   readonly instanceId = randomRelayId();
   private readonly challenges = new Map<string, ChallengeState>();
-  private readonly connections = new Map<object, () => void>();
+  private readonly pendingConnections = new Map<object, () => void>();
+  private readonly authenticatedConnections = new Map<object, () => void>();
   private readonly replay = new BoundedReplayCache();
   private disposed = false;
 
@@ -291,16 +293,35 @@ export class BrowserRelayAuthV2Authority {
     this.keyId = relayKeyIdFromHex(keyHex);
   }
 
-  registerConnection(binding: object, onInvalidate: () => void): boolean {
-    if (this.disposed || this.connections.size >= MAX_AUTH_CONNECTIONS) {
+  registerPendingConnection(binding: object, onInvalidate: () => void): boolean {
+    if (
+      this.disposed ||
+      this.pendingConnections.has(binding) ||
+      this.authenticatedConnections.has(binding) ||
+      this.pendingConnections.size >= MAX_PENDING_AUTH_CONNECTIONS
+    ) {
       return false;
     }
-    this.connections.set(binding, onInvalidate);
+    this.pendingConnections.set(binding, onInvalidate);
+    return true;
+  }
+
+  registerAuthenticatedConnection(binding: object, onInvalidate: () => void): boolean {
+    if (
+      this.disposed ||
+      this.pendingConnections.has(binding) ||
+      this.authenticatedConnections.has(binding) ||
+      this.authenticatedConnections.size >= MAX_AUTHENTICATED_CONNECTIONS
+    ) {
+      return false;
+    }
+    this.authenticatedConnections.set(binding, onInvalidate);
     return true;
   }
 
   releaseConnection(binding: object): void {
-    this.connections.delete(binding);
+    this.pendingConnections.delete(binding);
+    this.authenticatedConnections.delete(binding);
     for (const [sessionId, challenge] of this.challenges) {
       if (challenge.binding === binding) {
         this.challenges.delete(sessionId);
@@ -316,9 +337,9 @@ export class BrowserRelayAuthV2Authority {
   ): BrowserRelayAuthChallenge | null {
     if (
       this.disposed ||
-      !this.connections.has(binding) ||
+      !this.pendingConnections.has(binding) ||
       hello.keyId !== this.keyId ||
-      this.challenges.size >= MAX_AUTH_CONNECTIONS
+      this.challenges.size >= MAX_PENDING_AUTH_CONNECTIONS
     ) {
       return null;
     }
@@ -363,6 +384,14 @@ export class BrowserRelayAuthV2Authority {
     ) {
       return null;
     }
+    const invalidate = this.pendingConnections.get(binding);
+    if (!invalidate || this.authenticatedConnections.size >= MAX_AUTHENTICATED_CONNECTIONS) {
+      return null;
+    }
+    // Promotion is synchronous and moves the exact binding between disjoint
+    // registries, so pending admission can never consume active capacity.
+    this.pendingConnections.delete(binding);
+    this.authenticatedConnections.set(binding, invalidate);
     return {
       fields: challenge.fields,
       ok: {
@@ -384,8 +413,12 @@ export class BrowserRelayAuthV2Authority {
       return;
     }
     this.disposed = true;
-    const invalidators = [...this.connections.values()];
-    this.connections.clear();
+    const invalidators = [
+      ...this.pendingConnections.values(),
+      ...this.authenticatedConnections.values(),
+    ];
+    this.pendingConnections.clear();
+    this.authenticatedConnections.clear();
     this.challenges.clear();
     this.replay.clear();
     for (const invalidate of invalidators) {
