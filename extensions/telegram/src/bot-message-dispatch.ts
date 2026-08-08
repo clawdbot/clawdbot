@@ -320,6 +320,7 @@ export const dispatchTelegramMessage = async ({
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
     bot,
+    businessConnectionId: dispatchContext.msg.business_connection_id,
     cfg,
     chatId: dispatchContext.chatId,
     draftReplyToMessageId: quote.draftReplyToMessageId,

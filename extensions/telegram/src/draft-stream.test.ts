@@ -230,6 +230,34 @@ describe("createTelegramDraftStream", () => {
     expectPreviewEdit(api, "Hello again");
   });
 
+  it("threads business_connection_id through the streamed draft send and edit", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { businessConnectionId: "conn-123" });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expectPreviewSend(api, "Hello", { business_connection_id: "conn-123" }));
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expectPreviewEdit(api, "Hello again", { business_connection_id: "conn-123" });
+  });
+
+  it("omits business_connection_id from send/edit params for plain (non-business) chats", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    // Exact-match assertion: a stray business_connection_id key would fail this.
+    await vi.waitFor(() => expectPreviewSend(api, "Hello", {}));
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    // Plain (non-business) edits keep the pre-existing 3-arg call shape.
+    expectPreviewEdit(api, "Hello again");
+  });
+
   it.each(["forum", "dm"] as const)(
     "does not retry %s message preview sends without the topic id",
     async (scope) => {

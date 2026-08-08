@@ -61,6 +61,9 @@ function resolveDraftPartialText(
 export function createTelegramDraftController(params: {
   accountId: string;
   bot: Bot;
+  /** Set for Telegram Business messages; threaded into every streamed draft
+   * send/edit so the reply is attributed to the connected business account. */
+  businessConnectionId?: string;
   cfg: OpenClawConfig;
   chatId: number;
   draftReplyToMessageId?: number;
@@ -123,6 +126,7 @@ export function createTelegramDraftController(params: {
       ? (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: params.bot.api,
           chatId: params.chatId,
+          businessConnectionId: params.businessConnectionId,
           maxChars: draftMaxChars,
           thread: params.threadSpec,
           replyToMessageId: params.draftReplyToMessageId,

@@ -233,6 +233,10 @@ export function createTelegramDraftStream(params: {
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
   replyToMode?: ReplyToMode;
+  /** Set for Telegram Business messages; threaded into every send/edit so the
+   * streamed draft is attributed to the connected business account instead
+   * of silently falling back to the bot identity. */
+  businessConnectionId?: string;
   richMessages?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
@@ -254,16 +258,20 @@ export function createTelegramDraftStream(params: {
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
+  const businessConnectionParams = params.businessConnectionId
+    ? { business_connection_id: params.businessConnectionId }
+    : {};
   const initialSendMessageParams =
     replyToMessageId != null
       ? {
           ...threadParams,
+          ...businessConnectionParams,
           reply_parameters: {
             message_id: replyToMessageId,
             allow_sending_without_reply: true,
           },
         }
-      : (threadParams ?? {});
+      : { ...(threadParams ?? {}), ...businessConnectionParams };
   const consumesReplyTarget =
     replyToMessageId != null &&
     params.replyToMode !== undefined &&
@@ -277,7 +285,7 @@ export function createTelegramDraftStream(params: {
       return initialSendMessageParams;
     }
     if (replyTargetState.kind !== "available") {
-      return threadParams ?? {};
+      return { ...(threadParams ?? {}), ...businessConnectionParams };
     }
     replyTargetState = { kind: "pending", generation: sendGeneration };
     return initialSendMessageParams;
@@ -406,6 +414,13 @@ export function createTelegramDraftStream(params: {
       };
     }
   };
+  // Preserves the exact call arity tests assert on: only appends an options
+  // object when there is something to put in it (business_connection_id),
+  // instead of always passing a (possibly empty) 4th argument.
+  const editMessageTextWithBusiness = (targetMessageId: number, text: string): Promise<unknown> =>
+    Object.keys(businessConnectionParams).length > 0
+      ? params.api.editMessageText(chatId, targetMessageId, text, businessConnectionParams)
+      : params.api.editMessageText(chatId, targetMessageId, text);
   const sendMessageTransportPreview = async (
     page: PlannedTelegramDraftPage,
     sendGeneration: number,
@@ -425,6 +440,7 @@ export function createTelegramDraftStream(params: {
             chat_id: chatId,
             message_id: targetMessageId,
             rich_message: page.richMessage,
+            ...businessConnectionParams,
           });
         } catch (err) {
           const fallbackPlan = buildTelegramPlainFallbackPlan({
@@ -436,23 +452,24 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, fallbackPlan.plainText);
+          await editMessageTextWithBusiness(targetMessageId, fallbackPlan.plainText);
           acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
         }
       } else if (page.sourceTextMode === "html") {
         try {
           await params.api.editMessageText(chatId, targetMessageId, page.sourceText, {
             parse_mode: "HTML" as const,
+            ...businessConnectionParams,
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, page.text);
+          await editMessageTextWithBusiness(targetMessageId, page.text);
           acceptedSnapshot = fallbackSnapshot(page.text);
         }
       } else {
-        await params.api.editMessageText(chatId, targetMessageId, page.sourceText);
+        await editMessageTextWithBusiness(targetMessageId, page.sourceText);
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;
