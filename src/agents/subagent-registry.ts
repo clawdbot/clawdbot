@@ -518,6 +518,10 @@ export function adoptPausedSubagentRunForFollowUp(params: {
     // The original requester is idle behind its own yield, so its wake credential
     // is the only path back to it once this follow-up settles.
     preserveRequesterSettleWake: true,
+    // Gateway admission has not started provider work yet. If this owner swap
+    // is not durable, reject the dispatch instead of registering a sibling or
+    // leaving a live successor that restart recovery cannot identify.
+    persistenceFailure: "throw",
     // Persist the follow-up text so restart recovery cannot reissue the task that
     // the child already yielded on.
     task: params.task,

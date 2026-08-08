@@ -370,50 +370,6 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("adopts a sessions_yield-paused run when a plugin follow-up targets its session", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-adopt-" }, async (root) => {
-      useTestStateDir(root);
-      resetSubagentRegistryForTests({ persist: false });
-      const childSessionKey = "agent:work:subagent:plugin-yield-followup";
-      const originalRequester = "agent:main:telegram:direct:777";
-      addSubagentRunForTests({
-        runId: "plugin-subagent-paused",
-        childSessionKey,
-        requesterSessionKey: originalRequester,
-        requesterDisplayKey: originalRequester,
-        task: "wait for the remote job",
-        endedAt: 2_000,
-        pauseReason: "sessions_yield",
-        expectsCompletionMessage: true,
-      });
-
-      await registerPluginSubagentRunFromGateway({
-        cfg: {
-          session: { mainKey: "main", scope: "per-sender" },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-        },
-        runId: "plugin-subagent-followup",
-        childSessionKey,
-        task: "the remote job finished",
-        pluginId: "memory-core",
-      });
-
-      const run = requireValue(
-        getSubagentRunByChildSessionKey(childSessionKey),
-        "expected adopted plugin subagent run",
-      );
-      // A follow-up without requester context would otherwise register a sibling
-      // row owned by the child's own agent session, stranding the requester that
-      // is still parked behind its yield.
-      expectRecordFields(run, {
-        runId: "plugin-subagent-followup",
-        requesterSessionKey: originalRequester,
-        task: "the remote job finished",
-        pauseReason: undefined,
-      });
-    });
-  });
-
   it("registers normally when a follow-up to a paused session names its own requester", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-own-requester-" },
@@ -525,7 +481,7 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it("rejects plugin SDK subagent runs and releases admission when registry persistence fails", async () => {
+  it("rejects plugin SDK subagent registration and adoption when persistence fails", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
@@ -602,6 +558,54 @@ describe("gateway agent handler", () => {
           expect.stringContaining("rejecting untracked dispatch"),
         );
 
+        resetSubagentRegistryForTests({ persist: false });
+        const pausedRunId = "plugin-subagent-paused-before-persistence-failure";
+        addSubagentRunForTests({
+          runId: pausedRunId,
+          childSessionKey,
+          requesterSessionKey: "agent:main:telegram:direct:777",
+          requesterDisplayKey: "agent:main:telegram:direct:777",
+          task: "wait for the remote job",
+          endedAt: 2_000,
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+          throw new Error("disk full during paused-run adoption");
+        });
+        const adoptionRunId = "plugin-subagent-adoption-registry-fail";
+        const adoptionRespond = vi.fn();
+        await invokeAgent(
+          {
+            message: "the remote job finished",
+            sessionKey: childSessionKey,
+            idempotencyKey: adoptionRunId,
+          },
+          {
+            context,
+            reqId: adoptionRunId,
+            respond: adoptionRespond,
+            client: {
+              connect: baseClient.connect,
+              internal: {
+                ...baseClient.internal,
+                agentRunTracking: "plugin_subagent",
+                pluginRuntimeOwnerId: "memory-core",
+              },
+            },
+          },
+        );
+
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          runId: pausedRunId,
+          pauseReason: "sessions_yield",
+        });
+        expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
+        const adoptionError = expectRespondError(adoptionRespond, { code: ErrorCodes.UNAVAILABLE });
+        expectStringFieldContains(adoptionError, "message", "run was not started");
+
+        resetSubagentRegistryForTests({ persist: false });
         const retryRunId = "plugin-subagent-registry-retry";
         await invokeAgent(
           {

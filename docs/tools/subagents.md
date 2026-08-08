@@ -301,7 +301,7 @@ A sub-agent can also yield on its own behalf to wait for external work, such
 as a remote job or a long-running task it does not drive itself. That pauses
 the child run instead of completing it, so the requester receives no
 completion event yet and keeps waiting. A plugin can then continue that same run
-by calling `runtime.subagent.run` with the paused `sessionKey`, instead of
+by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of
 starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.

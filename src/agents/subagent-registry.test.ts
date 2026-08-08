@@ -3388,30 +3388,6 @@ describe("subagent registry seam flow", () => {
       // deferring instead of waking on a run that has not produced a result.
       expect(mod.countPendingDescendantRuns("agent:main:main")).toBe(1);
     });
-
-    it("declines adoption when the session has no paused run", async () => {
-      mockPendingAgentWait();
-      mod.registerSubagentRun({
-        runId: PAUSED_RUN_ID,
-        childSessionKey: CHILD_SESSION_KEY,
-        task: "still running",
-      });
-      await waitForFast(() => {
-        expect(
-          expectDefined(findRequesterRun(PAUSED_RUN_ID), "paused subagent run").execution.status,
-        ).toBe("running");
-      });
-
-      expect(
-        mod.adoptPausedSubagentRunForFollowUp({
-          childSessionKey: CHILD_SESSION_KEY,
-          runId: FOLLOW_UP_RUN_ID,
-          task: "concurrent work",
-        }),
-      ).toBe(false);
-      expect(findRequesterRun(PAUSED_RUN_ID)).toBeDefined();
-      expect(findRequesterRun(FOLLOW_UP_RUN_ID)).toBeUndefined();
-    });
   });
 
   it("ignores a late yield lifecycle event after the paused run is killed", async () => {

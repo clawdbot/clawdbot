@@ -684,7 +684,7 @@ export function createSubagentRunManager(params: {
     task?: string;
     restartRecovery?: SubagentRestartRecoveryReceipt;
     lifecycleGeneration?: string;
-    requirePersistence?: boolean;
+    persistenceFailure?: "return-false" | "throw";
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -838,7 +838,7 @@ export function createSubagentRunManager(params: {
       params.persistOrThrow(...changedRunIds);
     } catch (error) {
       if (
-        replaceParams.requirePersistence === true ||
+        replaceParams.persistenceFailure !== undefined ||
         replaceParams.lifecycleGeneration !== undefined
       ) {
         restoreKillReconciliationSnapshots(killReconciliationSnapshots);
@@ -849,6 +849,9 @@ export function createSubagentRunManager(params: {
           previousRunId,
           nextRunId,
         });
+        if (replaceParams.persistenceFailure === "throw") {
+          throw error;
+        }
         return false;
       }
       // The gateway has already started nextRunId. Keep its in-memory owner
