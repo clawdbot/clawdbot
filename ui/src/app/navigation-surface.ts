@@ -2,11 +2,14 @@ import { html, nothing } from "lit";
 import type { ApplicationContext } from "./context.ts";
 
 export function navigationSurfaceIsHidden(params: {
+  onboarding: boolean;
   navCollapsed: boolean;
   navDrawerOpen: boolean;
   mobileNavLayout: boolean;
 }): boolean {
-  return params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed;
+  return (
+    params.onboarding || (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed)
+  );
 }
 
 export function renderFloatingUpdateCard(params: {
@@ -18,7 +21,9 @@ export function renderFloatingUpdateCard(params: {
   refreshRequired: boolean;
   onRefresh: () => void;
 }) {
-  if (!params.navigationSurfaceHidden || params.onboarding) {
+  // A stale client must always have a visible refresh action, including during
+  // onboarding, even though update-available actions stay hidden there.
+  if (params.onboarding ? !params.refreshRequired : !params.navigationSurfaceHidden) {
     return nothing;
   }
   return html`<openclaw-sidebar-update-card

@@ -148,6 +148,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     !navDrawerOpen &&
     !settingsTakeover;
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
+    onboarding,
     navCollapsed,
     navDrawerOpen,
     mobileNavLayout,
