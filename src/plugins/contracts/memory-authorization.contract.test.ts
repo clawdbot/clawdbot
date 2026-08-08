@@ -202,6 +202,15 @@ describe("memory authorization conformance suite", () => {
     ).toEqual({ allowed: false, reasonCode: "plan-expired" });
     expect(
       evaluateMemoryAuthorizationConformanceScenario({
+        scenario: {
+          ...scenario!,
+          plan: { ...scenario!.plan, expiresAt: undefined as unknown as string },
+        },
+        resource,
+      }),
+    ).toEqual({ allowed: false, reasonCode: "plan-expired" });
+    expect(
+      evaluateMemoryAuthorizationConformanceScenario({
         scenario: scenario!,
         resource: { ...resource, expiresAt: "" },
       }),

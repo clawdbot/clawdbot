@@ -163,7 +163,8 @@ function planBindingFailure(
   scenario: MemoryAuthorizationConformanceScenario,
 ): MemoryAuthorizationReasonCode | null {
   const { context, plan } = scenario;
-  if (isExpired(plan.expiresAt, scenario.now)) {
+  // Plan expiry is mandatory: an omitted wire field must not become an unbounded grant.
+  if (typeof plan.expiresAt !== "string" || isExpired(plan.expiresAt, scenario.now)) {
     return "plan-expired";
   }
   if (plan.contextFingerprint !== context.contextFingerprint) {
