@@ -1,15 +1,15 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
-import {
-  classifyAgentRunTerminalOutcome,
-  projectAgentRunAttemptTerminal,
-} from "../../agent-run-terminal-outcome.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
-import { resolveEmbeddedRunAttemptTerminalOutcome } from "./terminal-outcome.js";
+import {
+  isEmbeddedRunTerminalInterrupted,
+  resolveEmbeddedRunAttemptTerminalOutcome,
+} from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type FinalizeEmbeddedAttemptParams = {
@@ -26,6 +26,9 @@ export function finalizeEmbeddedAttempt(
   params: FinalizeEmbeddedAttemptParams,
 ): EmbeddedRunAttemptResult {
   const { result, trajectoryRecorder } = params;
+  if (!trajectoryRecorder) {
+    return result;
+  }
   const terminalState = projectAgentRunAttemptTerminal(result.terminal);
   // Yield ends before message_end, so lastAssistant owns completion; the
   // completed attempt snapshot may belong to an earlier model cycle.
@@ -37,17 +40,14 @@ export function finalizeEmbeddedAttempt(
     attempt: result,
     assistant: completionAssistant,
   });
-  const completionClassification = classifyAgentRunTerminalOutcome(completionOutcome);
-  const completionStopReason = completionOutcome.stopReason;
   const terminalAssistantTexts = resolveTerminalAssistantTexts({
     assistantTexts: result.assistantTexts,
-    lastAssistantStopReason: completionStopReason,
+    lastAssistantStopReason: completionOutcome.stopReason,
     lastAssistantVisibleText: resolveFinalAssistantVisibleText(completionAssistant),
   });
   const terminal = resolveAttemptTrajectoryTerminal({
-    failed: completionClassification === "failure",
-    interrupted:
-      completionClassification === "timeout" || completionClassification === "cancellation",
+    failed: completionOutcome.status === "error",
+    interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
     assistantTexts: terminalAssistantTexts,
     toolMetas: result.toolMetas,
     didSendViaMessagingTool: result.didSendViaMessagingTool,
@@ -64,14 +64,14 @@ export function finalizeEmbeddedAttempt(
     lastToolError: result.lastToolError,
     silentExpected: params.silentExpected,
     emptyAssistantReplyIsSilent: params.emptyAssistantReplyIsSilent,
-    lastAssistantStopReason: completionStopReason,
+    lastAssistantStopReason: completionOutcome.stopReason,
     hasTerminalOutput: params.hasTerminalOutput,
   });
   const promptError = terminalState.promptError
     ? formatErrorMessage(terminalState.promptError)
     : undefined;
 
-  trajectoryRecorder?.recordEvent("model.completed", {
+  trajectoryRecorder.recordEvent("model.completed", {
     aborted: terminalState.aborted,
     externalAbort: terminalState.externalAbort,
     timedOut: terminalState.timedOut,
@@ -86,11 +86,11 @@ export function finalizeEmbeddedAttempt(
     promptCache: result.promptCache,
     compactionCount: result.compactionCount,
     assistantTexts: result.assistantTexts,
-    stopReason: completionStopReason,
+    stopReason: completionOutcome.stopReason,
     finalPromptText: result.finalPromptText,
     messagesSnapshot: result.messagesSnapshot,
   });
-  trajectoryRecorder?.recordEvent(
+  trajectoryRecorder.recordEvent(
     "trace.artifacts",
     buildTrajectoryArtifacts({
       status: terminal.status,
@@ -108,7 +108,7 @@ export function finalizeEmbeddedAttempt(
       promptCache: result.promptCache,
       compactionCount: result.compactionCount ?? 0,
       assistantTexts: result.assistantTexts,
-      stopReason: completionStopReason,
+      stopReason: completionOutcome.stopReason,
       finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,
@@ -120,7 +120,7 @@ export function finalizeEmbeddedAttempt(
       lastToolError: result.lastToolError,
     }),
   );
-  trajectoryRecorder?.recordEvent("session.ended", {
+  trajectoryRecorder.recordEvent("session.ended", {
     status: terminal.status,
     aborted: terminalState.aborted,
     externalAbort: terminalState.externalAbort,

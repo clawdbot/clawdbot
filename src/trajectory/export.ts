@@ -938,10 +938,7 @@ function resolveLatestRuntimeEventData(
   runtimeEvents: TrajectoryEvent[],
   type: string,
 ): JsonRecord | undefined {
-  const event = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((candidate) => candidate.type === type);
+  const event = runtimeEvents.findLast((candidate) => candidate.type === type);
   return event?.data;
 }
 

@@ -95,7 +95,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assistantMessage(
   content: WorkerDoneMessage["content"],
-  stopReason: "stop" | "length" | "toolUse",
+  stopReason: WorkerDoneMessage["stopReason"],
 ): WorkerDoneMessage {
   return {
     role: "assistant",
