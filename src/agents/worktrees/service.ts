@@ -1043,12 +1043,17 @@ export class ManagedWorktreeService {
       removedAt: undefined,
       lastActiveAt,
       provisionedPaths: restoredProvisionedPaths,
+      // The recorded cleanup outcome described the removed lifecycle; a restored
+      // checkout starts a new one, so a stale removed-lossless must not show on
+      // a live row until the next run-end cleanup records fresh truth.
+      runEndCleanup: undefined,
     });
     // Clear any lease rows or removal marker stranded by a crash between git removal
     // and finalize so the restored worktree admits runs again.
     finalizeWorktreeRemoval(this.env, params.id);
     const restored = { ...record, lastActiveAt };
     delete restored.removedAt;
+    delete restored.runEndCleanup;
     return restored;
   }
 

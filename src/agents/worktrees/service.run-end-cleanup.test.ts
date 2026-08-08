@@ -126,6 +126,10 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     });
 
     const restored = await service.restore({ id: created.id });
+    // Restore starts a new lifecycle: the stale removal outcome must not show
+    // on the now-live row.
+    expect(restored.runEndCleanup).toBeUndefined();
+    expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
     await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
     await service.acquire(created.id);
     await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
