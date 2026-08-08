@@ -5894,7 +5894,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     writeFileSync(
       ghPath,
       `#!/bin/sh
-case "$2" in
+if [ "$#" -ne 4 ] || [ "$1" != "api" ] || [ "$2" != "--method" ] || [ "$3" != "GET" ]; then
+  exit 1
+fi
+case "$4" in
   */actions/artifacts/123)
     printf '%s\n' '{"id":123,"name":"docker-e2e-package-456-1","expired":false,"digest":"sha256:${"b".repeat(64)}","workflow_run":{"id":456}}'
     ;;

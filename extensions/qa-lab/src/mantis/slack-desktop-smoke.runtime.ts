@@ -1244,7 +1244,7 @@ async function copyRemoteArtifacts(params: {
   remoteOutputDir: string;
   runner: CommandRunner;
 }) {
-  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
+  const { host, sshArgs, sshUser } = await sshCommand(params);
   await fs.mkdir(path.join(params.outputDir, "slack-qa"), { recursive: true });
   await runCommand({
     command: "rsync",

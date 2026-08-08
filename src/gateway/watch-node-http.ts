@@ -2,6 +2,7 @@
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord as isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -172,10 +173,6 @@ function resolveWatchClientAddress(
     ...(clientIp ? { clientIp } : {}),
     rateLimitKey: clientIp ?? buildRateLimitIdentityKey("watch-client", "unknown"),
   };
-}
-
-function isStringRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {

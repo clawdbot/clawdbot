@@ -214,6 +214,7 @@ describe("navigationIconForRoute", () => {
       talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
+      updates: "download",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
@@ -334,6 +335,7 @@ describe("titleForRoute", () => {
       talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
+      updates: "Updates",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
@@ -382,6 +384,7 @@ describe("subtitleForRoute", () => {
       talk: "Realtime voice: provider, model, and speaker voice.",
       infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
+      updates: "Release channel, automatic updates, and current update status.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Global agent defaults: skills, tools, and session.",
       "model-setup": "Connect a verified AI model",
@@ -800,6 +803,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "advanced",
       "debug",
       "logs",
+      "updates",
       "about",
     ]);
   });

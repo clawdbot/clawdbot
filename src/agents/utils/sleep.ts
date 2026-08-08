@@ -1,27 +1,17 @@
+import { sleepWithAbort } from "@openclaw/retry";
 /**
  * Sleep helper that respects abort signal.
  */
+import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Aborted"));
-      return;
-    }
-
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(new Error("Aborted"));
-    };
-    const timeout = setTimeout(
-      () => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      },
-      resolveTimerTimeoutMs(ms, 0, 0),
+  // Cancellation wins even for zero-delay waits so aborted runs cannot
+  // advance into follow-on work such as computer-tool screenshot capture.
+  if (signal?.aborted) {
+    return Promise.reject(
+      createAbortError("aborted", { cause: signal.reason ?? new Error("aborted") }),
     );
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+  }
+  return sleepWithAbort(resolveTimerTimeoutMs(ms, 0, 0), signal);
 }

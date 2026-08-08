@@ -266,6 +266,7 @@ const { createChatRunState } = await import("./server-chat-state.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntimeImpl>[1]>;
+type UpdateCheckParams = Parameters<PostAttachRuntimeDeps["scheduleGatewayUpdateCheck"]>[0];
 type SidecarPublisher = NonNullable<PostAttachParams["onGatewayLifetimeSidecars"]>;
 type SidecarHandle = Parameters<SidecarPublisher>[0][number];
 type GatewaySidecarsResult = Awaited<ReturnType<typeof startGatewaySidecarsImpl>>;
@@ -385,7 +386,6 @@ function startGatewayPostAttachRuntime(
     runtimeDeps,
   );
 }
-
 async function waitForGatewayTestState<T>(
   assertion: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
@@ -883,6 +883,99 @@ describe("startGatewayPostAttachRuntime", () => {
 
     result.stopGatewayUpdateCheck();
     expect(stopUpdateCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes detailed update broadcasts to read-capable operator clients", async () => {
+    const clients = [
+      {
+        connId: "pairing",
+        connect: { role: "operator", scopes: ["operator.pairing"] },
+      },
+      { connId: "node", connect: { role: "node", scopes: ["node.read"] } },
+      {
+        connId: "operator-read",
+        connect: { role: "operator", scopes: ["operator.read"] },
+      },
+    ];
+    const broadcastToConnIds = vi.fn();
+    const getClientConnIds: PostAttachParams["getClientConnIds"] = (filter) =>
+      new Set(
+        clients
+          .filter((client) => !filter || filter(client as never))
+          .map((client) => client.connId),
+      );
+    const scheduleGatewayUpdateCheck = vi.fn(async () => () => {});
+
+    const result = await startGatewayPostAttachRuntime(
+      createPostAttachParams({ broadcastToConnIds, getClientConnIds }),
+      createPostAttachRuntimeDeps({ scheduleGatewayUpdateCheck }),
+    );
+    await waitForGatewayTestState(() => {
+      expect(scheduleGatewayUpdateCheck).toHaveBeenCalledTimes(1);
+    });
+
+    const updateCheckParams = mockCallArg(scheduleGatewayUpdateCheck) as UpdateCheckParams;
+    const updateAvailable = {
+      currentVersion: "2026.8.7",
+      latestVersion: "2026.8.8",
+      channel: "dev" as const,
+      currentSha: "1111111111111111111111111111111111111111",
+      upstreamRef: "origin/main",
+      upstreamSha: "2222222222222222222222222222222222222222",
+      commitsBehind: 1,
+      commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
+    };
+    const schedule = {
+      channel: "dev" as const,
+      autoEnabled: true,
+      install: { kind: "git" as const },
+      target: {
+        kind: "git" as const,
+        currentSha: updateAvailable.currentSha,
+        upstreamRef: updateAvailable.upstreamRef,
+        upstreamSha: updateAvailable.upstreamSha,
+        commitsBehind: updateAvailable.commitsBehind,
+        commits: updateAvailable.commits,
+      },
+    };
+
+    updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
+    updateCheckParams.onUpdateScheduleChange?.(schedule);
+
+    expect(broadcastToConnIds.mock.calls).toEqual([
+      ["update.available", { updateAvailable }, new Set(["operator-read"]), { dropIfSlow: true }],
+      [
+        "update.available",
+        {
+          updateAvailable: {
+            currentVersion: updateAvailable.currentVersion,
+            latestVersion: updateAvailable.latestVersion,
+            channel: updateAvailable.channel,
+          },
+        },
+        new Set(["pairing", "node"]),
+        { dropIfSlow: true },
+      ],
+      [
+        "update.available",
+        { updateAvailable, schedule },
+        new Set(["operator-read"]),
+        { dropIfSlow: true },
+      ],
+      [
+        "update.available",
+        {
+          updateAvailable: {
+            currentVersion: updateAvailable.currentVersion,
+            latestVersion: updateAvailable.latestVersion,
+            channel: updateAvailable.channel,
+          },
+        },
+        new Set(["pairing", "node"]),
+        { dropIfSlow: true },
+      ],
+    ]);
+    result.stopGatewayUpdateCheck();
   });
 
   it("stops the gateway update check if close wins the deferred startup race", async () => {
@@ -3003,7 +3096,8 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     tlsEnabled: false,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,
-    broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    getClientConnIds: () => new Set(),
     tailscaleMode: "off",
     resetOnExit: false,
     preserveFunnel: false,

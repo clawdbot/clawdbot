@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { Result } from "@openclaw/normalization-core/result";
+import { normalizeLowercaseStringOrEmpty as normalizedChatSendAckStatus } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
@@ -105,10 +106,6 @@ function isBtwCommand(text: string): boolean {
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
-}
-
-function normalizedChatSendAckStatus(status: unknown): string {
-  return typeof status === "string" ? status.trim().toLowerCase() : "";
 }
 
 function isTerminalChatSendAckFailure(status: unknown): boolean {

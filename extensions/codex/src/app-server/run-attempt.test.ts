@@ -5655,11 +5655,17 @@ describe("runCodexAppServerAttempt", () => {
       fastMode: () => true,
       expectedServiceTier: "priority",
     },
+    {
+      name: "configured non-priority tier",
+      fastMode: undefined,
+      configuredServiceTier: "flex",
+      expectedServiceTier: "flex",
+    },
   ] satisfies Array<{
     name: string;
     fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "priority";
-    expectedServiceTier?: "priority" | null;
+    configuredServiceTier?: "flex" | "priority";
+    expectedServiceTier?: "flex" | "priority" | null;
   }>)(
     "maps $name to app-server resume and turn service tier",
     async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
@@ -5669,6 +5675,8 @@ describe("runCodexAppServerAttempt", () => {
       const { requests, waitForMethod, completeTurn } = createResumeHarness();
       const params = createParams(sessionFile, workspaceDir);
       params.fastMode = fastMode;
+      const onAgentEvent = vi.fn();
+      params.onAgentEvent = onAgentEvent;
       const options = configuredServiceTier
         ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
         : {};
@@ -5679,6 +5687,13 @@ describe("runCodexAppServerAttempt", () => {
         const requestParams = request?.params as Record<string, unknown> | undefined;
         expect(requestParams?.serviceTier).toBe(expectedServiceTier);
       }
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "codex_app_server.lifecycle",
+        data: expect.objectContaining({
+          phase: "turn_starting",
+          serviceTier: expectedServiceTier,
+        }),
+      });
     },
   );
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {

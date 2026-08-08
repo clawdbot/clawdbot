@@ -177,6 +177,9 @@ const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "update.hold",
+  "update.run",
+  "update.status",
 ] as const;
 
 export type MockGatewayRequest = {

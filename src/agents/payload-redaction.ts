@@ -275,5 +275,7 @@ export function projectDiagnosticPayload(
 }
 
 export function sanitizeDiagnosticPayload(value: unknown): unknown {
-  return projectDiagnosticPayload(value);
+  return projectDiagnosticPayload(value, {
+    omitField: (key) => key === "providerReplay",
+  });
 }

@@ -218,7 +218,10 @@ function isGatewayBackendLiveTest(file) {
 }
 
 function isGatewayProfilesLiveTest(file) {
-  return file === "src/gateway/gateway-models.profiles.live.test.ts";
+  return (
+    file === "src/gateway/gateway-models.profiles.live.test.ts" ||
+    file === "src/gateway/gateway-openai-long-context.live.test.ts"
+  );
 }
 
 function isExtensionMediaLiveTest(file) {

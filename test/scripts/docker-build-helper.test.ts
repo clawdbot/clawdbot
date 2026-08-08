@@ -2288,7 +2288,7 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');
   });
 
-  it("starts the upgrade survivor plugin registry before updates without ambient Feishu config", () => {
+  it("starts the upgrade survivor plugin registry before updates with scenario-owned config", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
@@ -2302,6 +2302,14 @@ docker_e2e_docker_run_cmd run demo
       'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
     );
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "configured-plugin-installs" ]; then',
+        '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
+        '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
+        "fi",
+      ].join("\n"),
+    );
     for (const script of [runner, publishedRunner]) {
       const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
       const fixtureDirectoryIndex = script.indexOf('mkdir -p "$fixture_root"');
@@ -2315,6 +2323,12 @@ docker_e2e_docker_run_cmd run demo
       expect(fixtureDirectoryIndex).toBeLessThan(registryServerIndex);
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
+    expect(publishedRunner).not.toContain(
+      '\nexport MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"\n',
+    );
+    expect(publishedRunner).not.toContain(
+      '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
+    );
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
