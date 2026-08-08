@@ -612,16 +612,17 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(resolved).not.toContain(path.join(realDir, "wl", "AGENTS.md"));
   });
 
-  it("does not loop on an ancestor-pointing literal directory symlink", async () => {
-    // Cycle guard: a directory symlink can point at an ancestor (`a/loop -> a`).
-    // The `loop` segment is literal in `*/loop/**/AGENTS.md`, so descent would
-    // be attempted, but the realpath ancestor check refuses to re-enter `a`.
-    // The walk must terminate and must not expand matches through the loop.
+  it("follows a contained ancestor-pointing literal directory symlink once", async () => {
+    // FIX 2: a directory symlink can point at an ancestor (`a/loop -> a`). The
+    // `loop` segment is literal in `*/loop/**/AGENTS.md`, so fs.glob follows the
+    // link once; the walker now matches that instead of over-rejecting it via a
+    // realpath cycle guard. Termination is structural — `**` never re-crosses the
+    // symlink — so the walk still completes.
     if (process.platform === "win32") {
       return;
     }
 
-    const workspaceDir = await createWorkspaceDir("symlink-cycle");
+    const workspaceDir = await createWorkspaceDir("symlink-ancestor");
     const dirA = path.join(workspaceDir, "a");
     await fs.mkdir(dirA, { recursive: true });
     await fs.writeFile(path.join(dirA, "AGENTS.md"), "a agents", "utf-8");
@@ -636,9 +637,16 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
 
     const files = await loadExtraBootstrapFileList(workspaceDir, ["*/loop/**/AGENTS.md"]);
 
-    // Ancestor descent is refused, so no phantom `a/loop/...` match is produced
-    // and the walk terminates instead of looping.
-    expect(files).toHaveLength(0);
+    // The ancestor link is followed exactly once, matching fs.glob, and the walk
+    // terminates instead of looping.
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(dirA, "loop", "AGENTS.md"),
+        content: "a agents",
+        missing: false,
+      },
+    ]);
   }, 15000);
 
   it("rejects hardlinked aliases to files outside workspace", async () => {

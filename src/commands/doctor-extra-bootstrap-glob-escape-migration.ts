@@ -32,7 +32,15 @@ const HOOK_KEY = "bootstrap-extra-files";
 // rewritten so the fix holds regardless of which key the hook currently prefers.
 const PATTERN_KEYS = ["paths", "patterns", "files"] as const;
 
-type PatternRewrite = { key: string; index: number; from: string; to: string };
+// A single configured pattern's repair. `replace` overwrites the entry in place
+// (the common case: the pattern was only ever a mislabeled literal). `add`
+// appends the escaped literal ALONGSIDE the untouched original so a workspace
+// that needs the literal path and another workspace whose live glob still
+// matches can coexist — the loader unions results across patterns into a Set,
+// so the extra entry is additive and safe.
+type PatternRewrite =
+  | { kind: "replace"; key: string; index: number; from: string; to: string }
+  | { kind: "add"; key: string; from: string; to: string };
 
 type ExtraBootstrapGlobEscapeResult = {
   cfg: OpenClawConfig;
@@ -64,45 +72,59 @@ async function pathExistsInside(workspaceDir: string, relPattern: string): Promi
   }
 }
 
-// Decide the escaped form for a single configured pattern, or null to leave it
-// untouched. A pattern is escaped only when all of the following hold, so a
-// genuine glob is never rewritten:
-//   1. it is currently parsed as a glob (`[ab]`, `@(a|b)`, …);
-//   2. escaping fully removes its magic (brackets/extglobs collapse to literals;
-//      brace `{a,b}` patterns stay magic and are intentionally left alone);
-//   3. it matches nothing as a glob in every workspace; and
-//   4. its literal interpretation names an existing on-disk entry in some
-//      workspace — the signal that the brackets were meant literally.
-async function escapedLiteralPatternOrNull(
+// Per-pattern escape decision. Two independent facts are computed across the
+// full workspace set, because one hook config is shared by every agent while
+// each agent has its own workspace:
+//   - literalNeeded: some workspace has the literal path on disk (the brackets
+//     were meant literally there);
+//   - globLive: some workspace has >=1 real glob match (the pattern is a genuine
+//     glob there today).
+// The decision, once the pattern is an escapable glob (currently magic, and
+// escaping fully removes its magic — brace `{a,b}` patterns stay magic and are
+// left alone):
+//   - neither          -> "none" (leave untouched, as today);
+//   - literalNeeded only -> "replace" (rewrite in place to the escaped literal);
+//   - literalNeeded + globLive -> "add" (keep the original glob AND add the
+//     escaped literal, so neither workspace loses its file — a naive replace
+//     would just move the silent-drop victim from one agent to the other).
+// A globLive-only pattern is a real glob and is never escaped.
+type EscapeDecision =
+  | { action: "none" }
+  | { action: "replace"; escaped: string }
+  | { action: "add"; escaped: string };
+
+async function decideExtraBootstrapEscape(
   pattern: string,
   workspaceDirs: string[],
-): Promise<string | null> {
+): Promise<EscapeDecision> {
   if (!hasGlobPattern(pattern)) {
-    return null;
+    return { action: "none" };
   }
   const escaped = escapeWorkspacePatternLiteral(pattern);
   if (escaped === pattern || hasGlobPattern(escaped)) {
-    return null;
+    return { action: "none" };
   }
+  let literalNeeded = false;
+  let globLive = false;
   for (const workspaceDir of workspaceDirs) {
     let matches: string[];
     try {
       matches = await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false);
     } catch {
       // Unreadable branch: the pattern is ambiguous, so leave it untouched.
-      return null;
+      return { action: "none" };
     }
     if (matches.length > 0) {
-      // Real glob (matches files today) — never escape it.
-      return null;
+      globLive = true;
     }
-  }
-  for (const workspaceDir of workspaceDirs) {
     if (await pathExistsInside(workspaceDir, pattern)) {
-      return escaped;
+      literalNeeded = true;
     }
   }
-  return null;
+  if (!literalNeeded) {
+    return { action: "none" };
+  }
+  return globLive ? { action: "add", escaped } : { action: "replace", escaped };
 }
 
 async function computeExtraBootstrapGlobEscapes(
@@ -133,10 +155,20 @@ async function computeExtraBootstrapGlobEscapes(
       if (!pattern) {
         continue;
       }
-      const escaped = await escapedLiteralPatternOrNull(pattern, workspaceDirs);
-      if (escaped !== null && escaped !== entry) {
-        rewrites.push({ key, index, from: entry, to: escaped });
+      const decision = await decideExtraBootstrapEscape(pattern, workspaceDirs);
+      if (decision.action === "none" || decision.escaped === entry) {
+        continue;
       }
+      if (decision.action === "replace") {
+        rewrites.push({ kind: "replace", key, index, from: entry, to: decision.escaped });
+        continue;
+      }
+      // Coexistence add: skip when the escaped literal is already configured so a
+      // second doctor run is idempotent and the list cannot grow unbounded.
+      if (list.includes(decision.escaped)) {
+        continue;
+      }
+      rewrites.push({ kind: "add", key, from: entry, to: decision.escaped });
     }
   }
   return rewrites;
@@ -168,7 +200,11 @@ export async function maybeEscapeExtraBootstrapGlobs(params: {
   }
   if (!params.shouldRepair) {
     for (const rewrite of rewrites) {
-      note(`${rewrite.from} → ${rewrite.to}`, "Extra bootstrap glob escape preview");
+      const preview =
+        rewrite.kind === "add"
+          ? `${rewrite.from} → keep, add ${rewrite.to}`
+          : `${rewrite.from} → ${rewrite.to}`;
+      note(preview, "Extra bootstrap glob escape preview");
     }
     return { cfg: params.cfg, changes: [], warnings: [] };
   }
@@ -178,9 +214,19 @@ export async function maybeEscapeExtraBootstrapGlobs(params: {
   if (entries) {
     for (const rewrite of rewrites) {
       const list = entries[rewrite.key];
-      if (Array.isArray(list)) {
+      if (!Array.isArray(list)) {
+        continue;
+      }
+      if (rewrite.kind === "replace") {
         list[rewrite.index] = rewrite.to;
         changes.push(`${rewrite.key}[${rewrite.index}]: ${rewrite.from} → ${rewrite.to}`);
+        continue;
+      }
+      // Append the escaped literal beside the untouched original. Guard again on
+      // the applied list so duplicate originals in one run cannot double-append.
+      if (!list.includes(rewrite.to)) {
+        list.push(rewrite.to);
+        changes.push(`${rewrite.key}: + ${rewrite.to} (kept ${rewrite.from})`);
       }
     }
   }

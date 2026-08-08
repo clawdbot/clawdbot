@@ -52,16 +52,19 @@ function extraBootstrapMatchOptions() {
     nocaseMagicOnly: true,
     platform: process.platform,
     // Mirror Node fs.glob's createMatcher, which sets optimizationLevel: 2. That
-    // level normalizes globstar-plus-parent-traversal patterns (`*/**/../b`) so
-    // the walk matcher agrees with fs.glob instead of matching nothing. Inherited
-    // by extraBootstrapMagicOptions() via its spread on purpose: it keeps the
-    // routing gate and the matcher aligned (gate-neutral — hasMagic classification
-    // is identical with or without the flag). Accepted residual: a bare
-    // single-portion parent traversal like `**/../AGENTS.md` is still not fully
-    // reproduced (fs.glob's walker navigates the `..` up a level, which this
-    // matcher-only normalization does not replicate). Left as-is on purpose: real
-    // extra-bootstrap patterns do not use `..`, and a `..` that escapes the root
-    // is already rejected by the upstream security gate.
+    // level normalizes reducible parent-traversal patterns (`*/../`, `*/**/../b`,
+    // `<p>/../`) into a downward form so the walk matcher agrees with fs.glob
+    // instead of matching nothing. Inherited by extraBootstrapMagicOptions() via
+    // its spread on purpose: it keeps the routing gate and the matcher aligned
+    // (gate-neutral — hasMagic classification is identical with or without the
+    // flag). Accepted residual: a globstar parent traversal like `**/../AGENTS.md`
+    // is NOT reproduced — fs.glob's walker navigates the `..` up a level, which
+    // this matcher-only walk cannot, so the `..` survives in the optimized
+    // globParts. That surviving `..` is not rejected by the workspace-containment
+    // gate either (its walk root stays in-root), so the loader detects it via
+    // patternHasUnsupportedParentTraversal and records an explicit
+    // unsupported-pattern diagnostic instead of letting the walk silently
+    // return [].
     optimizationLevel: 2,
   };
 }
@@ -88,6 +91,22 @@ export function hasGlobPattern(pattern: string): boolean {
   // literal file.
   const normalized = normalizeWorkspacePatternPath(pattern);
   return new Minimatch(normalized, extraBootstrapMagicOptions()).hasMagic();
+}
+
+// A `..` segment tells fs.glob's walker to step up a directory level; this
+// matcher-only downward walk cannot do that. optimizationLevel 2 collapses the
+// reducible forms (`*/../`, `<p>/../`) into a downward pattern the walk matches,
+// but a globstar parent (`**/../`) cannot be reduced, so its `..` survives in
+// the optimized globParts and the walk would silently match nothing. The loader
+// calls this to turn that silent drop into an explicit unsupported-pattern
+// diagnostic; a collapsible or `..`-free pattern returns false and resolves
+// normally. globParts is post-brace-expansion, so a `..` hidden inside a brace
+// alternative is caught too.
+export function patternHasUnsupportedParentTraversal(pattern: string): boolean {
+  const normalized = normalizeWorkspacePatternPath(pattern);
+  return new Minimatch(normalized, extraBootstrapMatchOptions()).globParts.some((parts) =>
+    parts.includes(".."),
+  );
 }
 
 function normalizeWorkspacePatternPath(value: string): string {
@@ -231,14 +250,25 @@ function expansionPrefixCanDescend(dirSegments: string[], patternSegments: strin
 // brace-free expansion's alignment allows it; each expansion is brace-free, so
 // the literal / **-taint / leading-dot rules below classify each concrete
 // alternative correctly rather than mis-reading a raw `{…}` segment as magic.
-function symlinkDescentAllowed(dirSegments: string[], patternExpansions: string[][]): boolean {
+function symlinkDescentAllowed(
+  dirSegments: string[],
+  patternExpansions: string[][],
+  ancestorSymlinkDepths: ReadonlySet<number>,
+): boolean {
   return patternExpansions.some((patternSegments) =>
-    expansionAllowsSymlinkDescent(dirSegments, patternSegments),
+    expansionAllowsSymlinkDescent(dirSegments, patternSegments, ancestorSymlinkDepths),
   );
 }
 
 // Per-expansion symlink-descent alignment for one brace-free pattern.
-function expansionAllowsSymlinkDescent(dirSegments: string[], patternSegments: string[]): boolean {
+// `ancestorSymlinkDepths` holds the 0-based path indices already reached by
+// following a symlink; a `**` may not consume one of them because globstar never
+// traverses INTO a symlink (see the loop-safety note on WalkFrame).
+function expansionAllowsSymlinkDescent(
+  dirSegments: string[],
+  patternSegments: string[],
+  ancestorSymlinkDepths: ReadonlySet<number>,
+): boolean {
   const dirLength = dirSegments.length;
   const patternLength = patternSegments.length;
   const lastDirIndex = dirLength - 1;
@@ -256,9 +286,17 @@ function expansionAllowsSymlinkDescent(dirSegments: string[], patternSegments: s
       if (align(dirIndex, patternIndex + 1)) {
         return true;
       }
-      // `**` never consumes the final symlink segment (that is wildcard-reached)
-      // and never crosses a leading-dot segment.
-      if (dirIndex === lastDirIndex || segment.startsWith(".")) {
+      // `**` never consumes the final symlink segment (that is wildcard-reached),
+      // never crosses a leading-dot segment, and never crosses an already-followed
+      // symlink: globstar does not traverse into a symlink in fs.glob, so letting a
+      // leading `**` absorb an ancestor link would re-cross a contained
+      // ancestor-pointing link on every pass and diverge from fs.glob (which only
+      // follows a link where the pattern names it literally).
+      if (
+        dirIndex === lastDirIndex ||
+        segment.startsWith(".") ||
+        ancestorSymlinkDepths.has(dirIndex)
+      ) {
         return false;
       }
       return align(dirIndex + 1, patternIndex);
@@ -276,21 +314,27 @@ function expansionAllowsSymlinkDescent(dirSegments: string[], patternSegments: s
   return align(0, 0);
 }
 
-// Ancestor chain node for the active descent path. Only symlinks can create
-// cycles, so we carry each directory's canonical realpath forward to refuse
-// re-entering a directory already on the path (`a/loop -> a`).
-type WalkFrame = { relativeDir: string; realpath: string; parent: WalkFrame | null };
+// Ancestor chain node for the active descent path. `symlinkDepths` holds the
+// 0-based path-segment indices at which a directory symlink was followed to reach
+// this frame; it is what makes the walk terminate without a realpath cycle guard.
+// A symlink is only ever descended after symlinkDescentAllowed aligns it against a
+// LITERAL pattern segment (wildcards never cross a symlink) whose preceding `**`
+// did not consume one of these depths — so globstar cannot re-cross a contained
+// ancestor-pointing link (`a/loop -> a`). Each followed link therefore advances
+// past a distinct literal pattern segment, and the pattern has finitely many, so
+// the walk is bounded and matches fs.glob (which follows such a link only where
+// the pattern names it literally).
+type WalkFrame = { relativeDir: string; symlinkDepths: ReadonlySet<number> };
 
 // Decide whether a literal-named directory symlink should be descended, mirroring
 // fs.glob which follows literal-named directory symlinks. Returns a child frame
-// when the link resolves to a directory that stays inside the workspace and is
-// not already an ancestor on the current path; otherwise null so the caller
-// keeps the symlink as a terminal leaf candidate.
+// when the link resolves to a directory that stays inside the workspace;
+// otherwise null so the caller keeps the symlink as a terminal leaf candidate.
 async function resolveSymlinkDescent(
   workspaceDir: string,
   workspaceRealpath: string,
   childRelativePath: string,
-  parent: WalkFrame,
+  childSymlinkDepths: ReadonlySet<number>,
 ): Promise<WalkFrame | null> {
   const childAbs = path.resolve(workspaceDir, childRelativePath);
   let stat: syncFs.Stats;
@@ -315,15 +359,8 @@ async function resolveSymlinkDescent(
   if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
     return null;
   }
-  // Cycle guard: refuse to re-enter a directory already on the descent path so an
-  // ancestor-pointing symlink cannot loop. This diverges from fs.glob (which
-  // follows such a link once) to guarantee termination.
-  for (let frame: WalkFrame | null = parent; frame; frame = frame.parent) {
-    if (frame.realpath === targetRealpath) {
-      return null;
-    }
-  }
-  return { relativeDir: childRelativePath, realpath: targetRealpath, parent };
+  // Record this link's depth so a later `**` cannot re-cross it (see WalkFrame).
+  return { relativeDir: childRelativePath, symlinkDepths: childSymlinkDepths };
 }
 
 async function* walkWorkspaceFiles(
@@ -369,9 +406,7 @@ async function* walkWorkspaceFiles(
   if (rootRelToWorkspace.startsWith("..") || path.isAbsolute(rootRelToWorkspace)) {
     return;
   }
-  const stack: WalkFrame[] = [
-    { relativeDir: rootRelativeDir, realpath: rootRealpath, parent: null },
-  ];
+  const stack: WalkFrame[] = [{ relativeDir: rootRelativeDir, symlinkDepths: new Set() }];
   let visitedEntries = 0;
   while (stack.length > 0) {
     const frame = stack.pop();
@@ -417,15 +452,11 @@ async function* walkWorkspaceFiles(
         // which files match. Broad patterns like `**/AGENTS.md` still recurse
         // into build-output directory names (e.g. `dist`), so the walker returns
         // the same match set as fs.glob — no ignored-directory pruning silently
-        // drops a configured match on upgrade. A real subdirectory's canonical
-        // path is parent-canonical/name, so the ancestor chain extends without an
-        // extra realpath syscall.
+        // drops a configured match on upgrade.
         if (matcher.match(normalizedChildPath, true)) {
-          stack.push({
-            relativeDir: childRelativePath,
-            realpath: path.join(frame.realpath, entry.name),
-            parent: frame,
-          });
+          // Real directory: inherit the parent's followed-symlink depths unchanged
+          // (a real segment is never a symlink crossing).
+          stack.push({ relativeDir: childRelativePath, symlinkDepths: frame.symlinkDepths });
         }
         continue;
       }
@@ -438,14 +469,18 @@ async function* walkWorkspaceFiles(
         // stays off the stack.
         const childSegments = normalizedChildPath.split("/");
         if (
-          symlinkDescentAllowed(childSegments, patternExpansions) &&
+          symlinkDescentAllowed(childSegments, patternExpansions, frame.symlinkDepths) &&
           matcher.match(normalizedChildPath, true)
         ) {
+          // This link sits at the last path index; record it so a `**` deeper in
+          // the walk cannot re-cross it (see WalkFrame loop-safety note).
+          const childSymlinkDepths = new Set(frame.symlinkDepths);
+          childSymlinkDepths.add(childSegments.length - 1);
           const descendFrame = await resolveSymlinkDescent(
             workspaceDir,
             workspaceRealpath,
             childRelativePath,
-            frame,
+            childSymlinkDepths,
           );
           if (descendFrame) {
             stack.push(descendFrame);

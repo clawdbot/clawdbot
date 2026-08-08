@@ -8,7 +8,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { resolveExtraBootstrapPatternPaths } from "./workspace-extra-bootstrap-walker.js";
+import {
+  patternHasUnsupportedParentTraversal,
+  resolveExtraBootstrapPatternPaths,
+} from "./workspace-extra-bootstrap-walker.js";
+import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 const realPlatform = process.platform;
 
@@ -113,6 +117,78 @@ describe("resolveExtraBootstrapPatternPaths platform case parity", () => {
 
     expect(matches).toStrictEqual(["a/x/b/AGENTS.md"]);
     expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+  });
+});
+
+describe("resolveExtraBootstrapPatternPaths parent-traversal parity and diagnostics", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createWorkspaceDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    // realpath the root so relative-path comparisons hold on macOS, where
+    // os.tmpdir() is a /var -> /private/var symlink the loader canonicalizes.
+    fixtureRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-walker-parent-")),
+    );
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  // A small tree with a root AGENTS.md plus `a/AGENTS.md` under a subdir, so the
+  // reducible parent-traversal shapes have real targets to resolve against.
+  const seedTree = async (prefix: string): Promise<string> => {
+    const workspaceDir = await createWorkspaceDir(prefix);
+    await fs.mkdir(path.join(workspaceDir, "a", "x"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "foo"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "a", "AGENTS.md"), "a", "utf-8");
+    return workspaceDir;
+  };
+
+  const loaderRelative = async (workspaceDir: string, pattern: string): Promise<string[]> => {
+    const { files } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [pattern]);
+    return files
+      .map((file) => path.relative(workspaceDir, file.path).replaceAll(path.sep, "/"))
+      .toSorted();
+  };
+
+  it("matches Node fs.glob for reducible parent-traversal shapes", async () => {
+    // optimizationLevel 2 collapses `*/../`, `a/*/../`, and literal `foo/../` into a
+    // downward form, so the observable loader result equals fs.glob's set. These
+    // are the parent-traversal shapes the walker fully supports.
+    for (const pattern of ["*/../AGENTS.md", "a/*/../AGENTS.md", "foo/../AGENTS.md"]) {
+      const workspaceDir = await seedTree("supported");
+      expect(await loaderRelative(workspaceDir, pattern)).toStrictEqual(
+        await nodeGlobRelative(workspaceDir, pattern),
+      );
+      expect(patternHasUnsupportedParentTraversal(pattern)).toBe(false);
+    }
+  });
+
+  it("records an unsupported-pattern diagnostic for a globstar parent traversal", async () => {
+    // `**/../` cannot be reduced to a downward walk (fs.glob steps up a level; this
+    // matcher-only walk cannot), so the walker would silently return []. The loader
+    // must surface an explicit diagnostic instead of dropping the configured
+    // pattern without a trace.
+    for (const pattern of ["**/../AGENTS.md", "x/**/../AGENTS.md"]) {
+      const workspaceDir = await seedTree("unsupported");
+      expect(patternHasUnsupportedParentTraversal(pattern)).toBe(true);
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        pattern,
+      ]);
+      expect(files).toHaveLength(0);
+      expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("unsupported-pattern");
+    }
   });
 });
 
@@ -264,27 +340,111 @@ describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "refuses an ancestor-pointing symlink cycle (intentional fs.glob divergence)",
+    "follows a contained ancestor-pointing symlink once (fs.glob parity)",
     async () => {
-      // Cycle guard: `a/loop -> a` names `loop` literally in `*/loop/**`, so
-      // descent is attempted, but the realpath ancestor check refuses to re-enter
-      // `a`. This deliberately diverges from fs.glob (which follows the loop once)
-      // to guarantee termination, so it is asserted directly, not against fs.glob.
-      const workspaceDir = await createWorkspaceDir("ancestor-cycle");
-      const dirA = path.join(workspaceDir, "a");
-      await fs.mkdir(dirA, { recursive: true });
-      await fs.writeFile(path.join(dirA, "AGENTS.md"), "a", "utf-8");
-      if (!(await trySymlink(dirA, path.join(dirA, "loop")))) {
+      // FIX 2: `pkg/loop -> pkg` is a contained ancestor-pointing directory symlink
+      // named literally in `*/loop/**`. fs.glob follows it once; the walker now
+      // matches that instead of over-rejecting it via a realpath cycle guard.
+      // Termination is structural: `**` never re-crosses the symlink, so the loop
+      // is followed only as many times as the pattern names it literally.
+      const workspaceDir = await createWorkspaceDir("ancestor-follow-once");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.writeFile(path.join(pkgDir, "AGENTS.md"), "pkg", "utf-8");
+      if (!(await trySymlink(pkgDir, path.join(pkgDir, "loop")))) {
         return;
       }
 
-      const matches = await resolveExtraBootstrapPatternPaths(
-        workspaceDir,
-        "*/loop/**/AGENTS.md",
-        false,
-      );
+      const pattern = "*/loop/**/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
 
-      expect(matches).toStrictEqual([]);
+      expect(matches).toStrictEqual(["pkg/loop/AGENTS.md"]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+    15000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "follows a self-referential symlink to the workspace root once (fs.glob parity)",
+    async () => {
+      // `self -> <workspace root>` named literally in `self/**`: fs.glob follows the
+      // link once and `**` then walks the real tree without re-crossing `self`.
+      const workspaceDir = await createWorkspaceDir("self-loop");
+      await fs.mkdir(path.join(workspaceDir, "sub"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+      await fs.writeFile(path.join(workspaceDir, "sub", "AGENTS.md"), "sub", "utf-8");
+      if (!(await trySymlink(workspaceDir, path.join(workspaceDir, "self")))) {
+        return;
+      }
+
+      const pattern = "self/**/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual(["self/AGENTS.md", "self/sub/AGENTS.md"]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+    15000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "terminates on an adversarial ancestor loop without a cycle guard",
+    async () => {
+      // Adversarial termination: `loop -> .` (the workspace root) is a contained
+      // self-loop. With the realpath cycle guard removed, termination must be
+      // structural — `**` never crosses the symlink, and a literal loop chain names
+      // it only finitely. Completing at all within the bounded timeout is the
+      // proof; `**/AGENTS.md` additionally holds fs.glob parity.
+      const workspaceDir = await createWorkspaceDir("adversarial-loop");
+      await fs.mkdir(path.join(workspaceDir, "a"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+      await fs.writeFile(path.join(workspaceDir, "a", "AGENTS.md"), "a", "utf-8");
+      if (!(await trySymlink(workspaceDir, path.join(workspaceDir, "loop")))) {
+        return;
+      }
+
+      const recursive = "**/AGENTS.md";
+      expect(
+        (await resolveExtraBootstrapPatternPaths(workspaceDir, recursive, false)).toSorted(),
+      ).toStrictEqual(await nodeGlobRelative(workspaceDir, recursive));
+
+      // A literal chain naming the loop repeatedly must also terminate; completing
+      // is the assertion (the deleted guard existed only to force termination).
+      await expect(
+        resolveExtraBootstrapPatternPaths(workspaceDir, "loop/loop/loop/**/AGENTS.md", false),
+      ).resolves.toBeDefined();
+    },
+    15000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not let a leading ** re-cross a contained ancestor symlink",
+    async () => {
+      // Regression: `a/link -> ..` is a contained ancestor-pointing symlink named
+      // by the literal `link` after `**`. fs.glob follows it once (globstar never
+      // traverses INTO a symlink), yielding two matches. The walker must not let
+      // the leading `**` absorb the `a/link` crossing to re-align the literal on
+      // every pass — that produced a deep bogus match set bounded only by the OS
+      // symlink limit (platform-dependent, non-deterministic) rather than the
+      // pattern structure.
+      const workspaceDir = await createWorkspaceDir("leading-star-ancestor");
+      await fs.mkdir(path.join(workspaceDir, "a"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+      await fs.writeFile(path.join(workspaceDir, "a", "AGENTS.md"), "a", "utf-8");
+      if (!(await trySymlink(path.join("..", ""), path.join(workspaceDir, "a", "link")))) {
+        return;
+      }
+
+      const pattern = "**/a/link/**/AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual(["a/link/AGENTS.md", "a/link/a/AGENTS.md"]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
     },
     15000,
   );
