@@ -1048,15 +1048,24 @@ export class ManagedWorktreeService {
     const record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
-      updateRegistryWorktree(this.env, id, {
-        runEndCleanup: {
-          outcome,
-          at: this.now(),
-          ...(outcome === "failed"
-            ? { reason: truncateUtf16Safe(formatErrorMessage(error), 500) }
-            : {}),
+      // Retained/failed writes happen after this remover released its claim, so a
+      // racing remover may have finalized the row; the live-row condition keeps the
+      // winner's removed-lossless authoritative. Only our own removed-lossless write
+      // targets a row this remover just finalized.
+      updateRegistryWorktree(
+        this.env,
+        id,
+        {
+          runEndCleanup: {
+            outcome,
+            at: this.now(),
+            ...(outcome === "failed"
+              ? { reason: truncateUtf16Safe(formatErrorMessage(error), 500) }
+              : {}),
+          },
         },
-      });
+        { onlyIfLive: outcome !== "removed-lossless" },
+      );
     };
     // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
     // QA and operators observe this product-boundary fact through worktrees.list.
@@ -1071,12 +1080,7 @@ export class ManagedWorktreeService {
         }
         // A live run lease or a competing remover holds the worktree; a lossless
         // auto-cleanup must not race it.
-        updateRegistryWorktree(
-          this.env,
-          id,
-          { runEndCleanup: { outcome: "retained-busy", at: this.now() } },
-          { onlyIfLive: true },
-        );
+        recordOutcome("retained-busy");
         return false;
       }
       try {

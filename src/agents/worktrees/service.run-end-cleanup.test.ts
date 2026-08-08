@@ -5,7 +5,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree, WorktreeRemovalContentionError } from "./registry.js";
+import {
+  getRegistryWorktree,
+  updateRegistryWorktree,
+  WorktreeRemovalContentionError,
+} from "./registry.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -86,6 +90,27 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     }
     expect(contention).toBeInstanceOf(WorktreeRemovalContentionError);
     expect(contention).toMatchObject({ kind: "finalized" });
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      removedAt: now,
+      runEndCleanup: { outcome: "removed-lossless", at: now },
+    });
+  });
+
+  it("keeps the winning removal outcome when a post-abort write lands after finalization", async () => {
+    const created = await materialize("post-abort-race");
+    await service.acquire(created.id);
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+
+    // A stale remover that aborted its claim writes retained/failed outcomes with
+    // the live-row condition (recordOutcome); against a finalized row it must be
+    // a no-op instead of replacing the winner's removed-lossless fact.
+    updateRegistryWorktree(
+      env,
+      created.id,
+      { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
+      { onlyIfLive: true },
+    );
+
     expect(getRegistryWorktree(env, created.id)).toMatchObject({
       removedAt: now,
       runEndCleanup: { outcome: "removed-lossless", at: now },
