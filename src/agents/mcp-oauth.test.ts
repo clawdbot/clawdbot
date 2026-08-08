@@ -895,11 +895,16 @@ describe("MCP OAuth provider", () => {
   it("persists localhost redirect for a later code exchange login", async () => {
     await withTempHome(
       async () => {
+        let finalAuthorizationUrl: URL | undefined;
         authMock.mockReset();
         authMock
           .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
           .mockImplementationOnce(async (provider) => {
             await provider.saveCodeVerifier?.("verifier");
+            const authorizationUrl = new URL("https://auth.example.com/authorize");
+            authorizationUrl.searchParams.set("redirect_uri", String(provider.redirectUrl));
+            authorizationUrl.searchParams.set("state", "state-1234567890");
+            await provider.redirectToAuthorization?.(authorizationUrl);
             return "REDIRECT";
           });
 
@@ -907,9 +912,15 @@ describe("MCP OAuth provider", () => {
           runMcpOAuthLogin({
             serverName: "Calendly",
             serverUrl: "https://mcp.calendly.com/",
-            onAuthorizationUrl: () => {},
+            onAuthorizationUrl: (url) => {
+              finalAuthorizationUrl = url;
+            },
           }),
         ).resolves.toBe("redirect");
+
+        expect(finalAuthorizationUrl?.searchParams.get("redirect_uri")).toBe(
+          "http://localhost:8989/oauth/callback",
+        );
 
         const store = readMcpOAuthStore(
           resolveMcpOAuthStoreKey("Calendly", "https://mcp.calendly.com/"),
@@ -918,7 +929,12 @@ describe("MCP OAuth provider", () => {
         expect(store.codeVerifier).toBe("verifier");
 
         authMock.mockReset();
-        authMock.mockResolvedValueOnce("AUTHORIZED");
+        authMock.mockImplementationOnce(async (provider, options) => {
+          expect(options.authorizationCode).toBe("code-123");
+          expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+          expect(await provider.codeVerifier?.()).toBe("verifier");
+          return "AUTHORIZED";
+        });
         await runMcpOAuthLogin({
           serverName: "Calendly",
           serverUrl: "https://mcp.calendly.com/",
