@@ -34,3 +34,14 @@ export function wrapRunWithTestAdmission<P extends { runId: string }, R>(
       admittedRunContext: createTestAdmittedRunContext(params.runId),
     } as unknown as P);
 }
+
+/** Exercises the real post-selection admission boundary without enabling audit collection. */
+export function wrapRunWithTestPreparedAdmission<P extends { runId: string }, R>(
+  run: (params: P) => R,
+): (params: Omit<P, "admittedRunContext" | "preparedRunAdmission">) => R {
+  return (params) =>
+    run({
+      ...params,
+      preparedRunAdmission: createTestPreparedRunAdmission(params.runId),
+    } as unknown as P);
+}
