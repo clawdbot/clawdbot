@@ -40,9 +40,9 @@ describe("plugin registry SQLite session ownership", () => {
         );
 
         const runtime = createPluginRuntime();
-        const runEmbeddedAgent = vi.fn(async () => ({ ok: true })) as unknown as PluginRuntime[
-          "agent"
-        ]["runEmbeddedAgent"];
+        const runEmbeddedAgent = vi.fn(async () => ({
+          ok: true,
+        })) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
         Object.defineProperty(runtime.agent, "runEmbeddedAgent", {
           configurable: true,
           value: runEmbeddedAgent,
