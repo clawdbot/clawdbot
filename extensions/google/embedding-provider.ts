@@ -206,7 +206,7 @@ function normalizeGeminiModel(model: string): string {
   return withoutPrefix;
 }
 
-function sanitizeGeminiEmbedding(values: number[], expectedDimensions?: number): number[] {
+export function sanitizeGeminiEmbedding(values: number[], expectedDimensions?: number): number[] {
   if (expectedDimensions != null && values.length !== expectedDimensions) {
     throw unexpectedGeminiEmbeddingDimensions(expectedDimensions, values.length);
   }
