@@ -161,6 +161,7 @@ export async function runHandlerBoundaryProof() {
   });
 
   const firstResponse = first.responses[0];
+  const publicRefreshCall = publicRefresh.refreshCalls[0];
   return {
     cacheHitSameTimestamp:
       (firstResponse?.payload as { ts?: unknown } | undefined)?.ts === cached.ts,
@@ -177,7 +178,7 @@ export async function runHandlerBoundaryProof() {
     liveOverlayMerged:
       (firstResponse?.payload as { eventLoop?: { status?: unknown } } | undefined)?.eventLoop
         ?.status === "live",
-    publicSensitiveOmitted: !publicRefresh.refreshCalls[0]?.includeSensitive,
+    publicSensitiveOmitted: publicRefreshCall !== undefined && !publicRefreshCall.includeSensitive,
   };
 }
 
