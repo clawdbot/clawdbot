@@ -13,6 +13,7 @@ export {
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
   resolveCodexMcpToolOverridesForAgent,
 } from "../agents/cli-runner/bundle-mcp-codex.js";
+export { runWithCronCreatorAuthorityResolver } from "../agents/cron-creator-authority-context.js";
 
 /** Materialize static configured MCP under a scheduled Codex authority envelope. */
 export async function materializeStaticMcpToolsForScheduledHarnessRun(
@@ -23,17 +24,6 @@ export async function materializeStaticMcpToolsForScheduledHarnessRun(
   const { materializeStaticMcpToolsForScheduledHarnessRun: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
-}
-
-/** Apply the shared harness policy pipeline to an already-bound Codex MCP catalog. */
-export async function projectMcpCatalogToolsForHarnessPolicy(
-  ...params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").projectMcpCatalogToolsForHarnessPolicy
-  >
-) {
-  const { projectMcpCatalogToolsForHarnessPolicy: project } =
-    await import("../agents/agent-bundle-mcp-harness.js");
-  return project(...params);
 }
 
 /** Capture the final Codex dynamic-tool surface for cron creator authority. */

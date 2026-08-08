@@ -294,8 +294,9 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
   const internal =
-    isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
+    isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
       ? {
+          ...(isLocalClient ? { isLocalClient: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
           ...(trustedAgentRuntimeIdentity
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }

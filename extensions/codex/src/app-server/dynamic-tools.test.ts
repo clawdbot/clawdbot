@@ -30,7 +30,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  createCodexDynamicToolBridge,
+  projectCodexExecutableDynamicTools,
+} from "./dynamic-tools.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
@@ -812,6 +815,27 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
     expect(badExecute).not.toHaveBeenCalled();
+  });
+
+  it("uses the bridge's executable projection for authority snapshots", () => {
+    const tools = [
+      createTool({ name: "configured_ok" }),
+      createTool({
+        name: "configured_unsupported",
+        parameters: { type: "array", items: { type: "string" } },
+      }),
+    ];
+    const projected = projectCodexExecutableDynamicTools({ tools });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+    });
+
+    expect(projected.availableTools.map((tool) => tool.name)).toEqual(
+      bridge.availableTools.map((tool) => tool.name),
+    );
+    expect(projected.availableTools.map((tool) => tool.name)).toEqual(["configured_ok"]);
+    expect(projected.quarantinedTools).toEqual(bridge.telemetry.quarantinedTools);
   });
 
   it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {

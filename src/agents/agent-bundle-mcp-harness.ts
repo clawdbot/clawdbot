@@ -12,9 +12,9 @@ import {
   getOrCreateRequesterScopedMcpRuntime,
   getOrCreateSessionMcpRuntime,
   rememberAdvertisedScopedMcpCatalog,
+  retireSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
-import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import {
   resolveConversationCapabilityProfile,
   type ConversationCapabilityProfileParams,
@@ -67,27 +67,20 @@ function isScheduledCodexApprovalAllowed(tool: AnyAgentTool, autoApprove: boolea
   );
 }
 
-function enforceScheduledCodexApproval(
+function filterScheduledCodexApproval(
   tools: readonly AnyAgentTool[],
   autoApprove: boolean,
+  onOmitted?: (message: string) => void,
 ): AnyAgentTool[] {
-  return tools.map((tool) => {
+  return tools.filter((tool) => {
     if (isScheduledCodexApprovalAllowed(tool, autoApprove)) {
-      return tool;
+      return true;
     }
-    const mcp = getPluginToolMeta(tool)!.mcp!;
-    const { serverName, toolName } = mcp;
-    const mode = mcp.codexApproval?.mode ?? "auto";
-    const wrapped: AnyAgentTool = {
-      ...tool,
-      execute: async () => {
-        throw new Error(
-          `Scheduled MCP tool "${toolName}" on server "${serverName}" requires interactive Codex approval (${mode}) and was not executed. ` +
-            `To authorize unattended execution, set mcp.servers.${serverName}.codex.defaultToolsApprovalMode to "approve".`,
-        );
-      },
-    };
-    return copyAgentToolMetadata(tool, wrapped);
+    const mcp = getPluginToolMeta(tool)?.mcp;
+    onOmitted?.(
+      `${mcp?.serverName ?? "configured MCP"}/${mcp?.toolName ?? tool.name}: requires interactive Codex approval (${mcp?.codexApproval?.mode ?? "auto"}); configure codex.defaultToolsApprovalMode="approve" or use the host-confirmed yolo profile`,
+    );
+    return false;
   });
 }
 
@@ -175,6 +168,8 @@ export async function materializeStaticMcpToolsForScheduledHarnessRun(
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
     /** Exact established Codex yolo predicate; no other profile bypasses approval metadata. */
     autoApproveCodexAppServerApprovals?: boolean;
+    /** Mutation-only probes retire their isolated runtime after the snapshot. */
+    retireSessionRuntimeAfterDispose?: boolean;
   },
 ): Promise<ScheduledStaticHarnessMcpTools> {
   const runtime = await getOrCreateSessionMcpRuntime({
@@ -186,10 +181,25 @@ export async function materializeStaticMcpToolsForScheduledHarnessRun(
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
   });
-  const liveRuntime = await materializeBundleMcpToolsForRun({
-    runtime,
-    reservedToolNames: params.reservedToolNames,
-  });
+  const retireSnapshotRuntime = params.retireSessionRuntimeAfterDispose
+    ? async () => {
+        await retireSessionMcpRuntime({
+          sessionId: params.sessionId,
+          reason: "scheduled-authority-snapshot-complete",
+        });
+      }
+    : undefined;
+  let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
+  try {
+    liveRuntime = await materializeBundleMcpToolsForRun({
+      runtime,
+      reservedToolNames: params.reservedToolNames,
+      ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
+    });
+  } catch (error) {
+    await retireSnapshotRuntime?.();
+    throw error;
+  }
   try {
     const policyWarnings: string[] = [];
     const policyParams = {
@@ -199,16 +209,18 @@ export async function materializeStaticMcpToolsForScheduledHarnessRun(
         params.warn?.(message);
       },
     };
-    const allowed = enforceScheduledCodexApproval(
+    const allowed = filterScheduledCodexApproval(
       applyHarnessToolPolicy(liveRuntime.tools, policyParams),
       params.autoApproveCodexAppServerApprovals === true,
+      (message) => policyWarnings.push(message),
     );
     // App views outlive this attempt, so bind their callable surface to the
     // same complete catalog and final policy before any model tool can mint one.
     liveRuntime.restrictAppTools?.(
-      applyHarnessToolPolicy(liveRuntime.appTools ?? liveRuntime.tools, policyParams).filter(
-        (tool) =>
-          isScheduledCodexApprovalAllowed(tool, params.autoApproveCodexAppServerApprovals === true),
+      filterScheduledCodexApproval(
+        applyHarnessToolPolicy(liveRuntime.appTools ?? liveRuntime.tools, policyParams),
+        params.autoApproveCodexAppServerApprovals === true,
+        (message) => policyWarnings.push(message),
       ),
     );
     const diagnosticNotice = formatScheduledMcpDiagnosticNotice([
@@ -233,14 +245,6 @@ export async function materializeStaticMcpToolsForScheduledHarnessRun(
     await liveRuntime.dispose();
     throw error;
   }
-}
-
-/** Project a native harness catalog through the same scheduled/runtime policy pipeline. */
-export function projectMcpCatalogToolsForHarnessPolicy(
-  catalog: McpToolCatalog,
-  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
-): AnyAgentTool[] {
-  return applyHarnessToolPolicy(buildCatalogTools(catalog, params), params);
 }
 
 /**

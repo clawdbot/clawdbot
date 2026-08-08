@@ -19,7 +19,10 @@ import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  createCodexDynamicToolBridge,
+  projectCodexExecutableDynamicTools,
+} from "./dynamic-tools.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -36,6 +39,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     codexMcpToolOverrides,
     authenticatedScheduledMode,
     ownsScheduledConfiguredMcpSurface,
+    canResolveScheduledConfiguredMcpCreatorAuthority,
   } = runtime;
   const {
     params,
@@ -120,6 +124,19 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
   } = {};
+  let toolBridge: ReturnType<typeof createCodexDynamicToolBridge> | undefined;
+  let creatorAuthorityPromise:
+    | Promise<{
+        tools: readonly (string | { name: string; pluginId?: string })[];
+        provenance: { version: 1; source: "final-executable-surface" };
+      }>
+    | undefined;
+  let resolveCreatorAuthorityImpl:
+    | (() => Promise<{
+        tools: readonly (string | { name: string; pluginId?: string })[];
+        provenance: { version: 1; source: "final-executable-surface" };
+      }>)
+    | undefined;
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -140,6 +157,16 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       void emitCodexAppServerEvent(params, event);
     },
     computerContextEpoch,
+    ...(canResolveScheduledConfiguredMcpCreatorAuthority
+      ? {
+          resolveCronCreatorToolAuthority: () => {
+            if (!resolveCreatorAuthorityImpl) {
+              throw new Error("configured MCP authority resolver was invoked before tool setup");
+            }
+            return (creatorAuthorityPromise ??= resolveCreatorAuthorityImpl());
+          },
+        }
+      : {}),
   };
   const tools = await buildDynamicTools({
     ...commonToolParams,
@@ -266,13 +293,38 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       scopedExecutable.length > 0 ? [...tools, ...scopedExecutable] : tools;
     const registeredWithScopedMcp =
       scopedAdvertised.length > 0 ? [...registeredTools, ...scopedAdvertised] : registeredTools;
-    const nativeConfiguredMcpServerNames = [
-      ...new Set([
-        ...Object.keys(bundleMcpThreadConfig.configPatch?.mcp_servers ?? {}),
-        ...(nativeToolSurfaceEnabled ? bundleMcpThreadConfig.userStaticServerNames : []),
-      ]),
-    ].toSorted();
-    const toolBridge = createCodexDynamicToolBridge({
+    const hookContext = {
+      agentId: sessionAgentId,
+      config: params.config,
+      contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
+      workspaceDir: effectiveWorkspace,
+      remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      runId: params.runId,
+      channelId: hookChannelId,
+      currentChannelProvider: resolveCodexMessageToolProvider(params),
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentMessageId: params.currentMessageId,
+      currentThreadId: params.currentThreadTs,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      onToolOutcome: onCodexToolOutcome,
+      allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
+      trigger: params.trigger,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+      ...(hasRequester ? { requester } : {}),
+      ...(turnSourceChannel ? { turnSourceChannel } : {}),
+      ...(turnSourceTo ? { turnSourceTo } : {}),
+      ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),
+      ...(params.currentThreadTs !== undefined
+        ? { turnSourceThreadId: params.currentThreadTs }
+        : {}),
+    };
+    toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       signal: runAbortController.signal,
@@ -284,47 +336,63 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         params,
         isHostScopedAgentToolActive("openclaw"),
       ),
-      hookContext: {
-        agentId: sessionAgentId,
-        config: params.config,
-        contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
-        workspaceDir: effectiveWorkspace,
-        remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
-        remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
-        sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        runId: params.runId,
-        channelId: hookChannelId,
-        currentChannelProvider: resolveCodexMessageToolProvider(params),
-        currentChannelId: params.currentChannelId,
-        currentMessagingTarget: params.currentMessagingTarget,
-        currentMessageId: params.currentMessageId,
-        currentThreadId: params.currentThreadTs,
-        replyToMode: params.replyToMode,
-        hasRepliedRef: params.hasRepliedRef,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        onToolOutcome: onCodexToolOutcome,
-        allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
-        trigger: params.trigger,
-        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-        ...(hasRequester ? { requester } : {}),
-        ...(turnSourceChannel ? { turnSourceChannel } : {}),
-        ...(turnSourceTo ? { turnSourceTo } : {}),
-        ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),
-        ...(params.currentThreadTs !== undefined
-          ? { turnSourceThreadId: params.currentThreadTs }
-          : {}),
-      },
+      hookContext,
     });
-    if (
-      (authenticatedScheduledMode || nativeConfiguredMcpServerNames.length === 0) &&
-      !scheduledConfiguredMcp?.diagnosticNotice
-    ) {
-      await captureFinalCodexCronCreatorToolAllowlist(
-        cronCreatorToolAllowlist,
-        cronCreatorToolAllowlistCaptureRef,
-        toolBridge.availableTools,
-      );
+    await captureFinalCodexCronCreatorToolAllowlist(
+      cronCreatorToolAllowlist,
+      cronCreatorToolAllowlistCaptureRef,
+      toolBridge.availableTools,
+    );
+    if (canResolveScheduledConfiguredMcpCreatorAuthority) {
+      resolveCreatorAuthorityImpl = async () => {
+        if (!toolBridge) {
+          throw new Error("configured MCP authority resolver lost the active tool bridge");
+        }
+        const authorityRuntimeId = `cron-authority:${params.runId}`;
+        const materialized = await materializeStaticMcpToolsForScheduledHarnessRun({
+          sessionId: authorityRuntimeId,
+          workspaceDir: effectiveWorkspace,
+          agentDir: policyContext.agentDir,
+          cfg: params.config,
+          reservedToolNames: toolBridge.availableTools.map((tool) => tool.name),
+          toolsAllow: params.toolsAllow,
+          toolOverrides: codexMcpToolOverrides,
+          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
+            connection.appServer,
+          ),
+          policyContext,
+          warn: (message) => embeddedAgentLog.warn(message),
+          retireSessionRuntimeAfterDispose: true,
+        });
+        try {
+          if (materialized.diagnosticNotice) {
+            throw new Error(
+              `${materialized.diagnosticNotice} Sign in to the affected MCP server, then retry the automation mutation to reauthorize it. No automation changes were saved.`,
+            );
+          }
+          const authorityTools: Array<string | { name: string; pluginId?: string }> = [];
+          const captureRef: {
+            value?: { version: 1; source: "final-executable-surface" };
+          } = {};
+          const projectedConfiguredMcp = projectCodexExecutableDynamicTools({
+            tools: filterCodexDynamicTools(materialized.tools, pluginConfig),
+            hookContext,
+          });
+          await captureFinalCodexCronCreatorToolAllowlist(authorityTools, captureRef, [
+            ...toolBridge.availableTools,
+            ...projectedConfiguredMcp.availableTools,
+          ]);
+          if (!captureRef.value) {
+            throw new Error("configured MCP authority snapshot did not produce provenance");
+          }
+          return Object.freeze({
+            tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
+            provenance: Object.freeze(captureRef.value),
+          });
+        } finally {
+          await materialized.dispose();
+        }
+      };
     }
     return {
       tools: toolsWithScopedMcp,
@@ -334,18 +402,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       configuredMcpOwnershipVersion: ownsScheduledConfiguredMcpSurface ? (1 as const) : undefined,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
-      nativeConfiguredMcpServerNames,
-      mcpCreatorPolicyParams: {
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: effectiveWorkspace,
-        agentDir: policyContext.agentDir,
-        cfg: params.config,
-        reservedToolNames,
-        toolsAllow: params.toolsAllow,
-        policyContext,
-        warn: (message: string) => embeddedAgentLog.warn(message),
-      },
       dynamicToolParams,
       computerContextEpoch,
       toolBridge,

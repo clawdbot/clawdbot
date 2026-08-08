@@ -156,6 +156,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
   it("materializes static tools without carrying requester identity and applies the stored cap", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled", requesterSenderId: "unused" });
     delete runtime.requesterScope;
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "approve";
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
     const result = await materializeStaticMcpToolsForScheduledHarnessRun({
@@ -427,7 +428,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     await result.dispose();
   });
 
-  it("blocks prompt-approved MCP tools before transport execution", async () => {
+  it("omits prompt-approved MCP tools from unattended execution", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-prompt", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
@@ -441,9 +442,9 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
       toolsAllow: ["user-mail__inbox"],
     });
 
-    await expect(result!.tools[0]!.execute("call-1", {})).rejects.toThrow(
-      "requires interactive Codex approval (prompt)",
-    );
+    expect(result.tools).toEqual([]);
+    expect(result.diagnosticNotice).toContain("user-mail/inbox");
+    expect(result.diagnosticNotice).toContain('defaultToolsApprovalMode="approve"');
     expect(callTool).not.toHaveBeenCalled();
     await result?.dispose();
   });
@@ -492,7 +493,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     await result?.dispose();
   });
 
-  it("fails closed when scheduled approval metadata is absent", async () => {
+  it("omits MCP tools when scheduled approval metadata is absent", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-unknown", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
@@ -504,9 +505,9 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
       toolsAllow: ["user-mail__inbox"],
     });
 
-    await expect(result!.tools[0]!.execute("call-1", {})).rejects.toThrow(
-      "requires interactive Codex approval (auto)",
-    );
+    expect(result.tools).toEqual([]);
+    expect(result.diagnosticNotice).toContain("user-mail/inbox");
+    expect(result.diagnosticNotice).toContain('defaultToolsApprovalMode="approve"');
     expect(callTool).not.toHaveBeenCalled();
     await result?.dispose();
   });

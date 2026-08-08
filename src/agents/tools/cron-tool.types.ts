@@ -18,6 +18,11 @@ export type CronToolsAllowCaptureRef = {
   value?: CronToolsAllowCaptureProvenance;
 };
 
+export type CronCreatorToolAuthoritySnapshot = {
+  tools: readonly CronCreatorToolAllowlistEntry[];
+  provenance: CronToolsAllowCaptureProvenance;
+};
+
 export type CronToolOptions = {
   agentSessionKey?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */
@@ -31,6 +36,8 @@ export type CronToolOptions = {
   creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
   /** Host-owned proof that creatorToolAllowlist reached the final executable surface. */
   creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
+  /** Attempt-cached authority resolved only when a mutation changes its tool cap. */
+  resolveCreatorToolAuthority?: () => Promise<CronCreatorToolAuthoritySnapshot>;
   selfRemoveOnlyJobId?: string;
   runId?: string;
 };

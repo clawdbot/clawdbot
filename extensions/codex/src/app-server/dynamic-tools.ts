@@ -468,19 +468,16 @@ export function createCodexDynamicToolBridge(params: {
     contextWindowTokens > 0
       ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
       : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-  const availableProjection = projectCodexDynamicTools(params.tools);
+  const availableProjection = projectCodexExecutableDynamicToolSurface(
+    params.tools,
+    params.hookContext,
+  );
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const wrappedAvailableProjection = wrapProjectedCodexDynamicTools(
-    availableProjection.tools,
-    params.hookContext,
-  );
-  const availableTools = wrappedAvailableProjection.tools;
+  const availableTools = availableProjection.tools;
   const quarantinedAvailableToolNames = new Set(
-    [...availableProjection.quarantinedTools, ...wrappedAvailableProjection.quarantinedTools].map(
-      (tool) => tool.tool,
-    ),
+    availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
   const registeredSpecTools = (
     params.registeredTools ? registeredProjection.tools : availableTools
@@ -490,7 +487,6 @@ export function createCodexDynamicToolBridge(params: {
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
-    ...wrappedAvailableProjection.quarantinedTools,
   ]);
   warnQuarantinedDynamicTools(quarantinedTools);
   emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
@@ -925,6 +921,39 @@ export function createCodexDynamicToolBridge(params: {
         consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
       }
     },
+  };
+}
+
+function projectCodexExecutableDynamicToolSurface(
+  tools: readonly AnyAgentTool[],
+  hookContext: CodexDynamicToolHookContext | undefined,
+): {
+  tools: ProjectedCodexDynamicTool[];
+  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
+} {
+  const projected = projectCodexDynamicTools(tools);
+  const wrapped = wrapProjectedCodexDynamicTools(projected.tools, hookContext);
+  return {
+    tools: wrapped.tools,
+    quarantinedTools: dedupeQuarantinedDynamicTools([
+      ...projected.quarantinedTools,
+      ...wrapped.quarantinedTools,
+    ]),
+  };
+}
+
+/** Applies the exact schema and hook-wrapper projection used by the executable Codex bridge. */
+export function projectCodexExecutableDynamicTools(params: {
+  tools: readonly AnyAgentTool[];
+  hookContext?: CodexDynamicToolHookContext;
+}): {
+  availableTools: AnyAgentTool[];
+  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
+} {
+  const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
+  return {
+    availableTools: projected.tools.map((entry) => entry.tool),
+    quarantinedTools: projected.quarantinedTools,
   };
 }
 

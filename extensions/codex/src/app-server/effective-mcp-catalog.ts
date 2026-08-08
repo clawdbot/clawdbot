@@ -10,7 +10,6 @@ import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js
 
 const MCP_STATUS_PAGE_SIZE = 100;
 const MCP_STATUS_MAX_PAGES = 100;
-const READY_MCP_AUTH_STATUSES = new Set(["unsupported", "bearerToken", "oAuth"]);
 type AgentHarnessMcpCatalogParams = Parameters<NonNullable<AgentHarness["loadMcpToolCatalog"]>>[0];
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -144,50 +143,17 @@ async function listCodexMcpServerStatuses(
   throw new Error("Codex mcpServerStatus/list exceeded the bounded page limit");
 }
 
-function assertInitializedMcpInventory(
-  statuses: readonly CodexMcpServerStatus[],
-  intendedServerNames: readonly string[],
-): void {
-  const statusByName = new Map(statuses.map((status) => [status.name, status] as const));
-  const incomplete = intendedServerNames.flatMap((serverName) => {
-    const status = statusByName.get(serverName);
-    if (!status) {
-      return [`${serverName} (not reported)`];
-    }
-    if (!readString(status.serverInfo?.name) || !readString(status.serverInfo?.version)) {
-      return [`${serverName} (initialization incomplete)`];
-    }
-    if (!status.authStatus || !READY_MCP_AUTH_STATUSES.has(status.authStatus)) {
-      return [
-        `${serverName} (${status.authStatus === "notLoggedIn" ? "authentication required" : "authentication status unavailable"})`,
-      ];
-    }
-    return [];
-  });
-  if (incomplete.length > 0) {
-    throw new Error(
-      `Codex configured MCP inventory is incomplete: ${incomplete.join(", ")}. ` +
-        "Retry after the servers initialize and authenticate.",
-    );
-  }
-}
-
 /** Loads the requested MCP inventory from the exact client/thread already selected for a run. */
-export async function loadCodexEffectiveMcpCatalogFromThread(params: {
+async function loadCodexEffectiveMcpCatalogFromThread(params: {
   client: Pick<CodexAppServerClient, "request">;
   threadId: string;
   mcpServerNames: readonly string[];
   toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"];
-  /** Creator-cap capture requires a complete initialized inventory, including zero-tool servers. */
-  requireInitializedInventory?: boolean;
 }): Promise<McpToolCatalog> {
   const allowedServerNames = new Set(params.mcpServerNames);
   const statuses = (await listCodexMcpServerStatuses(params.client, params.threadId)).filter(
     (status) => allowedServerNames.has(status.name),
   );
-  if (params.requireInitializedInventory) {
-    assertInitializedMcpInventory(statuses, params.mcpServerNames);
-  }
   return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
 }
 

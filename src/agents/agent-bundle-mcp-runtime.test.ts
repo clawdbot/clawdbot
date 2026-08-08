@@ -20,6 +20,7 @@ import {
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
+  peekSessionMcpRuntime,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
@@ -2771,6 +2772,27 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-retire");
 
     await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("keeps an ordinary session-key mapping when an unbound mutation probe retires", async () => {
+    const ordinary = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-ordinary",
+      sessionKey: "agent:test:ordinary",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "cron-authority:probe",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+
+    await retireSessionMcpRuntime({
+      sessionId: "cron-authority:probe",
+      reason: "scheduled-authority-snapshot-complete",
+    });
+
+    expect(peekSessionMcpRuntime({ sessionKey: "agent:test:ordinary" })).toBe(ordinary);
   });
 
   it("preserves a runtime while a bounded app view lease is active", async () => {

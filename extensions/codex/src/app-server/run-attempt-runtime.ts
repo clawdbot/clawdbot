@@ -21,6 +21,7 @@ import {
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
+import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
@@ -156,7 +157,30 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     params.scheduledToolPolicy !== undefined &&
     Array.isArray(params.toolsAllow);
   const ownsScheduledConfiguredMcpSurface =
-    authenticatedScheduledMode && bundleMcpThreadConfig.staticServerNames.length > 0;
+    authenticatedScheduledMode &&
+    (bundleMcpThreadConfig.staticServerNames.length > 0 ||
+      mutable.startupBinding?.configuredMcpOwnershipVersion === 1);
+  const mayResolveScheduledConfiguredMcpCreatorAuthority =
+    !authenticatedScheduledMode &&
+    canResolveScheduledConfiguredMcpCreatorAuthority({
+      trigger: params.trigger,
+      connectionClass: appServer.connectionClass,
+      bindingKind: connection.bindingIdentity.kind,
+      bindingSessionKey:
+        connection.bindingIdentity.kind === "session"
+          ? connection.bindingIdentity.sessionKey
+          : undefined,
+      sessionKey: params.sessionKey,
+      usesSupervisionConnection,
+      preservesNativeModel: mutable.startupBinding?.preserveNativeModel === true,
+      senderIsOwner: params.senderIsOwner,
+      senderId: params.senderId,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      spawnedBy: params.spawnedBy,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      hasStaticConfiguredMcp: bundleMcpThreadConfig.staticServerNames.length > 0,
+    });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -222,6 +246,8 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     bundleMcpThreadConfig,
     authenticatedScheduledMode,
     ownsScheduledConfiguredMcpSurface,
+    canResolveScheduledConfiguredMcpCreatorAuthority:
+      mayResolveScheduledConfiguredMcpCreatorAuthority,
     codexMcpToolOverrides,
     sandboxExecServerEnabled,
     nativeToolSurfaceEnabled,

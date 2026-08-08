@@ -1417,6 +1417,128 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
+  it("lazily snapshots configured MCP authority for a default agentTurn add", async () => {
+    const identities: unknown[] = [];
+    callGatewayMock.mockImplementation(async () => {
+      identities.push(getGatewayToolCallerIdentity());
+      return { ok: true };
+    });
+    const resolveCreatorToolAuthority = vi.fn(async () => ({
+      tools: ["read", "cron", "configured__lookup"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    }));
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-default-configured-mcp", {
+      action: "add",
+      job: buildReminderAgentTurnJob(),
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall().params).toMatchObject({
+      payload: {
+        toolsAllow: ["read", "automations", "configured__lookup"],
+        toolsAllowIsDefault: true,
+      },
+    });
+    expect(identities).toEqual([
+      expect.objectContaining({ cronToolsAllowCapture: "final-executable-surface" }),
+    ]);
+  });
+
+  it.each([
+    ["finite", ["read"]],
+    ["empty", []],
+  ])("keeps an explicit %s add offline and exact", async (_label, toolsAllow) => {
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("must stay offline");
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-explicit-configured-mcp", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow },
+      },
+    });
+
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow } });
+  });
+
+  it("resolves an unknown finite add name and cannot pre-authorize a future tool", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => ({
+      tools: ["read"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    }));
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-future-configured-mcp", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+      },
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+  });
+
+  it("resolves symbolic groups before persisting an add cap", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => ({
+      tools: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    }));
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-symbolic-configured-mcp", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["group:plugins"] },
+      },
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall().params).toMatchObject({
+      payload: { toolsAllow: ["configured__lookup"] },
+    });
+  });
+
+  it("does not write a default add when configured MCP authentication fails", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority: async () => {
+        throw new Error("Sign in to configured MCP, then retry; no automation changes were saved.");
+      },
+    });
+
+    await expect(
+      tool.execute("call-default-auth-failure", {
+        action: "add",
+        job: buildReminderAgentTurnJob(),
+      }),
+    ).rejects.toThrow("no automation changes were saved");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("fails only inherited-default adds while final tool capture is unavailable", async () => {
     const captureRef = {};
     const tool = createTestCronTool({
@@ -2629,7 +2751,13 @@ describe("cron tool", () => {
   });
 
   it("recovers flattened model-only payload patch params for update action", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-5",
+        configRevision: "sha256:model-only",
+        payload: { kind: "agentTurn", message: "before" },
+      })
+      .mockResolvedValueOnce({ ok: true });
 
     const tool = createTestCronTool();
     await tool.execute("call-update-flat-model-only", {
@@ -2640,7 +2768,7 @@ describe("cron tool", () => {
       toolsAllow: [" exec ", " read "],
     });
 
-    const params = expectSingleGatewayCallMethod("cron.update") as
+    const params = readGatewayCall(1).params as
       | {
           id?: string;
           patch?: {
@@ -3029,6 +3157,156 @@ describe("cron tool", () => {
     });
   });
 
+  it("keeps payload metadata updates offline and preserves the stored cap", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-metadata",
+        configRevision: "sha256:metadata",
+        payload: {
+          kind: "agentTurn",
+          message: "before",
+          toolsAllow: ["read", "configured__lookup"],
+          toolsAllowIsDefault: true,
+        },
+      })
+      .mockResolvedValueOnce({ ok: true });
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("metadata update must stay offline");
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-update-metadata-offline", {
+      action: "update",
+      id: "job-metadata",
+      patch: { payload: { kind: "agentTurn", message: "after" } },
+    });
+
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-metadata",
+        expectedConfigRevision: "sha256:metadata",
+        patch: { payload: { kind: "agentTurn", message: "after" } },
+      },
+    });
+  });
+
+  it("intersects a visible finite update offline without opening configured MCP", async () => {
+    const resolveCreatorToolAuthority = vi.fn(async () => {
+      throw new Error("visible finite update must stay offline");
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read", "cron"],
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-update-finite-offline", {
+      action: "update",
+      id: "job-finite",
+      patch: { payload: { kind: "agentTurn", toolsAllow: ["read"] } },
+    });
+
+    expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    expect(readGatewayCall().params).toMatchObject({
+      patch: { payload: { kind: "agentTurn", toolsAllow: ["read"] } },
+    });
+  });
+
+  it("reuses one resolved snapshot across a conflicting wildcard reauthorization", async () => {
+    const conflict = Object.assign(new Error("changed"), {
+      name: "GatewayClientRequestError",
+      details: { code: "CRON_JOB_CHANGED" },
+    });
+    const writeIdentities: unknown[] = [];
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-resolve-race",
+        configRevision: "sha256:first",
+        payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+      })
+      .mockImplementationOnce(async () => {
+        writeIdentities.push(getGatewayToolCallerIdentity());
+        throw conflict;
+      })
+      .mockResolvedValueOnce({
+        id: "job-resolve-race",
+        configRevision: "sha256:second",
+        payload: { kind: "agentTurn", message: "before", toolsAllow: [] },
+      })
+      .mockImplementationOnce(async () => {
+        writeIdentities.push(getGatewayToolCallerIdentity());
+        return { ok: true };
+      });
+    const resolveCreatorToolAuthority = vi.fn(async () => ({
+      tools: ["read", "configured__lookup"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    }));
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority,
+    });
+
+    await tool.execute("call-update-resolve-race", {
+      action: "update",
+      id: "job-resolve-race",
+      patch: { payload: { toolsAllow: ["*"] } },
+    });
+
+    expect(resolveCreatorToolAuthority).toHaveBeenCalledOnce();
+    expect(readGatewayCall(1).params).toMatchObject({
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          toolsAllow: ["read", "configured__lookup"],
+          toolsAllowIsDefault: true,
+        },
+      },
+    });
+    expect(readGatewayCall(3).params).toMatchObject({
+      expectedConfigRevision: "sha256:second",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          toolsAllow: ["read", "configured__lookup"],
+          toolsAllowIsDefault: true,
+        },
+      },
+    });
+    expect(writeIdentities).toEqual([
+      expect.objectContaining({ cronToolsAllowCapture: "final-executable-surface" }),
+      expect.objectContaining({ cronToolsAllowCapture: "final-executable-surface" }),
+    ]);
+  });
+
+  it("does not write an update when configured MCP authentication fails", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-auth-failure",
+      configRevision: "sha256:auth-failure",
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      resolveCreatorToolAuthority: async () => {
+        throw new Error("Sign in to configured MCP, then retry; no automation changes were saved.");
+      },
+    });
+
+    await expect(
+      tool.execute("call-update-auth-failure", {
+        action: "update",
+        id: "job-auth-failure",
+        patch: { payload: { toolsAllow: ["*"] } },
+      }),
+    ).rejects.toThrow("no automation changes were saved");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall().method).toBe("cron.get");
+  });
+
   it("leaves a stored narrower cap untouched when updating without a policy patch", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
@@ -3093,7 +3371,7 @@ describe("cron tool", () => {
       params: {
         id: "job-race",
         expectedConfigRevision: "sha256:first",
-        patch: { payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] } },
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
       },
     });
     expect(readGatewayCall(3)).toEqual({
@@ -3101,7 +3379,7 @@ describe("cron tool", () => {
       params: {
         id: "job-race",
         expectedConfigRevision: "sha256:second",
-        patch: { payload: { kind: "agentTurn", message: "updated", toolsAllow: [] } },
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
       },
     });
   });
@@ -3154,7 +3432,6 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             model: "openai/gpt-5.5",
-            toolsAllow: ["read"],
           },
         },
       },

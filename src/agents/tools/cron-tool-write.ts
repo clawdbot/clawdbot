@@ -4,6 +4,7 @@ import { isRecord } from "../../utils.js";
 import { planCronJobUpdatePatch } from "./cron-tool-creator-cap.js";
 import type {
   CronCreatorToolAllowlistEntry,
+  CronCreatorToolAuthoritySnapshot,
   CronToolsAllowCaptureRef,
   GatewayToolCaller,
 } from "./cron-tool.types.js";
@@ -33,12 +34,19 @@ async function prepareCronJobUpdateForGateway(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
+  creatorAuthorityComplete: boolean;
+  resolveCreatorToolAuthority?: () => Promise<CronCreatorToolAuthoritySnapshot>;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
-}): Promise<{ patch: Record<string, unknown>; expectedConfigRevision?: string }> {
+}): Promise<{
+  patch: Record<string, unknown>;
+  expectedConfigRevision?: string;
+  resolvedAuthority?: CronCreatorToolAuthoritySnapshot;
+}> {
   const initialPlan = planCronJobUpdatePatch({
     patch: params.patch,
     creatorToolAllowlist: params.creatorToolAllowlist,
+    creatorAuthorityComplete: params.creatorAuthorityComplete,
   });
   if (initialPlan.kind === "ready") {
     return { patch: initialPlan.patch };
@@ -52,15 +60,29 @@ async function prepareCronJobUpdateForGateway(params: {
       "cron.get response is missing configRevision; restart the Gateway before retrying this update",
     );
   }
-  const finalPlan = planCronJobUpdatePatch({
+  let resolvedAuthority: CronCreatorToolAuthoritySnapshot | undefined;
+  let finalPlan = planCronJobUpdatePatch({
     patch: params.patch,
     creatorToolAllowlist: params.creatorToolAllowlist,
     currentJob: existingRecord,
+    creatorAuthorityComplete: params.creatorAuthorityComplete,
   });
+  if (finalPlan.kind === "needs-creator-authority") {
+    if (!params.resolveCreatorToolAuthority) {
+      throw new Error("cron update requires complete creator tool authority");
+    }
+    resolvedAuthority = await params.resolveCreatorToolAuthority();
+    finalPlan = planCronJobUpdatePatch({
+      patch: params.patch,
+      creatorToolAllowlist: resolvedAuthority.tools,
+      currentJob: existingRecord,
+      creatorAuthorityComplete: true,
+    });
+  }
   if (finalPlan.kind !== "ready") {
     throw new Error("cron update patch planning did not use the loaded job");
   }
-  return { patch: finalPlan.patch, expectedConfigRevision };
+  return { patch: finalPlan.patch, expectedConfigRevision, resolvedAuthority };
 }
 
 function isCronJobConfigRevisionConflict(error: unknown): boolean {
@@ -78,35 +100,52 @@ export async function updateCronJobFromAgentTool(params: {
   patch: Record<string, unknown>;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
+  resolveCreatorToolAuthority?: () => Promise<CronCreatorToolAuthoritySnapshot>;
+  withCreatorAuthorityProvenance?: <T>(run: () => Promise<T>) => Promise<T>;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
 }): Promise<unknown> {
   const callerIncludedPayloadPatch = isRecord(params.patch.payload);
+  let creatorAuthorityPromise: Promise<CronCreatorToolAuthoritySnapshot> | undefined;
+  const resolveCreatorToolAuthority = params.resolveCreatorToolAuthority
+    ? () => (creatorAuthorityPromise ??= params.resolveCreatorToolAuthority!())
+    : undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const prepared = await prepareCronJobUpdateForGateway(params);
+    const prepared = await prepareCronJobUpdateForGateway({
+      ...params,
+      creatorAuthorityComplete: resolveCreatorToolAuthority === undefined,
+      resolveCreatorToolAuthority,
+    });
     if (callerIncludedPayloadPatch) {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);
     }
     const payload = isRecord(prepared.patch.payload) ? prepared.patch.payload : undefined;
+    const captureSource = prepared.resolvedAuthority
+      ? prepared.resolvedAuthority.provenance.source
+      : params.creatorToolAllowlistCaptureRef?.value?.source;
     if (
       payload?.toolsAllowIsDefault === true &&
-      params.creatorToolAllowlistCaptureRef &&
-      params.creatorToolAllowlistCaptureRef?.value?.source !== "final-executable-surface"
+      (prepared.resolvedAuthority || params.creatorToolAllowlistCaptureRef) &&
+      captureSource !== "final-executable-surface"
     ) {
       throw new Error(
         "The final tool surface is unavailable, so this automation was not updated with an incomplete inherited tool cap. Retry after configured MCP discovery succeeds, or provide an explicit tools list.",
       );
     }
     try {
-      return await params.callGateway("cron.update", params.gatewayOpts, {
-        id: params.id,
-        patch: prepared.patch,
-        ...(prepared.expectedConfigRevision
-          ? { expectedConfigRevision: prepared.expectedConfigRevision }
-          : {}),
-      });
+      const write = async () =>
+        await params.callGateway("cron.update", params.gatewayOpts, {
+          id: params.id,
+          patch: prepared.patch,
+          ...(prepared.expectedConfigRevision
+            ? { expectedConfigRevision: prepared.expectedConfigRevision }
+            : {}),
+        });
+      return prepared.resolvedAuthority && params.withCreatorAuthorityProvenance
+        ? await params.withCreatorAuthorityProvenance(write)
+        : await write();
     } catch (error) {
       if (attempt === 0 && isCronJobConfigRevisionConflict(error)) {
         continue;

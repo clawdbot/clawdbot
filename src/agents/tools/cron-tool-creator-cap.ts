@@ -15,7 +15,8 @@ type NormalizedCronCreatorTool = {
 
 type CronJobUpdatePatchPlan =
   | { kind: "ready"; patch: Record<string, unknown> }
-  | { kind: "needs-current-job" };
+  | { kind: "needs-current-job" }
+  | { kind: "needs-creator-authority" };
 
 export function assertInheritedCronToolCaptureReady(
   value: unknown,
@@ -103,6 +104,70 @@ function hasCronTriggerScript(value: unknown): boolean {
   return isRecord(value) && typeof value.script === "string" && value.script.trim().length > 0;
 }
 
+function classifyExplicitToolsAllow(
+  payload: Record<string, unknown> | undefined,
+): "absent" | "empty" | "finite" | "resolved" {
+  if (!payload || !Object.hasOwn(payload, "toolsAllow")) {
+    return "absent";
+  }
+  if (!Array.isArray(payload.toolsAllow)) {
+    return "resolved";
+  }
+  const values = payload.toolsAllow.filter((entry): entry is string => typeof entry === "string");
+  if (values.length === 0) {
+    return "empty";
+  }
+  return values.some((entry) => {
+    const normalized = normalizeToolName(entry);
+    return normalized === "*" || normalized.startsWith("group:");
+  })
+    ? "resolved"
+    : "finite";
+}
+
+function explicitFiniteToolsNeedResolution(
+  payload: Record<string, unknown> | undefined,
+  creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
+): boolean {
+  if (classifyExplicitToolsAllow(payload) !== "finite") {
+    return false;
+  }
+  const toolsAllow = payload?.toolsAllow;
+  if (!Array.isArray(toolsAllow)) {
+    return false;
+  }
+  const creatorNames = new Set(
+    normalizeCronCreatorToolsAllow(creatorToolAllowlist ?? []).map((tool) => tool.name),
+  );
+  return normalizeCronToolsAllow(
+    toolsAllow.filter((entry): entry is string => typeof entry === "string"),
+  ).some((name) => !creatorNames.has(name));
+}
+
+/** Whether an add needs the creator's complete authority rather than an explicit empty cap. */
+export function cronCreateRequiresCreatorAuthority(
+  value: unknown,
+  creatorToolAllowlist?: readonly CronCreatorToolAllowlistEntry[],
+): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const payload = isRecord(value.payload) ? value.payload : undefined;
+  const explicitToolsAllow = classifyExplicitToolsAllow(payload);
+  if (explicitToolsAllow === "empty") {
+    return false;
+  }
+  if (explicitToolsAllow === "finite") {
+    return explicitFiniteToolsNeedResolution(payload, creatorToolAllowlist);
+  }
+  return (
+    hasCronTriggerScript(value.trigger) ||
+    payload?.kind === "agentTurn" ||
+    payload?.kind === "script" ||
+    explicitToolsAllow === "resolved"
+  );
+}
+
 function capCronJobToolsAllow(params: {
   payload: Record<string, unknown>;
   trigger?: unknown;
@@ -162,7 +227,10 @@ export function capCronJobToolsAllowOnCreate(
   value: unknown,
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
 ): void {
-  if (!creatorToolAllowlist || !isRecord(value) || !isRecord(value.payload)) {
+  if (!isRecord(value) || !isRecord(value.payload)) {
+    return;
+  }
+  if (!creatorToolAllowlist) {
     return;
   }
   capCronJobToolsAllow({
@@ -181,31 +249,42 @@ export function planCronJobUpdatePatch(params: {
   patch: Record<string, unknown>;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   currentJob?: Record<string, unknown>;
+  creatorAuthorityComplete?: boolean;
 }): CronJobUpdatePatchPlan {
   const patch = structuredClone(params.patch);
   const payload = isRecord(patch.payload) ? patch.payload : undefined;
+  const explicitPayloadKind = readCronPayloadKind(payload);
+  const explicitToolsAllow = classifyExplicitToolsAllow(payload);
   if (payload === undefined && !Object.hasOwn(patch, "trigger")) {
     // Schedule, delivery, naming, and enabled-state edits do not reauthorize
     // legacy jobs. Only tool-runtime changes may synthesize durable authority.
     return { kind: "ready", patch };
   }
-  const explicitPayloadKind = readCronPayloadKind(payload);
+  if (
+    explicitPayloadKind !== undefined &&
+    explicitToolsAllow === "absent" &&
+    params.creatorAuthorityComplete !== false &&
+    !params.creatorToolAllowlist &&
+    !Object.hasOwn(patch, "trigger")
+  ) {
+    return { kind: "ready", patch };
+  }
+  if (
+    params.creatorAuthorityComplete === false &&
+    explicitFiniteToolsNeedResolution(payload, params.creatorToolAllowlist)
+  ) {
+    return { kind: "needs-creator-authority" };
+  }
   if (
     params.creatorToolAllowlist &&
-    explicitPayloadKind !== undefined &&
-    payload &&
-    Object.hasOwn(payload, "toolsAllow")
+    (explicitToolsAllow === "empty" || explicitToolsAllow === "finite") &&
+    explicitPayloadKind !== undefined
   ) {
     capCronJobToolsAllow({
-      payload,
+      payload: payload!,
       trigger: patch.trigger,
       creatorToolAllowlist: params.creatorToolAllowlist,
     });
-    return { kind: "ready", patch };
-  }
-
-  const needsStoredPayloadKind = payload !== undefined && explicitPayloadKind === undefined;
-  if (!needsStoredPayloadKind && !params.creatorToolAllowlist) {
     return { kind: "ready", patch };
   }
   if (!params.currentJob) {
@@ -213,23 +292,48 @@ export function planCronJobUpdatePatch(params: {
   }
 
   const existingPayload = params.currentJob.payload;
+  const existingPayloadRecord = isRecord(existingPayload) ? existingPayload : undefined;
+  const existingPayloadKind = readCronPayloadKind(existingPayload);
   const payloadKind = explicitPayloadKind ?? readCronPayloadKind(existingPayload);
   if (payload && payloadKind !== undefined) {
     payload.kind = payloadKind;
     patch.payload = payload;
   }
-  if (!params.creatorToolAllowlist) {
-    return { kind: "ready", patch };
-  }
 
   const trigger = Object.hasOwn(patch, "trigger") ? patch.trigger : params.currentJob.trigger;
-  const writesToolsAllow = payload !== undefined && Object.hasOwn(payload, "toolsAllow");
+  const startsToolPayload =
+    explicitPayloadKind !== undefined &&
+    explicitPayloadKind !== existingPayloadKind &&
+    (payloadKind === "agentTurn" || payloadKind === "script");
+  const startsToolTrigger =
+    Object.hasOwn(patch, "trigger") &&
+    hasCronTriggerScript(trigger) &&
+    !hasCronTriggerScript(params.currentJob.trigger);
+  const reusesDefaultAuthority =
+    explicitToolsAllow === "absent" &&
+    (startsToolPayload || startsToolTrigger) &&
+    (existingPayloadRecord?.toolsAllowIsDefault === true ||
+      !Array.isArray(existingPayloadRecord?.toolsAllow));
+  const needsResolvedAuthority =
+    explicitToolsAllow === "resolved" ||
+    reusesDefaultAuthority ||
+    explicitFiniteToolsNeedResolution(payload, params.creatorToolAllowlist);
+  if (needsResolvedAuthority && params.creatorAuthorityComplete === false) {
+    return { kind: "needs-creator-authority" };
+  }
   if (
-    payloadKind !== "agentTurn" &&
-    payloadKind !== "script" &&
-    !hasCronTriggerScript(trigger) &&
-    !writesToolsAllow
+    !needsResolvedAuthority &&
+    (explicitToolsAllow === "empty" || explicitToolsAllow === "finite") &&
+    params.creatorToolAllowlist
   ) {
+    capCronJobToolsAllow({
+      payload: payload!,
+      trigger,
+      creatorToolAllowlist: params.creatorToolAllowlist,
+    });
+    return { kind: "ready", patch };
+  }
+  if (!needsResolvedAuthority || !params.creatorToolAllowlist) {
     return { kind: "ready", patch };
   }
 
@@ -243,8 +347,8 @@ export function planCronJobUpdatePatch(params: {
     trigger,
     creatorToolAllowlist: params.creatorToolAllowlist,
     defaultToolsAllow:
-      isRecord(existingPayload) && existingPayload.toolsAllowIsDefault !== true
-        ? existingPayload.toolsAllow
+      existingPayloadRecord && existingPayloadRecord.toolsAllowIsDefault !== true
+        ? existingPayloadRecord.toolsAllow
         : undefined,
   });
   return { kind: "ready", patch };

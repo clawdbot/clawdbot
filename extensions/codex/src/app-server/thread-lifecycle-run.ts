@@ -331,14 +331,16 @@ export async function startOrResumeThread(
       params.persistentWebSearchAllowed !== false &&
       transientWebSearchRestriction;
     const unknownProviderWebSearchSupport = params.nativeProviderWebSearchSupport === "unknown";
-    if (
+    const configuredMcpOwnershipChanged =
       binding?.threadId &&
-      params.configuredMcpOwnershipVersion === 1 &&
-      (binding.configuredMcpOwnershipVersion !== 1 ||
-        binding.dynamicToolsFingerprint === undefined ||
-        binding.mcpServersFingerprint !== undefined ||
-        binding.userMcpServersFingerprint !== undefined)
-    ) {
+      ((params.configuredMcpOwnershipVersion === 1 &&
+        (binding.configuredMcpOwnershipVersion !== 1 ||
+          binding.dynamicToolsFingerprint === undefined ||
+          binding.mcpServersFingerprint !== undefined ||
+          binding.userMcpServersFingerprint !== undefined)) ||
+        (params.configuredMcpOwnershipVersion !== 1 &&
+          binding.configuredMcpOwnershipVersion === 1));
+    if (configuredMcpOwnershipChanged) {
       // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
       // Rotate legacy or ambiguous bindings so no stale native surface can survive the handoff.
       assertCodexBindingMayBeReplaced(binding, "changing configured MCP ownership");
@@ -653,10 +655,10 @@ export async function startOrResumeThread(
       }
     }
 
-    if (initialBoundThreadId && !preserveExistingBinding) {
+    if (initialBoundThreadId && !preserveExistingBinding && !replacementPredecessor) {
       await releaseRetainedThread(initialBoundThreadId);
     }
-    return await startFreshCodexThread(params, {
+    const started = await startFreshCodexThread(params, {
       bindingIdentity,
       startModelSelection,
       startModelProvider,
@@ -683,5 +685,11 @@ export async function startOrResumeThread(
       rotatedContextEngineBinding,
       replacementPredecessor,
     });
+    if (replacementPredecessor) {
+      // The predecessor remains authoritative through thread/start and exact-owner CAS.
+      // Release only that prior subscription after the successor has committed.
+      await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
+    }
+    return started;
   });
 }

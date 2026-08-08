@@ -138,6 +138,7 @@ export function createOpenClawTools(
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
     cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
     cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
+    resolveCronCreatorToolAuthority?: CronToolOptions["resolveCreatorToolAuthority"];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
     /** Trusted normalized conversation kind for the active inbound turn. */
@@ -454,7 +455,6 @@ export function createOpenClawTools(
       allowlist: explicitFactoryAllowlist,
       denylist: explicitFactoryDenylist,
     });
-  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callGateway;
   const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
     config: resolvedConfig,
@@ -487,9 +487,7 @@ export function createOpenClawTools(
                 }),
               ]),
           createCronTool({
-            // attempt-tool-base-prepare preserves the durable store key as runSessionKey.
-            // Cron bindings, wakes, and reminder history need that transcript owner; a
-            // policy-scoped DM key can be empty and cleanup-retired, leaving jobs dangling.
+            // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
@@ -500,6 +498,7 @@ export function createOpenClawTools(
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
             creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
             runId: options?.runId,
             ...(options?.cronSelfRemoveOnlyJobId
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
@@ -657,7 +656,7 @@ export function createOpenClawTools(
             config: resolvedConfig,
           }),
         ]),
-    ...(includeSubagentSpawnTool
+    ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,

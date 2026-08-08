@@ -55,6 +55,7 @@ import {
 } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
+import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -781,6 +782,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             pluginToolDenylist,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
+            resolveCronCreatorToolAuthority: bindActiveCronCreatorAuthorityResolver(options?.runId),
             currentChannelId: options?.currentChannelId,
             currentChatType: options?.chatType,
             currentMessagingTarget: options?.currentMessagingTarget,

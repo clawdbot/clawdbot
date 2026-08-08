@@ -46,6 +46,7 @@ import {
 import {
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
+  cronCreateRequiresCreatorAuthority,
 } from "./cron-tool-creator-cap.js";
 import {
   assertCronPacingInput,
@@ -393,8 +394,17 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             ) {
               delete job.enabled;
             }
-            capCronJobToolsAllowOnCreate(job, opts?.creatorToolAllowlist);
-            assertInheritedCronToolCaptureReady(job, opts?.creatorToolAllowlistCaptureRef);
+            const resolvedAuthority =
+              cronCreateRequiresCreatorAuthority(job, opts?.creatorToolAllowlist) &&
+              opts?.resolveCreatorToolAuthority
+                ? await opts.resolveCreatorToolAuthority()
+                : undefined;
+            const creatorToolAllowlist = resolvedAuthority?.tools ?? opts?.creatorToolAllowlist;
+            const creatorToolAllowlistCaptureRef = resolvedAuthority
+              ? { value: resolvedAuthority.provenance }
+              : opts?.creatorToolAllowlistCaptureRef;
+            capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
+            assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
             if (job && typeof job === "object") {
               const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
               const resolvedSessionKey = opts?.agentSessionKey
@@ -484,10 +494,18 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
                 }
               }
             }
+            const writeCallerIdentity =
+              resolvedAuthority && callerIdentity
+                ? { ...callerIdentity, cronToolsAllowCapture: "final-executable-surface" as const }
+                : callerIdentity;
             return jsonResult(
-              await callGateway("cron.add", gatewayOpts, {
-                ...job,
-              }),
+              await withGatewayToolCallerIdentity(
+                writeCallerIdentity,
+                async () =>
+                  await callGateway("cron.add", gatewayOpts, {
+                    ...job,
+                  }),
+              ),
             );
           }
           case "update": {
@@ -537,6 +555,17 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
                 patch,
                 creatorToolAllowlist: opts?.creatorToolAllowlist,
                 creatorToolAllowlistCaptureRef: opts?.creatorToolAllowlistCaptureRef,
+                resolveCreatorToolAuthority: opts?.resolveCreatorToolAuthority,
+                withCreatorAuthorityProvenance: callerIdentity
+                  ? async (run) =>
+                      await withGatewayToolCallerIdentity(
+                        {
+                          ...callerIdentity,
+                          cronToolsAllowCapture: "final-executable-surface",
+                        },
+                        run,
+                      )
+                  : undefined,
                 gatewayOpts,
                 callGateway,
               }),

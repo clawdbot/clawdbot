@@ -2,6 +2,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mcpMocks = vi.hoisted(() => ({
+  authorityResolvers: [] as Array<
+    () => Promise<{
+      tools: readonly (string | { name: string; pluginId?: string })[];
+      provenance: { version: 1; source: "final-executable-surface" };
+    }>
+  >,
   captureCalls: [] as Array<{
     sourceNames: string[];
     storedNames: string[];
@@ -30,6 +36,16 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/codex-mcp-projection")>();
   return {
     ...actual,
+    runWithCronCreatorAuthorityResolver: <T>(params: {
+      resolve: () => Promise<{
+        tools: readonly (string | { name: string; pluginId?: string })[];
+        provenance: { version: 1; source: "final-executable-surface" };
+      }>;
+      run: () => T;
+    }) => {
+      mcpMocks.authorityResolvers.push(params.resolve);
+      return params.run();
+    },
     materializeStaticMcpToolsForScheduledHarnessRun: async (params: Record<string, unknown>) => {
       mcpMocks.staticCalls.push(params);
       const materialized = await actual.materializeStaticMcpToolsForScheduledHarnessRun(
@@ -38,7 +54,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
       return {
         ...materialized,
         ...(mcpMocks.staticDiagnosticNotice
-          ? { diagnosticNotice: mcpMocks.staticDiagnosticNotice }
+          ? { diagnosticNotice: mcpMocks.staticDiagnosticNotice, tools: [] }
           : {}),
         dispose: async () => {
           await materialized.dispose();
@@ -76,6 +92,7 @@ import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 setupRunAttemptTestHooks();
 
 beforeEach(() => {
+  mcpMocks.authorityResolvers.length = 0;
   mcpMocks.captureCalls.length = 0;
   mcpMocks.staticCalls.length = 0;
   mcpMocks.requesterCalls = 0;
@@ -85,6 +102,7 @@ beforeEach(() => {
 
 function configureFakeMcp(params: ReturnType<typeof createParams>): void {
   setCodexTestModelSupportsTools(params, true);
+  params.cleanupBundleMcpOnRunEnd = true;
   params.runtimePlan = createCodexRuntimePlanFixture();
   params.config = {
     ...params.config,
@@ -162,7 +180,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(binding).not.toHaveProperty("userMcpServersFingerprint");
   });
 
-  it("keeps an ordinary turn running without stamping failed native inventory", async () => {
+  it("keeps ordinary configured MCP native without probing or stamping its inventory", async () => {
     const sessionFile = path.join(tempDir, "session-native-mcp-auth-failure.jsonl");
     const params = createParams(
       sessionFile,
@@ -191,9 +209,10 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toBeDefined();
 
-    expect(harness.requests.map((request) => request.method)).toContain("mcpServerStatus/list");
+    expect(harness.requests.map((request) => request.method)).not.toContain("mcpServerStatus/list");
     expect(mcpMocks.staticCalls).toHaveLength(0);
-    expect(mcpMocks.captureCalls).toHaveLength(0);
+    expect(mcpMocks.captureCalls).toHaveLength(1);
+    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
   });
 
   it("captures a restricted ordinary turn without inventing intentionally disabled native MCP", async () => {
@@ -218,6 +237,44 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     });
   });
 
+  it("lazily snapshots configured MCP through the local-operator resolver without replacing native MCP", async () => {
+    const sessionFile = path.join(tempDir, "session-local-operator-mutation.jsonl");
+    const params = createParams(
+      sessionFile,
+      path.join(tempDir, "workspace-local-operator-mutation"),
+    );
+    configureFakeMcp(params);
+    params.trigger = "user";
+    params.senderIsOwner = true;
+
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
+    expect(JSON.stringify(threadStart?.config ?? {})).toContain("fake");
+    expect(JSON.stringify(threadStart?.dynamicTools ?? [])).not.toContain("fake__show");
+    expect(mcpMocks.staticCalls).toHaveLength(0);
+
+    expect(mcpMocks.authorityResolvers).toHaveLength(2);
+    const authority = await mcpMocks.authorityResolvers[0]!();
+    expect(authority.provenance).toEqual({ version: 1, source: "final-executable-surface" });
+    expect(
+      authority.tools.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    ).toContain("fake__show");
+    expect(mcpMocks.staticCalls).toHaveLength(1);
+    expect(mcpMocks.staticCalls[0]).toMatchObject({
+      sessionId: `cron-authority:${params.runId}`,
+      retireSessionRuntimeAfterDispose: true,
+    });
+    expect(mcpMocks.staticCalls[0]).not.toHaveProperty("sessionKey");
+    expect(mcpMocks.captureCalls.at(-1)?.storedNames).toContain("fake__show");
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+  });
+
   it("keeps static discovery failures visible without stamping inherited authority", async () => {
     const sessionFile = path.join(tempDir, "session-static-mcp-discovery-failure.jsonl");
     const params = createParams(
@@ -238,7 +295,8 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     expect(JSON.stringify(threadStart?.params)).toContain("fake: authentication required");
-    expect(mcpMocks.captureCalls).toHaveLength(0);
+    expect(mcpMocks.captureCalls).toHaveLength(1);
+    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toBeDefined();

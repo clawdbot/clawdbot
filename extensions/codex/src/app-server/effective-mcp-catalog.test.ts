@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadCodexEffectiveMcpCatalog,
-  loadCodexEffectiveMcpCatalogFromThread,
-} from "./effective-mcp-catalog.js";
+import { loadCodexEffectiveMcpCatalog } from "./effective-mcp-catalog.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
   retainById: vi.fn(),
@@ -119,49 +116,5 @@ describe("loadCodexEffectiveMcpCatalog", () => {
       ),
     ).resolves.toBeUndefined();
     expect(sharedClientMocks.retainById).not.toHaveBeenCalled();
-  });
-});
-
-describe("loadCodexEffectiveMcpCatalogFromThread initialized inventory", () => {
-  function status(overrides: Record<string, unknown> = {}) {
-    return {
-      name: "docs",
-      serverInfo: { name: "docs-mcp", version: "1.0.0" },
-      authStatus: "unsupported",
-      tools: {},
-      ...overrides,
-    };
-  }
-
-  it("accepts an initialized authenticated server with zero tools", async () => {
-    const request = vi.fn().mockResolvedValue({ data: [status()], nextCursor: null });
-
-    const catalog = await loadCodexEffectiveMcpCatalogFromThread({
-      client: { request } as never,
-      threadId: "thread-1",
-      mcpServerNames: ["docs"],
-      requireInitializedInventory: true,
-    });
-
-    expect(catalog.servers.docs).toMatchObject({ serverName: "docs", toolCount: 0 });
-    expect(catalog.tools).toEqual([]);
-  });
-
-  it.each([
-    ["missing status", []],
-    ["unfinished initialization", [status({ serverInfo: null })]],
-    ["missing authentication status", [status({ authStatus: undefined })]],
-    ["required authentication", [status({ authStatus: "notLoggedIn" })]],
-  ])("rejects %s before creator-cap capture", async (_name, data) => {
-    const request = vi.fn().mockResolvedValue({ data, nextCursor: null });
-
-    await expect(
-      loadCodexEffectiveMcpCatalogFromThread({
-        client: { request } as never,
-        threadId: "thread-1",
-        mcpServerNames: ["docs"],
-        requireInitializedInventory: true,
-      }),
-    ).rejects.toThrow(/configured MCP inventory is incomplete/);
   });
 });
