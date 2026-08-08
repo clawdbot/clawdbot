@@ -336,30 +336,41 @@ describe.each([
     { reason: "unescaped control character", name: "lookup", arguments: '{"query":"cats\n"}' },
     { reason: "non-object JSON", name: "lookup", arguments: '["cats"]' },
     { reason: "empty arguments", name: "lookup", arguments: "" },
-    { reason: "missing function name", name: "", arguments: '{"query":"cats"}' },
   ] as const)(
-    "rejects an authoritative modern tool terminal with $reason",
+    "surfaces an authoritative modern tool terminal with $reason for runtime validation",
     async ({ name, arguments: rawArguments }) => {
       const { eventTypes, result } = await collectFixture(
         confirmedModernCallChunks(rawArguments, { id: "call_malformed", name }),
       );
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("incomplete or malformed tool call");
-      expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-      expect(eventTypes).not.toContain("toolcall_end");
+      expect(result.stopReason).toBe("toolUse");
+      const calls = result.content.filter((block) => block.type === "toolCall");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.arguments).toBeUndefined();
+      expect(eventTypes).toContain("toolcall_end");
     },
   );
+
+  it("still rejects a terminal call without an intended tool name", async () => {
+    const { eventTypes, result } = await collectFixture(
+      confirmedModernCallChunks('{"query":"cats"}', { id: "call_missing_name", name: "" }),
+    );
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("incomplete or malformed tool call");
+    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+    expect(eventTypes).not.toContain("toolcall_end");
+  });
 
   it.each([
     { reason: "incomplete JSON", arguments: '{"query":"cats"' },
     { reason: "invalid string escape", arguments: String.raw`{"query":"cats\q"}` },
     { reason: "unescaped control character", arguments: '{"query":"cats\n"}' },
-  ] as const)("rejects an authoritative legacy function terminal with $reason", async (value) => {
+  ] as const)("surfaces a legacy function terminal with $reason for validation", async (value) => {
     const { eventTypes, result } = await collectFixture(confirmedLegacyCallChunks(value.arguments));
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("incomplete or malformed tool call");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
+    expect(result.stopReason).toBe("toolUse");
+    const calls = result.content.filter((block) => block.type === "toolCall");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.arguments).toBeUndefined();
+    expect(eventTypes).toContain("toolcall_end");
   });
 
   it("rejects every parallel call when a sibling has incomplete arguments", async () => {
@@ -377,9 +388,11 @@ describe.each([
       }),
       chunk({}, "tool_calls"),
     ]);
-    expect(result.stopReason).toBe("error");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
+    expect(result.stopReason).toBe("toolUse");
+    const calls = result.content.filter((block) => block.type === "toolCall");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.arguments).toBeUndefined();
+    expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(2);
   });
 
   it("removes provisional calls when the response is aborted mid-stream", async () => {

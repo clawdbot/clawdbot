@@ -43,6 +43,10 @@ function normalizeFailurePhase(
 }
 
 function codeModeFailureFromOutcome(context: AfterToolOutcomeContext): CodeModeFailure | undefined {
+  if (!context.executionStarted && context.errorKind === "argument-validation") {
+    // The generic runtime owns schema-rejection recovery and its single durable budget.
+    return undefined;
+  }
   const details = isRecord(context.result.details) ? context.result.details : {};
   if (details.status === "failed") {
     const bridgeDispatchStarted = details.bridgeDispatchStarted === true;
@@ -64,14 +68,12 @@ function codeModeFailureFromOutcome(context: AfterToolOutcomeContext): CodeModeF
   if (!context.isError) {
     return undefined;
   }
-  const argumentValidation =
-    !context.executionStarted && context.errorKind === "argument-validation";
   return {
-    code: argumentValidation ? "invalid_input" : "internal_error",
+    code: "internal_error",
     error: resultText(context.result) || "code mode execution failed",
-    failurePhase: argumentValidation ? "input" : "host",
+    failurePhase: "host",
     bridgeDispatchStarted: context.executionStarted,
-    bridgeDispatchKnown: argumentValidation,
+    bridgeDispatchKnown: false,
     details,
   };
 }

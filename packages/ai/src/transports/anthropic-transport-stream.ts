@@ -1481,7 +1481,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 arguments:
                   contentBlock.input && typeof contentBlock.input === "object"
                     ? (contentBlock.input as Record<string, unknown>)
-                    : {},
+                    : (undefined as never),
                 partialJson: "",
                 index,
               };
@@ -1649,6 +1649,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
+              if (
+                block.partialJson &&
+                !parseJsonObjectPreservingUnsafeIntegers(block.partialJson)
+              ) {
+                block.arguments = undefined as never;
+              }
               delete block.partialJson;
               eventSink.push({
                 type: "toolcall_end",

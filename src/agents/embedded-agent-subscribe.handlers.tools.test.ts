@@ -1437,16 +1437,43 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 
   it("emits a prepared validation diagnostic without model arguments", async () => {
     const { ctx, onAgentEvent } = createTestContext();
-    const error =
-      'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{"path":"secret.txt","contents":"PTY_PLANTED_SECRET"}';
-    await executeTool(ctx, {
+    await endTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-validation",
-      args: { path: "secret.txt" },
       isError: true,
       executionStarted: false,
       errorKind: "argument-validation",
-      result: { details: { status: "error", error } },
+      result: {
+        details: {
+          classification: "invalid_tool_arguments",
+          executionStarted: false,
+          reason: "schema_validation_failed",
+          correlation: {
+            runId: "run-test",
+            sessionId: "session-test-id",
+            sessionKey: "agent:unit-session",
+            turnId: "turn-1",
+            intendedTool: "edit",
+            providerToolCallId: "tool-edit-validation",
+            providerToolCallIdOrigin: "unknown",
+            provider: "openai",
+            transport: "openai-responses",
+          },
+          recovery: {
+            recoveryId: "recovery-1",
+            attempt: 1,
+            maxAttempts: 2,
+            remainingAttempts: 1,
+            state: "retry_available",
+          },
+          validation: {
+            argumentShape: "object",
+            issueCount: 1,
+            issues: [{ code: "required", path: "edits" }],
+            truncated: false,
+          },
+        },
+      },
     });
 
     expect(onAgentEvent).toHaveBeenCalledWith({
@@ -1457,6 +1484,11 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       }),
     });
     expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("PTY_PLANTED_SECRET");
+    expect(ctx.state.toolMetas).toEqual([]);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
   });
 
   it("does not export a validation-lookalike error from an executed tool", async () => {

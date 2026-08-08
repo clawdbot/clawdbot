@@ -8,6 +8,7 @@ const hoisted = vi.hoisted(() => ({
   applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
   createAgentSessionForEmbeddedRunner: vi.fn(),
+  createInvalidToolArgumentsRecovery: vi.fn(),
   createEmbeddedAgentResourceLoader: vi.fn(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
@@ -62,6 +63,9 @@ vi.mock("./attempt-client-tools.js", () => ({
 vi.mock("./code-mode-repair.js", () => ({
   installCodeModeRepairHook: hoisted.installCodeModeRepairHook,
 }));
+vi.mock("./invalid-tool-arguments-recovery.js", () => ({
+  createInvalidToolArgumentsRecovery: hoisted.createInvalidToolArgumentsRecovery,
+}));
 vi.mock("./message-tool-terminal.js", () => ({
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
 }));
@@ -114,6 +118,7 @@ function createInput(options?: {
   };
   const hookRunner = { id: "hooks" };
   const sessionToolAllowlist = [{ name: "read" }];
+  const invalidBeforeToolBatch = vi.fn(async () => undefined);
   const allCustomTools = [{ name: "custom" }];
   const clientToolRuntime = {
     builtinToolNames: new Set(["read"]),
@@ -139,6 +144,10 @@ function createInput(options?: {
   hoisted.createAgentSessionForEmbeddedRunner.mockImplementation(async () => {
     events.push("create-session");
     return { session: activeSession };
+  });
+  hoisted.createInvalidToolArgumentsRecovery.mockResolvedValue({
+    beforeToolBatch: invalidBeforeToolBatch,
+    install: vi.fn(() => events.push("install-invalid-tool-arguments-recovery")),
   });
   hoisted.applySystemPromptToSession.mockImplementation(() => {
     events.push("apply-system-prompt");
@@ -212,6 +221,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "apply-system-prompt",
       "install-terminal-hook",
       "install-code-mode-repair",
+      "install-invalid-tool-arguments-recovery",
       "stage:agent-session",
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
@@ -223,7 +233,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       expect.objectContaining({
         resourceLoader: fixture.resourceLoader,
       }),
-      { beforeToolBatch: undefined, contextOverflowRecoveryOwner: "caller" },
+      { beforeToolBatch: expect.any(Function), contextOverflowRecoveryOwner: "caller" },
     );
     expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[0]).not.toHaveProperty(
       "contextOverflowRecoveryOwner",
@@ -250,6 +260,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
     expect(hoisted.installCodeModeRepairHook).not.toHaveBeenCalled();
     expect(fixture.events).not.toContain("install-code-mode-repair");
+    expect(fixture.events).toContain("install-invalid-tool-arguments-recovery");
   });
 
   it("leaves overflow recovery with the session when no model budget was resolved", async () => {
@@ -262,7 +273,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
     expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
-      beforeToolBatch: undefined,
+      beforeToolBatch: expect.any(Function),
       contextOverflowRecoveryOwner: "session",
     });
   });

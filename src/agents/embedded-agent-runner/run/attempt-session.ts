@@ -24,6 +24,7 @@ import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
+import { createInvalidToolArgumentsRecovery } from "./invalid-tool-arguments-recovery.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import {
@@ -113,6 +114,26 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     ...input.clientToolPreparation,
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
+  const toolLoopBatchAdmission = input.clientToolPreparation.catalogToolHookContext
+    ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
+    : undefined;
+  const invalidToolArgumentsRecovery = await createInvalidToolArgumentsRecovery({
+    attempt,
+    sessionManager: input.sessionManager,
+    sessionLockController: input.sessionLockController,
+    downstreamBeforeToolBatch: toolLoopBatchAdmission,
+    notifyRejected: async (event) => {
+      await hookRunner?.runToolCallRejected(event, {
+        agentId: input.sessionAgentId,
+        sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
+        sessionId: attempt.sessionId,
+        runId: attempt.runId,
+        abortSignal: input.runAbortSignal,
+        toolName: event.correlation.intendedTool,
+        toolCallId: event.correlation.providerToolCallId,
+      });
+    },
+  });
 
   const sessionOptions: CreateAgentSessionOptions = {
     cwd: input.effectiveCwd,
@@ -170,9 +191,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
-    beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
-      ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
-      : undefined,
+    beforeToolBatch: invalidToolArgumentsRecovery.beforeToolBatch,
   });
   const activeSession = createdSession.session;
   if (!activeSession) {
@@ -200,6 +219,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
     installCodeModeRepairHook({ agent: activeSession.agent });
   }
+  invalidToolArgumentsRecovery.install(activeSession.agent);
   input.markStage("agent-session");
 
   return {

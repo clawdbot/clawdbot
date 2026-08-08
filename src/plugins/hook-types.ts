@@ -113,6 +113,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "tool_call_rejected"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
@@ -165,6 +166,7 @@ const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "tool_call_rejected",
   "tool_result_persist",
   "before_message_write",
   "session_start",
@@ -300,7 +302,7 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
       eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
     }
   : { eligibleTriggers?: never }) &
-  (K extends "before_tool_call" | "after_tool_call"
+  (K extends "before_tool_call" | "after_tool_call" | "tool_call_rejected"
     ? { matcher?: PluginToolMatcher }
     : { matcher?: never });
 
@@ -750,6 +752,44 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+export type PluginHookToolCallRejectedEvent = {
+  classification: "invalid_tool_arguments";
+  executionStarted: false;
+  reason:
+    | "schema_validation_failed"
+    | "retry_exhausted"
+    | "retry_not_matched"
+    | "retry_claimed_without_receipt";
+  correlation: {
+    runId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    turnId: string;
+    intendedTool: string;
+    providerToolCallId: string;
+    providerToolCallIdOrigin: "provider" | "runtime" | "unknown";
+    provider: string;
+    transport: string;
+  };
+  recovery: {
+    recoveryId: string;
+    attempt: 1 | 2;
+    maxAttempts: 2;
+    remainingAttempts: 0 | 1;
+    state: "retry_available" | "retry_exhausted" | "retry_not_matched" | "indeterminate";
+    terminalReason?: "retry_exhausted" | "retry_not_matched" | "retry_claimed_without_receipt";
+  };
+  validation: {
+    argumentShape: "array" | "boolean" | "null" | "number" | "object" | "string" | "undefined";
+    issueCount: number;
+    issues: Array<{
+      code: "additionalProperties" | "enum" | "required" | "schema" | "type";
+      path: string;
+    }>;
+    truncated: boolean;
+  };
 };
 
 export type PluginHookToolResultPersistContext = {
@@ -1326,6 +1366,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<PluginHookBeforeToolCallResult | void> | PluginHookBeforeToolCallResult | void;
   after_tool_call: (
     event: PluginHookAfterToolCallEvent,
+    ctx: PluginHookToolContext,
+  ) => Promise<void> | void;
+  tool_call_rejected: (
+    event: PluginHookToolCallRejectedEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
   tool_result_persist: (

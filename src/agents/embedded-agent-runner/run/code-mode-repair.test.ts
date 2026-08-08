@@ -67,7 +67,7 @@ function createAgent(previous?: Agent["afterToolOutcome"]): Agent {
 }
 
 describe("installCodeModeRepairHook", () => {
-  it("offers one repair for a pre-execution argument validation failure", async () => {
+  it("leaves pre-execution argument validation to the generic runtime budget", async () => {
     const agent = createAgent();
 
     const result = await agent.afterToolOutcome?.(
@@ -79,17 +79,7 @@ describe("installCodeModeRepairHook", () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      isError: true,
-      terminate: false,
-      details: {
-        status: "failed",
-        code: "invalid_input",
-        failurePhase: "input",
-        bridgeDispatchStarted: false,
-        repair: { allowed: true, remainingAttempts: 1 },
-      },
-    });
+    expect(result).toBeUndefined();
   });
 
   it("does not spend the repair token on successful pure computation", async () => {

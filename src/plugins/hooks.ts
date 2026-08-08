@@ -29,6 +29,7 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookToolCallRejectedEvent,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
   PluginHookAgentEndEvent,
@@ -283,7 +284,7 @@ function getHooksForName<K extends PluginHookName>(
 
 export function getToolHookMatcherScope(
   registry: HookRunnerRegistry,
-  hookName: "before_tool_call" | "after_tool_call",
+  hookName: "before_tool_call" | "after_tool_call" | "tool_call_rejected",
 ): PluginToolMatcherScope | undefined {
   return createPluginToolMatcherScope(
     getHooksForName(registry, hookName).map((registration) => registration.matcher),
@@ -1333,6 +1334,21 @@ export function createHookRunner(
     return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
+  /** Run the secret-safe pre-execution tool rejection observer hook. */
+  async function runToolCallRejected(
+    event: PluginHookToolCallRejectedEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<void> {
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return runVoidHook(
+      "tool_call_rejected",
+      immutableEvent,
+      ctx,
+      {},
+      immutableEvent.correlation.intendedTool,
+    );
+  }
+
   /**
    * Run tool_result_persist hook.
    *
@@ -1678,6 +1694,7 @@ export function createHookRunner(
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runToolCallRejected,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,

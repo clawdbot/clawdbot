@@ -7,6 +7,7 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookToolCallRejectedEvent,
   PluginHookToolContext,
 } from "./types.js";
 
@@ -564,5 +565,60 @@ describe("before_tool_call matcher scoping", () => {
       { ...stubCtx, toolName: "web_search" },
     );
     expect(handler).toHaveBeenCalledOnce();
+  });
+});
+
+describe("tool_call_rejected observation", () => {
+  it("is immutable and honors canonical tool matchers", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn((event: PluginHookToolCallRejectedEvent) => {
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(Object.isFrozen(event.recovery)).toBe(true);
+    });
+    addTestHook({
+      registry,
+      pluginId: "failure-observer",
+      hookName: "tool_call_rejected",
+      matcher: ["edit"],
+      handler: handler as never,
+    });
+    const runner = createHookRunner(registry);
+    const event = {
+      classification: "invalid_tool_arguments" as const,
+      executionStarted: false as const,
+      reason: "schema_validation_failed" as const,
+      correlation: {
+        turnId: "turn-1",
+        intendedTool: "edit",
+        providerToolCallId: "call-1",
+        providerToolCallIdOrigin: "provider" as const,
+        provider: "openai",
+        transport: "openai-responses",
+      },
+      recovery: {
+        recoveryId: "recovery-1",
+        attempt: 1 as const,
+        maxAttempts: 2 as const,
+        remainingAttempts: 1 as const,
+        state: "retry_available" as const,
+      },
+      validation: {
+        argumentShape: "object" as const,
+        issueCount: 1,
+        issues: [{ code: "required" as const, path: "path" }],
+        truncated: false,
+      },
+    };
+
+    await runner.runToolCallRejected(event, { ...stubCtx, toolName: "edit" });
+    await runner.runToolCallRejected(
+      {
+        ...event,
+        correlation: { ...event.correlation, intendedTool: "read" },
+      },
+      { ...stubCtx, toolName: "read" },
+    );
+    expect(handler).toHaveBeenCalledOnce();
+    expect(event.recovery.state).toBe("retry_available");
   });
 });

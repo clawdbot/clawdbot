@@ -2050,6 +2050,7 @@ describe("agentLoop tool termination", () => {
 
   it("marks argument validation failures with typed provenance", async () => {
     const executed: string[] = [];
+    const beforeToolCall = vi.fn();
     const afterToolOutcome = vi.fn(async () => ({
       details: { observed: "pre-execution" },
     }));
@@ -2082,7 +2083,7 @@ describe("agentLoop tool termination", () => {
       agentLoop(
         [{ role: "user", content: "hello", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
-        { ...config, afterToolOutcome },
+        { ...config, beforeToolCall, afterToolOutcome },
         undefined,
         streamFn,
       ),
@@ -2093,6 +2094,10 @@ describe("agentLoop tool termination", () => {
     );
 
     expect(executed).toEqual([]);
+    expect(beforeToolCall).not.toHaveBeenCalled();
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "tool_execution_start", toolCallId: "call-edit" }),
+    );
     expect(endEvent).toMatchObject({
       executionStarted: false,
       errorKind: "argument-validation",

@@ -483,13 +483,16 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         ? normalizeEligibleTriggers(opts?.eligibleTriggers)
         : undefined;
     const matcher =
-      effectiveHookName === "before_tool_call" || effectiveHookName === "after_tool_call"
+      effectiveHookName === "before_tool_call" ||
+      effectiveHookName === "after_tool_call" ||
+      effectiveHookName === "tool_call_rejected"
         ? normalizePluginToolMatcher(opts?.matcher)
         : undefined;
     if (
       opts?.matcher &&
       effectiveHookName !== "before_tool_call" &&
-      effectiveHookName !== "after_tool_call"
+      effectiveHookName !== "after_tool_call" &&
+      effectiveHookName !== "tool_call_rejected"
     ) {
       pushDiagnostic({
         level: "warn",

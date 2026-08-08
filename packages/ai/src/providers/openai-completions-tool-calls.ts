@@ -209,17 +209,16 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     } catch {
       completeArguments = undefined;
     }
-    if (
-      typeof toolCall.name !== "string" ||
-      toolCall.name.trim().length === 0 ||
-      !isRecord(completeArguments)
-    ) {
+    if (typeof toolCall.name !== "string" || toolCall.name.trim().length === 0) {
       output.stopReason = "error";
       output.errorMessage = "Provider returned an incomplete or malformed tool call";
       output.content = output.content.filter((candidate) => !isToolCall(candidate));
       return;
     }
-    toolCall.arguments = completeArguments;
+    // Preserve the intended call identity but discard malformed provider bytes.
+    // Agent-core will classify this secret-safe sentinel as a pre-execution
+    // argument-shape rejection and own the single correction opportunity.
+    toolCall.arguments = isRecord(completeArguments) ? completeArguments : undefined;
   }
 
   for (let contentIndex = 0; contentIndex < output.content.length; contentIndex += 1) {

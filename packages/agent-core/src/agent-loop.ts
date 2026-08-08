@@ -34,9 +34,10 @@ import type {
   AgentToolCall,
   AgentToolResult,
   StreamFn,
-  ToolLoopIntervention,
+  ToolBatchIntervention,
 } from "./types.js";
-import { validateToolArguments } from "./validation.js";
+import { ToolArgumentValidationError, validateToolArguments } from "./validation.js";
+import type { ToolArgumentValidationEvidence } from "./validation.js";
 
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
@@ -394,7 +395,7 @@ async function runLoop(
         toolResults.push(...executedToolBatch.messages);
         turnTainted ||= toolResults.some(toolResultTaintsTurn);
         hasMoreToolCalls = !executedToolBatch.terminate;
-        if (executedToolBatch.intervention) {
+        if (executedToolBatch.intervention?.kind === "critical-tool-loop") {
           toolLoopRecoveryState.criticalToolLoopSeen = true;
         }
         terminateRun = executedToolBatch.terminateRun;
@@ -643,13 +644,19 @@ async function executeToolCalls(
         ? [{ toolCall, args: validation.prepared.args, tool: validation.prepared.tool }]
         : [];
     });
-    if (calls.length > 0 && !signal?.aborted) {
+    const rejections = toolCalls.flatMap((toolCall) => {
+      const validation = validatedToolCalls.get(toolCall);
+      return validation?.kind === "immediate" && validation.outcome.validationEvidence
+        ? [{ toolCall, validation: validation.outcome.validationEvidence }]
+        : [];
+    });
+    if ((calls.length > 0 || rejections.length > 0) && !signal?.aborted) {
       const admission = await config.beforeToolBatch(
-        { assistantMessage, calls, context: currentContext },
+        { assistantMessage, calls, rejections, context: currentContext },
         signal,
       );
       if (admission?.intervention) {
-        return await completeToolLoopInterventionBatch({
+        return await completeToolBatchIntervention({
           currentContext,
           assistantMessage,
           toolCalls,
@@ -712,7 +719,7 @@ type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
   terminate: boolean;
   terminateRun: boolean;
-  intervention?: ToolLoopIntervention;
+  intervention?: ToolBatchIntervention;
 };
 
 type ResolvedToolCallOutcome =
@@ -751,13 +758,24 @@ async function executeToolCallsSequential(
       toolCall,
       resolvedToolCalls,
     );
-    await emit({
-      type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    });
+    const validation = await getValidatedToolCallOutcome(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+      validatedToolCalls,
+    );
+    if (!isArgumentValidationRejection(validation)) {
+      await emit({
+        type: "tool_execution_start",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        args: toolCall.arguments,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      });
+    }
 
     const preparation = await prepareToolCall(
       currentContext,
@@ -857,13 +875,24 @@ async function executeToolCallsParallel(
       toolCall,
       resolvedToolCalls,
     );
-    await emit({
-      type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    });
+    const validation = await getValidatedToolCallOutcome(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+      validatedToolCalls,
+    );
+    if (!isArgumentValidationRejection(validation)) {
+      await emit({
+        type: "tool_execution_start",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        args: toolCall.arguments,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      });
+    }
 
     const preparation = await prepareToolCall(
       currentContext,
@@ -972,11 +1001,41 @@ type ImmediateToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   errorKind?: "argument-validation";
+  validationEvidence?: ToolArgumentValidationEvidence;
 };
 
 type ValidatedToolCallOutcome =
   | { kind: "validated"; prepared: PreparedToolCall }
   | { kind: "immediate"; outcome: ImmediateToolCallOutcome };
+
+async function getValidatedToolCallOutcome(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCall: AgentToolCall,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
+  validatedToolCalls: Map<AgentToolCall, ValidatedToolCallOutcome>,
+): Promise<ValidatedToolCallOutcome> {
+  const cached = validatedToolCalls.get(toolCall);
+  if (cached) {
+    return cached;
+  }
+  const validation = await validateToolCallForBatchAdmission(
+    currentContext,
+    assistantMessage,
+    toolCall,
+    config,
+    signal,
+    resolvedToolCalls,
+  );
+  validatedToolCalls.set(toolCall, validation);
+  return validation;
+}
+
+function isArgumentValidationRejection(validation: ValidatedToolCallOutcome): boolean {
+  return validation.kind === "immediate" && validation.outcome.errorKind === "argument-validation";
+}
 
 type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;
@@ -1201,13 +1260,24 @@ async function validateToolCallForBatchAdmission(
   try {
     validatedArgs = validateToolArguments(tool, preparedToolCall);
   } catch (error) {
+    const validationError = error instanceof ToolArgumentValidationError ? error : undefined;
     return {
       kind: "immediate",
       outcome: {
         kind: "immediate",
-        result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+        result: {
+          ...createErrorToolResult(
+            validationError?.message ?? "Tool arguments failed schema validation.",
+          ),
+          details: {
+            classification: "invalid_tool_arguments",
+            executionStarted: false,
+            ...(validationError ? { validation: validationError.evidence } : {}),
+          },
+        },
         isError: true,
         errorKind: "argument-validation",
+        ...(validationError ? { validationEvidence: validationError.evidence } : {}),
       },
     };
   }
@@ -1395,7 +1465,7 @@ async function finalizeToolCallOutcome(
   }
 }
 
-async function completeToolLoopInterventionBatch(params: {
+async function completeToolBatchIntervention(params: {
   currentContext: AgentContext;
   assistantMessage: AssistantMessage;
   toolCalls: AgentToolCall[];
@@ -1404,32 +1474,43 @@ async function completeToolLoopInterventionBatch(params: {
   config: AgentLoopConfig;
   signal: AbortSignal | undefined;
   emit: AgentEventSink;
-  intervention: ToolLoopIntervention;
+  intervention: ToolBatchIntervention;
   terminal: boolean;
 }): Promise<ExecutedToolCallBatch> {
   const messages: ToolResultMessage[] = [];
   const finalizedCalls: FinalizedToolCallOutcome[] = [];
+  const invalidArgumentsIntervention =
+    params.intervention.kind === "invalid-tool-arguments-recovery"
+      ? params.intervention
+      : undefined;
+  const isInvalidArgumentsRecovery = invalidArgumentsIntervention !== undefined;
   for (const toolCall of params.toolCalls) {
     const hideFromChannelProgress = hidesToolCallFromChannelProgress(
       params.currentContext,
       toolCall,
       params.resolvedToolCalls,
     );
-    await params.emit({
-      type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    });
+    if (!isInvalidArgumentsRecovery) {
+      await params.emit({
+        type: "tool_execution_start",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        args: toolCall.arguments,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      });
+    }
     const isTrigger = toolCall.id === params.intervention.toolCallId;
-    const text = params.terminal
+    const text = isInvalidArgumentsRecovery
       ? isTrigger
-        ? `${params.intervention.reason}\n\nCritical tool-loop recovery failed because another critical loop was detected. This run is stopping now.`
-        : "This tool was not executed because another call in the batch repeated a critical tool loop. This run is stopping now."
-      : isTrigger
-        ? `${params.intervention.reason}\n\nDo not repeat this exact tool action. Reassess the task. You may answer the user, ask for clarification, or continue with a different tool or different arguments.`
-        : "This tool was not executed because another call in the batch triggered critical tool-loop recovery. Reassess the task before choosing the next action.";
+        ? params.intervention.reason
+        : "This tool was not executed because the tool-argument recovery turn was not an exact single-call match."
+      : params.terminal
+        ? isTrigger
+          ? `${params.intervention.reason}\n\nCritical tool-loop recovery failed because another critical loop was detected. This run is stopping now.`
+          : "This tool was not executed because another call in the batch repeated a critical tool loop. This run is stopping now."
+        : isTrigger
+          ? `${params.intervention.reason}\n\nDo not repeat this exact tool action. Reassess the task. You may answer the user, ask for clarification, or continue with a different tool or different arguments.`
+          : "This tool was not executed because another call in the batch triggered critical tool-loop recovery. Reassess the task before choosing the next action.";
     const validation = params.validatedToolCalls.get(toolCall);
     // Rejected calls never start executing, so they must not inherit the
     // resolved tool's result content source; that metadata is only truthful
@@ -1441,15 +1522,25 @@ async function completeToolLoopInterventionBatch(params: {
         toolCall,
         result: {
           content: [{ type: "text", text }],
-          details: {
-            status: "blocked",
-            deniedReason: "tool-loop",
-            intervention: params.intervention,
-          },
-          ...(params.terminal ? { terminate: true } : {}),
+          details: isInvalidArgumentsRecovery
+            ? isTrigger
+              ? invalidArgumentsIntervention.rejection
+              : {
+                  status: "blocked",
+                  deniedReason: "invalid-tool-arguments-recovery",
+                }
+            : {
+                status: "blocked",
+                deniedReason: "tool-loop",
+                intervention: params.intervention,
+              },
+          ...(params.terminal || isInvalidArgumentsRecovery ? { terminate: true } : {}),
         },
         isError: true,
         executionStarted: false,
+        ...(isInvalidArgumentsRecovery && isTrigger
+          ? { errorKind: "argument-validation" as const }
+          : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
       validation?.kind === "validated" ? validation.prepared.args : toolCall.arguments,
@@ -1467,8 +1558,9 @@ async function completeToolLoopInterventionBatch(params: {
     // A later critical loop always forces termination. During first recovery,
     // honor the outcome hooks: if every finalized outcome says terminate, the
     // batch ends without another provider turn.
-    terminate: params.terminal || shouldTerminateToolBatch(finalizedCalls),
-    terminateRun: params.terminal,
+    terminate:
+      params.terminal || isInvalidArgumentsRecovery || shouldTerminateToolBatch(finalizedCalls),
+    terminateRun: !isInvalidArgumentsRecovery && params.terminal,
     intervention: params.intervention,
   };
 }

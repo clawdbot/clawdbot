@@ -35,16 +35,39 @@ const rejectedTerminalToolFixture = (params: {
         },
       ]),
     ],
-    canonical: {
-      events: [
-        { type: "text_start", contentIndex: 0 },
-        { type: "text_end", contentIndex: 0, content: "Checking..." },
-      ],
-      content: [{ type: "text", text: "Checking..." }],
-      responseId: "resp_rejected_terminal_tool",
-      stopReason: "stop",
-      error: params.error,
-    },
+    canonical:
+      params.status === "completed"
+        ? {
+            events: [
+              { type: "text_start", contentIndex: 0 },
+              { type: "text_end", contentIndex: 0, content: "Checking..." },
+              { type: "toolcall_start", contentIndex: 1 },
+              { type: "toolcall_end", contentIndex: 1 },
+            ],
+            content: [
+              { type: "text", text: "Checking..." },
+              {
+                type: "toolCall",
+                id: "call_rejected_terminal|fc_rejected_terminal",
+                name: "lookup",
+                arguments: undefined,
+                partialJson: false,
+              },
+            ],
+            responseId: "resp_rejected_terminal_tool",
+            stopReason: "toolUse",
+            error: null,
+          }
+        : {
+            events: [
+              { type: "text_start", contentIndex: 0 },
+              { type: "text_end", contentIndex: 0, content: "Checking..." },
+            ],
+            content: [{ type: "text", text: "Checking..." }],
+            responseId: "resp_rejected_terminal_tool",
+            stopReason: "stop",
+            error: params.error,
+          },
   };
 };
 
@@ -76,13 +99,42 @@ const rejectedTerminalToolBatchFixture = (params: {
       },
     ]),
   ],
-  canonical: {
-    events: [],
-    content: [],
-    responseId: "resp_rejected_terminal_tool_batch",
-    stopReason: "stop",
-    error: params.error,
-  },
+  canonical:
+    params.status === "completed" && (params.toolName ?? "lookup") !== ""
+      ? {
+          events: [
+            { type: "toolcall_start", contentIndex: 0 },
+            { type: "toolcall_end", contentIndex: 0 },
+            { type: "toolcall_start", contentIndex: 1 },
+            { type: "toolcall_end", contentIndex: 1 },
+          ],
+          content: [
+            {
+              type: "toolCall",
+              id: "call_valid_before_rejection|fc_valid_before_rejection",
+              name: "lookup",
+              arguments: { q: "valid" },
+              partialJson: false,
+            },
+            {
+              type: "toolCall",
+              id: "call_rejected_after_valid|fc_rejected_after_valid",
+              name: params.toolName ?? "lookup",
+              arguments: undefined,
+              partialJson: false,
+            },
+          ],
+          responseId: "resp_rejected_terminal_tool_batch",
+          stopReason: "toolUse",
+          error: null,
+        }
+      : {
+          events: [],
+          content: [],
+          responseId: "resp_rejected_terminal_tool_batch",
+          stopReason: "stop",
+          error: params.error,
+        },
 });
 
 const rejectedStreamedToolFixture = (params: {
@@ -122,28 +174,51 @@ const rejectedStreamedToolFixture = (params: {
       { type: "response.output_item.done", output_index: 0, item },
       completed("resp_rejected_streamed_tool", [item]),
     ],
-    canonical: {
-      events: params.started
-        ? [
-            { type: "toolcall_start", contentIndex: 0 },
-            { type: "toolcall_delta", contentIndex: 0, delta: "{" },
-          ]
-        : [],
-      content: params.started
-        ? [
-            {
-              type: "toolCall",
-              id: "call_rejected_streamed|fc_rejected_streamed",
-              name: "lookup",
-              arguments: {},
-              partialJson: false,
-            },
-          ]
-        : [],
-      responseId: null,
-      stopReason: "stop",
-      error: params.error,
-    },
+    canonical:
+      params.status === "completed"
+        ? {
+            events: [
+              { type: "toolcall_start", contentIndex: 0 },
+              ...(params.started
+                ? [{ type: "toolcall_delta" as const, contentIndex: 0, delta: "{" }]
+                : []),
+              { type: "toolcall_end", contentIndex: 0 },
+            ],
+            content: [
+              {
+                type: "toolCall",
+                id: "call_rejected_streamed|fc_rejected_streamed",
+                name: "lookup",
+                arguments: undefined,
+                partialJson: false,
+              },
+            ],
+            responseId: "resp_rejected_streamed_tool",
+            stopReason: "toolUse",
+            error: null,
+          }
+        : {
+            events: params.started
+              ? [
+                  { type: "toolcall_start", contentIndex: 0 },
+                  { type: "toolcall_delta", contentIndex: 0, delta: "{" },
+                ]
+              : [],
+            content: params.started
+              ? [
+                  {
+                    type: "toolCall",
+                    id: "call_rejected_streamed|fc_rejected_streamed",
+                    name: "lookup",
+                    arguments: {},
+                    partialJson: false,
+                  },
+                ]
+              : [],
+            responseId: null,
+            stopReason: "stop",
+            error: params.error,
+          },
   };
 };
 

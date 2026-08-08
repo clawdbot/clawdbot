@@ -75,16 +75,35 @@ export interface ToolLoopIntervention {
   reason: string;
 }
 
+/** Typed core signal used to fail closed when an argument-recovery turn is ambiguous. */
+export interface InvalidToolArgumentsIntervention {
+  kind: "invalid-tool-arguments-recovery";
+  toolCallId: string;
+  toolName: string;
+  reason: string;
+  rejection: unknown;
+}
+
+export type ToolBatchIntervention = ToolLoopIntervention | InvalidToolArgumentsIntervention;
+
+/** A schema-rejected call participating in an internal whole-batch admission check. */
+export interface InternalToolBatchRejection {
+  toolCall: AgentToolCall;
+  validation: import("./validation.js").ToolArgumentValidationEvidence;
+}
+
 /** Context for OpenClaw-owned whole-batch tool admission. */
 export interface InternalBeforeToolBatchContext {
   assistantMessage: AssistantMessage;
   calls: InternalToolBatchCall[];
+  /** Schema-rejected calls. Omitted by older internal callers. */
+  rejections?: InternalToolBatchRejection[];
   context: AgentContext;
 }
 
 /** Result of OpenClaw-owned whole-batch tool admission. */
 export interface InternalBeforeToolBatchResult {
-  intervention?: ToolLoopIntervention;
+  intervention?: ToolBatchIntervention;
 }
 
 export interface DeferredToolCallContext {

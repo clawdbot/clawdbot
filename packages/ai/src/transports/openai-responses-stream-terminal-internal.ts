@@ -102,10 +102,9 @@ export function resolveCompletedResponsesToolCall(
   const argumentsValue = parseJsonObjectPreservingUnsafeIntegers(
     streamed?.arguments ?? item.arguments,
   );
-  if (!argumentsValue) {
-    throw new Error("Responses stream completed tool call with invalid JSON arguments");
-  }
-  return { name, arguments: argumentsValue };
+  // Keep the provider identity while discarding invalid raw JSON. Agent-core
+  // turns the undefined sentinel into invalid_tool_arguments before execution.
+  return { name, arguments: argumentsValue as ToolCall["arguments"] };
 }
 
 export function createResponsesTerminalController(params: {

@@ -20,6 +20,7 @@ import {
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
@@ -610,7 +611,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
                 partial: output,
               });
             } else if (block.type === "toolCall") {
-              block.arguments = parseStreamingJson(block.partialJson);
+              block.arguments =
+                block.partialJson.trim().length === 0
+                  ? block.arguments
+                  : (parseJsonObjectPreservingUnsafeIntegers(block.partialJson) ??
+                    (undefined as never));
               // Finalize in-place and strip the scratch buffer so replay only
               // carries parsed arguments.
               delete (block as { partialJson?: string }).partialJson;

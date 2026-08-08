@@ -7,6 +7,41 @@ const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 
 /** Maximum string length accepted for schema-gated JSON coercion. */
 const MAX_JSON_COERCE_LENGTH = 64 * 1024;
+const MAX_VALIDATION_ISSUES = 8;
+const MAX_VALIDATION_PATH_LENGTH = 128;
+
+export type ToolArgumentValidationIssueCode =
+  | "additionalProperties"
+  | "enum"
+  | "required"
+  | "schema"
+  | "type";
+
+export type ToolArgumentValidationEvidence = {
+  argumentShape: "array" | "boolean" | "null" | "number" | "object" | "string" | "undefined";
+  issueCount: number;
+  issues: Array<{ code: ToolArgumentValidationIssueCode; path: string }>;
+  truncated: boolean;
+};
+
+function boundedValidationString(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 128);
+}
+
+/** Stable, secret-safe failure raised when model-emitted tool arguments fail schema validation. */
+export class ToolArgumentValidationError extends Error {
+  readonly code = "invalid_tool_arguments";
+
+  constructor(
+    toolName: string,
+    readonly evidence: ToolArgumentValidationEvidence,
+  ) {
+    super(
+      `Tool arguments failed schema validation for "${boundedValidationString(toolName)}". Correct the arguments and try once more.`,
+    );
+    this.name = "ToolArgumentValidationError";
+  }
+}
 
 interface JsonSchemaObject {
   type?: string | string[];
@@ -328,6 +363,40 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
+function normalizeValidationIssueCode(keyword: string): ToolArgumentValidationIssueCode {
+  if (
+    keyword === "additionalProperties" ||
+    keyword === "enum" ||
+    keyword === "required" ||
+    keyword === "type"
+  ) {
+    return keyword;
+  }
+  return "schema";
+}
+
+function normalizeValidationPath(error: TLocalizedValidationError): string {
+  if (error.keyword === "additionalProperties") {
+    return "root";
+  }
+  const path = formatValidationPath(error)
+    .split(".")
+    .slice(0, 8)
+    .map((segment) => (/^[A-Za-z0-9_-]+$/u.test(segment) ? segment : "*"))
+    .join(".");
+  return (path || "root").slice(0, MAX_VALIDATION_PATH_LENGTH);
+}
+
+function argumentShape(value: unknown): ToolArgumentValidationEvidence["argumentShape"] {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  return typeof value as ToolArgumentValidationEvidence["argumentShape"];
+}
+
 /** Finds the target tool and validates/coerces a model-emitted tool call. */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   const tool = tools.find((t) => t.name === toolCall.name);
@@ -363,13 +432,14 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
     return args;
   }
 
-  const errors =
-    validator
-      .Errors(args)
-      .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-      .join("\n") || "Unknown validation error";
-
-  throw new Error(
-    `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
-  );
+  const errors = [...validator.Errors(args)];
+  throw new ToolArgumentValidationError(toolCall.name, {
+    argumentShape: argumentShape(toolCall.arguments),
+    issueCount: errors.length,
+    issues: errors.slice(0, MAX_VALIDATION_ISSUES).map((error) => ({
+      code: normalizeValidationIssueCode(error.keyword),
+      path: normalizeValidationPath(error),
+    })),
+    truncated: errors.length > MAX_VALIDATION_ISSUES,
+  });
 }

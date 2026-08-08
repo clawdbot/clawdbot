@@ -57,13 +57,13 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option             | Effect                                                                                                                                                                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
-| `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                           |
-| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
-| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
-| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| Option             | Effect                                                                                                                                                                                                                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call`, `after_tool_call`, or `tool_call_rejected`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
+| `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                                                  |
+| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                                              |
+| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                                             |
+| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                                         |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
@@ -161,6 +161,7 @@ observation-only.
 | -------------------------- | --------------------------------------------------------- |
 | **`before_tool_call`**     | Rewrite tool params, block execution, or require approval |
 | `after_tool_call`          | Observe tool results, errors, and duration                |
+| `tool_call_rejected`       | Observe sanitized pre-execution argument rejection        |
 | `resolve_exec_env`         | Contribute plugin-owned environment variables to `exec`   |
 | **`tool_result_persist`**  | Rewrite the assistant message produced from a tool result |
 | **`before_message_write`** | Inspect or block an in-progress message write (rare)      |
@@ -306,6 +307,61 @@ provider payloads, start the Gateway with `--raw-stream` and
 `--raw-stream-path <path>` to write raw model stream events to a jsonl file.
 
 ## Tool call policy
+
+### Pre-execution argument rejection
+
+`tool_call_rejected` is the read-only observer for runtime contract version 1
+of invalid tool-argument recovery. It fires only when schema or argument-shape
+validation rejects a call before `before_tool_call`. Neither
+`before_tool_call` nor `after_tool_call` fires for that rejected call, and the
+event always carries `classification: "invalid_tool_arguments"` and
+`executionStarted: false`.
+
+The event contains only:
+
+- bounded correlation identifiers for the run, session, stable runtime turn,
+  intended tool, provider tool-call id and its known origin, provider, and
+  transport;
+- an opaque recovery id, attempt and remaining-attempt counts, recovery state,
+  and optional terminal reason;
+- the top-level argument shape, issue count, truncation flag, and up to eight
+  normalized issue codes and schema paths.
+
+Every string is bounded to 128 characters. Raw arguments, rejected values,
+validator messages, and hashes of raw arguments are intentionally absent. Do
+not attempt to reconstruct or log rejected input in this hook.
+
+Recovery is owned by the OpenClaw runtime, not plugins. Two attempts means the
+original rejected call plus exactly one immediately following correction turn.
+That turn must contain exactly one call to the same normalized tool. A missing,
+different, malformed, or multi-call correction closes the chain and stops the
+batch. Plugins may record the event but must not enqueue another retry.
+
+The recovery state is written to the session transcript under the session
+lock. On restart, `retry_available` still permits the one correction. A
+completed receipt is replay-safe and is not executed again. A claim without a
+terminal receipt fails closed as `retry_claimed_without_receipt`. A valid
+correction blocked by policy or failed by the tool consumes the correction and
+keeps its native policy or tool-error classification.
+
+Contract version 1 is supported by `openai-completions` (including
+OpenRouter), `openai-responses` (direct OpenAI), and `anthropic-messages`
+(direct Anthropic).
+
+```typescript
+api.on("tool_call_rejected", async (event) => {
+  await recordFailureObservation({
+    kind: event.classification,
+    retrySafe: event.recovery.state === "retry_available",
+    correlation: event.correlation,
+    recovery: event.recovery,
+    validation: event.validation,
+  });
+});
+```
+
+The hook is observational. It cannot alter the result, claim the retry, or
+change the runtime budget.
 
 `before_tool_call` receives:
 

@@ -37,7 +37,10 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import type {
+  PluginHookAfterToolCallEvent,
+  PluginHookToolCallRejectedEvent,
+} from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -301,6 +304,128 @@ const toolStartData = new Map<string, ToolStartRecord>();
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
+}
+
+function readBoundedRejectionString(value: unknown): string | undefined {
+  const stringValue = readStringValue(value);
+  return stringValue
+    ? truncateUtf16Safe(stringValue.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?"), 128)
+    : undefined;
+}
+
+function readToolCallRejectedEvent(result: unknown): PluginHookToolCallRejectedEvent | undefined {
+  const details = readToolResultDetails(result);
+  if (details?.classification !== "invalid_tool_arguments" || details.executionStarted !== false) {
+    return undefined;
+  }
+  const correlation = readRecordField(details.correlation);
+  const recovery = readRecordField(details.recovery);
+  const validation = readRecordField(details.validation);
+  const issues = Array.isArray(validation?.issues) ? validation.issues : undefined;
+  const reason = details.reason;
+  const state = recovery?.state;
+  const argumentShape = validation?.argumentShape;
+  if (
+    !correlation ||
+    !recovery ||
+    !validation ||
+    !issues ||
+    (reason !== "schema_validation_failed" &&
+      reason !== "retry_exhausted" &&
+      reason !== "retry_not_matched" &&
+      reason !== "retry_claimed_without_receipt") ||
+    (state !== "retry_available" &&
+      state !== "retry_exhausted" &&
+      state !== "retry_not_matched" &&
+      state !== "indeterminate") ||
+    (argumentShape !== "array" &&
+      argumentShape !== "boolean" &&
+      argumentShape !== "null" &&
+      argumentShape !== "number" &&
+      argumentShape !== "object" &&
+      argumentShape !== "string" &&
+      argumentShape !== "undefined") ||
+    typeof validation.issueCount !== "number" ||
+    !Number.isSafeInteger(validation.issueCount) ||
+    validation.issueCount < 0 ||
+    typeof validation.truncated !== "boolean" ||
+    (recovery.attempt !== 1 && recovery.attempt !== 2) ||
+    recovery.maxAttempts !== 2 ||
+    (recovery.remainingAttempts !== 0 && recovery.remainingAttempts !== 1)
+  ) {
+    return undefined;
+  }
+  const normalizedIssues: PluginHookToolCallRejectedEvent["validation"]["issues"] = issues
+    .slice(0, 8)
+    .flatMap((issue) => {
+      const record = readRecordField(issue);
+      const code = record?.code;
+      const path = readBoundedRejectionString(record?.path);
+      return record &&
+        path &&
+        (code === "additionalProperties" ||
+          code === "enum" ||
+          code === "required" ||
+          code === "schema" ||
+          code === "type")
+        ? [{ code, path }]
+        : [];
+    });
+  const requiredCorrelation = {
+    turnId: readBoundedRejectionString(correlation.turnId),
+    intendedTool: readBoundedRejectionString(correlation.intendedTool),
+    providerToolCallId: readBoundedRejectionString(correlation.providerToolCallId),
+    provider: readBoundedRejectionString(correlation.provider),
+    transport: readBoundedRejectionString(correlation.transport),
+  };
+  const origin = correlation.providerToolCallIdOrigin;
+  const recoveryId = readBoundedRejectionString(recovery.recoveryId);
+  const runId = readBoundedRejectionString(correlation.runId);
+  const sessionId = readBoundedRejectionString(correlation.sessionId);
+  const sessionKey = readBoundedRejectionString(correlation.sessionKey);
+  if (
+    Object.values(requiredCorrelation).some((value) => !value) ||
+    !recoveryId ||
+    (origin !== "provider" && origin !== "runtime" && origin !== "unknown")
+  ) {
+    return undefined;
+  }
+  const terminalReason = recovery.terminalReason;
+  return {
+    classification: "invalid_tool_arguments",
+    executionStarted: false,
+    reason,
+    correlation: {
+      ...requiredCorrelation,
+      turnId: requiredCorrelation.turnId!,
+      intendedTool: requiredCorrelation.intendedTool!,
+      providerToolCallId: requiredCorrelation.providerToolCallId!,
+      provider: requiredCorrelation.provider!,
+      transport: requiredCorrelation.transport!,
+      providerToolCallIdOrigin: origin,
+      ...(runId ? { runId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
+    },
+    recovery: {
+      recoveryId,
+      attempt: recovery.attempt,
+      maxAttempts: 2,
+      remainingAttempts: recovery.remainingAttempts,
+      state,
+      ...(terminalReason === "retry_exhausted" ||
+      terminalReason === "retry_not_matched" ||
+      terminalReason === "retry_claimed_without_receipt"
+        ? { terminalReason }
+        : {}),
+    },
+    validation: {
+      argumentShape,
+      issueCount: Math.max(0, Math.trunc(validation.issueCount)),
+      issues: normalizedIssues,
+      truncated: validation.truncated || issues.length > 8,
+    },
+  };
 }
 
 /** Returns the number of active tool executions tracked for one embedded run. */
@@ -1408,6 +1533,77 @@ export async function handleToolExecutionEnd(
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const isArgumentValidationRejection =
+    evt.executionStarted === false && evt.errorKind === "argument-validation";
+  const rejectedEvent = isArgumentValidationRejection
+    ? readToolCallRejectedEvent(sanitizedResult)
+    : undefined;
+  if (isArgumentValidationRejection) {
+    const toolStartKey = buildToolStartKey(runId, toolCallId);
+    toolStartData.delete(toolStartKey);
+    ctx.state.execLiveUpdateStateById?.delete(toolCallId);
+    ctx.state.toolMetaById.delete(toolCallId);
+    ctx.state.toolSummaryById.delete(toolCallId);
+    ctx.state.pendingMessagingTexts.delete(toolCallId);
+    ctx.state.pendingMessagingTargets.delete(toolCallId);
+    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+    consumeAdjustedParamsForToolCall(toolCallId, runId);
+    consumeTrackedToolExecutionStarted(toolCallId, runId);
+    consumePreExecutionBlockedToolCall(toolCallId, runId);
+    consumeStructuredReplaySafeToolCall(toolCallId, runId);
+    try {
+      ctx.params.onAgentToolResult?.({
+        toolName,
+        result: sanitizedResult,
+        isError: true,
+      });
+    } catch (error) {
+      ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
+    }
+    emitAgentEvent({
+      runId,
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: toolName,
+        toolCallId,
+        isError: true,
+        result: sanitizedResult,
+        ...(createToolValidationErrorSummary(toolName)
+          ? { toolErrorSummary: createToolValidationErrorSummary(toolName) }
+          : {}),
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      },
+    });
+    await emitToolResultOutput({
+      ctx,
+      toolName,
+      rawToolName,
+      meta: undefined,
+      isToolError: true,
+      result,
+      sanitizedResult,
+    });
+    await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
+      ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
+    });
+    const hookRunner = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
+    if (rejectedEvent && hookRunner?.hasHooks("tool_call_rejected")) {
+      void hookRunner
+        .runToolCallRejected(rejectedEvent, {
+          toolName: rejectedEvent.correlation.intendedTool,
+          agentId: ctx.params.agentId,
+          sessionKey: ctx.params.sessionKey,
+          sessionId: ctx.params.sessionId,
+          runId,
+          toolCallId: rejectedEvent.correlation.providerToolCallId,
+        })
+        .catch((error: unknown) => {
+          ctx.log.warn(`tool_call_rejected hook failed: tool=${toolName} error=${String(error)}`);
+        });
+    }
+    return;
+  }
   const approvalUnavailable =
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
@@ -1889,7 +2085,7 @@ export async function handleToolExecutionEnd(
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
 
-  // Run after_tool_call plugin hook (fire-and-forget)
+  // Invalid argument rejections returned above and never reach after_tool_call.
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;

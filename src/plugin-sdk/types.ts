@@ -17,6 +17,7 @@ export type {
   PluginHookSkillProposalEvaluationOutcome,
   PluginHookSkillProposalKind,
   PluginHookToolContext,
+  PluginHookToolCallRejectedEvent,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
 } from "../plugins/hook-types.js";

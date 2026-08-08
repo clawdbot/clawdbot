@@ -7,9 +7,10 @@ import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.t
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => false),
+    hasHooks: vi.fn((_name?: string) => false),
     runBeforeToolCall: vi.fn(async () => {}),
     runAfterToolCall: vi.fn(async () => {}),
+    runToolCallRejected: vi.fn(async () => {}),
   },
 }));
 
@@ -119,6 +120,8 @@ describe("after_tool_call hook wiring", () => {
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     hookMocks.runner.runAfterToolCall.mockClear();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
+    hookMocks.runner.runToolCallRejected.mockClear();
+    hookMocks.runner.runToolCallRejected.mockResolvedValue(undefined);
   });
 
   it("calls runAfterToolCall in handleToolExecutionEnd when hook is registered", async () => {
@@ -223,6 +226,79 @@ describe("after_tool_call hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
+  });
+
+  it("routes sanitized pre-execution validation failures only to tool_call_rejected", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "tool_call_rejected");
+    const ctx = createToolHandlerCtx({
+      runId: "rejected-run",
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+    });
+    const rejection = {
+      classification: "invalid_tool_arguments",
+      executionStarted: false,
+      reason: "schema_validation_failed",
+      correlation: {
+        runId: "rejected-run",
+        sessionId: "session-id",
+        sessionKey: "session-key",
+        turnId: "turn-1",
+        intendedTool: "edit",
+        providerToolCallId: "provider-call-1",
+        providerToolCallIdOrigin: "provider",
+        provider: "openai",
+        transport: "openai-responses",
+      },
+      recovery: {
+        recoveryId: "recovery-1",
+        attempt: 1,
+        maxAttempts: 2,
+        remainingAttempts: 1,
+        state: "retry_available",
+      },
+      validation: {
+        argumentShape: "object",
+        issueCount: 1,
+        issues: [{ code: "required", path: "path" }],
+        truncated: false,
+      },
+    };
+    const secret = "HOOK_SECRET_CANARY_820";
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "provider-call-1",
+        isError: true,
+        executionStarted: false,
+        errorKind: "argument-validation",
+        result: {
+          content: [{ type: "text", text: "correct once" }],
+          details: {
+            ...rejection,
+            rawArguments: { token: secret },
+            validatorMessage: secret,
+          },
+        },
+      } as never,
+    );
+
+    expect(hookMocks.runner.runToolCallRejected).toHaveBeenCalledWith(rejection, {
+      toolName: "edit",
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      runId: "rejected-run",
+      toolCallId: "provider-call-1",
+    });
+    expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
+    expect(ctx.state.toolMetas).toEqual([]);
+    expect(JSON.stringify(hookMocks.runner.runToolCallRejected.mock.calls)).not.toContain(secret);
   });
 
   it("keeps start args isolated per run when toolCallId collides", async () => {
