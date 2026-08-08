@@ -362,35 +362,6 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("passes persisted cadence through a coalesced exec wake", async () => {
-    useFakeHeartbeatTime();
-    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const runner = startDefaultRunner(runSpy);
-
-    requestHeartbeat({
-      source: "interval",
-      intent: "scheduled",
-      reason: "interval",
-      agentId: "main",
-      scheduledEveryMs: 5 * 60_000,
-      coalesceMs: 100,
-    });
-    requestHeartbeat({
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      agentId: "main",
-      coalesceMs: 100,
-    });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expectRunCallFields(runSpy, 0, {
-      source: "exec-event",
-      scheduledEveryMs: 5 * 60_000,
-    });
-    runner.stop();
-  });
-
   it("keeps persisted monitor cadence authoritative when its tick joins a task turn", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

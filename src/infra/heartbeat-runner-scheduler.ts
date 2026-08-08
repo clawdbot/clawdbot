@@ -339,15 +339,15 @@ export function startHeartbeatRunner(opts: {
     };
     const runOneAgent = async (
       agent: HeartbeatAgentState,
-      authoritativeScheduledTick = false,
+      scheduledTickIsAuthoritative = false,
     ): Promise<AgentWakeOutcome> => {
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
-        authoritativeScheduledTick,
+        authoritativeScheduledTick: scheduledTickIsAuthoritative,
         retainedWork,
       });
       if (deferral.defer) {
         advanceStaleScheduleAfterDeferral(agent, now, reason, deferral, {
-          authoritativeScheduledTick,
+          authoritativeScheduledTick: scheduledTickIsAuthoritative,
           execEventWake,
         });
         return {

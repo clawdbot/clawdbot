@@ -262,41 +262,6 @@ describe("heartbeat-wake", () => {
     },
   );
 
-  it("preserves scheduled cadence when an exec wake joins the scheduled turn", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat({
-      source: "interval",
-      intent: "scheduled",
-      reason: "interval",
-      agentId: "main",
-      scheduledEveryMs: 5 * 60_000,
-      scheduledAnchorMs: 42_000,
-      coalesceMs: 100,
-    });
-    requestHeartbeat({
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      agentId: "main",
-      coalesceMs: 100,
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith({
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      agentId: "main",
-      scheduledEveryMs: 5 * 60_000,
-      scheduledAnchorMs: 42_000,
-    });
-  });
-
   it("runs a phase-aligned task on every period despite the min-spacing floor", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000_000_000_000);

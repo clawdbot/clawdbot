@@ -137,6 +137,76 @@ describe("stale exec heartbeat wakes", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves scheduled cadence when an exec wake joins the scheduled turn", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      scheduledAnchorMs: 42_000,
+      coalesceMs: 100,
+    });
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 100,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      scheduledAnchorMs: 42_000,
+    });
+  });
+
+  it("passes persisted cadence through a coalesced exec wake", async () => {
+    vi.useFakeTimers();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: schedulerSeed,
+    });
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      coalesceMs: 100,
+    });
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "exec-event",
+        scheduledEveryMs: 5 * 60_000,
+      }),
+    );
+    runner.stop();
+  });
+
   it("keeps a scheduled turn alive when an acknowledged exec wake coalesces with it", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
