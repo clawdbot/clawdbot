@@ -314,6 +314,10 @@ async function runMcpOAuthLoginAttempt(
     suppressStoredTokens: params.forceAuthorization,
     lease,
   });
+  if (params.codeVerifier) {
+    const codeVerifier = params.codeVerifier;
+    provider.codeVerifier = () => codeVerifier;
+  }
   const result = await auth(provider, {
     serverUrl: params.serverUrl,
     authorizationCode: normalizeOptionalString(params.authorizationCode),
