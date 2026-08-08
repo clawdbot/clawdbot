@@ -41,6 +41,19 @@ function storeOptions(rootDir: string, identityKey?: string): DeviceIdentityStor
   };
 }
 
+function writeRetiredIdentity(filePath: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(
+    filePath,
+    `${JSON.stringify({
+      deviceId: SWIFT_RAW_DEVICE_ID,
+      publicKey: SWIFT_RAW_PUBLIC_KEY,
+      privateKey: SWIFT_RAW_PRIVATE_KEY,
+      createdAtMs: 1_700_000_000_000,
+    })}\n`,
+  );
+}
+
 function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
   let stdout = "";
   let stderr = "";
@@ -263,11 +276,30 @@ describe("device identity SQLite store", () => {
       expect(secondary.deviceId).not.toBe(primary.deviceId);
 
       const claimPath = path.join(rootDir, "identity", "device.json.doctor-importing");
-      fs.mkdirSync(path.dirname(claimPath), { recursive: true });
-      fs.writeFileSync(claimPath, "{}\n");
-      expect(() => loadOrCreateProcessDeviceIdentity(primaryOptions)).toThrow(/doctor --fix/);
+      writeRetiredIdentity(claimPath);
+      expect(loadOrCreateProcessDeviceIdentity(primaryOptions)).toBe(primary);
+      expect(fs.existsSync(claimPath)).toBe(true);
     });
   });
+
+  it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
+    "keeps canonical SQLite authoritative when retired %s reappears",
+    async (legacyName) => {
+      await withTempDir("openclaw-device-identity-canonical-", async (rootDir) => {
+        const options = storeOptions(rootDir);
+        const canonical = loadOrCreateDeviceIdentity(options);
+        expect(canonical.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
+        closeOpenClawStateDatabaseForTest();
+
+        const legacyPath = path.join(rootDir, "identity", legacyName);
+        writeRetiredIdentity(legacyPath);
+
+        expect(loadDeviceIdentityIfPresent(options)).toEqual(canonical);
+        expect(loadOrCreateDeviceIdentity(options)).toEqual(canonical);
+        expect(fs.existsSync(legacyPath)).toBe(true);
+      });
+    },
+  );
 
   it("returns one authoritative winner to concurrent creators", async () => {
     await withTempDir("openclaw-device-identity-concurrent-", async (rootDir) => {
