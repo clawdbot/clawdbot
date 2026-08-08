@@ -2659,6 +2659,7 @@ public struct AgentParams: Codable, Sendable {
     public let cwd: String?
     public let cleanupbundlemcponrunend: Bool?
     public let modelrun: Bool?
+    public let modelrunoptions: [String: AnyCodable]?
     public let promptmode: AnyCodable?
     public let extrasystemprompt: String?
     public let bootstrapcontextmode: AnyCodable?
@@ -2708,6 +2709,7 @@ public struct AgentParams: Codable, Sendable {
         cwd: String? = nil,
         cleanupbundlemcponrunend: Bool? = nil,
         modelrun: Bool? = nil,
+        modelrunoptions: [String: AnyCodable]? = nil,
         promptmode: AnyCodable? = nil,
         extrasystemprompt: String? = nil,
         bootstrapcontextmode: AnyCodable? = nil,
@@ -2756,6 +2758,7 @@ public struct AgentParams: Codable, Sendable {
         self.cwd = cwd
         self.cleanupbundlemcponrunend = cleanupbundlemcponrunend
         self.modelrun = modelrun
+        self.modelrunoptions = modelrunoptions
         self.promptmode = promptmode
         self.extrasystemprompt = extrasystemprompt
         self.bootstrapcontextmode = bootstrapcontextmode
@@ -2806,6 +2809,7 @@ public struct AgentParams: Codable, Sendable {
         case cwd
         case cleanupbundlemcponrunend = "cleanupBundleMcpOnRunEnd"
         case modelrun = "modelRun"
+        case modelrunoptions = "modelRunOptions"
         case promptmode = "promptMode"
         case extrasystemprompt = "extraSystemPrompt"
         case bootstrapcontextmode = "bootstrapContextMode"

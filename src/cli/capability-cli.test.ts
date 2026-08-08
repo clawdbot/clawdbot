@@ -648,7 +648,7 @@ describe("capability cli", () => {
       messages?: Array<{ content?: unknown; role?: unknown }>;
       systemPrompt?: unknown;
     };
-    options?: { reasoning?: unknown };
+    options?: { maxTokens?: unknown; reasoning?: unknown; temperature?: unknown };
   };
   type ImageDescribeParams = {
     filePath?: string;
@@ -938,6 +938,143 @@ describe("capability cli", () => {
     await runCapability("model", "run", "--prompt", "hello", "--thinking", "high", "--json");
 
     expect(firstCompletionCall()?.options?.reasoning).toBe("high");
+  });
+
+  it("reads private model prompts from a mode-0600 prompt file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-run-prompt-"));
+    const promptFile = path.join(tempDir, "prompt.txt");
+    await fs.writeFile(promptFile, "private prompt", { mode: 0o600 });
+
+    try {
+      await runCap("capability", "model", "run", "--prompt-file", promptFile, "--json");
+
+      expect(firstCompletionCall()?.context?.messages?.[0]?.content).toBe("private prompt");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects prompt text combined with a prompt file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-run-prompt-"));
+    const promptFile = path.join(tempDir, "prompt.txt");
+    await fs.writeFile(promptFile, "private prompt", { mode: 0o600 });
+
+    try {
+      await expect(
+        runCap(
+          "capability",
+          "model",
+          "run",
+          "--prompt",
+          "argv prompt",
+          "--prompt-file",
+          promptFile,
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains("Use exactly one of --prompt or --prompt-file.");
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "group-readable file",
+      setup: async (tempDir: string) => {
+        const promptFile = path.join(tempDir, "prompt.txt");
+        await fs.writeFile(promptFile, "private prompt", { mode: 0o600 });
+        await fs.chmod(promptFile, 0o640);
+        return promptFile;
+      },
+      expected: "must have mode 0600",
+    },
+    {
+      name: "symbolic link",
+      setup: async (tempDir: string) => {
+        const target = path.join(tempDir, "target.txt");
+        const promptFile = path.join(tempDir, "prompt.txt");
+        await fs.writeFile(target, "private prompt", { mode: 0o600 });
+        await fs.symlink(target, promptFile);
+        return promptFile;
+      },
+      expected: "must not be a symbolic link",
+    },
+    {
+      name: "empty file",
+      setup: async (tempDir: string) => {
+        const promptFile = path.join(tempDir, "prompt.txt");
+        await fs.writeFile(promptFile, "", { mode: 0o600 });
+        return promptFile;
+      },
+      expected: "cannot be empty",
+    },
+    {
+      name: "oversized file",
+      setup: async (tempDir: string) => {
+        const promptFile = path.join(tempDir, "prompt.txt");
+        await fs.writeFile(promptFile, Buffer.alloc(1024 * 1024 + 1, 0x61), { mode: 0o600 });
+        return promptFile;
+      },
+      expected: "must not exceed 1048576 bytes",
+    },
+  ])("rejects an unsafe $name prompt input", async ({ setup, expected }) => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-run-prompt-"));
+    try {
+      const promptFile = await setup(tempDir);
+      await expect(
+        runCap("capability", "model", "run", "--prompt-file", promptFile, "--json"),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains(expected);
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes and reports effective local model-run settings", async () => {
+    await runCap(
+      "capability",
+      "model",
+      "run",
+      "--prompt",
+      "hello",
+      "--max-output-tokens",
+      "64",
+      "--temperature",
+      "0",
+      "--json",
+    );
+
+    expect(firstCompletionCall()?.options).toMatchObject({ maxTokens: 64, temperature: 0 });
+    expect(firstJsonOutput()?.effectiveSettings).toEqual({ maxOutputTokens: 64, temperature: 0 });
+  });
+
+  it("propagates and reports effective gateway model-run settings", async () => {
+    await runCap(
+      "capability",
+      "model",
+      "run",
+      "--prompt",
+      "hello",
+      "--gateway",
+      "--max-output-tokens",
+      "64",
+      "--temperature",
+      "0",
+      "--json",
+    );
+
+    expect(firstGatewayCall()?.params?.modelRunOptions).toEqual({
+      maxTokens: 64,
+      temperature: 0,
+    });
+    expect(firstJsonOutput()?.effectiveSettings).toEqual({ maxOutputTokens: 64, temperature: 0 });
   });
 
   it("passes image files to gateway model probes as attachments", async () => {

@@ -18,6 +18,7 @@ export type CapabilityEnvelope = {
   inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
   ignoredOverrides?: Array<Record<string, unknown>>;
+  effectiveSettings?: Record<string, unknown>;
   error?: string;
 };
 
@@ -26,7 +27,18 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--file", "--model", "--thinking", "--local", "--gateway", "--json"],
+    flags: [
+      "--prompt",
+      "--prompt-file",
+      "--file",
+      "--model",
+      "--thinking",
+      "--max-output-tokens",
+      "--temperature",
+      "--local",
+      "--gateway",
+      "--json",
+    ],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
