@@ -27,6 +27,7 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import type { WorkerSessionPlacementRetirement } from "../worker-environments/placement-store.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
@@ -41,14 +42,19 @@ export class SessionWorkerPlacementMutationError extends Error {
   }
 }
 
-export function resolveSessionWorkerPlacementMutationError(params: {
+type SessionWorkerPlacementMutationGuard = {
+  error?: SessionWorkerPlacementMutationError;
+  retirement?: WorkerSessionPlacementRetirement;
+};
+
+export function resolveSessionWorkerPlacementMutationGuard(params: {
   action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
   context: GatewayRequestContext;
   key: string;
   sessionId: string | undefined;
-}): SessionWorkerPlacementMutationError | undefined {
+}): SessionWorkerPlacementMutationGuard {
   if (!params.sessionId) {
-    return undefined;
+    return {};
   }
   const placement = params.context.workerSessionPlacementService
     ?.getMany([params.sessionId])
@@ -64,15 +70,36 @@ export function resolveSessionWorkerPlacementMutationError(params: {
     (placement.environmentId === null ||
       environment?.state === "destroyed" ||
       (environment?.state === "failed" && environment.leaseId === null));
-  if (
+  const placementCanMutate =
     !placement ||
     placement.state === "local" ||
     (params.action === "delete" && placement.state === "reclaimed") ||
-    failedPlacementCanDelete
-  ) {
-    return undefined;
+    failedPlacementCanDelete;
+  if (!placementCanMutate) {
+    return {
+      error: new SessionWorkerPlacementMutationError(placement.state, params.action, params.key),
+    };
   }
-  return new SessionWorkerPlacementMutationError(placement.state, params.action, params.key);
+  if (
+    params.action === "delete" &&
+    placement &&
+    (placement.state === "local" || placement.state === "reclaimed" || placement.state === "failed")
+  ) {
+    return {
+      retirement: {
+        sessionId: placement.sessionId,
+        expectedState: placement.state,
+        expectedGeneration: placement.generation,
+      },
+    };
+  }
+  return {};
+}
+
+export function resolveSessionWorkerPlacementMutationError(
+  params: Parameters<typeof resolveSessionWorkerPlacementMutationGuard>[0],
+): SessionWorkerPlacementMutationError | undefined {
+  return resolveSessionWorkerPlacementMutationGuard(params).error;
 }
 
 export function respondSessionWorkerPlacementMutationError(

@@ -38,6 +38,22 @@ The box needs no inbound ports except `sshd`: the Gateway connects out via pinne
 
 In managed mode, the Crabbox coordinator owns the cloud-provider credentials and provisions AWS on the Gateway user's behalf. Local AWS keys are not required. Authenticate interactively, then verify the stored coordinator and provider state:
 
+Before provisioning, determine the Gateway host's outbound IPv4:
+
+```bash
+curl -fsS https://checkip.amazonaws.com
+```
+
+Add that address as a `/32` to Crabbox's own configuration. For example, if the command prints `203.0.113.10`:
+
+```yaml
+aws:
+  sshCIDRs:
+    - 203.0.113.10/32
+```
+
+Direct SSH originates from the Gateway host, while the coordinator API may see a reverse-proxy or request-source address. Explicit pinning keeps later Crabbox security-group reconciliation from replacing the actual SSH caller with that API-facing address.
+
 ```bash
 crabbox login --url <coordinator-url> --provider aws
 crabbox config show --json
@@ -45,7 +61,7 @@ crabbox whoami --json
 crabbox doctor --provider aws --json
 ```
 
-`doctor` is non-mutating: it checks the coordinator, broker identity, local tools, and AWS provider readiness without creating or changing a lease. Trusted automation can pipe an approved coordinator token through stdin instead of placing it on the command line:
+Before provisioning, confirm `crabbox config show --json` reports the expected `/32` under `aws.sshCIDRs`, then review `crabbox doctor --provider aws --json` for provider-readiness failures. `doctor` is non-mutating: it checks the coordinator, broker identity, local tools, and AWS provider readiness without creating or changing a lease. Trusted automation can pipe an approved coordinator token through stdin instead of placing it on the command line:
 
 ```bash
 printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login \
@@ -184,7 +200,7 @@ Placement moves through a durable state machine (`local → requested → provis
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
 - **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.38.1 or newer; older binaries do not expose the authoritative `providerMetadata.instanceProfileAttached` contract required for AWS admission.
 - **Dispatch fails with a provider or bootstrap error** — `environments.list` intentionally omits internal `lastError`. Inspect the session with `sessions.describe`; a failed placement may expose a bounded `recoveryError`. When deeper diagnosis is necessary, an operator on the Gateway host can inspect the durable worker state read-only. Do not edit the state database to bypass lifecycle fencing.
-- **No SSH candidate is reachable** — Crabbox may authenticate readiness through a fallback port. OpenClaw persists the ordered candidates from inspect and retries them through the same identity and pinned host key for fresh SSH and workspace-transfer connections. Ensure the Gateway's outbound route and the worker's ingress policy allow at least one advertised candidate.
+- **No SSH candidate is reachable** — compare the Gateway host's current outbound IPv4 with Crabbox's effective `aws.sshCIDRs` in `crabbox config show --json`. If the matching `/32` is absent, correct Crabbox's configuration and rerun `crabbox doctor --provider aws --json` before retrying; the coordinator's reverse-proxy or request-source address is not necessarily the Gateway's direct SSH source. Then ensure the Gateway's outbound route and the worker ingress policy permit at least one advertised candidate. OpenClaw already tries Crabbox's ordered ports with the same identity and pinned host key.
 - **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously (dispatch keeps running server-side either way, and a retry while provisioning is rejected with `session cannot dispatch from placement provisioning`).
 - **Worker reclaimed after upgrading from a 2026.7.2 beta** — those betas used the older worker launch contract. On restart, OpenClaw destroys an idle incompatible worker, keeps the session and workspace, marks the placement reclaimed, and provisions a current worker on the next dispatch or turn. A beta worker interrupted while still starting is marked failed after cleanup; retry the dispatch to provision it with the current contract.
 - **Cloud workspace conflict notice** — the turn completed and kept the local version of each listed path. Use the staged-ref commands in the notice to inspect or take the cloud version; no retry is required for the non-conflicting changes, which are already applied.
