@@ -704,7 +704,8 @@ export async function bootstrapWorker(
   request: WorkerBootstrapRequest,
   dependencies: WorkerBootstrapDependencies,
 ): Promise<WorkerAdmissionHandshake> {
-  const receipt = normalizeHandshake(request.artifact);
+  const artifact = request.artifact;
+  const receipt = normalizeHandshake(artifact);
   const timeoutMs = dependencies.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const prepared = await prepareWorkerSsh({
@@ -719,7 +720,7 @@ export async function bootstrapWorker(
         prepared,
         runCommand,
         script: PREFLIGHT_SCRIPT,
-        scriptArgs: [receipt.bundleHash, JSON.stringify(receipt), request.artifact.install],
+        scriptArgs: [receipt.bundleHash, JSON.stringify(receipt), artifact.install],
         timeoutMs,
         port,
         signal: dependencies.signal,
@@ -731,7 +732,7 @@ export async function bootstrapWorker(
     }
 
     try {
-      if (request.artifact.install === "bundle") {
+      if (artifact.install === "bundle") {
         const transfer = await runWorkerSshCandidates(prepared, (port) =>
           runCommand(
             [
@@ -740,7 +741,7 @@ export async function bootstrapWorker(
               "-P",
               String(port),
               "--",
-              request.artifact.tarballPath,
+              artifact.tarballPath,
               `${prepared.scpTarget}:${preflight.path}`,
             ],
             workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
@@ -757,13 +758,13 @@ export async function bootstrapWorker(
           runCommand,
           script: INSTALL_SCRIPT,
           scriptArgs: [
-            request.artifact.install,
+            artifact.install,
             receipt.bundleHash,
-            request.artifact.install === "npm" ? request.artifact.packageSpec : "",
-            request.artifact.install === "npm" ? request.artifact.packageIntegrity : "",
+            artifact.install === "npm" ? artifact.packageSpec : "",
+            artifact.install === "npm" ? artifact.packageIntegrity : "",
             JSON.stringify(receipt),
             preflight.path,
-            request.artifact.install === "bundle" ? request.artifact.tarballSha256 : "",
+            artifact.install === "bundle" ? artifact.tarballSha256 : "",
           ],
           timeoutMs,
           port,

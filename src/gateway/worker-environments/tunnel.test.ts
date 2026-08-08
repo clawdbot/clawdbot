@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
@@ -29,6 +30,7 @@ function waitForFast<T>(
 
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const SSH: WorkerSshEndpoint = {
   host: "worker.example.test",
@@ -407,7 +409,7 @@ describe("worker tunnel manager", () => {
     const endpoint = { ...SSH, port: 2222, fallbackPorts: [22] };
     const remoteWorkspaceDir = "/home/worker/.openclaw-worker/workspaces/env/session/1";
     const manifestRef = `sha256:${"c".repeat(64)}`;
-    const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-fallback-sync-"));
+    const localPath = tempDirs.make("openclaw-worker-fallback-sync-");
     await fs.writeFile(path.join(localPath, "artifact.txt"), "transfer me\n");
     const fake = fakeRunner((argv, options) => {
       if (
