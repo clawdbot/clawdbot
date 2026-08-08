@@ -111,7 +111,13 @@ export function toError(error: unknown): Error {
           (typeof key !== "string" || !ERROR_OWNED_FIELDS.has(key)) &&
           Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
       )
-      .map((key) => [key, Reflect.get(error, key)]),
+      .flatMap((key): [PropertyKey, unknown][] => {
+        try {
+          return [[key, Reflect.get(error, key)]];
+        } catch {
+          return [];
+        }
+      }),
   );
   const normalized = toErrorObject(details, message);
   normalized.cause = error;

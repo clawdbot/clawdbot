@@ -93,6 +93,20 @@ describe("database verification error coercion", () => {
     });
   });
 
+  it("skips structured fields whose getters throw", async () => {
+    const failure = {
+      get details(): never {
+        throw new Error("unexpected structured field read");
+      },
+      code: "SQLITE_IOERR",
+    };
+
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
+
+    expect(error).toMatchObject({ code: "SQLITE_IOERR" });
+    expect(error).not.toHaveProperty("details");
+  });
+
   it("preserves adapter-owned Error fields when structured failure fields collide", async () => {
     const detailKey = Symbol("detail");
     let reservedReads = 0;

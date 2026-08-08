@@ -164,6 +164,22 @@ describe("worker connection error coercion", () => {
     expect(error).toMatchObject(cause);
   });
 
+  it("skips structured fields whose getters throw", () => {
+    const cause = {
+      get details(): never {
+        throw new Error("unexpected structured field read");
+      },
+      code: "ECONNRESET",
+    };
+    let error: Error | undefined;
+
+    expect(() => {
+      error = toError(cause);
+    }).not.toThrow();
+    expect(error).toMatchObject({ code: "ECONNRESET" });
+    expect(error).not.toHaveProperty("details");
+  });
+
   it("preserves adapter-owned Error fields when structured cause fields collide", () => {
     const detailKey = Symbol("detail");
     let reservedReads = 0;
