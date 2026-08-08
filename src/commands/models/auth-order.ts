@@ -7,18 +7,24 @@ import {
   resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import { findNormalizedProviderValue } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
+import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveModelsTargetAgent } from "./shared.js";
 
-function describeOrder(store: AuthProfileStore, provider: string): string[] {
-  const providerKey = normalizeProviderId(provider);
-  const order = store.order?.[providerKey];
+function describeOrder(store: AuthProfileStore, provider: string, cfg: OpenClawConfig): string[] {
+  const providerKey = resolveProviderIdForAuth(provider, { config: cfg });
+  const order =
+    store.order?.[providerKey] ??
+    Object.entries(store.order ?? {}).find(
+      ([storedProvider]) =>
+        resolveProviderIdForAuth(storedProvider, { config: cfg }) === providerKey,
+    )?.[1];
   return Array.isArray(order) ? order : [];
 }
 
@@ -45,8 +51,9 @@ async function resolveAuthOrderContext(
       `Missing --provider. Run ${formatCliCommand("openclaw models auth list")} to see saved provider profiles.`,
     );
   }
-  const provider = normalizeProviderId(rawProvider);
   const cfg = await loadModelsConfig({ commandName: "models auth-order", runtime });
+  // Alias model providers share the canonical credential owner's account order.
+  const provider = resolveProviderIdForAuth(rawProvider, { config: cfg });
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
   return { cfg, agentId, agentDir, provider };
 }
@@ -60,7 +67,7 @@ export async function modelsAuthOrderGetCommand(
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
-  const order = describeOrder(store, provider);
+  const order = describeOrder(store, provider, cfg);
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
@@ -91,6 +98,7 @@ export async function modelsAuthOrderClearCommand(
   const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
   const updated = await setAuthProfileOrder({
     agentDir,
+    config: cfg,
     provider,
     order: null,
   });
@@ -99,6 +107,8 @@ export async function modelsAuthOrderClearCommand(
       `Failed to update auth state; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
     );
   }
+
+  await refreshRunningGatewayAuthState();
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
@@ -115,7 +125,6 @@ export async function modelsAuthOrderSetCommand(
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
-  const providerKey = provider;
   const requested = normalizeStringEntries(opts.order ?? []);
   if (requested.length === 0) {
     throw new Error(
@@ -130,13 +139,14 @@ export async function modelsAuthOrderSetCommand(
         `Auth profile "${profileId}" not found in ${shortenHomePath(agentDir)}. Run ${formatCliCommand("openclaw models auth list --provider " + provider)} to see saved profiles.`,
       );
     }
-    if (normalizeProviderId(cred.provider) !== providerKey) {
+    if (resolveProviderIdForAuth(cred.provider, { config: cfg }) !== provider) {
       throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
     }
   }
 
   const updated = await setAuthProfileOrder({
     agentDir,
+    config: cfg,
     provider,
     order: requested,
   });
@@ -146,7 +156,9 @@ export async function modelsAuthOrderSetCommand(
     );
   }
 
+  await refreshRunningGatewayAuthState();
+
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth profile order override: ${describeOrder(updated, provider).join(", ")}`);
+  runtime.log(`Auth profile order override: ${describeOrder(updated, provider, cfg).join(", ")}`);
 }

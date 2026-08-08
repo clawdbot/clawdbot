@@ -22,6 +22,7 @@ import {
   promoteAuthProfileInOrder,
   removeAuthProfilesAcrossOwnerStores,
   removeAuthProfilesWithLock,
+  setAuthProfileOrder,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
@@ -120,6 +121,119 @@ function expectOAuthCredentialFields(
   }
   return credential;
 }
+
+describe("setAuthProfileOrder", () => {
+  const primaryProfileId = "gmi:primary";
+  const backupProfileId = "gmi:backup";
+  const unrelatedProfileId = "unrelated-provider:default";
+
+  const cases: Array<{
+    label: string;
+    provider: string;
+    previousOrder: Record<string, string[]>;
+    requestedOrder: string[] | null;
+    expectedOrder: Record<string, string[]>;
+  }> = [
+    {
+      label: "canonicalizes an alias-only account order on set",
+      provider: "gmi-cloud",
+      previousOrder: { "gmi-cloud": [primaryProfileId] },
+      requestedOrder: [backupProfileId],
+      expectedOrder: { gmi: [backupProfileId] },
+    },
+    {
+      label: "removes every historical alias duplicate on set",
+      provider: "gmi",
+      previousOrder: {
+        gmi: [primaryProfileId],
+        "gmi-cloud": [primaryProfileId],
+        gmicloud: [primaryProfileId],
+      },
+      requestedOrder: [backupProfileId],
+      expectedOrder: { gmi: [backupProfileId] },
+    },
+    {
+      label: "clears an alias-only account order through the canonical provider",
+      provider: "gmi",
+      previousOrder: { "gmi-cloud": [primaryProfileId] },
+      requestedOrder: null,
+      expectedOrder: {},
+    },
+    {
+      label: "clears every canonical and historical alias duplicate atomically",
+      provider: "gmicloud",
+      previousOrder: {
+        gmi: [primaryProfileId],
+        "gmi-cloud": [primaryProfileId],
+        gmicloud: [backupProfileId],
+      },
+      requestedOrder: null,
+      expectedOrder: {},
+    },
+  ];
+
+  it.each(cases)(
+    "$label without changing unrelated state or credential ownership",
+    async (params) => {
+      await withAuthProfileTestState(
+        "openclaw-auth-order-canonical-owner-",
+        async ({ agentDir }) => {
+          fs.mkdirSync(agentDir, { recursive: true });
+          const unrelatedOrder = [unrelatedProfileId];
+          const store: AuthProfileStore = {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              [primaryProfileId]: { type: "api_key", provider: "gmi", key: "fixture-primary-key" },
+              [backupProfileId]: { type: "api_key", provider: "gmi", key: "fixture-backup-key" },
+              [unrelatedProfileId]: {
+                type: "api_key",
+                provider: "unrelated-provider",
+                key: "fixture-unrelated-key",
+              },
+            },
+            order: {
+              ...params.previousOrder,
+              "unrelated-provider": unrelatedOrder,
+            },
+            lastGood: {
+              gmi: primaryProfileId,
+              "unrelated-provider": unrelatedProfileId,
+            },
+            usageStats: {
+              [primaryProfileId]: { lastUsed: 123 },
+              [unrelatedProfileId]: { lastUsed: 456 },
+            },
+          };
+          saveAuthProfileStore(store, agentDir);
+          replaceRuntimeAuthProfileStoreSnapshots([
+            { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
+          ]);
+          const credentialMutationToken =
+            getRuntimeAuthProfileStoreCredentialMutationToken(agentDir);
+
+          const updated = await setAuthProfileOrder({
+            agentDir,
+            provider: params.provider,
+            order: params.requestedOrder,
+          });
+
+          const expectedOrder = {
+            ...params.expectedOrder,
+            "unrelated-provider": unrelatedOrder,
+          };
+          expect(updated?.order).toEqual(expectedOrder);
+          expect(loadAuthProfileStoreForRuntime(agentDir).order).toEqual(expectedOrder);
+          expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.order).toEqual(expectedOrder);
+          expect(updated?.lastGood).toEqual(store.lastGood);
+          expect(updated?.usageStats).toEqual(store.usageStats);
+          expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir)).toEqual(
+            credentialMutationToken,
+          );
+        },
+      );
+    },
+  );
+});
 
 describe("promoteAuthProfileInOrder", () => {
   it("refreshes inherited main selection state without advancing credential ownership", async () => {

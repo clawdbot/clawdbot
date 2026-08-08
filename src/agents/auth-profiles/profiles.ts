@@ -8,8 +8,9 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
@@ -78,10 +79,20 @@ function updateSuccessfulUsageStatsEntry(
 /** Sets or clears explicit auth profile order for a provider. */
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
+  config?: OpenClawConfig;
   provider: string;
   order?: string[] | null;
 }): Promise<AuthProfileStore | null> {
-  const providerKey = normalizeProviderId(params.provider);
+  // Discover plugin-owned aliases before SQLite's synchronous commit section;
+  // otherwise canonical cleanup would perform filesystem work under its lock.
+  const providerAliases = resolveProviderAuthAliasMap(
+    params.config ? { config: params.config } : undefined,
+  );
+  const resolveProviderOwner = (provider: string): string => {
+    const normalized = normalizeProviderId(provider);
+    return providerAliases[normalized] ?? normalized;
+  };
+  const providerKey = resolveProviderOwner(params.provider);
   const sanitized =
     params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
@@ -90,15 +101,27 @@ export async function setAuthProfileOrder(params: {
     agentDir: params.agentDir,
     updater: (store) => {
       store.order = store.order ?? {};
+      const matchingProviderKeys = Object.keys(store.order).filter(
+        (storedProvider) => resolveProviderOwner(storedProvider) === providerKey,
+      );
       if (deduped.length === 0) {
-        if (!store.order[providerKey]) {
+        if (matchingProviderKeys.length === 0) {
           return false;
         }
-        delete store.order[providerKey];
+        for (const storedProvider of matchingProviderKeys) {
+          delete store.order[storedProvider];
+        }
         if (Object.keys(store.order).length === 0) {
           store.order = undefined;
         }
         return true;
+      }
+      // Canonical and alias keys are one owner; stale duplicates would silently
+      // resurrect an override after a later canonical clear.
+      for (const storedProvider of matchingProviderKeys) {
+        if (storedProvider !== providerKey) {
+          delete store.order[storedProvider];
+        }
       }
       store.order[providerKey] = deduped;
       return true;
