@@ -1,5 +1,5 @@
 // Uninstall command tests cover cleanup flow, prompts, and runtime messages.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
@@ -11,6 +11,19 @@ import {
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
 
+const gatewayService = vi.hoisted(() => ({
+  label: "LaunchAgent",
+  loadedText: "loaded",
+  notLoadedText: "not loaded",
+  isLoaded: vi.fn(async () => false),
+  stop: vi.fn(async () => {}),
+  uninstall: vi.fn(async () => {}),
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => gatewayService,
+}));
+
 const { uninstallCommand } = await import("./uninstall.js");
 
 describe("uninstallCommand", () => {
@@ -19,7 +32,39 @@ describe("uninstallCommand", () => {
   beforeEach(() => {
     resetCleanupCommandMocks();
     silenceCleanupCommandRuntime(runtime);
+    gatewayService.isLoaded.mockResolvedValue(false);
+    gatewayService.stop.mockResolvedValue(undefined);
+    gatewayService.uninstall.mockResolvedValue(undefined);
   });
+
+  it.each([
+    { loadProbe: true, expectedStops: 1 },
+    { loadProbe: false, expectedStops: 0 },
+    { loadProbe: new Error("launchctl unavailable"), expectedStops: 0 },
+  ])(
+    "uninstalls the service definition when the load probe returns $loadProbe",
+    async ({ loadProbe, expectedStops }) => {
+      if (loadProbe instanceof Error) {
+        gatewayService.isLoaded.mockRejectedValueOnce(loadProbe);
+      } else {
+        gatewayService.isLoaded.mockResolvedValueOnce(loadProbe);
+      }
+
+      await uninstallCommand(runtime, {
+        service: true,
+        yes: true,
+        nonInteractive: true,
+      });
+
+      expect(gatewayService.stop).toHaveBeenCalledTimes(expectedStops);
+      expect(gatewayService.uninstall).toHaveBeenCalledOnce();
+      if (loadProbe instanceof Error) {
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("continuing with uninstall"),
+        );
+      }
+    },
+  );
 
   it("recommends creating a backup before removing state or workspaces", async () => {
     await uninstallCommand(runtime, {

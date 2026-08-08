@@ -58,43 +58,41 @@ function buildScopeSelection(opts: UninstallOptions): {
   return { scopes, hadExplicit };
 }
 
-async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
+async function stopAndUninstallService(runtime: RuntimeEnv): Promise<void> {
   if (isNixMode) {
     // Nix owns service lifecycle in Nix mode; uninstalling via launchd/systemd would fight the profile.
     runtime.error(
       `Nix mode detected; service uninstall is disabled. Manage the service through your Nix profile instead, then run ${formatCliCommand("openclaw status")} to verify.`,
     );
-    return false;
+    return;
   }
   const service = resolveGatewayService();
-  let loaded;
+  let loaded: boolean | undefined;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
     runtime.error(
-      `Gateway service check failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for service diagnostics.`,
+      `Gateway service check failed: ${formatErrorMessage(err)}; continuing with uninstall. Run ${formatCliCommand("openclaw gateway status --deep")} if removal does not complete.`,
     );
-    return false;
   }
-  if (!loaded) {
+  if (loaded === false) {
     runtime.log(`Gateway service ${service.notLoadedText}.`);
-    return true;
   }
-  try {
-    await service.stop({ env: process.env, stdout: process.stdout });
-  } catch (err) {
-    runtime.error(
-      `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
-    );
+  if (loaded) {
+    try {
+      await service.stop({ env: process.env, stdout: process.stdout });
+    } catch (err) {
+      runtime.error(
+        `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
+      );
+    }
   }
   try {
     await service.uninstall({ env: process.env, stdout: process.stdout });
-    return true;
   } catch (err) {
     runtime.error(
       `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
     );
-    return false;
   }
 }
 
