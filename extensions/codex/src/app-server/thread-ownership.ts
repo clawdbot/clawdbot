@@ -196,12 +196,15 @@ export async function retireCodexConversationThreadBinding(params: {
           if: { kind: "absent" },
         });
         if (!restored) {
-          throw new Error("the previous Codex binding generation could not be restored");
+          throw new Error("the previous Codex binding generation could not be restored", {
+            cause: error,
+          });
         }
       } catch (restorationError) {
-        throw new Error(
+        throw new AggregateError(
+          [error, restorationError],
           `Codex conversation detachment failed and native thread ${current.threadId} could not be restored; run /codex resume ${current.threadId} to recover it`,
-          { cause: new AggregateError([error, restorationError]) },
+          { cause: restorationError },
         );
       }
       throw error;
