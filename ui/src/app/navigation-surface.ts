@@ -15,6 +15,8 @@ export function renderFloatingUpdateCard(params: {
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateRunning: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
 }) {
   if (!params.navigationSurfaceHidden || params.onboarding) {
     return nothing;
@@ -24,5 +26,7 @@ export function renderFloatingUpdateCard(params: {
     .updateAvailable=${params.updateAvailable}
     .updateRunning=${params.updateRunning}
     .onUpdate=${params.onUpdate}
+    .refreshRequired=${params.refreshRequired}
+    .onRefresh=${params.onRefresh}
   ></openclaw-sidebar-update-card>`;
 }

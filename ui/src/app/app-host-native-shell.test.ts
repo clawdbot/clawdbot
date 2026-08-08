@@ -393,6 +393,8 @@ describe("OpenClaw shell update affordance", () => {
       },
       updateRunning: false,
       onUpdate: vi.fn(),
+      refreshRequired: false,
+      onRefresh: vi.fn(),
     };
     const collapsed = navigationSurfaceIsHidden({
       navCollapsed: true,
@@ -400,7 +402,26 @@ describe("OpenClaw shell update affordance", () => {
       mobileNavLayout: false,
     });
     render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
-    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
+    const card = container.querySelector<
+      HTMLElement & {
+        refreshRequired: boolean;
+        onRefresh: () => void;
+      }
+    >("openclaw-sidebar-update-card");
+    expect(card).not.toBeNull();
+
+    render(
+      renderFloatingUpdateCard({
+        ...shared,
+        navigationSurfaceHidden: collapsed,
+        updateAvailable: null,
+        refreshRequired: true,
+      }),
+      container,
+    );
+    expect(card?.refreshRequired).toBe(true);
+    card?.onRefresh();
+    expect(shared.onRefresh).toHaveBeenCalledOnce();
 
     const visible = navigationSurfaceIsHidden({
       navCollapsed: false,

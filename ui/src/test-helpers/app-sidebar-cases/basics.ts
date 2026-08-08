@@ -61,12 +61,14 @@ describe("AppSidebar update card wiring", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
+    const onRefresh = vi.fn();
     sidebar.updateAvailable = {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     };
     sidebar.onUpdate = onUpdate;
+    sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
@@ -75,6 +77,17 @@ describe("AppSidebar update card wiring", () => {
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    sidebar.refreshRequired = true;
+    await sidebar.updateComplete;
+    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-sidebar-update-card",
+    );
+    await refreshCard?.updateComplete;
+    expect(refreshCard?.textContent).toContain("Server updated");
+    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
