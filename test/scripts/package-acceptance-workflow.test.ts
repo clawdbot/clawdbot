@@ -1978,7 +1978,7 @@ describe("package acceptance workflow", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       label === "title"
-        ? "Refusing to adopt ci.yml run 101: display title never matched"
+        ? "Refusing to adopt ci.yml run 101: run never became readable with display title"
         : "Refusing to adopt unvalidated ci.yml run 101",
     );
     expect(

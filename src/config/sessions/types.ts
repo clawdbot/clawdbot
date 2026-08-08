@@ -28,6 +28,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionToolOverrides = {
@@ -163,6 +164,7 @@ export type SessionCompactionCheckpoint = {
   reason: SessionCompactionCheckpointReason;
   tokensBefore?: number;
   tokensAfter?: number;
+  tokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
   summary?: string;
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
@@ -535,6 +537,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
+    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
+    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -796,9 +800,7 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
+function resolveSessionTotalTokensValue(entry?: Pick<SessionEntry, "totalTokens"> | null) {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return undefined;
@@ -807,13 +809,16 @@ export function resolveSessionTotalTokens(
 }
 
 export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion"> | null,
 ): number | undefined {
-  const total = resolveSessionTotalTokens(entry);
+  const total = resolveSessionTotalTokensValue(entry);
   if (total === undefined) {
     return undefined;
   }
-  if (entry?.totalTokensFresh === false) {
+  if (
+    entry?.totalTokensFresh !== true ||
+    entry.totalTokensVersion !== SESSION_TOTAL_TOKENS_VERSION
+  ) {
     return undefined;
   }
   return total;

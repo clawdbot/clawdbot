@@ -2280,6 +2280,8 @@ docker_e2e_docker_run_cmd run demo
       expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
       expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
     }
+    expect(runner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"');
+    expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');
   });
 
   it("starts the upgrade survivor plugin registry before updates without ambient Feishu config", () => {

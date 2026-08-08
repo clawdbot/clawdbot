@@ -18,6 +18,7 @@ import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
   isAssistantForModelRef,
+  normalizeAssistantUsageForContext,
   resolveActiveErrorContext,
   resolveLatestCallUsage,
 } from "./helpers.js";
@@ -158,8 +159,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
           ]),
         )
       : input.bootstrapPromptWarningSignaturesSeen);
-  const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-  const currentAttemptAssistantUsage = normalizeUsage(currentAttemptAssistant?.usage as UsageLike);
+  const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
+  const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
   const callUsage = resolveLatestCallUsage({
     currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],

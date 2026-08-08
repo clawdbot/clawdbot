@@ -86,6 +86,7 @@ export async function resetReplyRunSession(params: {
     outputTokens: undefined,
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
     estimatedCostUsd: undefined,
     cacheRead: undefined,
     cacheWrite: undefined,
