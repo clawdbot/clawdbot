@@ -100,6 +100,9 @@ async function captureProbeConnectFrame(params: {
   });
   await vi.waitFor(() => expect(webSockets).toHaveLength(1));
   const socket = webSockets[0];
+  if (!socket) {
+    throw new Error("missing probe websocket");
+  }
   socket.emitOpen();
   socket.emitMessage(
     JSON.stringify({
