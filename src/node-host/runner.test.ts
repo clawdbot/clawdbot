@@ -747,47 +747,46 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("retires queued publications when a manifest change reconnects the gateway", async () => {
-    let resolveFirstPluginPublication: (() => void) | undefined;
+  it.each([true, false])("retires inventory before manifest reconnect", async (deferInitial) => {
+    let resolveInitialPublication: (() => void) | undefined;
     await withReadyNodeHost(async ({ client, options }) => {
-      client.request.mockImplementation((method: string) => {
-        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD && !resolveFirstPluginPublication) {
-          return new Promise((resolve) => {
-            resolveFirstPluginPublication = () => resolve({});
-          });
-        }
-        return Promise.resolve({});
-      });
+      const pluginPublications = () =>
+        client.request.mock.calls.filter(([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD);
+      if (deferInitial) {
+        client.request.mockImplementation((method: string) => {
+          if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD && !resolveInitialPublication) {
+            return new Promise((resolve) => {
+              resolveInitialPublication = () => resolve({});
+            });
+          }
+          return Promise.resolve({});
+        });
+      }
       options?.onHelloOk?.({
         protocol: 3,
         features: { methods: [], events: [] },
       } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-      await vi.waitFor(() => expect(resolveFirstPluginPublication).toBeDefined());
-
-      mocks.nodePluginTools = [];
-      mocks.nodeHostCaps = ["canvas"];
-      mocks.availabilityChanged?.();
-      await vi.waitFor(() => expect(client.updateNodeManifest).toHaveBeenCalled());
-      resolveFirstPluginPublication?.();
+      if (deferInitial) {
+        await vi.waitFor(() => expect(resolveInitialPublication).toBeDefined());
+      }
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+      expect(pluginPublications()).toHaveLength(1);
 
-      expect(
-        client.request.mock.calls.filter(([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD),
-      ).toHaveLength(1);
+      Object.assign(mocks, { nodePluginTools: [], nodeHostCaps: ["canvas"] });
+      mocks.availabilityChanged?.();
+      resolveInitialPublication?.();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(pluginPublications()).toHaveLength(1);
 
       options?.onHelloOk?.({
         protocol: 3,
         features: { methods: [], events: [] },
       } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-      await vi.waitFor(() => {
-        expect(
-          client.request.mock.calls.filter(
-            ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
-          ),
-        ).toHaveLength(2);
-      });
+      await vi.waitFor(() => expect(pluginPublications()).toHaveLength(2));
       expect(client.request).toHaveBeenLastCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, {
         tools: [],
       });
