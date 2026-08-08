@@ -395,6 +395,10 @@ export const en: TranslationMap = {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
       controlUiCommit: "Control UI commit",
+      builtAt: "Built",
+      installedAt: "Installed",
+      installedAtUnknown: "Unknown · recorded after the next successful update",
+      lastCommitAt: "Last commit",
       installKind: "Install type",
       policyTitle: "Update policy",
       channel: "Release channel",
@@ -412,6 +416,12 @@ export const en: TranslationMap = {
       available: "Update available {target}",
       upToDate: "Up to date",
       statusUnavailable: "Update status unavailable",
+      gitCommitAhead: "{count} commit ahead of tracked upstream",
+      gitCommitsAhead: "{count} commits ahead of tracked upstream",
+      gitDiverged: "Diverged · {ahead} ahead, {behind} behind",
+      gitFetchFailed: "Could not fetch the tracked upstream",
+      gitNoUpstream: "No tracked upstream is configured",
+      gitComparisonFailed: "Could not compare this checkout with its tracked upstream",
       updateNow: "Update now",
       updateNowDescription: "Install the available update and restart the Gateway.",
     },
@@ -423,6 +433,8 @@ export const en: TranslationMap = {
       "Update installed but running version did not change — restart may have been blocked.",
     verificationFailedWithVersions:
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    verificationFailedWithIdentity:
+      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:
       "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
     outcomeUnknown:
@@ -447,6 +459,11 @@ export const en: TranslationMap = {
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       restartUnhealthy:
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      restartRevisionMismatch:
+        "The restarted Gateway is running a different revision. Check the service install root and retry.",
+      restartRevisionUnavailable:
+        "The restarted Gateway could not report its revision. Check the service install root and logs before retrying.",
+      alreadyCurrent: "This checkout is already at its tracked upstream revision.",
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",

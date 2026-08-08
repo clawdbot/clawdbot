@@ -4,7 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
-import { controlUiVersionDiffersFrom } from "../build-info.ts";
+import { controlUiVersionDiffersFrom, reloadControlUiIfStale } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -40,18 +40,22 @@ import {
   readOverlayOperatorAccessTransition,
 } from "./overlays-access.ts";
 import {
+  createPendingUpdateReconciliation,
   createUpdateCampaignStatusPoller,
+  createUpdateStatusRefresher,
   createUpdateVerificationController,
-  isPendingUpdateHandoffSentinel,
+  projectUpdateStatusResponse,
   readUpdateAvailable,
   readUpdateAvailableValue,
   readUpdateSchedule,
   readUpdateScheduleValue,
+  resolveExpectedUpdateSha,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
   UPDATE_HANDOFF_STARTED_REASON,
   type ApplicationStatusBanner,
   type PendingUpdateReconciliation,
+  type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
 
@@ -79,6 +83,7 @@ type ApplicationOverlaySnapshot = {
 export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
+  refreshUpdateStatus: () => Promise<void>;
   runUpdate: () => Promise<void>;
   holdUpdate: () => Promise<boolean>;
   decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
@@ -231,41 +236,32 @@ export function createApplicationOverlays(
     getHello: () => gateway.snapshot.hello,
     publish,
     publishBanner: publishUpdateBanner,
+    onVerifiedInstall: reloadControlUiIfStale,
   });
+  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
+    snapshot = {
+      ...snapshot,
+      ...projectUpdateStatusResponse(response, {
+        updateStatusBanner: snapshot.updateStatusBanner,
+        heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
+      }),
+    };
+    publish();
+  };
   const updateCampaignPoller = createUpdateCampaignStatusPoller({
     getClient: () => activeClient,
     getEpoch: () => connectedEpoch,
     canPoll: () => operatorAccess.canAdmin,
     getSchedule: () => snapshot.updateSchedule,
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
-    onStatus: (response) => {
-      const sentinel = response.sentinel;
-      const updateSchedule = Object.hasOwn(response, "schedule")
-        ? readUpdateScheduleValue(response.schedule)
-        : undefined;
-      snapshot = {
-        ...snapshot,
-        updateStatusBanner:
-          sentinel?.kind === "update" && sentinel.status
-            ? sentinel.status === "ok" || isPendingUpdateHandoffSentinel(sentinel)
-              ? null
-              : resolveUpdateStatusBanner({
-                  status: sentinel.status,
-                  reason: sentinel.stats?.reason ?? undefined,
-                })
-            : snapshot.updateStatusBanner,
-        ...(Object.hasOwn(response, "updateAvailable")
-          ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
-          : {}),
-        ...(updateSchedule !== undefined
-          ? {
-              updateSchedule,
-              heldUpdateCampaignId: heldCampaignId(updateSchedule),
-            }
-          : {}),
-      };
-      publish();
-    },
+    onStatus: applyUpdateStatusResponse,
+  });
+  const refreshUpdateStatus = createUpdateStatusRefresher({
+    getClient: () => activeClient,
+    getEpoch: () => connectedEpoch,
+    canRefresh: () => operatorAccess.canAdmin,
+    isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
+    onStatus: applyUpdateStatusResponse,
   });
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
@@ -452,6 +448,7 @@ export function createApplicationOverlays(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    refreshUpdateStatus,
     async runUpdate() {
       const client = gateway.snapshot.client;
       if (
@@ -479,8 +476,11 @@ export function createApplicationOverlays(
         ) {
           return;
         }
-        const announcedVersion = snapshot.updateAvailable?.latestVersion?.trim() || null;
-        pendingUpdate = { expected: announcedVersion, kind: "ambiguous" };
+        pendingUpdate = createPendingUpdateReconciliation(
+          "ambiguous",
+          snapshot.updateAvailable?.latestVersion?.trim() || null,
+          resolveExpectedUpdateSha(snapshot.updateSchedule, snapshot.updateAvailable),
+        );
         publish();
         const response = await client.request<UpdateRunResponse>("update.run", {});
         if (
@@ -492,18 +492,20 @@ export function createApplicationOverlays(
           return;
         }
         const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
-        const expectedVersion = response.result?.after?.version?.trim() || announcedVersion;
+        const expectedVersion =
+          response.result?.after?.version?.trim() || pendingUpdate.expectedVersion;
+        const expectedSha = response.result?.after?.sha?.trim() || pendingUpdate.expectedSha;
         if (
           response.ok === true &&
           status === "skipped" &&
           response.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
           response.handoff?.status === "started"
         ) {
-          pendingUpdate = { expected: expectedVersion, kind: "handoff" };
+          pendingUpdate = { expectedVersion, expectedSha, kind: "handoff" };
           return;
         }
         if (response.ok === true && status === "ok") {
-          pendingUpdate = { expected: expectedVersion, kind: "restart" };
+          pendingUpdate = { expectedVersion, expectedSha, kind: "restart" };
           if (response.restart?.coalesced === true) {
             snapshot = {
               ...snapshot,
