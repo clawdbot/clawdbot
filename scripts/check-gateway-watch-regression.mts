@@ -982,6 +982,10 @@ export function writeBuildAndRuntimePostBuildStamps(params: { cwd?: string } = {
   writeRuntimePostBuildStamp({ cwd });
 }
 
+export function calculateDistRuntimeByteGrowth(pre, post) {
+  return post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
+}
+
 /**
  * Collects pass/fail findings for the bounded gateway watch regression run.
  */
@@ -1150,10 +1154,7 @@ async function main() {
     entry.startsWith("dist-runtime/"),
   ).length;
   const distRuntimeFileGrowth = distRuntimeAddedPaths;
-  const distRuntimeByteGrowth =
-    distRuntimeAddedPaths === 0
-      ? 0
-      : post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
+  const distRuntimeByteGrowth = calculateDistRuntimeByteGrowth(pre, post);
   const totalCpuMs = Math.round(
     (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
   );
