@@ -320,7 +320,7 @@ describe("listSessionsFromStore resolver cache", () => {
           opts: { includeDerivedTitles: false, includeLastMessage: false, limit: 30 },
         });
         expect(titleBatchSpy).toHaveBeenCalledOnce();
-        expect(titleBatchSpy).toHaveBeenCalledWith([]);
+        expect(titleBatchSpy).toHaveBeenCalledWith([], { fallbackToInterSession: true });
       } finally {
         titleBatchSpy.mockRestore();
       }

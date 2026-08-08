@@ -25,6 +25,24 @@ type SessionTitleFields = {
   lastMessagePreview: string | null;
 };
 
+type TitleFieldReadOptions = {
+  // Include inter-session (relayed) user messages as title candidates outright.
+  includeInterSession?: boolean;
+  // Prefer a direct end-user message, but fall back to a relayed (inter-session)
+  // one when none exists anywhere probed — so a relay-only session shows the
+  // relayed text instead of an opaque sessionId. No-op when includeInterSession.
+  fallbackToInterSession?: boolean;
+};
+
+type TitleFieldCacheVariant = "default" | "includeInterSession" | "defaultInterSessionFallback";
+
+function titleFieldCacheVariant(opts?: TitleFieldReadOptions): TitleFieldCacheVariant {
+  if (opts?.includeInterSession === true) {
+    return "includeInterSession";
+  }
+  return opts?.fallbackToInterSession === true ? "defaultInterSessionFallback" : "default";
+}
+
 const EMPTY_SESSION_TITLE_FIELDS: SessionTitleFields = {
   firstUserMessage: null,
   lastMessagePreview: null,
@@ -44,7 +62,7 @@ const SQLITE_TITLE_PROBE_MAX_MESSAGES = 100;
 const SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES = 256;
 
 type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWatermark> & {
-  fields: Partial<Record<"default" | "includeInterSession", SessionTitleFields>>;
+  fields: Partial<Record<TitleFieldCacheVariant, SessionTitleFields>>;
 };
 
 // Appends advance maxSeq while rewind, fork, and compaction rotate generation. Both tokens must
@@ -103,12 +121,12 @@ function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]):
 
 function readSqliteTitleFields(
   target: ResolvedTranscriptReadTarget,
-  opts?: { includeInterSession?: boolean },
+  opts?: TitleFieldReadOptions,
 ): SessionTitleFields {
   const scope = toTranscriptReadScope(target);
   const cacheKey = sqliteTitleFieldCacheKey(target);
   const watermark = readSessionTranscriptWatermark(scope);
-  const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
+  const variant = titleFieldCacheVariant(opts);
   const cached = sqliteTitleFieldCache.get(cacheKey);
   const cachedFields =
     cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq
@@ -145,17 +163,27 @@ function readSqliteTitleFields(
             0,
             SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
           );
-    let firstUser = findFirstTitleUserMessage(head, opts?.includeInterSession === true);
+    const includeInterSession = opts?.includeInterSession === true;
+    let firstUser = findFirstTitleUserMessage(head, includeInterSession);
+    // Read the widened range lazily (only when the head probe misses), reusing it
+    // for the inter-session fallback below so that neither adds an extra DB read.
+    let widened: SessionTranscriptMessageEvent[] | undefined;
     if (!firstUser && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
-      firstUser = findFirstTitleUserMessage(
-        readSqliteTitleProbeRange(
-          scope,
-          tail.totalMessages,
-          SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
-          SQLITE_TITLE_PROBE_MAX_MESSAGES,
-        ),
-        opts?.includeInterSession === true,
+      widened = readSqliteTitleProbeRange(
+        scope,
+        tail.totalMessages,
+        SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+        SQLITE_TITLE_PROBE_MAX_MESSAGES,
       );
+      firstUser = findFirstTitleUserMessage(widened, includeInterSession);
+    }
+    // Fallback: no direct end-user message exists anywhere probed. Accept a relayed
+    // (inter-session) message as the title rather than deriveSessionTitle falling
+    // through to the opaque sessionId. Re-scan the already-read pages only.
+    if (!firstUser && opts?.fallbackToInterSession === true && !includeInterSession) {
+      firstUser =
+        findFirstTitleUserMessage(head, true) ??
+        (widened ? findFirstTitleUserMessage(widened, true) : undefined);
     }
     fields = {
       firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
@@ -181,7 +209,7 @@ function readSqliteTitleFields(
 
 function readSqliteTitleFieldsOrEmpty(
   target: ResolvedTranscriptReadTarget,
-  opts?: { includeInterSession?: boolean },
+  opts?: TitleFieldReadOptions,
 ): SessionTitleFields {
   try {
     return readSqliteTitleFields(target, opts);
@@ -197,10 +225,10 @@ function readSqliteTitleFieldsOrEmpty(
 /** Batch-hydrates list title fields once per store, with canonical widening only for misses. */
 function readSessionTitleFieldsFromTranscriptBatchCurrent(
   scopes: readonly SessionTranscriptReadScope[],
-  opts?: { includeInterSession?: boolean },
+  opts?: TitleFieldReadOptions,
 ): SessionTitleFields[] {
   const targets: ResolvedTranscriptReadTarget[] = [];
-  const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
+  const variant = titleFieldCacheVariant(opts);
   const results = new Map<number, SessionTitleFields>();
   const misses: Array<{
     cacheKey: string;
@@ -270,11 +298,20 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
       results.set(miss.index, { ...cachedFields });
       continue;
     }
-    const firstUser = findFirstTitleUserMessage(probe.head, opts?.includeInterSession === true);
+    const includeInterSession = opts?.includeInterSession === true;
+    let firstUser = findFirstTitleUserMessage(probe.head, includeInterSession);
     const lastText = findLastMessageText(probe.tail);
     if (probe.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES && (!firstUser || !lastText)) {
+      // A widen is needed; delegate to the single-scope reader, which applies the
+      // same inter-session fallback over the wider probe range.
       results.set(miss.index, readSqliteTitleFieldsOrEmpty(miss.target, opts));
       continue;
+    }
+    // Fallback within the head probe: a relay-only session has no direct-user
+    // title candidate, so accept the relayed (inter-session) message rather than
+    // letting deriveSessionTitle collapse to the opaque sessionId.
+    if (!firstUser && opts?.fallbackToInterSession === true && !includeInterSession) {
+      firstUser = findFirstTitleUserMessage(probe.head, true);
     }
     const fields = {
       firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
@@ -305,7 +342,7 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
 /** Batch-hydrates list title fields while isolating a rebuilding projection to its session. */
 export function readSessionTitleFieldsFromTranscriptBatch(
   scopes: readonly SessionTranscriptReadScope[],
-  opts?: { includeInterSession?: boolean },
+  opts?: TitleFieldReadOptions,
 ): SessionTitleFields[] {
   try {
     return readSessionTitleFieldsFromTranscriptBatchCurrent(scopes, opts);
@@ -322,7 +359,7 @@ export function readSessionTitleFieldsFromTranscriptBatch(
 /** Reads title and preview text from a transcript through the reader seam. */
 export function readSessionTitleFieldsFromTranscript(
   scope: SessionTranscriptReadScope,
-  opts?: { includeInterSession?: boolean },
+  opts?: TitleFieldReadOptions,
 ): SessionTitleFields {
   return readSqliteTitleFieldsOrEmpty(resolveTranscriptReadTarget(scope), opts);
 }
@@ -330,7 +367,7 @@ export function readSessionTitleFieldsFromTranscript(
 /** Reads title and preview text asynchronously through the reader seam. */
 export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
-  opts?: { includeInterSession?: boolean },
+  opts?: TitleFieldReadOptions,
 ): Promise<SessionTitleFields> {
   return readSqliteTitleFieldsOrEmpty(resolveTranscriptReadTarget(scope), opts);
 }

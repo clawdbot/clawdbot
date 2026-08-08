@@ -419,13 +419,18 @@ export function createSessionsListTool(opts?: {
         await pMap(
           titleTargets,
           async (target) => {
-            const fields = await readSessionTitleFieldsFromTranscriptAsync({
-              agentId: target.agentId,
-              sessionEntry: target.sessionEntry,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-              storePath,
-            });
+            const fields = await readSessionTitleFieldsFromTranscriptAsync(
+              {
+                agentId: target.agentId,
+                sessionEntry: target.sessionEntry,
+                sessionId: target.sessionId,
+                sessionKey: target.sessionKey,
+                storePath,
+              },
+              // Relay-only sessions have only inter-session user messages; without
+              // this the model-facing session list also collapses to the sessionId.
+              { fallbackToInterSession: true },
+            );
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,

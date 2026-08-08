@@ -545,7 +545,11 @@ export async function listSessionsFromStoreAsync(
           },
         ];
       });
-    const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes, {
+      // Relay-only sessions have only inter-session user messages; without this
+      // fallback the list title collapses to the opaque sessionId.
+      fallbackToInterSession: true,
+    });
     let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");

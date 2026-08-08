@@ -683,6 +683,42 @@ describe("session transcript reader facade", () => {
     expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
   });
 
+  test("falls back to an inter-session message for the title when no direct user message exists", async () => {
+    const scope = await writeSqliteMessages("reader-title-inter-session-fallback", [
+      {
+        role: "user",
+        content: "relayed from another session",
+        provenance: { kind: "inter_session", sourceSessionKey: "agent:main:origin" },
+      },
+      { role: "assistant", content: "ack" },
+    ]);
+    // Default probe skips the inter-session (relayed) message, so a relay-only
+    // session has no direct-user title source — the regression that made
+    // deriveSessionTitle collapse to the opaque sessionId.
+    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBeNull();
+    // The fallback surfaces the relayed text instead, reusing already-read pages.
+    expect(
+      readSessionTitleFieldsFromTranscript(scope, { fallbackToInterSession: true })
+        .firstUserMessage,
+    ).toBe("relayed from another session");
+  });
+
+  test("prefers a direct user message over an inter-session one even with fallback", async () => {
+    const scope = await writeSqliteMessages("reader-title-inter-session-prefer-direct", [
+      {
+        role: "user",
+        content: "relayed first",
+        provenance: { kind: "inter_session", sourceSessionKey: "agent:main:origin" },
+      },
+      { role: "user", content: "real user second" },
+    ]);
+    // Fallback is additive: a real end-user message still wins over a relayed one.
+    expect(
+      readSessionTitleFieldsFromTranscript(scope, { fallbackToInterSession: true })
+        .firstUserMessage,
+    ).toBe("real user second");
+  });
+
   test("skips batch title probes while every cached transcript watermark is unchanged", async () => {
     const scope = await writeSqliteMessages("reader-title-batch-cache-warm", [
       { role: "user", content: "cached batch prompt" },

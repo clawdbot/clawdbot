@@ -358,13 +358,18 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readScopedSessionTitleFieldsFromTranscript({
-      agentId: sessionAgentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: key,
-      storePath,
-    });
+    const fields = readScopedSessionTitleFieldsFromTranscript(
+      {
+        agentId: sessionAgentId,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey: key,
+        storePath,
+      },
+      // A relay-only session's sole user message is inter-session; fall back to it
+      // so opening the session shows its text, not the raw sessionId.
+      { fallbackToInterSession: true },
+    );
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
     }
