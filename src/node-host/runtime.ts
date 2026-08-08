@@ -325,6 +325,10 @@ export async function prepareNodeHostRuntime(params?: {
         const nextPluginNodeHost = resolvePluginNodeHost();
         const nextManifest = buildManifest(nextPluginNodeHost);
         currentPluginNodeHost = nextPluginNodeHost;
+        if (!sameManifest(currentManifest, nextManifest)) {
+          currentManifest = nextManifest;
+          onManifestChanged?.(nextManifest);
+        }
         onInventoryChanged?.(
           createInventory({
             skills,
@@ -332,10 +336,6 @@ export async function prepareNodeHostRuntime(params?: {
             mcpManager: manager,
           }),
         );
-        if (!sameManifest(currentManifest, nextManifest)) {
-          currentManifest = nextManifest;
-          onManifestChanged?.(nextManifest);
-        }
       };
       const stopAvailabilityWatch = onManifestChanged
         ? watchRegisteredNodeHostCommandAvailability(availabilityContext, refreshAvailability)
