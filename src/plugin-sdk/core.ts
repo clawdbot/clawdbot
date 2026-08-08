@@ -29,8 +29,28 @@ import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import type {
+  MemoryCorpusGetResult as MemoryCorpusGetResultInternal,
+  MemoryCorpusSupplement as MemoryCorpusSupplementInternal,
+  MemoryCorpusSupplementRegistration as MemoryCorpusSupplementRegistrationInternal,
+} from "../plugins/memory-state.js";
+import type {
+  OpenClawPluginAgentApi as OpenClawPluginAgentApiInternal,
+  OpenClawPluginAgentEventsApi as OpenClawPluginAgentEventsApiInternal,
+  OpenClawPluginLifecycleApi as OpenClawPluginLifecycleApiInternal,
+  OpenClawPluginRunContextApi as OpenClawPluginRunContextApiInternal,
+  OpenClawPluginSessionApi as OpenClawPluginSessionApiInternal,
+  OpenClawPluginSessionControlsApi as OpenClawPluginSessionControlsApiInternal,
+  OpenClawPluginSessionStateApi as OpenClawPluginSessionStateApiInternal,
+  OpenClawPluginSessionWorkflowApi as OpenClawPluginSessionWorkflowApiInternal,
+} from "../plugins/plugin-api.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type {
+  OpenClawPluginHttpRouteAuth as OpenClawPluginHttpRouteAuthFacade,
+  OpenClawPluginHttpRouteUpgradeHandler as OpenClawPluginHttpRouteUpgradeHandlerFacade,
+} from "../plugins/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
+import type { PluginMcpServerConnectionResolverRegistration as PluginMcpServerConnectionResolverRegistrationInternal } from "../plugins/types.mcp-connection.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -181,6 +201,21 @@ export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.
 export type { PollInput } from "../polls.js";
 export { isSecretRef } from "../config/types.secrets.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+export type MemoryCorpusGetResult = MemoryCorpusGetResultInternal;
+export type MemoryCorpusSupplement = MemoryCorpusSupplementInternal;
+export type MemoryCorpusSupplementRegistration = MemoryCorpusSupplementRegistrationInternal;
+export type OpenClawPluginAgentApi = OpenClawPluginAgentApiInternal;
+export type OpenClawPluginAgentEventsApi = OpenClawPluginAgentEventsApiInternal;
+export type OpenClawPluginLifecycleApi = OpenClawPluginLifecycleApiInternal;
+export type OpenClawPluginRunContextApi = OpenClawPluginRunContextApiInternal;
+export type OpenClawPluginSessionApi = OpenClawPluginSessionApiInternal;
+export type OpenClawPluginSessionControlsApi = OpenClawPluginSessionControlsApiInternal;
+export type OpenClawPluginSessionStateApi = OpenClawPluginSessionStateApiInternal;
+export type OpenClawPluginSessionWorkflowApi = OpenClawPluginSessionWorkflowApiInternal;
+export type OpenClawPluginHttpRouteAuth = OpenClawPluginHttpRouteAuthFacade;
+export type OpenClawPluginHttpRouteUpgradeHandler = OpenClawPluginHttpRouteUpgradeHandlerFacade;
+export type PluginMcpServerConnectionResolverRegistration =
+  PluginMcpServerConnectionResolverRegistrationInternal;
 export type {
   ChannelOutboundSessionRoute,
   ChannelMessagingAdapter,

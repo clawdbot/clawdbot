@@ -2,7 +2,7 @@
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
+import { defaultSlotIdForKey, normalizeSlotValue } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
@@ -11,7 +11,11 @@ export type NormalizedPluginsConfig = {
   deny: string[];
   loadPaths: string[];
   slots: {
-    memory?: string | null;
+    "memory.recall"?: string | null;
+    "memory.compaction"?: string | null;
+    "memory.capture"?: string | null;
+    "memory.dreaming"?: string | null;
+    "memory.userModel"?: string | null;
     contextEngine?: string | null;
   };
   entries: Record<
@@ -241,14 +245,19 @@ export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
-  const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
+  const memoryRecallSlot = normalizeSlotValue(config?.slots?.["memory.recall"]);
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow, normalizePluginId),
     deny: normalizeList(config?.deny, normalizePluginId),
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
-      memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
+      "memory.recall":
+        memoryRecallSlot === undefined ? defaultSlotIdForKey("memory.recall") : memoryRecallSlot,
+      "memory.compaction": normalizeSlotValue(config?.slots?.["memory.compaction"]),
+      "memory.capture": normalizeSlotValue(config?.slots?.["memory.capture"]),
+      "memory.dreaming": normalizeSlotValue(config?.slots?.["memory.dreaming"]),
+      "memory.userModel": normalizeSlotValue(config?.slots?.["memory.userModel"]),
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),

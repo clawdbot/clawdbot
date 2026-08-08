@@ -1,30 +1,45 @@
 /** Applies mutually exclusive plugin slot selection for memory and context-engine plugins. */
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+  listAgentEntriesWithSource,
+  mutateAuthoredAgentRosterEntries,
+} from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { PluginSlotsConfig } from "../config/types.plugins.js";
+import { MEMORY_PLUGIN_ROLE_SLOT_KEYS } from "./memory-role.contract.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import {
+  defaultSlotIdForKey,
+  MEMORY_PLUGIN_SLOT_KEYS,
+  type PluginSlotKey,
+} from "./slot-defaults.js";
+export {
+  defaultSlotIdForKey,
+  MEMORY_PLUGIN_SLOT_KEYS,
+  normalizeSlotValue,
+  type PluginSlotKey,
+} from "./slot-defaults.js";
 
-export type PluginSlotKey = keyof PluginSlotsConfig;
+type ExclusivePluginSlotKey = "memory.recall" | "contextEngine";
+
+export const PLUGIN_SLOT_KEYS = [
+  ...MEMORY_PLUGIN_SLOT_KEYS,
+  "contextEngine",
+] as const satisfies readonly PluginSlotKey[];
 
 type SlotPluginRecord = {
   id: string;
   kind?: PluginKind | PluginKind[];
 };
 
-const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
-  memory: "memory",
+const SLOT_BY_KIND: Record<PluginKind, ExclusivePluginSlotKey> = {
+  memory: "memory.recall",
   "context-engine": "contextEngine",
 };
 
-const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
-  memory: "memory-core",
-  contextEngine: "legacy",
-};
-
-const PLUGIN_SLOT_KEYS = Object.keys(DEFAULT_SLOT_BY_KEY) as PluginSlotKey[];
+const PROTECTED_SLOT_KEYS = [
+  ...MEMORY_PLUGIN_ROLE_SLOT_KEYS,
+  "contextEngine",
+] as const satisfies readonly PluginSlotKey[];
+const PROTECTED_AGENT_SLOT_KEYS = MEMORY_PLUGIN_ROLE_SLOT_KEYS;
 
 /** Normalize a kind field to an array for uniform iteration. */
 function normalizeKinds(kind?: PluginKind | PluginKind[]): PluginKind[] {
@@ -53,65 +68,191 @@ export function kindsEqual(
 }
 
 /** Return all slot keys that a plugin's kind field maps to. */
-function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[] {
+function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): ExclusivePluginSlotKey[] {
   return normalizeKinds(kind)
     .map((k) => SLOT_BY_KIND[k])
-    .filter((k): k is PluginSlotKey => k != null);
+    .filter((k): k is ExclusivePluginSlotKey => k != null);
 }
 
-/** Returns the implicit plugin id that owns a slot before config overrides it. */
-export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {
-  return DEFAULT_SLOT_BY_KEY[slotKey];
+function slotValueForOwnership(
+  slots: Partial<Record<PluginSlotKey, string | undefined>> | undefined,
+  slotKey: PluginSlotKey,
+): string | undefined {
+  return slots?.[slotKey] ?? defaultSlotIdForKey(slotKey);
 }
 
-/** Raw `plugins.slots[key]`: `none` turns the slot off, blank leaves it unset. */
-export function normalizeSlotValue(value: unknown): string | null | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (normalizeOptionalLowercaseString(trimmed) === "none") {
-    return null;
-  }
-  return trimmed;
+function pluginOwnsProtectedRootSlot(params: {
+  slots: Partial<Record<PluginSlotKey, string | undefined>>;
+  pluginId: string;
+  ignoredSlotKey: PluginSlotKey;
+}): boolean {
+  return PROTECTED_SLOT_KEYS.filter((slotKey) => slotKey !== params.ignoredSlotKey).some(
+    (slotKey) => slotValueForOwnership(params.slots, slotKey) === params.pluginId,
+  );
 }
 
-/**
- * How a configured slot reads. The single owner of the rule: an unset slot is
- * the implicit default owner, never "whichever plugin happens to be enabled".
- * Config normalization and the Control UI both resolve slots through this.
- */
-type SlotSelection =
-  | { kind: "default"; pluginId: string }
-  | { kind: "off" }
-  | { kind: "pinned"; pluginId: string };
-
-export function resolveSlotSelection(slotKey: PluginSlotKey, value: unknown): SlotSelection {
-  const normalized = normalizeSlotValue(value);
-  if (normalized === undefined) {
-    return { kind: "default", pluginId: defaultSlotIdForKey(slotKey) };
-  }
-  return normalized === null ? { kind: "off" } : { kind: "pinned", pluginId: normalized };
-}
-
-/** Resets every slot currently owned by a plugin to that slot's implicit default. */
-export function resetPluginSlotsToDefaults(
-  slots: PluginSlotsConfig | undefined,
-  pluginId: string,
-): PluginSlotsConfig | undefined {
-  if (!slots) {
-    return slots;
-  }
-  const next = { ...slots };
-  let changed = false;
-  for (const slotKey of PLUGIN_SLOT_KEYS) {
-    if (slots[slotKey] !== pluginId) {
+function pluginOwnsProtectedAgentSlot(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+}): boolean {
+  for (const { entry: agent } of listAgentEntriesWithSource(params.config)) {
+    const slots = agent.plugins?.slots;
+    if (!slots) {
       continue;
     }
-    next[slotKey] = defaultSlotIdForKey(slotKey);
-    changed = true;
+    for (const slotKey of PROTECTED_AGENT_SLOT_KEYS) {
+      if (slots[slotKey] === params.pluginId) {
+        return true;
+      }
+    }
   }
-  return changed ? next : slots;
+  return false;
+}
+
+function pluginOwnsProtectedSlot(params: {
+  config: OpenClawConfig;
+  slots: Partial<Record<PluginSlotKey, string | undefined>>;
+  pluginId: string;
+  ignoredSlotKey: PluginSlotKey;
+}): boolean {
+  return (
+    pluginOwnsProtectedRootSlot(params) ||
+    pluginOwnsProtectedAgentSlot({
+      config: params.config,
+      pluginId: params.pluginId,
+    })
+  );
+}
+
+export function resetPluginSlotReferences<
+  T extends Partial<Record<PluginSlotKey, string | undefined>>,
+>(
+  slots: T | undefined,
+  pluginId: string,
+  slotKeys: readonly PluginSlotKey[] = PLUGIN_SLOT_KEYS,
+): { slots: T | undefined; changed: boolean; resetKeys: PluginSlotKey[] } {
+  const mutation = mutatePluginSlotReferences(slots, {
+    mode: "reset-to-default",
+    pluginId,
+    slotKeys,
+  });
+  return { slots: mutation.slots, changed: mutation.changed, resetKeys: mutation.touchedKeys };
+}
+
+type PluginSlotReferenceMutation =
+  | {
+      mode: "replace";
+      fromPluginId: string;
+      toPluginId: string;
+      slotKeys?: readonly PluginSlotKey[];
+    }
+  | {
+      mode: "reset-to-default";
+      pluginId: string;
+      slotKeys?: readonly PluginSlotKey[];
+    }
+  | {
+      mode: "delete-override";
+      pluginId: string;
+      slotKeys?: readonly PluginSlotKey[];
+      pruneEmpty?: boolean;
+    };
+
+function matchesSlotMutation(value: string | undefined, mutation: PluginSlotReferenceMutation) {
+  return mutation.mode === "replace"
+    ? value === mutation.fromPluginId
+    : value === mutation.pluginId;
+}
+
+function replacementSlotValue(
+  slotKey: PluginSlotKey,
+  mutation: Exclude<PluginSlotReferenceMutation, { mode: "delete-override" }>,
+): string {
+  return mutation.mode === "replace" ? mutation.toPluginId : defaultSlotIdForKey(slotKey);
+}
+
+export function mutatePluginSlotReferences<
+  T extends Partial<Record<PluginSlotKey, string | undefined>>,
+>(
+  slots: T | undefined,
+  mutation: PluginSlotReferenceMutation,
+): { slots: T | undefined; changed: boolean; touchedKeys: PluginSlotKey[] } {
+  if (!slots) {
+    return { slots, changed: false, touchedKeys: [] };
+  }
+  let next: T | undefined;
+  const touchedKeys: PluginSlotKey[] = [];
+  for (const slotKey of mutation.slotKeys ?? PLUGIN_SLOT_KEYS) {
+    if (!matchesSlotMutation(slots[slotKey], mutation)) {
+      continue;
+    }
+    next ??= { ...slots };
+    if (mutation.mode === "delete-override") {
+      delete next[slotKey];
+    } else {
+      Object.assign(next, { [slotKey]: replacementSlotValue(slotKey, mutation) });
+    }
+    touchedKeys.push(slotKey);
+  }
+  if (!next) {
+    return { slots, changed: false, touchedKeys };
+  }
+  return {
+    slots:
+      mutation.mode === "delete-override" && mutation.pruneEmpty !== false
+        ? Object.keys(next).length > 0
+          ? next
+          : undefined
+        : next,
+    changed: true,
+    touchedKeys,
+  };
+}
+
+export function mutateAgentMemoryPluginSlotReferences(
+  agents: OpenClawConfig["agents"],
+  mutation: PluginSlotReferenceMutation,
+): { agents: OpenClawConfig["agents"]; changed: boolean } {
+  const result = mutateAuthoredAgentRosterEntries(agents, (agent) => {
+    const slotsMutation = mutatePluginSlotReferences(agent?.plugins?.slots, {
+      ...mutation,
+      slotKeys: mutation.slotKeys ?? MEMORY_PLUGIN_SLOT_KEYS,
+    });
+    if (!slotsMutation.changed) {
+      return undefined;
+    }
+    const plugins =
+      agent.plugins &&
+      (slotsMutation.slots || Object.keys(agent.plugins).some((key) => key !== "slots"))
+        ? {
+            ...agent.plugins,
+            slots: slotsMutation.slots,
+          }
+        : undefined;
+    if (plugins?.slots === undefined) {
+      delete plugins?.slots;
+    }
+    const nextAgent = {
+      ...agent,
+      plugins,
+    };
+    if (nextAgent.plugins === undefined) {
+      delete nextAgent.plugins;
+    }
+    return nextAgent;
+  });
+
+  return { agents: result.agents, changed: result.changed };
+}
+
+export function resetAgentMemoryPluginSlotReferences(
+  agents: OpenClawConfig["agents"],
+  pluginId: string,
+): { agents: OpenClawConfig["agents"]; changed: boolean } {
+  return mutateAgentMemoryPluginSlotReferences(agents, {
+    mode: "delete-override",
+    pluginId,
+  });
 }
 
 type SlotSelectionResult = {
@@ -141,7 +282,6 @@ export function applyExclusiveSlotSelection(params: {
   for (const slotKey of slotKeys) {
     const prevSlot = slots[slotKey];
     slots[slotKey] = params.selectedId;
-
     const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
     if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
       warnings.push(
@@ -162,11 +302,14 @@ export function applyExclusiveSlotSelection(params: {
           continue;
         }
         // Don't disable a plugin that still owns another slot (explicit or default).
-        const stillOwnsOtherSlot = (Object.keys(SLOT_BY_KIND) as PluginKind[])
-          .map((k) => SLOT_BY_KIND[k])
-          .filter((sk) => sk !== slotKey)
-          .some((sk) => (slots[sk] ?? defaultSlotIdForKey(sk)) === plugin.id);
-        if (stillOwnsOtherSlot) {
+        if (
+          pluginOwnsProtectedSlot({
+            config: params.config,
+            slots,
+            pluginId: plugin.id,
+            ignoredSlotKey: slotKey,
+          })
+        ) {
           continue;
         }
         const entry = entries[plugin.id];

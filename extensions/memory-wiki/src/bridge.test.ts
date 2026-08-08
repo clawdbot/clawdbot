@@ -551,6 +551,60 @@ describe("syncMemoryWikiBridgeSources", () => {
     }
   });
 
+  it("does not prune bridge pages when recall is disabled for the active config", async () => {
+    const workspaceDir = await createBridgeWorkspace("disabled-recall-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("disabled-recall-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: memoryPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const firstPagePath = first.pagePaths[0] ?? "";
+    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
+      "# Durable Memory",
+    );
+
+    await fs.rm(memoryPath);
+    const disabledRecallConfig: OpenClawConfig = {
+      ...appConfig,
+      plugins: {
+        slots: { "memory.recall": "none" },
+      },
+    };
+    const second = await syncMemoryWikiBridgeSources({
+      config,
+      appConfig: disabledRecallConfig,
+    });
+
+    expect(second.artifactCount).toBe(0);
+    expect(second.removedCount).toBe(0);
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).resolves.toSatisfy((stat) =>
+      stat.isFile(),
+    );
+  });
+
   it("refuses to overwrite bridge source pages through vault symlinks", async () => {
     const workspaceDir = await createBridgeWorkspace("symlink-workspace");
     const { rootDir: vaultDir, config } = await createVault({

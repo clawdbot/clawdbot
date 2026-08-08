@@ -1,3 +1,4 @@
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
@@ -8,9 +9,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { resolveMemoryRoleSlot } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type AnyAgentTool,
+  type OpenClawPluginApi,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -272,6 +275,52 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
   };
 }
 
+function isMemoryCoreRecallSelected(config: OpenClawConfig, agentId: string): boolean {
+  return (
+    resolveMemoryRoleSlot({
+      cfg: config,
+      role: "recall",
+      agentId,
+      applySelectionPolicy: true,
+    }) === "memory-core"
+  );
+}
+
+function registerMemoryManagerWarmup(
+  api: OpenClawPluginApi,
+  memoryRuntime: MemoryPluginRuntime,
+): void {
+  api.on("gateway_start", (_event, ctx) => {
+    const config = (api.runtime.config?.current?.() ?? ctx.config ?? api.config) as OpenClawConfig;
+    for (const agentId of listAgentIds(config)) {
+      if (!isMemoryCoreRecallSelected(config, agentId)) {
+        continue;
+      }
+      const backend = memoryRuntime.resolveMemoryBackendConfig({ cfg: config, agentId });
+      void memoryRuntime
+        .getMemorySearchManager({ cfg: config, agentId })
+        .then(async ({ manager, error }) => {
+          if (!manager) {
+            if (error) {
+              api.logger.debug?.(`memory-core: startup index warmup unavailable: ${error}`);
+            }
+            return;
+          }
+          if (backend.backend === "builtin") {
+            await manager.sync?.({ reason: "startup-warmup" });
+          }
+        })
+        .catch((error: unknown) => {
+          api.logger.debug?.(
+            `memory-core: startup index warmup failed for ${agentId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+    }
+  });
+}
+
 export default definePluginEntry({
   id: "memory-core",
   name: "OpenClaw Memory",
@@ -299,6 +348,7 @@ export default definePluginEntry({
         },
       },
     });
+    registerMemoryManagerWarmup(api, memoryRuntime);
 
     api.registerTool((ctx) => createLazyMemorySearchTool(resolveMemoryToolOptions(ctx, host)), {
       names: ["memory_search"],

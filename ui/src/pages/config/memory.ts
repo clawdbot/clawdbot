@@ -25,7 +25,7 @@ import {
   type MemoryTab,
 } from "./memory-schema.ts";
 
-/** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
+/** One installed plugin that can claim the exclusive `plugins.slots["memory.recall"]` slot. */
 type MemoryEngineOption = {
   id: string;
   label: string;

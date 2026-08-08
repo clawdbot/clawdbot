@@ -42,6 +42,8 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds,
   tryResolveDefaultAgentId: resolveDefaultAgentId,
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+    cfg.agents?.entries?.[agentId] ?? cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 }));
@@ -552,20 +554,20 @@ describe("noteMemorySearchHealth", () => {
     [
       "does not warn when an enabled alternate memory plugin owns the memory slot",
       {
-        slots: { memory: "memory-lancedb" },
+        slots: { "memory.recall": "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
       },
       true,
     ],
     [
       "still warns when an alternate memory slot has no configured plugin entry",
-      { slots: { memory: "memory-lancedb" } },
+      { slots: { "memory.recall": "memory-lancedb" } },
       false,
     ],
     [
       "still warns when an alternate memory slot entry is disabled",
       {
-        slots: { memory: "memory-lancedb" },
+        slots: { "memory.recall": "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: false } },
       },
       false,
@@ -573,7 +575,7 @@ describe("noteMemorySearchHealth", () => {
     [
       "still warns when an alternate memory slot entry is only a placeholder",
       {
-        slots: { memory: "memory-lancedb" },
+        slots: { "memory.recall": "memory-lancedb" },
         entries: { "memory-lancedb": {} },
       },
       false,
@@ -662,7 +664,7 @@ describe("noteMemorySearchHealth", () => {
     "warns when the $memoryProvider provider lacks protected transcript recall",
     async ({ memoryProvider, activeMemoryConfig }) => {
       await runConversationRecallHealth({
-        slots: { memory: memoryProvider },
+        slots: { "memory.recall": memoryProvider },
         entries: {
           "active-memory": {
             enabled: true,

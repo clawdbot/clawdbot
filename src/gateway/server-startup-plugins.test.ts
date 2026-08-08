@@ -682,7 +682,7 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("does not warn for memory embedding providers when the memory slot is disabled", async () => {
+  it("warns for memory embedding providers when only the legacy memory slot is disabled", async () => {
     const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
       await import("./server-startup-plugins.js");
     const log = createLog();
@@ -692,6 +692,28 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
 
         agents: { defaults: {} },
         plugins: { slots: { memory: "none" } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(2);
+    const warnings = log.warn.mock.calls.map(([message]) => String(message));
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('memory.search.provider="openai"'),
+        expect.stringContaining('memory.search.fallback="ollama"'),
+      ]),
+    );
+  });
+
+  it("does not warn for memory embedding providers when the canonical recall slot is disabled", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+        plugins: { slots: { "memory.recall": "none" } },
       } as OpenClawConfig,
       pluginRegistry: registry([]),
       log,

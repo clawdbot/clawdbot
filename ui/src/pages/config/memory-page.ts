@@ -25,7 +25,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
-  resolveConfiguredDreaming,
+  resolveConfiguredDreamingFromConfig,
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
@@ -63,7 +63,7 @@ import type { ConfigRouteData } from "./route-data.ts";
 
 /** Explicit-off sentinel; resolveSlotSelection maps it to an `off` selection. */
 const MEMORY_SLOT_OFF = "none";
-const MEMORY_SLOT_PATH = ["plugins", "slots", "memory"];
+const MEMORY_SLOT_PATH = ["plugins", "slots", "memory.recall"];
 const DREAMING_DOCS_URL = "https://docs.openclaw.ai/concepts/dreaming";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -564,7 +564,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private dreamingPluginId(): string {
-    return resolveConfiguredDreaming(this.configObjectFromController()).pluginId;
+    return resolveConfiguredDreamingFromConfig(this.configObjectFromController(), {
+      agentId: this.resolveAgentId(),
+    }).pluginId;
   }
 
   private dreamingConfig(): Record<string, unknown> | null {
@@ -574,7 +576,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   }
 
   private syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
-    const pluginId = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state)).pluginId;
+    const pluginId = resolveConfiguredDreamingFromConfig(currentConfigObject(runtimeConfig.state), {
+      agentId: this.resolveAgentId(),
+    }).pluginId;
     if (pluginId !== this.supportPluginId) {
       this.supportPluginId = pluginId;
       this.support = "unknown";

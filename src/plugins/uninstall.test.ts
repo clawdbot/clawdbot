@@ -7,6 +7,7 @@ import type { runCommandWithTimeout } from "../process/exec.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
+import { resolveMemoryRoleSlot } from "./slot-resolution.js";
 import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
@@ -176,6 +177,7 @@ function createPluginConfig(params: {
   enabled?: boolean;
   slots?: PluginConfig["slots"];
   loadPaths?: string[];
+  agents?: OpenClawConfig["agents"];
   channels?: OpenClawConfig["channels"];
 }): OpenClawConfig {
   const plugins: PluginConfig = {};
@@ -202,6 +204,7 @@ function createPluginConfig(params: {
   }
   return {
     ...(Object.keys(plugins).length > 0 ? { plugins } : {}),
+    ...(params.agents ? { agents: params.agents } : {}),
     ...(params.channels ? { channels: params.channels } : {}),
   };
 }
@@ -504,6 +507,29 @@ describe("removePluginFromConfig", () => {
       expectedChanged: true,
     },
     {
+      name: "clears granular memory role slots when uninstalling active memory plugin",
+      config: createPluginConfig({
+        entries: {
+          "memory-plugin": { enabled: true },
+        },
+        slots: {
+          "memory.recall": "memory-plugin",
+          "memory.compaction": "memory-plugin",
+          "memory.capture": "memory-plugin",
+          "memory.dreaming": "memory-plugin",
+          "memory.userModel": "memory-plugin",
+        },
+      }),
+      pluginId: "memory-plugin",
+      expectedMemory: undefined,
+      expectedRecall: "memory-core",
+      expectedCompaction: "none",
+      expectedCapture: "none",
+      expectedDreaming: "none",
+      expectedUserModel: "none",
+      expectedChanged: true,
+    },
+    {
       name: "does not modify memory slot when uninstalling non-memory plugin",
       config: createPluginConfig({
         entries: createSinglePluginEntries(),
@@ -513,14 +539,37 @@ describe("removePluginFromConfig", () => {
       }),
       pluginId: "my-plugin",
       expectedMemory: "memory-core",
+      expectedRecall: undefined,
+      expectedCompaction: undefined,
+      expectedCapture: undefined,
+      expectedDreaming: undefined,
+      expectedUserModel: undefined,
       expectedChanged: false,
     },
-  ] as const)("$name", ({ config, pluginId, expectedMemory, expectedChanged }) => {
-    const { config: result, actions } = removePluginFromConfig(config, pluginId);
+  ] as const)(
+    "$name",
+    ({
+      config,
+      pluginId,
+      expectedMemory,
+      expectedRecall,
+      expectedCompaction,
+      expectedCapture,
+      expectedDreaming,
+      expectedUserModel,
+      expectedChanged,
+    }) => {
+      const { config: result, actions } = removePluginFromConfig(config, pluginId);
 
-    expect(result.plugins?.slots?.memory).toBe(expectedMemory);
-    expect(actions.memorySlot).toBe(expectedChanged);
-  });
+      expect(result.plugins?.slots?.memory).toBe(expectedMemory);
+      expect(result.plugins?.slots?.["memory.recall"]).toBe(expectedRecall);
+      expect(result.plugins?.slots?.["memory.compaction"]).toBe(expectedCompaction);
+      expect(result.plugins?.slots?.["memory.capture"]).toBe(expectedCapture);
+      expect(result.plugins?.slots?.["memory.dreaming"]).toBe(expectedDreaming);
+      expect(result.plugins?.slots?.["memory.userModel"]).toBe(expectedUserModel);
+      expect(actions.memorySlot).toBe(expectedChanged);
+    },
+  );
 
   it("clears context engine slot when uninstalling active context engine plugin", () => {
     const config = createPluginConfig({
@@ -536,6 +585,78 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.slots?.contextEngine).toBe("legacy");
     expect(actions.contextEngineSlot).toBe(true);
+  });
+
+  it("removes per-agent memory role overrides when uninstalling selected plugin", () => {
+    const config = createPluginConfig({
+      entries: {
+        "agent-memory": { enabled: true },
+      },
+      slots: {
+        "memory.recall": "memory-lancedb",
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: {
+                "memory.recall": "agent-memory",
+                "memory.compaction": "agent-memory",
+                "memory.capture": "other-memory",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const { config: result, actions } = removePluginFromConfig(config, "agent-memory");
+
+    expect(result.plugins?.slots).toEqual({ "memory.recall": "memory-lancedb" });
+    expect(result.agents?.list?.[0]?.plugins?.slots).toEqual({
+      "memory.capture": "other-memory",
+    });
+    expect(resolveMemoryRoleSlot({ cfg: result, role: "recall", agentId: "research" })).toBe(
+      "memory-lancedb",
+    );
+    expect(actions.memorySlot).toBe(true);
+  });
+
+  it("removes selected memory overrides from authored agents.entries on uninstall", () => {
+    const config = createPluginConfig({
+      entries: {
+        "agent-memory": { enabled: true },
+      },
+      slots: {
+        "memory.recall": "memory-lancedb",
+      },
+      agents: {
+        entries: {
+          research: {
+            plugins: {
+              slots: {
+                "memory.recall": "agent-memory",
+                "memory.compaction": "agent-memory",
+                "memory.capture": "other-memory",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const { config: result, actions } = removePluginFromConfig(config, "agent-memory");
+
+    expect(result.plugins?.slots).toEqual({ "memory.recall": "memory-lancedb" });
+    expect(result.agents?.entries?.research?.plugins?.slots).toEqual({
+      "memory.capture": "other-memory",
+    });
+    expect(result.agents?.list).toBeUndefined();
+    expect(resolveMemoryRoleSlot({ cfg: result, role: "recall", agentId: "research" })).toBe(
+      "memory-lancedb",
+    );
+    expect(actions.memorySlot).toBe(true);
   });
 
   it("removes plugins object when uninstall leaves only empty slots", () => {

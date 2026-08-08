@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 
 export { normalizePluginsConfig, resolveEffectiveEnableState };
+export { resolveMemoryRoleSlot } from "../plugins/slot-resolution.js";
 export { mergeDeep } from "../infra/deep-merge.js";
 
 /** Requires an already-resolved runtime config at plugin runtime boundaries. */

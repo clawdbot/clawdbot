@@ -5,12 +5,12 @@ import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
 } from "../channel-plugin-ids.js";
-import { normalizePluginsConfig } from "../config-state.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
+import { listConfiguredMemoryRolePluginIds } from "../slot-resolution.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   resolvePluginRuntimeLoadContext,
@@ -34,8 +34,7 @@ function resolveMemoryPluginIds(
       pluginIds.add(providerId);
     }
   }
-  const memoryPluginId = normalizePluginsConfig(context.config.plugins).slots.memory?.trim();
-  if (memoryPluginId) {
+  for (const memoryPluginId of listConfiguredMemoryRolePluginIds({ cfg: context.config })) {
     pluginIds.add(memoryPluginId);
   }
   return [...pluginIds].toSorted();

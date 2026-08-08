@@ -86,7 +86,7 @@ suite.define(() => {
           agents: { defaults: { userTimezone: "Asia/Singapore" } },
           memory: { backend: "qmd" },
           plugins: {
-            slots: { memory: "memory-core" },
+            slots: { "memory.recall": "memory-core" },
             entries: {
               "memory-core": {
                 config: {
@@ -136,7 +136,7 @@ suite.define(() => {
         await frequencyRow.getByRole("button", { name: "Reset to default" }).click();
 
         const saved = requestRaw(await gateway.waitForRequest("config.set"));
-        expect(saved).not.toHaveProperty("plugins.slots.memory");
+        expect(saved).not.toHaveProperty(["plugins", "slots", "memory.recall"]);
         expect(saved).not.toHaveProperty("memory.backend");
         expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
         expect(saved).toHaveProperty(

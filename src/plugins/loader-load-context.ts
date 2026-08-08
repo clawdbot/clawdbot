@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import {
@@ -24,6 +26,7 @@ import type {
   PluginLoadOptions,
   PluginRuntimeSubagentMode,
 } from "./loader-types.js";
+import { MEMORY_PLUGIN_ROLE_SLOT_KEYS } from "./memory-role.contract.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -140,6 +143,7 @@ function resolveBundledPackageCacheIdentity(
 }
 
 function buildActivationMetadataHash(params: {
+  config: OpenClawConfig;
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
 }): string {
@@ -167,13 +171,53 @@ function buildActivationMetadataHash(params: {
         enabled: params.activationSource.plugins.enabled,
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
-        memorySlot: params.activationSource.plugins.slots.memory,
+        memorySlots: Object.fromEntries(
+          MEMORY_PLUGIN_ROLE_SLOT_KEYS.map((slotKey) => [
+            slotKey,
+            params.activationSource.plugins.slots[slotKey],
+          ]),
+        ),
+        agentMemorySlots: collectAgentMemorySlotCacheEntries(params.config),
+        activationAgentMemorySlots: collectAgentMemorySlotCacheEntries(
+          params.activationSource.rootConfig,
+        ),
         entries: pluginEntryStates,
         enabledChannels: enabledSourceChannels,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
     .digest("hex");
+}
+
+type AgentMemorySlotCacheEntry = {
+  agentId: string;
+  slots: Partial<Record<(typeof MEMORY_PLUGIN_ROLE_SLOT_KEYS)[number], string | null>>;
+};
+
+function collectAgentMemorySlotCacheEntries(config?: OpenClawConfig): AgentMemorySlotCacheEntry[] {
+  if (!config) {
+    return [];
+  }
+  return listAgentEntries(config)
+    .map((agent) => {
+      const rawSlots = agent.plugins?.slots;
+      if (!rawSlots || typeof rawSlots !== "object" || Array.isArray(rawSlots)) {
+        return null;
+      }
+      const normalizedSlots = normalizePluginsConfig({ slots: rawSlots }).slots;
+      const slots: AgentMemorySlotCacheEntry["slots"] = {};
+      for (const slotKey of MEMORY_PLUGIN_ROLE_SLOT_KEYS) {
+        if (Object.hasOwn(rawSlots, slotKey)) {
+          slots[slotKey] = normalizedSlots[slotKey] ?? null;
+        }
+      }
+      if (Object.keys(slots).length === 0) {
+        return null;
+      }
+      return { agentId: normalizeAgentId(agent.id), slots };
+    })
+    .filter((entry): entry is AgentMemorySlotCacheEntry => entry !== null)
+    .toSorted((left, right) => left.agentId.localeCompare(right.agentId));
 }
 
 function buildCacheKey(params: {
@@ -375,6 +419,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     workspaceDir: options.workspaceDir,
     plugins: trustNormalized,
     activationMetadataKey: buildActivationMetadataHash({
+      config: cfg,
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),

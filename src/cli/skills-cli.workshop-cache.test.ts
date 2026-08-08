@@ -44,6 +44,7 @@ vi.mock("../config/config.js", () => ({
   resetConfigRuntimeState: () => undefined,
 }));
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentEntries: () => [],
   resolveAgentIdByWorkspacePath: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => mocks.workspaceDir,

@@ -798,6 +798,18 @@ export async function collectDoctorPreviewNotes(params: {
     }
   }
 
+  const { collectLegacyMemorySlotWarnings, scanLegacyMemorySlotConfig } =
+    await import("./legacy-memory-slot.js");
+  const legacyMemorySlotHits = scanLegacyMemorySlotConfig(params.cfg);
+  if (legacyMemorySlotHits.length > 0) {
+    warnings.push(
+      collectLegacyMemorySlotWarnings({
+        hits: legacyMemorySlotHits,
+        doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
+  }
+
   const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
   warnings.push(
     ...collectCodexRouteWarnings({

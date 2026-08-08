@@ -433,7 +433,7 @@ function createStartupConfig(params: {
   contextEngine?: string;
 }) {
   const slotsConfig = {
-    ...(params.memorySlot ? { memory: params.memorySlot } : {}),
+    ...(params.memorySlot ? { "memory.recall": params.memorySlot } : {}),
     ...(params.contextEngine ? { contextEngine: params.contextEngine } : {}),
   };
   const hasSlots = Object.keys(slotsConfig).length > 0;
@@ -906,7 +906,22 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
           defaults: {},
         },
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
+        },
+      } as OpenClawConfig,
+      ["browser"],
+    ],
+    [
+      "does not load memory embedding provider owners when the canonical recall slot is disabled",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai", fallback: "ollama" },
+          },
+        },
+        plugins: {
+          slots: { "memory.recall": "none" },
         },
       } as OpenClawConfig,
       ["browser"],
@@ -1411,6 +1426,28 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     });
   });
 
+  it("starts memory plugins selected only by per-agent role slot overrides", () => {
+    expectStartupPluginIds({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { "memory.recall": "none" },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "memory-lancedb" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-lancedb"],
+    });
+  });
+
   it("skips startup when activation.onStartup is false", () => {
     expectStartupPluginIds({
       config: createStartupConfig({
@@ -1482,7 +1519,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
           "source-external-channel": { enabled: true },
         },
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
         },
       } as OpenClawConfig,
     ],
@@ -1525,7 +1562,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       config: {
         channels: {},
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             "demo-config-startup": {
               enabled: true,
@@ -1545,7 +1582,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       config: {
         channels: {},
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             "external-config-startup": {
               enabled: true,
@@ -1561,7 +1598,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       config: {
         channels: {},
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             "external-config-startup": {
               config: { autoStart: { enabled: true } },
@@ -1581,7 +1618,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     const cases: Array<{ plugins: OpenClawConfig["plugins"]; expected: readonly string[] }> = [
       {
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             "external-config-startup": {
               enabled: true,
@@ -1593,7 +1630,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       },
       {
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           deny: ["external-config-startup"],
           entries: { "external-config-startup": externalEntry },
         },
@@ -1601,7 +1638,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       },
       {
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           allow: ["browser"],
           entries: { "external-config-startup": externalEntry },
         },
@@ -1610,7 +1647,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       {
         plugins: {
           enabled: false,
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: { "external-config-startup": externalEntry },
         },
         expected: [],
@@ -1630,7 +1667,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       channels: {},
       plugins: {
         allow: ["browser"],
-        slots: { memory: "none" },
+        slots: { "memory.recall": "none" },
         entries: {
           "external-config-startup": {
             enabled: true,
@@ -1683,7 +1720,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         plugins: {
           enabled: false,
           allow: ["external-hook-capability"],
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             "external-hook-capability": {
               enabled: true,
@@ -1702,7 +1739,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         plugins: {
           allow: ["external-hook-capability"],
           deny: ["external-hook-capability"],
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             "external-hook-capability": {
               enabled: true,
@@ -1719,7 +1756,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       config: {
         channels: {},
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             browser: {
               enabled: false,
@@ -1745,7 +1782,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       config: {
         channels: {},
         plugins: {
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             browser: {
               enabled: false,
@@ -1766,7 +1803,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         channels: {},
         plugins: {
           allow: ["browser"],
-          slots: { memory: "none" },
+          slots: { "memory.recall": "none" },
           entries: {
             browser: {
               enabled: false,
@@ -1788,7 +1825,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       channels: {},
       plugins: {
         allow: ["browser"],
-        slots: { memory: "none" },
+        slots: { "memory.recall": "none" },
         entries: {
           browser: {
             enabled: false,
@@ -1800,7 +1837,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       channels: {},
       plugins: {
         allow: ["browser", "external-hook-policy"],
-        slots: { memory: "none" },
+        slots: { "memory.recall": "none" },
         entries: {
           browser: {
             enabled: false,
@@ -2022,7 +2059,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       resolveGatewayStartupMetadataPluginIds({
         config: {
           channels: {},
-          plugins: { allow: ["browser"], slots: { memory: "none" } },
+          plugins: { allow: ["browser"], slots: { "memory.recall": "none" } },
         } as OpenClawConfig,
         env: createPluginPlanningTestEnv(),
         index,
@@ -2040,7 +2077,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         config: {
           channels: {},
           cloudWorkers: { profiles: { development: { provider: "static-ssh" } } },
-          plugins: { allow: ["browser"], slots: { memory: "none" } },
+          plugins: { allow: ["browser"], slots: { "memory.recall": "none" } },
         } as OpenClawConfig,
         env: createPluginPlanningTestEnv(),
         index,
@@ -2227,6 +2264,99 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         index,
       }),
     ).toEqual(["browser", "demo-channel", "openai"]);
+  });
+
+  it("scopes config-validation metadata to global and per-agent memory role slots", () => {
+    const baseRegistry = createManifestRegistryFixture();
+    const memorySlotPluginIds = [
+      "legacy-memory",
+      "global-recall",
+      "global-compaction",
+      "global-dreaming",
+      "global-user-model",
+      "agent-recall",
+      "agent-compaction",
+      "agent-capture",
+      "agent-user-model",
+      "agent-legacy-memory",
+    ];
+    const registry: PluginManifestRegistry = {
+      ...baseRegistry,
+      plugins: [
+        ...baseRegistry.plugins,
+        ...memorySlotPluginIds.map((id) =>
+          withManifestLoadPaths({
+            id,
+            kind: "memory",
+            channels: [],
+            origin: "installed",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          }),
+        ),
+      ] as PluginManifestRecord[],
+    };
+    const index = createInstalledPluginIndexFixture(registry);
+
+    expect(
+      resolveConfigValidationMetadataPluginIds({
+        config: {
+          channels: {},
+          plugins: {
+            slots: {
+              memory: "legacy-memory",
+              "memory.recall": "global-recall",
+              "memory.compaction": "global-compaction",
+              "memory.capture": "none",
+              "memory.dreaming": "global-dreaming",
+              "memory.userModel": "global-user-model",
+              contextEngine: "lossless-claw",
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "alpha",
+                plugins: {
+                  slots: {
+                    "memory.recall": "agent-recall",
+                    "memory.compaction": "agent-compaction",
+                    "memory.capture": "agent-capture",
+                    "memory.dreaming": "none",
+                    "memory.userModel": "Agent-User-Model",
+                  },
+                },
+              },
+              {
+                id: "legacy",
+                plugins: {
+                  slots: {
+                    memory: "agent-legacy-memory",
+                  },
+                },
+              },
+            ],
+          },
+        } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+      }),
+    ).toEqual(
+      [
+        "agent-capture",
+        "agent-compaction",
+        "agent-legacy-memory",
+        "agent-recall",
+        "agent-user-model",
+        "global-compaction",
+        "global-dreaming",
+        "global-recall",
+        "global-user-model",
+        "legacy-memory",
+        "lossless-claw",
+      ].toSorted((left, right) => left.localeCompare(right)),
+    );
   });
 
   it("uses installed-index provider contracts to scope config-validation provider owners", () => {
@@ -2513,10 +2643,38 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         channels: {},
         plugins: {
           allow: ["browser", "memory-lancedb"],
-          slots: { memory: "memory-lancedb" },
+          slots: { "memory.recall": "memory-lancedb" },
           entries: {
             "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
           },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core", "memory-lancedb"],
+    });
+  });
+
+  it("includes agent-selected memory.dreaming plugins in startup scope", () => {
+    expectStartupPluginIds({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser", "memory-lancedb"],
+          slots: { "memory.recall": "memory-core" },
+          entries: {
+            "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: {
+                  "memory.dreaming": "memory-lancedb",
+                },
+              },
+            },
+          ],
         },
       } as OpenClawConfig,
       expected: ["browser", "memory-core", "memory-lancedb"],
@@ -2533,7 +2691,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
           channels: {},
           plugins: {
             allow: ["browser", "memory-lancedb"],
-            slots: { memory: "memory-lancedb" },
+            slots: { "memory.recall": "memory-lancedb" },
             entries: {
               "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
             },
@@ -2552,7 +2710,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         plugins: {
           allow: ["browser", "memory-lancedb"],
           deny: ["memory-core"],
-          slots: { memory: "memory-lancedb" },
+          slots: { "memory.recall": "memory-lancedb" },
           entries: {
             "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
           },
@@ -2568,7 +2726,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         channels: {},
         plugins: {
           allow: ["browser", "memory-lancedb"],
-          slots: { memory: "memory-lancedb" },
+          slots: { "memory.recall": "memory-lancedb" },
           entries: {
             "memory-core": { enabled: false },
             "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },

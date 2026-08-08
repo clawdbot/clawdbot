@@ -1,6 +1,7 @@
 /**
  * Public SDK subpath for memory host status and dreaming state helpers.
  */
+
 export {
   resolveMemoryCacheSummary,
   resolveMemoryFtsState,
@@ -11,7 +12,9 @@ export {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
+  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingConfig,
+  resolveMemoryDreamingSelection,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,

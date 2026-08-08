@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Memory Core plugin module implements dreaming behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS as DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
@@ -15,6 +14,7 @@ import {
   MANAGED_MEMORY_DREAMING_CRON_TAG as MANAGED_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDeepDreamingConfig,
+  resolveMemoryDreamingSelection,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -417,6 +417,7 @@ function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
 export function resolveShortTermPromotionDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): ShortTermPromotionDreamingConfig {
   const resolved = resolveMemoryDeepDreamingConfig(params);
   return {
@@ -436,6 +437,36 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     storage: resolved.storage,
     ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
   };
+}
+
+function resolveManagedCronDreamingConfig(params: {
+  cfg: OpenClawConfig;
+  fallbackPluginConfig?: Record<string, unknown>;
+}): ShortTermPromotionDreamingConfig {
+  const rootSelection = resolveMemoryDreamingSelection(params.cfg);
+  const rootConfig = resolveShortTermPromotionDreamingConfig({
+    pluginConfig: rootSelection.pluginConfig ?? params.fallbackPluginConfig,
+    cfg: params.cfg,
+  });
+  if (rootConfig.enabled) {
+    return rootConfig;
+  }
+
+  const agentIds = uniqueStrings(
+    resolveMemoryDreamingWorkspaces(params.cfg).flatMap((entry) => entry.agentIds),
+  );
+  for (const agentId of agentIds) {
+    const selection = resolveMemoryDreamingSelection(params.cfg, { agentId });
+    const config = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: selection.pluginConfig,
+      cfg: params.cfg,
+      agentId,
+    });
+    if (config.enabled) {
+      return config;
+    }
+  }
+  return rootConfig;
 }
 
 async function reconcileShortTermDreamingCronJob(params: {
@@ -567,12 +598,10 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   if (!includesSystemEventToken(params.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
     return undefined;
   }
-  if (!params.config.enabled) {
+  if (!params.config.enabled && !params.cfg) {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
   }
 
-  const recencyHalfLifeDays =
-    params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
   // Narrative subagent sessions live in per-agent SQLite stores, so every swept workspace
   // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
@@ -613,14 +642,16 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     );
     return { handled: true, reason: "memory-core: short-term dreaming missing workspace" };
   }
-  if (params.config.limit === 0) {
+  if (params.config.limit === 0 && !params.cfg) {
     params.logger.info("memory-core: dreaming promotion skipped because limit=0.");
     return { handled: true, reason: "memory-core: short-term dreaming disabled by limit" };
   }
 
   if (params.config.verboseLogging) {
+    const configRecencyHalfLifeDays =
+      params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
     params.logger.info(
-      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaces.length}).`,
+      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${configRecencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaces.length}).`,
     );
   }
 
@@ -629,7 +660,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   let failedWorkspaces = 0;
   let degradedNarratives = 0;
   let pendingNarratives = 0;
-  const pluginConfig = params.cfg ? resolveMemoryDreamingPluginConfig(params.cfg) : undefined;
+  let processedWorkspaces = 0;
+  let skippedWorkspaces = 0;
   const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
@@ -647,12 +679,37 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     import("./short-term-promotion.js"),
   ]);
   for (const { agentId, workspaceDir } of workspaces) {
+    const selection = params.cfg
+      ? resolveMemoryDreamingSelection(params.cfg, { agentId })
+      : {
+          config: params.config,
+          pluginConfig: undefined,
+          pluginId: "memory-core",
+        };
+    if (!selection.config.enabled) {
+      skippedWorkspaces += 1;
+      continue;
+    }
+    const workspaceConfig = params.cfg
+      ? resolveShortTermPromotionDreamingConfig({
+          pluginConfig: selection.pluginConfig,
+          cfg: params.cfg,
+          agentId,
+        })
+      : params.config;
+    if (!workspaceConfig.enabled) {
+      skippedWorkspaces += 1;
+      continue;
+    }
+    processedWorkspaces += 1;
+    const workspaceRecencyHalfLifeDays =
+      workspaceConfig.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
     const sweepNowMs = Date.now();
     try {
       const phaseResult = await runDreamingSweepPhases({
         agentId,
         workspaceDir,
-        pluginConfig,
+        pluginConfig: selection.pluginConfig,
         cfg: params.cfg,
         logger: params.logger,
         subagent: params.subagent,
@@ -680,17 +737,17 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       }
       const candidates = await rankShortTermPromotionCandidates({
         workspaceDir,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        recencyHalfLifeDays,
-        maxAgeDays: params.config.maxAgeDays,
+        limit: workspaceConfig.limit,
+        minScore: workspaceConfig.minScore,
+        minRecallCount: workspaceConfig.minRecallCount,
+        minUniqueQueries: workspaceConfig.minUniqueQueries,
+        recencyHalfLifeDays: workspaceRecencyHalfLifeDays,
+        maxAgeDays: workspaceConfig.maxAgeDays,
         nowMs: sweepNowMs,
       });
       totalCandidates += candidates.length;
       reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
-      if (params.config.verboseLogging) {
+      if (workspaceConfig.verboseLogging) {
         const candidateSummary =
           candidates.length > 0
             ? candidates
@@ -707,24 +764,24 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       const applied = await applyShortTermPromotions({
         workspaceDir,
         candidates,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        maxAgeDays: params.config.maxAgeDays,
-        maxPromotedSnippetTokens: params.config.maxPromotedSnippetTokens,
-        maxPriorEntryLossFraction: params.config.maxPriorEntryLossFraction,
+        limit: workspaceConfig.limit,
+        minScore: workspaceConfig.minScore,
+        minRecallCount: workspaceConfig.minRecallCount,
+        minUniqueQueries: workspaceConfig.minUniqueQueries,
+        maxAgeDays: workspaceConfig.maxAgeDays,
+        maxPromotedSnippetTokens: workspaceConfig.maxPromotedSnippetTokens,
+        maxPriorEntryLossFraction: workspaceConfig.maxPriorEntryLossFraction,
         consolidation: {
           ...(params.subagent ? { subagent: params.subagent } : {}),
-          ...(params.config.execution?.model ? { model: params.config.execution.model } : {}),
+          ...(workspaceConfig.execution?.model ? { model: workspaceConfig.execution.model } : {}),
           logger: params.logger,
         },
-        timezone: params.config.timezone,
+        timezone: workspaceConfig.timezone,
         nowMs: sweepNowMs,
       });
       totalApplied += applied.applied;
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
-      if (params.config.verboseLogging) {
+      if (workspaceConfig.verboseLogging) {
         const appliedSummary =
           applied.appliedCandidates.length > 0
             ? applied.appliedCandidates
@@ -742,8 +799,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         workspaceDir,
         bodyLines: reportLines,
         nowMs: sweepNowMs,
-        timezone: params.config.timezone,
-        storage: params.config.storage ?? { mode: "separate", separateReports: false },
+        timezone: workspaceConfig.timezone,
+        storage: workspaceConfig.storage ?? { mode: "separate", separateReports: false },
       });
       // Generate dream diary narrative from promoted memories.
       if (candidates.length > 0 || applied.applied > 0) {
@@ -757,7 +814,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             workspaceDir,
             data,
             nowMs: sweepNowMs,
-            timezone: params.config.timezone,
+            timezone: workspaceConfig.timezone,
             logger: params.logger,
             reason: "subagent runtime is unavailable",
           });
@@ -768,8 +825,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             workspaceDir,
             data,
             nowMs: sweepNowMs,
-            timezone: params.config.timezone,
-            model: params.config.execution?.model,
+            timezone: workspaceConfig.timezone,
+            model: workspaceConfig.execution?.model,
             logger: params.logger,
             detached: detachNarratives,
           });
@@ -790,7 +847,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         workspaceDir,
         phase: "deep",
         error,
-        storageMode: params.config.storage?.mode ?? "separate",
+        storageMode: workspaceConfig.storage?.mode ?? "separate",
         nowMs: sweepNowMs,
         logger: params.logger,
       });
@@ -798,8 +855,11 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   }
   // A summary that reads identically whether the sweep worked or failed everywhere is how
   // a broken pipeline stays unnoticed; escalate when no workspace produced anything.
-  const summary = `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}, degraded=${degradedNarratives}, narrativesPending=${pendingNarratives}).`;
-  if (failedWorkspaces === workspaces.length || degradedNarratives > 0) {
+  if (processedWorkspaces === 0 && skippedWorkspaces > 0) {
+    return { handled: true, reason: "memory-core: short-term dreaming disabled" };
+  }
+  const summary = `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, skipped=${skippedWorkspaces}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}, degraded=${degradedNarratives}, narrativesPending=${pendingNarratives}).`;
+  if (failedWorkspaces === processedWorkspaces || degradedNarratives > 0) {
     params.logger.warn(summary);
   } else {
     params.logger.info(summary);
@@ -892,17 +952,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
   }): Promise<ShortTermPromotionDreamingConfig> => {
-    const startupCfg =
+    const runtimeCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
-    const pluginConfig =
-      params.reason === "startup"
-        ? (resolveMemoryDreamingPluginConfig(startupCfg) ??
-          resolveMemoryDreamingPluginConfig(api.config) ??
-          api.pluginConfig)
-        : resolveMemoryDreamingPluginConfig(startupCfg);
-    const config = resolveShortTermPromotionDreamingConfig({
-      pluginConfig,
-      cfg: startupCfg,
+    const config = resolveManagedCronDreamingConfig({
+      cfg: runtimeCfg,
+      ...(params.reason === "startup"
+        ? {
+            fallbackPluginConfig:
+              resolveMemoryDreamingSelection(api.config).pluginConfig ?? api.pluginConfig,
+          }
+        : {}),
     });
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
@@ -1170,7 +1229,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
     },
-    { eligibleTriggers: ["heartbeat", "cron"] },
+    { eligibleTriggers: ["heartbeat", "cron"], memoryRole: "dreaming" },
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

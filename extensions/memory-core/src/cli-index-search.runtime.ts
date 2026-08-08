@@ -241,14 +241,16 @@ export async function runMemorySearch(
     purpose: "cli",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+      const memoryPluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
       const dreamingEnabled = resolveMemoryDreamingConfig({
         pluginConfig: memoryPluginConfig,
         cfg,
+        agentId,
       }).enabled;
       const dreaming = resolveShortTermPromotionDreamingConfig({
         pluginConfig: memoryPluginConfig,
         cfg,
+        agentId,
       });
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
@@ -334,8 +336,9 @@ export async function runMemoryPromote(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, { agentId }),
         cfg,
+        agentId,
       });
       if (!workspaceDir) {
         defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
@@ -491,8 +494,9 @@ export async function runMemoryPromoteExplain(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, { agentId }),
         cfg,
+        agentId,
       });
       if (!workspaceDir) {
         defaultRuntime.error("Memory promote-explain requires a resolvable workspace directory.");

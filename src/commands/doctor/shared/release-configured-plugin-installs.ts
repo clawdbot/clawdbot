@@ -17,6 +17,7 @@ import {
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import { listConfiguredMemoryRolePluginIds } from "../../../plugins/slot-resolution.js";
 import {
   resolveWebSearchInstallCatalogEntriesForEnv,
   resolveWebSearchInstallCatalogEntry,
@@ -114,12 +115,12 @@ function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
 
 function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
   const slots = asObjectRecord(cfg.plugins?.slots);
-  return ["memory", "contextEngine"]
-    .map((key) => normalizeId(slots?.[key]))
-    .filter(
-      (pluginId): pluginId is string =>
-        typeof pluginId === "string" && pluginId.toLowerCase() !== "none",
-    );
+  const ids = new Set(listConfiguredMemoryRolePluginIds({ cfg }));
+  const contextEngineId = normalizeId(slots?.contextEngine);
+  if (contextEngineId && contextEngineId.toLowerCase() !== "none") {
+    ids.add(contextEngineId);
+  }
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {

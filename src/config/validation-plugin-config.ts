@@ -1,5 +1,7 @@
 import path from "node:path";
+import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isMemoryRoleSelectedSlotActivationAllowed } from "../plugins/config-activation-shared.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
@@ -13,7 +15,8 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
-import { hasKind } from "../plugins/slots.js";
+import { resolveMemoryRoleLoadScope } from "../plugins/slot-resolution.js";
+import { MEMORY_PLUGIN_SLOT_KEYS, hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
@@ -162,7 +165,10 @@ export function validateExplicitPluginConfig(params: {
     warnings,
   } = params;
   const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
-  const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
+  const blockedPluginDiagnosticsWithSource: Array<{
+    message: string;
+    source: string;
+  }> = [];
   const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
     const trimmed = value?.trim();
     if (!trimmed) {
@@ -179,7 +185,10 @@ export function validateExplicitPluginConfig(params: {
       continue;
     }
     if (!diag.pluginId && diag.source) {
-      blockedPluginDiagnosticsWithSource.push({ message: diag.message, source: diag.source });
+      blockedPluginDiagnosticsWithSource.push({
+        message: diag.message,
+        source: diag.source,
+      });
     }
     if (diag.pluginId) {
       const normalizedPluginId = normalizePluginId(diag.pluginId);
@@ -249,14 +258,20 @@ export function validateExplicitPluginConfig(params: {
     },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
-      warnings.push({ path: issuePath, message: formatRemovedPluginConfigWarning(pluginId) });
+      warnings.push({
+        path: issuePath,
+        message: formatRemovedPluginConfigWarning(pluginId),
+      });
       return;
     }
     const blockedDiagnostic = findBlockedPluginDiagnostic(pluginId);
     if (blockedDiagnostic) {
       const source = blockedDiagnostic.source ? `; source: ${blockedDiagnostic.source}` : "";
       const message = `plugin present but blocked: ${pluginId} (see preceding plugin warning${source}; fix the blocked plugin path instead of removing config)`;
-      (options?.warnOnly ? warnings : issues).push({ path: issuePath, message });
+      (options?.warnOnly ? warnings : issues).push({
+        path: issuePath,
+        message,
+      });
       return;
     }
     if (
@@ -297,7 +312,9 @@ export function validateExplicitPluginConfig(params: {
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
-        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
+        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, {
+          warnOnly: true,
+        });
       }
     }
   }
@@ -329,27 +346,71 @@ export function validateExplicitPluginConfig(params: {
     }
   }
 
-  // The default memory slot is inferred; only a user-configured slot should block startup.
+  // Default slot values are inferred; only user-configured canonical memory-role slots
+  // should block startup. Legacy plugins.slots.memory is accepted only for doctor
+  // migration and is ignored by steady-state validation/routing.
   const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot = pluginSlots !== undefined && Object.hasOwn(pluginSlots, "memory");
-  const memorySlot = normalizedPlugins.slots.memory;
-  if (
-    hasExplicitMemorySlot &&
-    typeof memorySlot === "string" &&
-    memorySlot.trim() &&
-    !knownIds.has(memorySlot)
-  ) {
-    const missingMessage = formatMissingOfficialExternalPluginWarning(memorySlot, {
-      selectedMissingMemorySlot: true,
+  for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+    if (slotKey === "memory") {
+      continue;
+    }
+    const hasExplicitSlot = pluginSlots !== undefined && Object.hasOwn(pluginSlots, slotKey);
+    const slotValue = normalizedPlugins.slots[slotKey];
+    if (
+      !hasExplicitSlot ||
+      typeof slotValue !== "string" ||
+      !slotValue.trim() ||
+      knownIds.has(slotValue)
+    ) {
+      continue;
+    }
+    const isRecallSlot = slotKey === "memory.recall";
+    const missingMessage = formatMissingOfficialExternalPluginWarning(slotValue, {
+      selectedMissingMemorySlot: isRecallSlot,
     });
     const isMissingOfficialExternalMemorySlot =
-      memorySlot === "memory-lancedb" && Boolean(missingMessage);
-    pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
-      warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(memorySlot),
+      isRecallSlot && slotValue === "memory-lancedb" && Boolean(missingMessage);
+    pushMissingPluginIssue(`plugins.slots.${slotKey}`, slotValue, {
+      warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(slotValue),
       missingMessage,
     });
   }
+  for (const { entry, source } of listAgentEntriesWithSource(config)) {
+    const agentSlots = entry?.plugins?.slots;
+    if (!agentSlots) {
+      continue;
+    }
+    const pathPrefix =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+      if (slotKey === "memory" || !Object.hasOwn(agentSlots, slotKey)) {
+        continue;
+      }
+      const rawSlotValue = agentSlots[slotKey];
+      if (typeof rawSlotValue !== "string" || !rawSlotValue.trim()) {
+        continue;
+      }
+      const slotValue = normalizePluginId(rawSlotValue);
+      if (!slotValue || slotValue.toLowerCase() === "none" || knownIds.has(slotValue)) {
+        continue;
+      }
+      const isRecallSlot = slotKey === "memory.recall";
+      const missingMessage = formatMissingOfficialExternalPluginWarning(slotValue, {
+        selectedMissingMemorySlot: isRecallSlot,
+      });
+      const isMissingOfficialExternalMemorySlot =
+        isRecallSlot && slotValue === "memory-lancedb" && Boolean(missingMessage);
+      pushMissingPluginIssue(`${pathPrefix}.plugins.slots.${slotKey}`, slotValue, {
+        warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(slotValue),
+        missingMessage,
+      });
+    }
+  }
 
+  const { selectedMemoryRolePluginIds, memorySlots } = resolveMemoryRoleLoadScope({
+    cfg: config,
+    normalizedPlugins,
+  });
   let selectedMemoryPluginId: string | null = null;
   const seenPlugins = new Set<string>();
   for (const record of registry.plugins) {
@@ -368,11 +429,19 @@ export function validateExplicitPluginConfig(params: {
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;
+    if (
+      !enabled &&
+      selectedMemoryRolePluginIds.has(pluginId) &&
+      isMemoryRoleSelectedSlotActivationAllowed({ pluginId, config: normalizedPlugins })
+    ) {
+      enabled = true;
+      reason = "selected memory slot";
+    }
     if (enabled) {
       const memoryDecision = resolveMemorySlotDecision({
         id: pluginId,
         kind: record.kind,
-        slot: memorySlot,
+        slot: memorySlots,
         selectedId: selectedMemoryPluginId,
       });
       if (!memoryDecision.enabled) {

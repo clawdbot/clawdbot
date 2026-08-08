@@ -42,6 +42,7 @@ function fixturePayload(): DoctorMemoryStatusPayload {
       deviceNames: ["Apple GPU"],
     },
     dreaming: {
+      pluginId: "memory-core",
       enabled: true,
       timezone: "Europe/Vienna",
       verboseLogging: false,

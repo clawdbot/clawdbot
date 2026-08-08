@@ -232,7 +232,7 @@ function readMemorySearchEnabled(
 }
 
 function isMemorySlotExplicitlyDisabled(config: OpenClawConfig): boolean {
-  return normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none";
+  return normalizeOptionalLowercaseString(config.plugins?.slots?.["memory.recall"]) === "none";
 }
 
 type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";

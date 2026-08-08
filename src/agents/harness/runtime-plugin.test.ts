@@ -94,7 +94,7 @@ describe("harness runtime plugins", () => {
     },
     {
       name: "an explicitly selected default memory slot",
-      config: { plugins: { slots: { memory: "memory-core" } } },
+      config: { plugins: { slots: { "memory.recall": "memory-core" } } },
       expectedPluginIds: ["memory-core"],
     },
     {
@@ -104,12 +104,12 @@ describe("harness runtime plugins", () => {
     },
     {
       name: "an explicitly disabled memory slot",
-      config: { plugins: { slots: { memory: "none" } } },
+      config: { plugins: { slots: { "memory.recall": "none" } } },
       expectedPluginIds: [],
     },
     {
       name: "an explicitly selected alternative memory slot",
-      config: { plugins: { slots: { memory: "memory-lancedb" } } },
+      config: { plugins: { slots: { "memory.recall": "memory-lancedb" } } },
       expectedPluginIds: ["memory-lancedb"],
     },
     {
@@ -172,7 +172,7 @@ describe("harness runtime plugins", () => {
 
   it("preserves startup-scoped plugins when selected owners synthesize an allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
-      config: { plugins: { slots: { memory: "memory-core" } } },
+      config: { plugins: { slots: { "memory.recall": "memory-core" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: ["telegram"],
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],

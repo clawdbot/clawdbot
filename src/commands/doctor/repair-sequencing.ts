@@ -40,6 +40,7 @@ import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
+import { maybeRepairLegacyMemorySlotConfig } from "./shared/legacy-memory-slot.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
@@ -189,6 +190,7 @@ export async function runDoctorRepairSequence(params: {
       }),
     ),
   );
+  applyMutation(maybeRepairLegacyMemorySlotConfig(state.candidate));
   const missingConfiguredPluginInstallRepair = await runWithCurrentPluginMetadata(() =>
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,

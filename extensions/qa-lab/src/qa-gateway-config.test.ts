@@ -114,7 +114,7 @@ describe("buildQaGatewayConfig", () => {
     });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
     expectQaLabPluginEnabled(cfg);
-    expect(cfg.plugins?.slots?.memory).toBe("memory-core");
+    expect(cfg.plugins?.slots?.["memory.recall"]).toBe("memory-core");
     expect(cfg.plugins?.entries?.acpx).toEqual({
       enabled: true,
       config: {

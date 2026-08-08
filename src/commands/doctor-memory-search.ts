@@ -50,6 +50,7 @@ import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { resolveMemoryRoleSlot } from "../plugins/slot-resolution.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
@@ -326,11 +327,12 @@ function buildDreamingArtifactIssueNote(audit: DreamingArtifactsAuditSummary): s
 export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const labelAgents = scopes.length > 1;
-  const dreaming = resolveMemoryDreamingConfig({
-    cfg,
-    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
-  });
   for (const scope of scopes) {
+    const dreaming = resolveMemoryDreamingConfig({
+      cfg,
+      pluginConfig: resolveMemoryDreamingPluginConfig(cfg, { agentId: scope.agentId }),
+      agentId: scope.agentId,
+    });
     try {
       const context = await resolveRuntimeMemoryAuditContext(cfg, scope.agentId);
       const workspaceDir = context?.workspaceDir?.trim();
@@ -498,11 +500,11 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   if (!plugins.enabled) {
     return false;
   }
-  const memorySlot = plugins.slots.memory;
+  const memorySlot = resolveMemoryRoleSlot({ cfg, role: "recall" });
   if (typeof memorySlot !== "string" || memorySlot.length === 0) {
     return false;
   }
-  if (memorySlot === defaultSlotIdForKey("memory")) {
+  if (memorySlot === defaultSlotIdForKey("memory.recall")) {
     return false;
   }
   if (plugins.deny.includes(memorySlot)) {
@@ -538,8 +540,9 @@ function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig): {
   providerSupported: boolean;
   memorySearchAllowed: boolean;
 } {
-  const plugins = normalizePluginsConfig(cfg.plugins);
-  const providerSupported = plugins.slots.memory === defaultSlotIdForKey("memory");
+  const recallSlot = resolveMemoryRoleSlot({ cfg, role: "recall" });
+  const providerSupported =
+    recallSlot === defaultSlotIdForKey("memory.recall") || hasActiveAlternateMemoryPluginSlot(cfg);
   const entry = cfg.plugins?.entries?.["active-memory"];
   const config = isRecord(entry?.config) ? entry.config : undefined;
   if (!Array.isArray(config?.toolsAllow)) {

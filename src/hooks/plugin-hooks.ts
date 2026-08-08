@@ -3,12 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isMemoryRoleSelectedSlotActivationAllowed } from "../plugins/config-activation-shared.js";
 import {
   normalizePluginsConfigWithResolver,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-policy.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveMemoryRoleLoadScope } from "../plugins/slot-resolution.js";
 import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
@@ -42,7 +44,11 @@ export function resolvePluginHookDirs(params: {
     params.config?.plugins,
     metadataSnapshot.normalizePluginId,
   );
-  const memorySlot = normalizedPlugins.slots.memory;
+  const config = params.config ?? {};
+  const { selectedMemoryRolePluginIds, memorySlots } = resolveMemoryRoleLoadScope({
+    cfg: config,
+    normalizedPlugins,
+  });
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: PluginHookDirEntry[] = [];
@@ -55,16 +61,24 @@ export function resolvePluginHookDirs(params: {
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: params.config,
+      rootConfig: config,
     });
     if (!activationState.activated) {
-      continue;
+      if (
+        !selectedMemoryRolePluginIds.has(record.id) ||
+        !isMemoryRoleSelectedSlotActivationAllowed({
+          pluginId: record.id,
+          config: normalizedPlugins,
+        })
+      ) {
+        continue;
+      }
     }
 
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: memorySlots,
       selectedId: selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {

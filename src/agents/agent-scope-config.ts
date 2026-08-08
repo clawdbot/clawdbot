@@ -15,9 +15,16 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
+type AuthoredAgentRosterEntry = AgentEntry | AgentEntriesConfig[string];
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
 export type ListedAgentEntry = {
   entry: AgentEntry;
+  source: { kind: "entries"; key: string } | { kind: "list"; index: number };
+};
+export type MutableAuthoredAgentRosterEntry = {
+  entry: AuthoredAgentRosterEntry;
+  agentId: string;
+  path: string;
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
 
@@ -54,6 +61,7 @@ export type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
+  plugins?: AgentEntry["plugins"];
   tools?: AgentEntry["tools"];
 };
 
@@ -81,6 +89,88 @@ export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntr
   );
 }
 
+/**
+ * Mutates the authored agent roster representation while preserving its shape.
+ * Keyed `agents.entries` is authoritative when present; `agents.list` is only
+ * visited for legacy/list-shaped input, so materialized aliases are not touched
+ * twice. The mutator should return a replacement entry only when it changed.
+ */
+export function mutateAuthoredAgentRosterEntries(
+  agents: OpenClawConfig["agents"],
+  mutate: (
+    entry: AuthoredAgentRosterEntry,
+    context: MutableAuthoredAgentRosterEntry,
+  ) => AuthoredAgentRosterEntry | undefined,
+): {
+  agents: OpenClawConfig["agents"];
+  changed: boolean;
+  touched: MutableAuthoredAgentRosterEntry[];
+} {
+  const roster = readAgentsRosterProperty(agents);
+  if (roster?.kind === "entries") {
+    if (!roster.value || typeof roster.value !== "object" || Array.isArray(roster.value)) {
+      return { agents, changed: false, touched: [] };
+    }
+    const entries = roster.value as AgentEntriesConfig;
+    let nextEntries: AgentEntriesConfig | undefined;
+    const touched: MutableAuthoredAgentRosterEntry[] = [];
+    for (const [key, entry] of Object.entries(entries)) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const context: MutableAuthoredAgentRosterEntry = {
+        entry,
+        agentId: normalizeAgentId(key),
+        path: `agents.entries.${key}`,
+        source: { kind: "entries", key },
+      };
+      const nextEntry = mutate(entry, context);
+      if (nextEntry === undefined || nextEntry === entry) {
+        continue;
+      }
+      nextEntries ??= { ...entries };
+      Object.defineProperty(nextEntries, key, {
+        configurable: true,
+        enumerable: true,
+        value: nextEntry,
+        writable: true,
+      });
+      touched.push(context);
+    }
+    return nextEntries
+      ? { agents: { ...agents, entries: nextEntries }, changed: true, touched }
+      : { agents, changed: false, touched };
+  }
+
+  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
+    return { agents, changed: false, touched: [] };
+  }
+  const list = roster.value as AgentEntry[];
+  let nextList: AgentEntry[] | undefined;
+  const touched: MutableAuthoredAgentRosterEntry[] = [];
+  for (const [index, entry] of list.entries()) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const context: MutableAuthoredAgentRosterEntry = {
+      entry,
+      agentId: normalizeAgentId(entry.id),
+      path: `agents.list.${index}`,
+      source: { kind: "list", index },
+    };
+    const nextEntry = mutate(entry, context);
+    if (nextEntry === undefined || nextEntry === entry) {
+      continue;
+    }
+    nextList ??= [...list];
+    nextList[index] = nextEntry as AgentEntry;
+    touched.push(context);
+  }
+  return nextList
+    ? { agents: { ...agents, list: nextList }, changed: true, touched }
+    : { agents, changed: false, touched };
+}
+
 /** Lists valid configured agent entries from either supported representation. */
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
@@ -102,6 +192,11 @@ export function readAgentRosterProperty(raw: unknown): AgentRosterProperty | und
     return undefined;
   }
   const agents = (raw as { agents?: unknown }).agents;
+  return readAgentsRosterProperty(agents);
+}
+
+/** Reads an `agents` object roster property using runtime roster precedence. */
+function readAgentsRosterProperty(agents: unknown): AgentRosterProperty | undefined {
   if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
     return undefined;
   }
@@ -245,6 +340,7 @@ export function resolveAgentConfig(
         ? entry.embeddedAgent
         : undefined,
     sandbox: entry.sandbox,
+    plugins: typeof entry.plugins === "object" && entry.plugins ? entry.plugins : undefined,
     tools: entry.tools,
   };
 }

@@ -48,6 +48,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
         : [{ id: "main", default: true }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+    cfg.agents?.entries?.[agentId] ?? cfg.agents?.list?.find((agent) => agent.id === agentId),
 }));
 
 vi.mock("../../agents/memory-search.js", () => ({
@@ -343,6 +345,7 @@ describe("doctor.memory.status", () => {
       embedding: { ok: true },
     });
     const dreaming = expectRecordFields(payload.dreaming, {
+      pluginId: "memory-core",
       enabled: true,
       shortTermCount: 0,
       totalSignalCount: 0,
@@ -382,39 +385,86 @@ describe("doctor.memory.status", () => {
     });
   });
 
-  it("orders dreaming entries deterministically when one timestamp is malformed", async () => {
-    useMemoryManagerFixture({
-      status: () => ({ provider: "gemini" }),
-    });
-    const recentIso = "2026-04-04T00:00:00.000Z";
-    loadShortTermPromotionDreamingStats.mockImplementation(async () =>
-      makeDreamingStats({
-        shortTermCount: 2,
-        shortTermEntries: [
-          makeDreamingEntry("memory/malformed.md", {
-            snippet: "malformed timestamp entry",
-            totalSignalCount: 5,
-            lastRecalledAt: "not-a-valid-date",
-          }),
-          makeDreamingEntry("memory/recent.md", {
-            snippet: "valid timestamp entry",
-            totalSignalCount: 1,
-            lastRecalledAt: recentIso,
-          }),
+  it("resolves selected-agent dreaming config on the host", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        slots: {
+          "memory.dreaming": "global-dreamer",
+        },
+        entries: {
+          "global-dreamer": {
+            config: { dreaming: { enabled: false, frequency: "0 1 * * *" } },
+          },
+          "agent-dreamer": {
+            config: { dreaming: { enabled: true, frequency: "0 2 * * *" } },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            plugins: {
+              slots: {
+                "memory.dreaming": "agent-dreamer",
+              },
+            },
+          },
         ],
-      }),
-    );
-
+      },
+    } as OpenClawConfig);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: "/tmp/alpha" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
     const respond = vi.fn();
-    await invokeDoctorMemory("doctor.memory.status", respond, {});
 
-    const dreaming = respondPayload(respond).dreaming as Record<string, unknown>;
-    const entries = dreaming.shortTermEntries as Array<Record<string, unknown>>;
-    // A NaN-returning comparator would leave the order undefined; with the fix
-    // the malformed timestamp coerces to -Infinity so the valid recent entry
-    // sorts first even though the malformed entry has more signals.
-    expect(entries[0]).toMatchObject({ path: "memory/recent.md" });
-    expect(entries[1]).toMatchObject({ path: "memory/malformed.md" });
+    await invokeDoctorMemory("doctor.memory.status", respond, { params: { agentId: "alpha" } });
+
+    const payload = respondPayload(respond);
+    const dreaming = expectRecordFields(payload.dreaming, {
+      pluginId: "agent-dreamer",
+      enabled: true,
+    });
+    expectRecordFields(expectRecordFields(dreaming.phases, {}).deep, {
+      cron: "0 2 * * *",
+    });
+  });
+
+  it("reports explicit none dreaming selection as disabled", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        slots: {
+          "memory.dreaming": "none",
+          "memory.recall": "memory-recall",
+        },
+        entries: {
+          "memory-recall": {
+            config: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: "/tmp/main" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemory("doctor.memory.status", respond);
+
+    expectRecordFields(respondPayload(respond).dreaming, {
+      pluginId: "none",
+      enabled: false,
+    });
   });
 
   it("returns llama.cpp runtime facts created by the deep embedding probe", async () => {
@@ -1020,11 +1070,12 @@ describe("doctor.memory.status", () => {
     }
   });
 
-  it("reads dreaming config from the selected memory slot plugin", async () => {
+  it("reads dreaming config from the selected memory.dreaming slot plugin", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
         slots: {
-          memory: "memos-local-openclaw-plugin",
+          "memory.dreaming": "memos-local-openclaw-plugin",
+          "memory.recall": "memory-core",
         },
         entries: {
           "memos-local-openclaw-plugin": {

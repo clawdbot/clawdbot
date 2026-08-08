@@ -4,7 +4,6 @@ import type {
   DoctorMemoryDreamDiaryPayload,
   DoctorMemoryStatusPayload,
 } from "../../../../../src/gateway/server-methods/doctor.ts";
-import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/plugins/slots.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -15,9 +14,10 @@ import {
   isGatewayMethodAdvertised,
   type GatewayMethodOperatorScope,
 } from "../../../lib/gateway-methods.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
+import { isMemoryWikiEnabled } from "./memory-wiki-availability.ts";
+import type { DreamingConfigResolution } from "./resolve-configured-dreaming.ts";
 
-const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
+export { resolveConfiguredDreamingFromConfig } from "./resolve-configured-dreaming.ts";
 
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
 export type DreamingEntry = DreamingStatus["shortTermEntries"][number];
@@ -179,18 +179,12 @@ type DreamingConfigCapability = Pick<
   "lookupSchemaPath" | "patch" | "state"
 >;
 
-function isMemoryWikiEnabled(state: DreamingState): boolean {
-  return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
-    enabledByDefault: false,
-  });
-}
-
 function canCallMemoryWikiMethod(state: DreamingState, method: string): boolean {
   const available = isGatewayMethodAdvertised(state, method);
   if (available !== null) {
     return available;
   }
-  return isMemoryWikiEnabled(state);
+  return isMemoryWikiEnabled(state.configSnapshot);
 }
 
 export function canCallDreamingMethod(
@@ -310,28 +304,16 @@ function buildSelectedAgentPayload(
   return buildSelectedAgentPayloadForAgentId(resolveSelectedAgentId(state));
 }
 
-export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
-  pluginId: string;
-  enabled: boolean;
-  overridden: boolean;
-  engineOff: boolean;
-} {
-  const slots = asRecord(asRecord(configValue?.plugins)?.slots);
-  const slotSelection = resolveSlotSelection("memory", slots?.memory);
-  const pluginId =
-    slotSelection.kind === "off" ? defaultSlotIdForKey("memory") : slotSelection.pluginId;
-  const plugins = asRecord(configValue?.plugins);
-  const entries = asRecord(plugins?.entries);
-  const pluginEntry = asRecord(entries?.[pluginId]);
-  const config = asRecord(pluginEntry?.config);
-  const dreaming = asRecord(config?.dreaming);
-  const overridden = typeof dreaming?.enabled === "boolean";
-  return {
-    pluginId,
-    enabled: slotSelection.kind !== "off" && dreaming?.enabled !== false,
-    overridden,
-    engineOff: slotSelection.kind === "off",
-  };
+function resolveConfiguredDreaming(state: DreamingState): DreamingConfigResolution {
+  if (state.dreamingStatusAgentId === resolveSelectedAgentId(state) && state.dreamingStatus) {
+    return {
+      pluginId: state.dreamingStatus.pluginId,
+      enabled: state.dreamingStatus.enabled,
+      overridden: true,
+      engineOff: state.dreamingStatus.pluginId.toLowerCase() === "none",
+    };
+  }
+  return { pluginId: "memory-core", enabled: true, overridden: false, engineOff: false };
 }
 
 type DreamingResourcePayloads = {
@@ -670,9 +652,27 @@ export async function updateDreamingEnabled(
     state.dreamingStatusError = t("dreaming.actions.configHashMissing");
     return false;
   }
-  const { pluginId } = resolveConfiguredDreaming(
-    asRecord(config.state.configSnapshot?.config) ?? null,
-  );
+  let configured =
+    state.dreamingStatusAgentId === resolveSelectedAgentId(state) && state.dreamingStatus
+      ? resolveConfiguredDreaming(state)
+      : null;
+  if (!configured) {
+    await loadDreamingStatus(state);
+    configured =
+      state.dreamingStatusAgentId === resolveSelectedAgentId(state) && state.dreamingStatus
+        ? resolveConfiguredDreaming(state)
+        : null;
+  }
+  if (!configured) {
+    state.dreamingStatusError = "Dreaming status unavailable; refresh and retry.";
+    return false;
+  }
+  const { pluginId } = configured;
+  if (pluginId.toLowerCase() === "none") {
+    state.dreamingStatusError =
+      "Dreaming is disabled by memory.dreaming=none; choose a dreaming memory plugin before enabling.";
+    return false;
+  }
   if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
     return false;
   }

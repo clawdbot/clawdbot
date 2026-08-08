@@ -73,7 +73,7 @@ export function resolveEffectivePluginActivationState(
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: PluginKind | PluginKind[];
-  slot: string | null | undefined;
+  slot: string | null | undefined | readonly (string | null | undefined)[];
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   return resolveMemorySlotDecisionShared(params);

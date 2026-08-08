@@ -214,16 +214,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
-      // +1: forwarding-routed approver-restricted native approval capability factory.
-      // +1: shared inbound-event delivery correlation factory for channel plugins.
-      // +1: canonical webhook route identity for plugin-owned target registries.
-      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
-      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
-      // +1: auth-profile preservation decision for native model pickers.
-      // +2: shared channel question-reaction store and preflight-audio factories.
-      // +1: shared channel interactive dispatcher with canonical binding authorization.
-      // +1: simple channel secret contract factory replacing repeated collectors.
-      4835,
+      // +15: memory-role hook type plus plugin host facade types restored for SDK/API consistency.
+      // +16: memory-role resolver projections across the current public SDK entrypoint graph.
+      4850,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -265,16 +258,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
-      // +1: forwarding-routed approver-restricted native approval capability factory.
-      // +1: shared inbound-event delivery correlation factory for channel plugins.
-      // +1: canonical webhook route identity for plugin-owned target registries.
-      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
-      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
-      // +1: auth-profile preservation decision for native model pickers.
-      // +2: shared channel question-reaction store and preflight-audio factories.
-      // +1: shared channel interactive dispatcher with canonical binding authorization.
-      // +1: simple channel secret contract factory replacing repeated collectors.
-      2912,
+      // +1: effective memory-role slot resolver for bundled memory plugins.
+      // +16: the resolver's projections across the current public SDK entrypoint graph.
+      2913,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

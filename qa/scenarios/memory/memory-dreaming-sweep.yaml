@@ -56,12 +56,17 @@ flow:
         - set: originalDreaming
           value:
             expr: "memoryCoreConfig?.dreaming"
+        - set: originalDreamingSlot
+          value:
+            expr: "original.config.plugins && typeof original.config.plugins === 'object' && original.config.plugins.slots && typeof original.config.plugins.slots === 'object' ? original.config.plugins.slots['memory.dreaming'] : undefined"
         - call: patchConfig
           args:
             - env:
                 ref: env
               patch:
                 plugins:
+                  slots:
+                    memory.dreaming: memory-core
                   entries:
                     memory-core:
                       config:
@@ -119,6 +124,9 @@ flow:
                       ref: env
                     patch:
                       plugins:
+                        slots:
+                          memory.dreaming:
+                            expr: "originalDreamingSlot === undefined ? null : originalDreamingSlot"
                         entries:
                           memory-core:
                             config:
@@ -274,6 +282,9 @@ flow:
                       ref: env
                     patch:
                       plugins:
+                        slots:
+                          memory.dreaming:
+                            expr: "originalDreamingSlot === undefined ? null : originalDreamingSlot"
                         entries:
                           memory-core:
                             config:

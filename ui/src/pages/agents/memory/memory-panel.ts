@@ -31,7 +31,7 @@ import {
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
-  resolveConfiguredDreaming,
+  resolveConfiguredDreamingFromConfig as resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
 } from "./dreaming.ts";

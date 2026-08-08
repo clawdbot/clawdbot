@@ -27,7 +27,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
-    'Select the active memory plugin by id, or "none" to disable memory plugins.',
+    'Legacy memory selector removed from runtime routing. Run `openclaw doctor --fix` to migrate it to `plugins.slots["memory.recall"]` and remove the old key before normal runtime.',
   "plugins.slots.contextEngine":
     "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
   "plugins.entries":

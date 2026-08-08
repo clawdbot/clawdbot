@@ -17,6 +17,7 @@ import {
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
+  resolveMemoryPluginStatus,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
@@ -547,6 +548,61 @@ describe("buildTailscaleHttpsUrl", () => {
         serviceName: "svc:openclaw",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveMemoryPluginStatus", () => {
+  it("prefers the granular recall slot over the legacy memory slot", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            memory: "legacy-memory",
+            "memory.recall": "recall-memory",
+          },
+        },
+      }),
+    ).toEqual({ enabled: true, slot: "recall-memory" });
+  });
+
+  it("ignores the legacy memory slot when canonical recall is absent", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            memory: "legacy-memory",
+          },
+        },
+      }),
+    ).toEqual({ enabled: true, slot: "memory-core" });
+  });
+
+  it("does not let legacy memory=none disable runtime recall", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      }),
+    ).toEqual({ enabled: true, slot: "memory-core" });
+  });
+
+  it("reports granular recall disablement", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            "memory.recall": "none",
+          },
+        },
+      }),
+    ).toEqual({
+      enabled: false,
+      slot: null,
+      reason: 'plugins.slots.memory.recall="none"',
+    });
   });
 });
 

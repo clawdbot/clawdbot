@@ -14,7 +14,7 @@ describe("memory curated defaults", () => {
     resetMemoryEngine(config);
     resetMemoryBackend(config);
 
-    expect(removeFormValue).toHaveBeenNthCalledWith(1, ["plugins", "slots", "memory"]);
+    expect(removeFormValue).toHaveBeenNthCalledWith(1, ["plugins", "slots", "memory.recall"]);
     expect(removeFormValue).toHaveBeenNthCalledWith(2, ["memory", "backend"]);
   });
 

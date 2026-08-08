@@ -80,11 +80,11 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   // These factories carry compaction/pruning runtime state into the resource loader.
   const extensionFactories = buildEmbeddedExtensionFactories({
     cfg: attempt.config,
+    agentId: input.sessionAgentId,
     sessionManager: input.sessionManager,
     provider: attempt.provider,
     modelId: attempt.modelId,
     model: attempt.model,
-    agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
     runId: attempt.runId,

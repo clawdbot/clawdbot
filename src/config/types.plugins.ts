@@ -47,8 +47,18 @@ export type PluginEntryConfig = {
 };
 
 export type PluginSlotsConfig = {
-  /** Select which plugin owns the memory slot ("none" disables memory plugins). */
+  /** Legacy memory slot selector removed from runtime routing. `openclaw doctor --fix` migrates it to `memory.recall` and removes this key. */
   memory?: string;
+  /** Select which plugin owns factual memory search and retrieval. */
+  "memory.recall"?: string;
+  /** Select which plugin owns memory-aware context compaction. */
+  "memory.compaction"?: string;
+  /** Select which plugin owns automatic memory capture/extraction. */
+  "memory.capture"?: string;
+  /** Select which plugin owns background memory consolidation/dreaming. */
+  "memory.dreaming"?: string;
+  /** Select which plugin owns inferred user/profile modeling. */
+  "memory.userModel"?: string;
   /** Select which plugin owns the context-engine slot. */
   contextEngine?: string;
 };

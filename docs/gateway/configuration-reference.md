@@ -403,7 +403,9 @@ cannot be read, account-wide exposure fails closed.
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
 - Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
-- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
+- `plugins.slots["memory.recall"]`: pick the active factual memory recall plugin id, or `"none"` to disable recall. The legacy `plugins.slots.memory` selector is removed from runtime routing; run `openclaw doctor --fix` after upgrading and before normal runtime to migrate it to `plugins.slots["memory.recall"]` and remove the old key.
+- `plugins.slots["memory.compaction"]`, `plugins.slots["memory.capture"]`, `plugins.slots["memory.dreaming"]`, and `plugins.slots["memory.userModel"]`: optional role-specific memory plugin slots for memory-aware compaction, capture hooks, dreaming/consolidation, and user modeling.
+- `agents.entries.*.plugins.slots`: normal authored per-agent overrides for the same memory role slots. Compatibility/internal list-shaped input may also accept `agents.list[].plugins.slots`.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 
 See [Plugins](/tools/plugin).

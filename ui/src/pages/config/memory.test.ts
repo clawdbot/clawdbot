@@ -502,10 +502,10 @@ describe("resolveMemoryBackend", () => {
     expect(
       resolveMemoryBackend({
         memory: { backend: "qmd" },
-        plugins: { slots: { memory: "memory-lancedb" } },
+        plugins: { slots: { "memory.recall": "memory-lancedb" } },
       }),
     ).toBeNull();
-    expect(resolveMemoryBackend({ plugins: { slots: { memory: "none" } } })).toBeNull();
+    expect(resolveMemoryBackend({ plugins: { slots: { "memory.recall": "none" } } })).toBeNull();
   });
 
   it("preserves whether the effective backend is inherited or pinned", () => {

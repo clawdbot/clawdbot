@@ -690,7 +690,7 @@ describe("persistPluginInstall", () => {
             ...params.config.plugins,
             slots: {
               ...params.config.plugins?.slots,
-              memory: "legacy-memory",
+              "memory.recall": "legacy-memory",
             },
           },
         },
@@ -722,7 +722,7 @@ describe("persistPluginInstall", () => {
       requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry", 1).config,
     ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
-    expect(next.plugins?.slots?.memory).toBe("legacy-memory");
+    expect(next.plugins?.slots?.["memory.recall"]).toBe("legacy-memory");
   });
 
   it("uses cold metadata for manifest-kind slot selection without loading runtime siblings", async () => {
@@ -763,7 +763,7 @@ describe("persistPluginInstall", () => {
             ...params.config.plugins,
             slots: {
               ...params.config.plugins?.slots,
-              memory: "memory-b",
+              "memory.recall": "memory-b",
             },
           },
         },
@@ -791,7 +791,7 @@ describe("persistPluginInstall", () => {
       requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry", 1).config,
     ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
-    expect(next.plugins?.slots?.memory).toBe("memory-b");
+    expect(next.plugins?.slots?.["memory.recall"]).toBe("memory-b");
   });
 
   it("does not load every plugin runtime for non-slot installs without manifest kind", async () => {

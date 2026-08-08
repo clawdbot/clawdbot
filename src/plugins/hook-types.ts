@@ -42,6 +42,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
+import type { MemoryPluginRole } from "./memory-role.contract.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -294,6 +295,7 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   priority?: number;
   registrationId?: string;
   timeoutMs?: number;
+  memoryRole?: MemoryPluginRole;
 } & (K extends "before_agent_reply"
   ? {
       /** Host-enforced turn triggers that may invoke this reply hook. */
@@ -1446,6 +1448,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   priority?: number;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
+  memoryRole?: MemoryPluginRole;
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

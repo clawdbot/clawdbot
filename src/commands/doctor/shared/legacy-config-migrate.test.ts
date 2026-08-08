@@ -252,6 +252,110 @@ describe("legacy MCP server config migrate", () => {
 });
 
 describe("legacy memory search config migrate", () => {
+  it("migrates legacy-only plugins.slots.memory to canonical memory.recall", () => {
+    const raw = {
+      plugins: {
+        slots: {
+          memory: "memory-lancedb",
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({
+        path: "plugins.slots.memory",
+        message: expect.stringContaining("plugins.slots.memory is legacy and is ignored"),
+      }),
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.plugins?.slots).toEqual({
+      "memory.recall": "memory-lancedb",
+    });
+    expect(res.changes).toEqual(['Moved plugins.slots.memory → plugins.slots["memory.recall"].']);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("preserves canonical memory.recall and removes conflicting legacy memory slot", () => {
+    const raw = {
+      plugins: {
+        slots: {
+          memory: "legacy-memory",
+          "memory.recall": "canonical-memory",
+        },
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.plugins?.slots).toEqual({
+      "memory.recall": "canonical-memory",
+    });
+    expect(res.changes).toEqual([
+      'Removed plugins.slots.memory; plugins.slots["memory.recall"] is already set.',
+    ]);
+  });
+
+  it("migrates authored agents.entries legacy memory slots and preserves keyed roster shape", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            plugins: { slots: { memory: "entry-memory" } },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({
+        path: "agents.entries",
+        message: expect.stringContaining("agents.entries.*.plugins.slots.memory is legacy"),
+      }),
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.entries?.main?.plugins?.slots).toEqual({
+      "memory.recall": "entry-memory",
+    });
+    expect(Object.prototype.propertyIsEnumerable.call(res.config?.agents ?? {}, "list")).toBe(
+      false,
+    );
+    expect(res.changes).toEqual([
+      "Moved agents.entries.main.plugins.slots.memory → memory.recall.",
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("migrates agents.list compatibility input without converting roster shape", () => {
+    const raw = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            plugins: { slots: { memory: "list-memory" } },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.list",
+          message: expect.stringContaining("agents.list[].plugins.slots.memory is legacy"),
+        }),
+      ]),
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.entries?.main?.plugins?.slots).toEqual({
+      "memory.recall": "list-memory",
+    });
+    expect(res.changes).toEqual(["Moved agents.list.0.plugins.slots.memory → memory.recall."]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
   it("removes sidecar memory search index paths", () => {
     const res = migrateLegacyConfigForTest({
       memorySearch: {
@@ -3065,7 +3169,7 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.config?.plugins?.deny).toEqual(["openai"]);
     expect(res.config?.plugins?.entries?.openai).toEqual({ enabled: false });
     expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
-    expect(res.config?.plugins?.slots?.memory).toBe("openai");
+    expect(res.config?.plugins?.slots?.["memory.recall"]).toBe("openai");
     expect(res.changes).toContain("Rewrote plugins.allow openai-codex references to openai.");
     expect(res.changes).toContain("Rewrote plugins.deny openai-codex references to openai.");
     expect(res.changes).toContain(

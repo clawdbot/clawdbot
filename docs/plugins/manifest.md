@@ -1354,7 +1354,7 @@ Example schema extension:
 
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
 - `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup.
-- `plugins.slots.memory` referencing an unknown plugin id is an **error**, except for the known `memory-lancedb` official external plugin, which warns instead.
+- Canonical memory roles are selected through `plugins.slots["memory.recall"]`, `plugins.slots["memory.compaction"]`, `plugins.slots["memory.capture"]`, `plugins.slots["memory.dreaming"]`, and `plugins.slots["memory.userModel"]`. `plugins.slots.memory` is deprecated legacy input; Doctor migrates it to `plugins.slots["memory.recall"]` and removes the legacy key. Unknown canonical memory-role plugin ids are validation issues; legacy `plugins.slots.memory` is treated only as migration input.
 - If a plugin is installed but has a broken or missing manifest or schema, validation fails and Doctor reports the plugin error.
 - If plugin config exists but the plugin is **disabled**, the config is kept and a **warning** is surfaced in Doctor + logs.
 
@@ -1367,7 +1367,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
-- Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
+- Exclusive plugin kinds are selected through canonical role slots: `kind: "memory"` primarily via `plugins.slots["memory.recall"]` (default `memory-core`) plus the companion memory role slots above, and `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`). `plugins.slots.memory` remains only as deprecated Doctor-migrated legacy input and is not an active runtime role slot.
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).

@@ -58,12 +58,12 @@ export function buildConfigItems(params: {
         id: "config:memory-plugin-slot",
         target: "plugins.slots",
         path: ["plugins", "slots"],
-        value: { memory: "memory-core" },
+        value: { "memory.recall": "memory-core" },
         message: "Select the default OpenClaw memory plugin for imported file memory.",
         conflict:
           !params.ctx.overwrite &&
           hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "slots"], {
-            memory: true,
+            "memory.recall": true,
           }),
       }),
     );
@@ -95,7 +95,7 @@ export function buildConfigItems(params: {
         message:
           "Hermes used Honcho memory. OpenClaw keeps built-in memory selected until the matching plugin is installed and reviewed.",
         recommendation:
-          "Install or review the Honcho memory plugin before selecting it for plugins.slots.memory.",
+          'Install or review the Honcho memory plugin before selecting it for plugins.slots["memory.recall"].',
       }),
     );
   } else if (memoryProvider && !["builtin", "file", "files"].includes(memoryProvider)) {

@@ -102,11 +102,11 @@ function formatRuntimeBytes(bytes: number): string {
   }
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
-function formatDreamingSummary(cfg: OpenClawConfig): string {
-  const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
-  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
+function formatDreamingSummary(cfg: OpenClawConfig, agentId: string): string {
+  const pluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
+  const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg, agentId });
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg, agentId });
+  const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg, agentId });
   const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
   const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
   const lightSummary = light.enabled
@@ -352,7 +352,7 @@ export async function runMemoryStatus(
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
       `${label("Workspace")} ${info(workspacePath)}`,
-      `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
+      `${label("Dreaming")} ${info(formatDreamingSummary(cfg, agentId))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
       const state =

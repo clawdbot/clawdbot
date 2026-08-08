@@ -278,6 +278,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .description("Write grounded historical REM summaries into DREAMS.md for UI review")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--path <file-or-dir>", "Historical daily memory file(s) or directory")
+    .option("--grounded", "Accepted for clarity; rem-backfill output is always grounded", false)
     .option("--rollback", "Remove previously written grounded REM backfill entries", false)
     .option(
       "--stage-short-term",

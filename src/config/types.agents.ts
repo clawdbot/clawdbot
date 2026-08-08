@@ -13,9 +13,12 @@ import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
+import type { PluginSlotsConfig } from "./types.plugins.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
+
+type AgentPluginSlotsConfig = Omit<PluginSlotsConfig, "contextEngine">;
 
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
@@ -163,6 +166,10 @@ export type AgentConfig = {
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
+  /** Optional per-agent plugin slot overrides. */
+  plugins?: {
+    slots?: AgentPluginSlotsConfig;
+  };
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;

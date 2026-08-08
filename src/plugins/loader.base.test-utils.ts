@@ -1333,7 +1333,7 @@ describe("loadOpenClawPlugins", () => {
             plugins: {
               load: { paths: [memoryPlugin.file] },
               allow: ["memory-demo"],
-              slots: { memory: "memory-demo" },
+              slots: { "memory.recall": "memory-demo" },
               entries: {
                 "memory-demo": { enabled: true },
               },
