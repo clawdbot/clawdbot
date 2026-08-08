@@ -43,6 +43,8 @@ function makeEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-id-default",
     updatedAt: 1,
+    totalTokensFresh: true,
+    totalTokensVersion: 1,
     ...overrides,
   } as SessionEntry;
 }
@@ -86,17 +88,23 @@ describe("computeRequestCompactionContextUsage: freshness contract (axis a)", ()
     expect(result).toBeCloseTo(0.75, 5);
   });
 
-  it("computes the ratio when totalTokensFresh is undefined (treated as fresh)", async () => {
+  it("returns null when total-token freshness provenance is missing", async () => {
     const compute = await getComputeRequestCompactionContextUsage();
 
     const result = compute({
-      entry: makeEntry({ totalTokens: 100_000, contextTokens: 200_000 }),
+      entry: makeEntry({
+        totalTokens: 100_000,
+        totalTokensFresh: undefined,
+        totalTokensVersion: undefined,
+        contextTokens: 200_000,
+      }),
       cfg: CFG,
       provider: PROVIDER,
       model: MODEL,
     });
 
-    expect(result).toBeCloseTo(0.5, 5);
+    expect(result).toBeNull();
+    expect(state.resolveContextTokensForModelMock).not.toHaveBeenCalled();
   });
 
   it("returns null when totalTokens is missing (entry has no usage snapshot yet)", async () => {
