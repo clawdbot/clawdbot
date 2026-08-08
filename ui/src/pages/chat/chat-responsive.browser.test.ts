@@ -473,7 +473,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
-                          <summary class="context-ring" role="status" aria-label="Thread context usage: 46k/200k (23%)">
+                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
                             <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                               <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>

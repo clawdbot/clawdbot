@@ -369,7 +369,7 @@ describe("renderWorkboard", () => {
     expect(detailActions).not.toBeNull();
     expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
-    expect(buttonByLabel(detailActions!, "Stop thread")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
     expect(
       detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
@@ -454,8 +454,8 @@ describe("renderWorkboard", () => {
       "workboard-dispatcher",
     );
     const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
-    expect(runningCard?.querySelector('button[aria-label="Open thread"]')).not.toBeNull();
-    expect(runningCard?.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
   it("renders date and time in detail drawer timestamps", () => {
@@ -1084,8 +1084,8 @@ describe("renderWorkboard", () => {
     expect(actions).not.toBeNull();
     expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
     expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Stop thread")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Open thread")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
     expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
 
     const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
@@ -1201,7 +1201,7 @@ describe("renderWorkboard", () => {
         "Card details: Inspect drawer focus",
       );
       expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
-        "Start or link a thread",
+        "Start or link a session",
       );
       dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
@@ -1502,7 +1502,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.textContent).toContain("Task running");
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
@@ -1528,7 +1528,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1544,7 +1544,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1560,7 +1560,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1576,7 +1576,7 @@ describe("renderWorkboard", () => {
     state.missingTaskIds = new Set(["task-pruned-from-ledger"]);
     renderView();
 
-    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -1740,7 +1740,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.textContent).toContain("Thread missing");
+    expect(container.textContent).toContain("Session missing");
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -2422,10 +2422,10 @@ describe("renderWorkboard", () => {
       renderView();
 
       expect(container.textContent).toContain("Stale");
-      expect(container.textContent).toContain("No recent thread activity");
+      expect(container.textContent).toContain("No recent session activity");
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
-      expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -2453,7 +2453,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
   it.each([
@@ -2779,7 +2779,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("No linked thread");
+    expect(container.textContent).toContain("No linked session");
     expect(container.textContent).toContain("Existing session");
   });
 

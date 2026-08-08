@@ -171,7 +171,7 @@ export function staleSessionState(session: GatewaySessionRow): WorkboardStaleSta
   return {
     detectedAt: Date.now(),
     lastSessionUpdatedAt: session.updatedAt,
-    reason: "Linked thread has not reported recent activity.",
+    reason: "Linked session has not reported recent activity.",
   };
 }
 

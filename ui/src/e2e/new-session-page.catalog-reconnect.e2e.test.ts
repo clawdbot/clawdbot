@@ -208,7 +208,7 @@ suite.define(() => {
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -283,7 +283,7 @@ suite.define(() => {
         .toBe(listCalls + 1);
 
       await message.fill("create during refresh");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -365,7 +365,7 @@ suite.define(() => {
       await message.fill("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isEnabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(false);
       expect(await gateway.getRequests("sessions.catalog.list")).toHaveLength(0);
 
@@ -392,7 +392,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",
@@ -539,7 +539,7 @@ suite.define(() => {
       });
       await expect.poll(() => baseInput.inputValue()).toBe("feature-choice");
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",

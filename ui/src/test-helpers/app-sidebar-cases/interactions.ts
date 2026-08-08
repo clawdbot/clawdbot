@@ -130,10 +130,10 @@ describe("AppSidebar multi-select", () => {
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
       expect(label).toBeTruthy();
       expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
-        `Pin thread: ${label}`,
+        `Pin session: ${label}`,
       );
       expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toBe(
-        `Open thread menu: ${label}`,
+        `Open session menu: ${label}`,
       );
     }
   });

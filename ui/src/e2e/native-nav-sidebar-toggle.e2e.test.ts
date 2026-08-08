@@ -196,7 +196,7 @@ suite.define(() => {
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
     const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newThread = toolbar.getByRole("button", { name: "New thread" });
+    const newThread = toolbar.getByRole("button", { name: "New session" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
@@ -256,7 +256,7 @@ suite.define(() => {
     await expect
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New thread" }).count()).toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
@@ -353,7 +353,7 @@ suite.define(() => {
 
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
-    await row.getByRole("button", { name: "Open thread menu" }).click();
+    await row.getByRole("button", { name: "Open session menu" }).click();
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");

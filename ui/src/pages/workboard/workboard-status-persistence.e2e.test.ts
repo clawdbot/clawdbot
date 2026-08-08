@@ -343,7 +343,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       const editDialog = page.getByRole("dialog", { name: "Edit card" });
       await editDialog.waitFor({ timeout: 10_000 });
       await expect
-        .poll(() => workboardSelectValue(page, "Thread"))
+        .poll(() => workboardSelectValue(page, "Session"))
         .toBe("Execution linked session");
 
       await page.getByLabel("Title").fill(updatedCard.title);

@@ -291,7 +291,7 @@ describe("AppSidebar session accessibility", () => {
     const list = sidebar.querySelector('[data-session-section="ungrouped"] [role="list"]');
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
-    expect(list?.getAttribute("aria-label")).toBe("Threads");
+    expect(list?.getAttribute("aria-label")).toBe("Sessions");
     expect(row?.getAttribute("role")).toBe("listitem");
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
@@ -434,7 +434,7 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Thread archived"),
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
     );
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,

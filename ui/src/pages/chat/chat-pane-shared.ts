@@ -117,9 +117,9 @@ export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
 export const WORKSPACE_RAIL_MAX_WIDTH = 280;
 export const SESSION_RAIL_DOCK_MIN_WIDTH = 1080;
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new thread after the active run or queued messages finish.";
+  "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Thread list is still refreshing. Try New Chat again in a moment.";
+  "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
 

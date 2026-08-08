@@ -174,12 +174,12 @@ suite.define(() => {
       await row.click({ button: "right" });
       const menuHost = page.locator("openclaw-session-menu");
       await menuHost
-        .getByRole("menuitem", { name: "Archive thread" })
+        .getByRole("menuitem", { name: "Archive session" })
         .waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
 
-      await row.getByRole("button", { name: "Open thread menu" }).click();
-      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive thread" }));
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive session" }));
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -269,7 +269,7 @@ suite.define(() => {
       await expect.poll(() => error.textContent()).toContain(`${batchKeys[1]}: active run`);
       await expect
         .poll(() => page.locator(".app-toast").textContent())
-        .toContain("Archived 2 threads");
+        .toContain("Archived 2 sessions");
       await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
       await page.waitForTimeout(500);
       expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
@@ -355,10 +355,10 @@ suite.define(() => {
       });
       const selectedRow = rowFor(selected.key);
       await selectedRow.hover();
-      await selectedRow.getByRole("button", { name: "Open thread menu" }).click();
+      await selectedRow.getByRole("button", { name: "Open session menu" }).click();
       await activateMenuItem(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
-          name: "Archive thread",
+          name: "Archive session",
         }),
       );
       await waitForPatch(
@@ -561,7 +561,7 @@ suite.define(() => {
       const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
-      await row.getByRole("button", { name: "Open thread menu" }).click();
+      await row.getByRole("button", { name: "Open session menu" }).click();
       await activateMenuItem(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );
