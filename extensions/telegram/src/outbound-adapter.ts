@@ -387,6 +387,12 @@ export async function sendTelegramPayloadMessages(params: {
     : payloadOpts;
   let implicitReplyTargetAvailable = true;
   if (reactionEmoji) {
+    if (params.baseOpts.businessConnectionId) {
+      // MVP: fail loudly instead of silently reacting as the bot's own
+      // identity — reactMessageTelegram/setMessageReaction does not yet
+      // forward business_connection_id. Mirrors sendLocation/sendPoll above.
+      throw new Error("Telegram reactions are not supported in Business mode yet.");
+    }
     if (typeof replyToMessageId !== "number") {
       throw new Error("Telegram reaction requires a reply target");
     }

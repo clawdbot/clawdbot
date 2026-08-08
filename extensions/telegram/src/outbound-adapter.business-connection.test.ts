@@ -16,10 +16,11 @@ import type { TelegramRuntime } from "./runtime.types.js";
 const sendMessageTelegramMock = vi.fn();
 const sendPollTelegramMock = vi.fn();
 const sendLocationTelegramMock = vi.fn();
+const reactMessageTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: vi.fn(),
-  reactMessageTelegram: vi.fn(),
+  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
   sendLocationTelegram: (...args: unknown[]) => sendLocationTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
@@ -89,6 +90,7 @@ describe("telegramOutbound business connection routing", () => {
     sendMessageTelegramMock.mockReset();
     sendPollTelegramMock.mockReset();
     sendLocationTelegramMock.mockReset();
+    reactMessageTelegramMock.mockReset();
     installBusinessStoreRuntime();
   });
 
@@ -181,5 +183,24 @@ describe("telegramOutbound business connection routing", () => {
         }),
       ).rejects.toThrow(/Business mode/);
       expect(sendLocationTelegramMock).not.toHaveBeenCalled();
+    }));
+
+  it("rejects a reaction send for a business chat instead of silently reacting as the bot", async () =>
+    withBusinessTestEnv(async () => {
+      await seedConnection(true);
+
+      await expect(
+        telegramOutbound.sendPayload!({
+          cfg: {} as never,
+          to: CHAT_ID,
+          text: "",
+          replyToId: "4",
+          payload: {
+            channelData: { telegram: { reaction: { emoji: "👍" } } },
+          },
+          deps: { sendTelegram: sendMessageTelegramMock },
+        }),
+      ).rejects.toThrow(/Business mode/);
+      expect(reactMessageTelegramMock).not.toHaveBeenCalled();
     }));
 });
