@@ -130,7 +130,6 @@ async function writeScheduledTaskScript({
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({
     env: taskEnv,
-    environment,
     description,
   });
   const script = buildTaskScript({

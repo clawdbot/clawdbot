@@ -172,10 +172,7 @@ describe("createSlackMonitorContext channel metadata cache", () => {
   it("isolates remembered types by enterprise team scope", async () => {
     const createScope = (teamId: string): SlackEventScope =>
       ({
-        apiAppId: "A_EXPECTED",
-        enterpriseId: "E_EXPECTED",
         teamId,
-        isEnterpriseInstall: true,
         client: {
           conversations: { info: vi.fn().mockRejectedValue(new Error("missing_scope")) },
         },

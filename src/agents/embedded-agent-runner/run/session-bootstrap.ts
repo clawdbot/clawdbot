@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveStorePath } from "../../../config/sessions.js";
+import { resolveStorePath, SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntries,
@@ -71,9 +71,9 @@ export function buildContextEngineCompactionSessionTarget(params: {
       ? candidateSessionKey
       : candidateSessionKey && !suppliedEntry
         ? candidateSessionKey
-        : (preferredMarkerSessionKey ?? (markerMatches.length === 0 ? marker.sessionId : undefined))
+        : preferredMarkerSessionKey
     : undefined;
-  if (marker && !markerSessionKey) {
+  if (marker && markerMatches.length > 0 && !markerSessionKey) {
     throw new Error("Legacy compaction transcript identity is ambiguous");
   }
   if (
@@ -90,7 +90,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     ? targetSessionKey
     : marker
       ? markerSessionKey
-      : (targetSessionKey ?? suppliedSessionKey ?? targetSessionId ?? params.sessionId);
+      : (targetSessionKey ?? suppliedSessionKey);
   const agentId =
     targetAgentId ??
     marker?.agentId ??
@@ -141,6 +141,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
       async () => ({
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         inputTokens: undefined,
         outputTokens: undefined,
         cacheRead: undefined,

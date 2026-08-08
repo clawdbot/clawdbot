@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch } from "diff";
 import { Type } from "typebox";
+import { isMissingPathError } from "../../../infra/errors.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -94,12 +95,7 @@ const defaultWriteOperations: WriteOperations = {
         mtimeMs: stat.mtimeMs,
       } as const;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code?: unknown }).code === "ENOENT"
-      ) {
+      if (isMissingPathError(error)) {
         return null;
       }
       throw error;
@@ -315,12 +311,10 @@ function formatWriteResult(
 }
 
 function isMissingFileError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  if ("code" in error && (error as { code?: unknown }).code === "ENOENT") {
+  if (isMissingPathError(error)) {
     return true;
   }
+  // Injected write operations may preserve only their legacy human-readable error.
   return error instanceof Error && error.message.includes("No such file or directory");
 }
 

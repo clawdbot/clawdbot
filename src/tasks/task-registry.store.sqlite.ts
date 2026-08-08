@@ -1,5 +1,6 @@
 // Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
@@ -94,11 +95,7 @@ function parseJsonValue(raw: string | null): JsonValue | undefined {
   if (!raw?.trim()) {
     return undefined;
   }
-  try {
-    return JSON.parse(raw) as JsonValue;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(raw) as JsonValue | undefined;
 }
 
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {

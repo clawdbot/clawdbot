@@ -21,6 +21,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const consumeSelectedSystemEventEntriesMock = vi.hoisted(() => vi.fn(() => []));
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
@@ -31,6 +32,16 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventEntry: (text: string, options: { deliveryContext?: unknown }) => {
+    enqueueSystemEventMock(text, options);
+    return {
+      text,
+      ts: Date.now(),
+      contextKey: null,
+      deliveryContext: options.deliveryContext,
+    };
+  },
+  consumeSelectedSystemEventEntries: consumeSelectedSystemEventEntriesMock,
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -66,6 +77,7 @@ beforeEach(() => {
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
+  consumeSelectedSystemEventEntriesMock.mockClear();
   supervisorMock.spawn.mockReset();
 });
 

@@ -1,5 +1,10 @@
 // N-1 (legacy protocol) node feature filtering, kept out of the oversized
 // node-command-policy.ts file.
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -17,6 +22,29 @@ const BUILT_IN_NODE_COMMANDS = new Set<string>([
   ...TALK_PTT_COMMANDS,
   ...IOS_WATCH_RELAY_COMMANDS,
 ]);
+
+const LEGACY_NODE_HOST_DESKTOP_METADATA: Readonly<
+  Record<string, { platform: string; deviceFamily: string }>
+> = {
+  darwin: { platform: "macos", deviceFamily: "Mac" },
+  linux: { platform: "linux", deviceFamily: "Linux" },
+  win32: { platform: "windows", deviceFamily: "Windows" },
+};
+
+/** Normalizes the desktop metadata emitted by the shipped protocol-v3 node host. */
+export function normalizeLegacyNodeHostClientMetadata(
+  client: ConnectParams["client"],
+): ConnectParams["client"] {
+  if (
+    client.id !== GATEWAY_CLIENT_IDS.NODE_HOST ||
+    client.mode !== GATEWAY_CLIENT_MODES.NODE ||
+    client.deviceFamily?.trim()
+  ) {
+    return client;
+  }
+  const metadata = LEGACY_NODE_HOST_DESKTOP_METADATA[client.platform];
+  return metadata ? { ...client, ...metadata } : client;
+}
 
 export function filterLegacyNodeProtocolFeatures(params: {
   caps: readonly string[];

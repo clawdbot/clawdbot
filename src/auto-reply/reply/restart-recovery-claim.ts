@@ -499,6 +499,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             }),
             abortedLastRun: true,
             endedAt,
+            lifecycleRunId: undefined,
             pendingFinalDelivery: undefined,
             runtimeMs:
               typeof current.startedAt === "number"
@@ -532,6 +533,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             ? {
                 abortedLastRun: false,
                 endedAt,
+                lifecycleRunId: undefined,
                 runtimeMs:
                   typeof current.startedAt === "number"
                     ? Math.max(0, endedAt - current.startedAt)

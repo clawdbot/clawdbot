@@ -2687,6 +2687,42 @@ describe("runCli exit behavior", () => {
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
+  it("sanitizes control characters in unowned command diagnostics", async () => {
+    const primary = "bad\u001b[31m-red\u001b[0m\nforged\tline";
+
+    await expect(runCli(["node", "openclaw", primary])).rejects.toThrow(
+      'Unknown command: openclaw bad-red\\nforged\\tline. No built-in command or plugin CLI metadata owns "bad-red\\nforged\\tline".',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds long unowned command diagnostics without splitting Unicode", async () => {
+    const primary = "🦞".repeat(1_000);
+
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", primary]);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    const displayPrimary = `${"🦞".repeat(63)}…`;
+    expect(displayPrimary.length).toBeLessThanOrEqual(128);
+    expect(message).toContain(`Unknown command: openclaw ${displayPrimary}`);
+    expect(message).not.toContain("�");
+    expect(message.length).toBeLessThan(500);
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
   it("keeps suggestions out of plugin-policy diagnostics", async () => {
     resolveManifestCommandAliasOwnerMock.mockReturnValueOnce({
       pluginId: "codex",

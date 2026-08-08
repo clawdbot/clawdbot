@@ -16,6 +16,13 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import { transformTransportMessages } from "./host-policy.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  buildOpenAIResponsesReplayContext,
+  createOpenAIResponsesCompactionPrefixPruner,
+  isSafeResponsesReplayItemId,
+  resolveNewestOpenAIResponsesCompactionReplay,
+} from "./openai-responses-compaction-replay.js";
+import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
@@ -33,6 +40,14 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+
+export {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+  createCompactionTracker,
+  createOpenAIResponsesCompactionPrefixPruner,
+  resolveNewestOpenAIResponsesCompactionReplay,
+} from "./openai-responses-compaction-replay.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
 
@@ -54,75 +69,102 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
   );
 }
 
-function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
+function stripEncryptedReasoningContentFields(value: unknown): {
+  value: unknown;
+  changed: boolean;
+} {
   if (!value || typeof value !== "object") {
     return { value, changed: false };
   }
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
-      const stripped = stripEncryptedContentFields(item);
+      const stripped = stripEncryptedReasoningContentFields(item);
       changed ||= stripped.changed;
       return stripped.value;
     });
     return changed ? { value: next, changed: true } : { value, changed: false };
   }
 
+  const source = value as Record<string, unknown>;
+  if (source.type === "compaction") {
+    return { value, changed: false };
+  }
   let changed = false;
   const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, child] of Object.entries(source)) {
     if (key === "encrypted_content") {
       changed = true;
       continue;
     }
-    const stripped = stripEncryptedContentFields(child);
+    const stripped = stripEncryptedReasoningContentFields(child);
     changed ||= stripped.changed;
     next[key] = stripped.value;
   }
   return changed ? { value: next, changed: true } : { value, changed: false };
 }
 
-export function stripResponsesRequestEncryptedContent(
-  params: OpenAIResponsesRequestParams,
-): OpenAIResponsesRequestParams {
-  const stripped = stripEncryptedContentFields(params.input);
+type ResponsesEncryptedContentRequest = { input?: ResponseInput };
+
+type ResponsesEncryptedContentAttemptKind =
+  | "initial"
+  | "reasoning-stripped"
+  | "compaction-stripped";
+
+export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
+  kind: ResponsesEncryptedContentAttemptKind;
+  request: TRequest;
+};
+
+function stripResponsesRequestEncryptedReasoning<TRequest extends ResponsesEncryptedContentRequest>(
+  request: TRequest,
+): TRequest {
+  const stripped = stripEncryptedReasoningContentFields(request.input);
   if (!stripped.changed) {
-    return params;
+    return request;
   }
   return {
-    ...params,
+    ...request,
     input: stripped.value as ResponseInput,
   };
 }
 
-function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? shortHash(normalized) : undefined;
+function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedContentRequest>(
+  request: TRequest,
+): TRequest {
+  if (!Array.isArray(request.input)) {
+    return request;
+  }
+  const input = request.input.filter(
+    (item) =>
+      !(
+        item !== null &&
+        typeof item === "object" &&
+        (item as { type?: unknown }).type === "compaction"
+      ),
+  );
+  return input.length === request.input.length ? request : { ...request, input };
 }
 
-function buildOpenAIResponsesReplayContext(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReplayContext {
-  return {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    baseUrlHash: hashOptionalReplayContextValue(model.baseUrl),
-    sessionHash: hashOptionalReplayContextValue(options?.sessionId),
-    authProfileHash: hashOptionalReplayContextValue(options?.authProfileId),
-  };
-}
-
-export function buildOpenAIResponsesReasoningReplayMetadata(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReasoningReplayMetadata {
-  return {
-    v: 1,
-    source: "openai-responses",
-    ...buildOpenAIResponsesReplayContext(model, options),
-  };
+export function resolveNextResponsesEncryptedContentAttempt<
+  TRequest extends ResponsesEncryptedContentRequest,
+>(
+  attempt: ResponsesEncryptedContentAttempt<TRequest>,
+  error: unknown,
+): ResponsesEncryptedContentAttempt<TRequest> | undefined {
+  if (!isInvalidEncryptedContentError(error) || attempt.kind === "compaction-stripped") {
+    return undefined;
+  }
+  if (attempt.kind === "initial") {
+    const reasoningStripped = stripResponsesRequestEncryptedReasoning(attempt.request);
+    if (reasoningStripped !== attempt.request) {
+      return { kind: "reasoning-stripped", request: reasoningStripped };
+    }
+  }
+  const compactionStripped = stripResponsesRequestCompaction(attempt.request);
+  return compactionStripped === attempt.request
+    ? undefined
+    : { kind: "compaction-stripped", request: compactionStripped };
 }
 
 export function tagOpenAIResponsesReasoningReplayItem(
@@ -211,7 +253,7 @@ export function prepareOpenAIResponsesReasoningItemForReplay(
   if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
-  const stripped = stripEncryptedContentFields(rest);
+  const stripped = stripEncryptedReasoningContentFields(rest);
   return normalizeOpenAIResponsesReasoningReplayItem(
     stripped.value as ReplayableResponseReasoningItem,
   );
@@ -223,33 +265,49 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
+  onCompactionRejected?: () => void;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
-  try {
-    params.observePrompt?.(params.request, {
+  const sendAttempt = async (
+    attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
+  ) => {
+    params.observePrompt?.(attempt.request, {
       egress: "responses-sdk",
-      payloadVariant: "initial",
+      payloadVariant: attempt.kind,
     });
     const { data, response } = await params.client.responses
-      .create(params.request as never, params.requestOptions as never)
+      .create(attempt.request as never, params.requestOptions as never)
       .withResponse();
-    return { stream: data as unknown as AsyncIterable<unknown>, response };
-  } catch (error) {
-    const retryRequest = stripResponsesRequestEncryptedContent(params.request);
-    if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
-      throw error;
+    if (attempt.kind === "compaction-stripped") {
+      params.onCompactionRejected?.();
     }
-    log.warn(
-      `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-        `api=${params.model.api} model=${params.model.id}`,
-    );
-    params.observePrompt?.(retryRequest, {
-      egress: "responses-sdk",
-      payloadVariant: "encrypted-content-retry",
-    });
-    const { data, response } = await params.client.responses
-      .create(retryRequest as never, params.requestOptions as never)
-      .withResponse();
     return { stream: data as unknown as AsyncIterable<unknown>, response };
+  };
+
+  let attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams> = {
+    kind: "initial",
+    request: params.request,
+  };
+  while (true) {
+    try {
+      return await sendAttempt(attempt);
+    } catch (error) {
+      const nextAttempt = resolveNextResponsesEncryptedContentAttempt(attempt, error);
+      if (!nextAttempt) {
+        throw error;
+      }
+      if (nextAttempt.kind === "reasoning-stripped") {
+        log.warn(
+          `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
+            `api=${params.model.api} model=${params.model.id}`,
+        );
+      } else {
+        log.warn(
+          `[responses] retrying without encrypted compaction content provider=${params.model.provider} ` +
+            `api=${params.model.api} model=${params.model.id}`,
+        );
+      }
+      attempt = nextAttempt;
+    }
   }
 }
 
@@ -268,14 +326,6 @@ function normalizeResponsesReplayItemId(
     return id;
   }
   return `${prefix}_${shortHash(id)}`;
-}
-
-function isSafeResponsesReplayItemId(id: unknown): id is string {
-  return (
-    typeof id === "string" &&
-    id.length > 0 &&
-    id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH
-  );
 }
 
 export function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
@@ -385,6 +435,11 @@ export function convertResponsesMessages(
     normalizeToolCallId,
     { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
+  const compaction = resolveNewestOpenAIResponsesCompactionReplay(transformedMessages, model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+  });
+  const compactionPruner = createOpenAIResponsesCompactionPrefixPruner(compaction);
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
@@ -403,6 +458,10 @@ export function convertResponsesMessages(
   }
   let msgIndex = 0;
   for (const msg of transformedMessages) {
+    if (compactionPruner.shouldSkipMessage(msg)) {
+      msgIndex += 1;
+      continue;
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push(
@@ -428,11 +487,18 @@ export function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      const assistantCompaction = msg === compaction?.owner ? compaction : undefined;
       let textFallbackOrdinal = 0;
       let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
-      for (const block of msg.content) {
+      for (const [contentIndex, block] of msg.content.entries()) {
+        if (compactionPruner.shouldSkipAssistantBlock(msg, contentIndex)) {
+          continue;
+        }
+        if (assistantCompaction && contentIndex === assistantCompaction.replayIndex) {
+          output.push(assistantCompaction.item);
+        }
         if (block.type === "thinking") {
           if (
             shouldReplayReasoningItems &&
@@ -497,6 +563,7 @@ export function convertResponsesMessages(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
+          compactionPruner.recordToolCall(block.id);
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
@@ -517,6 +584,9 @@ export function convertResponsesMessages(
           previousReplayItemWasReasoning = false;
         }
       }
+      if (assistantCompaction && assistantCompaction.replayIndex >= msg.content.length) {
+        output.push(assistantCompaction.item);
+      }
       if (output.length > 0) {
         messages.push(...output);
       }
@@ -526,6 +596,10 @@ export function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
+      if (!compactionPruner.shouldKeepToolResult(msg.toolCallId)) {
+        msgIndex += 1;
+        continue;
+      }
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);

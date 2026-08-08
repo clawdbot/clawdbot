@@ -68,7 +68,6 @@ export async function authenticateGatewayConnect(
   } = context.handler;
   const {
     connectParams,
-    configSnapshot,
     trustedProxies,
     allowRealIpFallback,
     peerLabel,
@@ -105,7 +104,6 @@ export async function authenticateGatewayConnect(
   const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
   const controlUiAuthPolicy = resolveControlUiAuthPolicy({
     isControlUi,
-    controlUiConfig: configSnapshot.gateway?.controlUi,
     deviceRaw,
     deviceAuthMigrationPending: context.handler.isControlUiDeviceAuthMigrationPending?.(),
   });

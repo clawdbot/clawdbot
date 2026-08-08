@@ -13,6 +13,14 @@ export const terminalPanelStyles = css`
     bottom: 0;
     --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
   }
+  .tp--main {
+    /* Main mode owns the content region; later sibling docks may overlay it. */
+    top: var(--shell-topbar-height, 0);
+    left: var(--shell-nav-width, 0);
+    right: 0;
+    bottom: 0;
+    --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
+  }
   .tp--fullscreen {
     inset: 0;
   }
@@ -22,6 +30,11 @@ export const terminalPanelStyles = css`
   .tp-icon.is-active {
     color: var(--text, #d7dae0);
     background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+  }
+  .tp-dock-modes {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
   .tp-session-picker {
     position: relative;

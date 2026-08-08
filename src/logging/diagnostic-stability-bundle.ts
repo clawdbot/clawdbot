@@ -10,6 +10,7 @@ import type {
   DiagnosticMemoryPressureEvent,
   DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
@@ -246,15 +247,6 @@ function buildBundlePath(dir: string, now: Date, reason: string): string {
 
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
 }
 
 function readObject(value: unknown, label: string): Record<string, unknown> {
@@ -1234,7 +1226,7 @@ function listDiagnosticStabilityBundleFilesSync(
       })
       .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return [];
     }
     throw error;

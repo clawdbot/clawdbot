@@ -599,7 +599,9 @@ class SessionMenu extends OpenClawLightDomElement {
                 >
                 <span class="session-menu__text"
                   >${batch
-                    ? t("sessionsView.archiveSessionCount", { count })
+                    ? session.archived
+                      ? t("sessionsView.restoreSessionCount", { count })
+                      : t("sessionsView.archiveSessionCount", { count })
                     : session.archived
                       ? t("sessionsView.restoreSession")
                       : t("sessionsView.archiveSession")}</span

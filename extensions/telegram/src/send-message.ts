@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -35,9 +36,13 @@ import {
   withTelegramNativeQuoteFallback,
   type TelegramApiContext,
 } from "./send-context.js";
-import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
+import {
+  isTelegramPhotoLimitError,
+  isTelegramVoiceMessagesForbiddenError,
+} from "./send-error-predicates.js";
 import { createTelegramTextSender } from "./send-message-text.js";
 import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
+import { reportTelegramProviderDelivery } from "./send-outbound.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -89,12 +94,20 @@ async function sendMessageTelegramWithContext(
   const reportDelivery = async (
     messageId: string | number,
     deliveredChatId: string | number,
+    message: TelegramMessageLike,
     meta?: TelegramSendResult["meta"],
-  ) => {
-    await opts.onDeliveryResult?.({
-      messageId: String(messageId),
-      chatId: String(deliveredChatId),
+    kind?: "text" | "media",
+    onPrepared?: (delivery: TelegramSendResult) => void,
+  ): Promise<TelegramSendResult> => {
+    return await reportTelegramProviderDelivery({
+      message,
+      messageId,
+      fallbackChatId: deliveredChatId,
+      successfulSendThread: threadSpec,
       ...(meta ? { meta } : {}),
+      ...(kind ? { kind } : {}),
+      ...(onPrepared ? { onPrepared } : {}),
+      onDeliveryResult: opts.onDeliveryResult,
     });
   };
   const recordDeliveredPromptContext = async (
@@ -288,7 +301,11 @@ async function sendMessageTelegramWithContext(
         plainCaption: htmlCaption ? plainCaption : undefined,
         ...(label === "photo"
           ? { shouldLog: (error: unknown) => !isTelegramPhotoLimitError(error) }
-          : {}),
+          : label === "voice"
+            ? {
+                shouldLog: (error: unknown) => !isTelegramVoiceMessagesForbiddenError(error),
+              }
+            : {}),
         send: (requestParams, shouldLog) =>
           withTelegramNativeQuoteFallback({
             label,
@@ -316,6 +333,22 @@ async function sendMessageTelegramWithContext(
       deliveredCaption = delivery.result.deliveredCaption;
       deliveredMediaSender = delivery.sender;
     } catch (error) {
+      if (
+        mediaSender.label === "voice" &&
+        isTelegramVoiceMessagesForbiddenError(error) &&
+        text.trim()
+      ) {
+        logVerbose(
+          "telegram sendVoice forbidden by recipient privacy settings; falling back to text",
+        );
+        const textResult = await sendChunkedText(text, "voice fallback text send");
+        recordChannelActivity({
+          channel: "telegram",
+          accountId: account.accountId,
+          direction: "outbound",
+        });
+        return textResult;
+      }
       opts.promptContextProjectionPlan?.cursor.invalidate();
       throw error;
     }
@@ -324,16 +357,35 @@ async function sendMessageTelegramWithContext(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
-    let mediaReported = false;
+    let mediaDeliveryResult: TelegramSendResult | undefined;
     let mediaPromptRecorded = false;
-    const recordMediaDelivery = async (finalPart: boolean, hasInlineKeyboard: boolean) => {
-      if (!mediaReported) {
-        await reportDelivery(mediaMessageId, resolvedChatId, {
-          ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
-          telegramHasInlineKeyboard: hasInlineKeyboard,
+    const reportMediaDelivery = async (hasInlineKeyboard: boolean) => {
+      try {
+        mediaDeliveryResult = await reportDelivery(
+          mediaMessageId,
+          resolvedChatId,
+          result,
+          {
+            ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
+            telegramHasInlineKeyboard: hasInlineKeyboard,
+          },
+          "media",
+          (delivery) => {
+            mediaDeliveryResult = delivery;
+          },
+        );
+      } catch (error) {
+        if (isChannelPartialDeliveryError(error)) {
+          throw error;
+        }
+        throw createChannelPartialDeliveryError(error, {
+          messageIds: [String(mediaMessageId)],
+          ...(mediaDeliveryResult?.receipt ? { receipt: mediaDeliveryResult.receipt } : {}),
+          visibleReplySent: true,
         });
-        mediaReported = true;
       }
+    };
+    const recordMediaPromptContext = async (finalPart: boolean) => {
       if (!mediaPromptRecorded) {
         await recordDeliveredPromptContext(
           {
@@ -349,8 +401,9 @@ async function sendMessageTelegramWithContext(
         mediaPromptRecorded = true;
       }
     };
+    await reportMediaDelivery(!needsSeparateText && Boolean(replyMarkup));
     if (!needsSeparateText) {
-      await recordMediaDelivery(true, Boolean(replyMarkup));
+      await recordMediaPromptContext(true);
     }
     logTelegramOutboundSendOk({
       accountId: account.accountId,
@@ -375,7 +428,7 @@ async function sendMessageTelegramWithContext(
       try {
         textResult = await sendChunkedText(followUpText, "text follow-up send", {
           replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
-          beforeFirstAccepted: () => recordMediaDelivery(false, false),
+          beforeFirstAccepted: () => recordMediaPromptContext(false),
         });
       } catch (error) {
         if (isTelegramEmptyContentError(error)) {
@@ -391,16 +444,29 @@ async function sendMessageTelegramWithContext(
               keyboardError = editError;
             }
           }
-          await recordMediaDelivery(true, hasInlineKeyboard);
+          await recordMediaPromptContext(true);
           if (keyboardError !== undefined) {
             throw createChannelPartialDeliveryError(keyboardError, {
               messageIds: [String(mediaMessageId)],
+              ...(mediaDeliveryResult?.receipt ? { receipt: mediaDeliveryResult.receipt } : {}),
               visibleReplySent: true,
             });
           }
-          return { messageId: String(mediaMessageId), chatId: resolvedChatId };
+          const finalMediaResult = mediaDeliveryResult ?? {
+            messageId: String(mediaMessageId),
+            chatId: resolvedChatId,
+          };
+          return hasInlineKeyboard
+            ? {
+                ...finalMediaResult,
+                meta: {
+                  ...finalMediaResult.meta,
+                  telegramHasInlineKeyboard: true,
+                },
+              }
+            : finalMediaResult;
         }
-        await recordMediaDelivery(false, false);
+        await recordMediaPromptContext(false);
         const textMessageIds = isChannelPartialDeliveryError(error)
           ? (error.deliveryResult.messageIds ?? [])
           : [];
@@ -411,11 +477,11 @@ async function sendMessageTelegramWithContext(
       }
       const mediaReplyToId = resolveAcceptedReplyToMessageId(acceptedMediaParams)?.toString();
       const receipt = createMessageReceiptFromOutboundResults({
-        results: [{ messageId: String(mediaMessageId), chatId: resolvedChatId }, textResult],
+        results: [
+          mediaDeliveryResult ?? { messageId: String(mediaMessageId), chatId: resolvedChatId },
+          textResult,
+        ],
         kind: "text",
-        ...(acceptedMediaParams?.message_thread_id !== undefined
-          ? { threadId: String(acceptedMediaParams.message_thread_id) }
-          : {}),
       });
       if (mediaReplyToId) {
         receipt.replyToId = mediaReplyToId;
@@ -436,7 +502,13 @@ async function sendMessageTelegramWithContext(
       };
     }
 
-    return { messageId: String(mediaMessageId), chatId: resolvedChatId };
+    return mediaDeliveryResult?.receipt
+      ? {
+          messageId: mediaDeliveryResult.messageId,
+          chatId: mediaDeliveryResult.chatId,
+          receipt: mediaDeliveryResult.receipt,
+        }
+      : { messageId: String(mediaMessageId), chatId: resolvedChatId };
   }
 
   if (!text || !text.trim()) {

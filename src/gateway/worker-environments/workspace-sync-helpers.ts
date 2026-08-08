@@ -57,7 +57,10 @@ export function workspaceSyncError(result: SpawnResult): Error {
   );
 }
 
-export function workerWorkspaceRsyncRemoteCommand(prepared: PreparedWorkerSsh): string {
+export function workerWorkspaceRsyncRemoteCommand(
+  prepared: PreparedWorkerSsh,
+  port = prepared.port,
+): string {
   return workerSshRemoteCommand([
     "ssh",
     ...workerSshOptions(prepared, { forwarding: "disabled" }),
@@ -65,13 +68,14 @@ export function workerWorkspaceRsyncRemoteCommand(prepared: PreparedWorkerSsh): 
     "-x",
     "-T",
     "-p",
-    String(prepared.port),
+    String(port),
   ]);
 }
 
 export function workerWorkspaceSshArgv(
   prepared: PreparedWorkerSsh,
   remoteArgv: readonly string[],
+  port = prepared.port,
 ): string[] {
   return [
     "ssh",
@@ -80,7 +84,7 @@ export function workerWorkspaceSshArgv(
     "-x",
     "-T",
     "-p",
-    String(prepared.port),
+    String(port),
     "--",
     prepared.sshTarget,
     workerSshRemoteCommand(remoteArgv),
@@ -97,6 +101,7 @@ async function resolveRemoteWorkspaceBaseManifest(
     throw new Error("Worker workspace base manifest reference is invalid");
   }
   const resolved = await runWorkspaceCommand({
+    transportRetry: "idempotent",
     argv: [
       "node",
       "-e",
@@ -137,6 +142,7 @@ export async function verifyRemoteWorkspaceManifest(params: {
 }): Promise<void> {
   const expectedDigest = params.expectedRef.slice("sha256:".length);
   const verified = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
     argv: [
       "node",
       "-e",

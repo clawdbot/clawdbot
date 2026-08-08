@@ -1,7 +1,6 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_LIVE_EVENT_BYTES = 32 * 1024;
@@ -310,16 +309,18 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
     if (event.type === "agent_end") {
       lifecycleFinished = true;
-      const lastAssistant = event.messages
-        .toReversed()
-        .find((message): message is AssistantMessage => message.role === "assistant");
+      const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+      const terminal = {
+        startedAt,
+        endedAt: Date.now(),
+        ...(lastAssistant ? { stopReason: lastAssistant.stopReason } : {}),
+      };
       if (lastAssistant?.stopReason === "error") {
         terminalLiveEvent = {
           kind: "lifecycle",
           payload: {
             phase: "error",
-            startedAt,
-            endedAt: Date.now(),
+            ...terminal,
             error: lastAssistant.errorMessage ?? "Worker inference failed.",
             fallbackExhaustedFailure: true,
           },
@@ -329,16 +330,14 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           kind: "lifecycle",
           payload: {
             phase: "end",
-            startedAt,
-            endedAt: Date.now(),
-            stopReason: "aborted",
+            ...terminal,
             aborted: true,
           },
         };
       } else {
         terminalLiveEvent = {
           kind: "lifecycle",
-          payload: { phase: "end", startedAt, endedAt: Date.now() },
+          payload: { phase: "end", ...terminal },
         };
       }
     }

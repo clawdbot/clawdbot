@@ -476,7 +476,6 @@ type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   constructor(
     private cfg: OpenClawConfig,
-    private accountId: string,
     private logger?: Logger,
   ) {
     super();
@@ -501,7 +500,6 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
         const logger = this.logger ?? discordEventQueueLog;
         const count = await closeDiscordThreadSessions({
           cfg: this.cfg,
-          accountId: this.accountId,
           threadId,
         });
         if (count > 0) {
@@ -541,7 +539,6 @@ export class DiscordThreadDeleteListener extends ThreadDeleteListener {
         });
         const count = await closeDiscordThreadSessions({
           cfg: this.cfg,
-          accountId: this.accountId,
           threadId,
         });
         if (count > 0) {

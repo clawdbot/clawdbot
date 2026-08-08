@@ -8,12 +8,14 @@ class FakeSocket {
   readonly sent: unknown[] = [];
   closed = false;
   closeCode?: number;
+  closeReason?: string;
   send(data: string): void {
     this.sent.push(JSON.parse(data));
   }
-  close(code?: number): void {
+  close(code?: number, reason?: string): void {
     this.closed = true;
     this.closeCode = code;
+    this.closeReason = reason;
   }
   /** Frames of a given method (client CDP responses/events). */
   frames(): Array<Record<string, unknown>> {
@@ -572,6 +574,113 @@ describe("ExtensionRelayBridge", () => {
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     expect(socket.closed).toBe(true);
     expect(bridge.extensionConnected).toBe(false);
+  });
+
+  it("keeps the active extension while a candidate is pending, malformed, or closed", () => {
+    const bridge = new ExtensionRelayBridge();
+    const active = wireExtension(bridge);
+    sendHello(active.handlers);
+
+    const pendingSocket = new FakeSocket();
+    const pending = bridge.attachExtensionSocket(pendingSocket);
+    expect(active.socket.closed).toBe(false);
+    expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
+
+    pending.onClose();
+    sendHello(pending);
+    expect(bridge.extensionConnected).toBe(true);
+    expect(active.socket.closed).toBe(false);
+
+    const malformedSocket = new FakeSocket();
+    const malformed = bridge.attachExtensionSocket(malformedSocket);
+    malformed.onMessage(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "candidate",
+        browserVersion: "Chrome/145.0.0.0",
+        extensionVersion: "2.0.0",
+      }),
+    );
+    expect(malformedSocket).toMatchObject({
+      closed: true,
+      closeCode: 4001,
+      closeReason: "expected valid hello",
+    });
+    expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
+    expect(active.socket.closed).toBe(false);
+  });
+
+  it("replaces the active extension only after the candidate sends a valid hello", () => {
+    const bridge = new ExtensionRelayBridge();
+    const active = wireExtension(bridge);
+    sendHello(active.handlers);
+
+    const candidateSocket = new FakeSocket();
+    const candidate = bridge.attachExtensionSocket(candidateSocket);
+    sendHello(candidate, [
+      { tabId: 2, url: "https://candidate.example", title: "Candidate", active: true },
+    ]);
+
+    expect(active.socket).toMatchObject({
+      closed: true,
+      closeCode: 4000,
+      closeReason: "replaced by newer extension connection",
+    });
+    expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
+    expect(bridge.sharedTabs()).toEqual([
+      { tabId: 2, url: "https://candidate.example", title: "Candidate", active: true },
+    ]);
+
+    active.handlers.onClose();
+    expect(bridge.extensionConnected).toBe(true);
+    expect(bridge.sharedTabs()).toHaveLength(1);
+  });
+
+  it("rejects an older candidate when a newer candidate promotes first", () => {
+    const bridge = new ExtensionRelayBridge();
+    const active = wireExtension(bridge);
+    sendHello(active.handlers);
+
+    const firstSocket = new FakeSocket();
+    const first = bridge.attachExtensionSocket(firstSocket);
+    const secondSocket = new FakeSocket();
+    const second = bridge.attachExtensionSocket(secondSocket);
+    expect(active.socket.closed).toBe(false);
+
+    second.onMessage(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "second",
+        browserVersion: "Chrome/146.0.0.0",
+        extensionVersion: "2.0.0",
+        tabs: [],
+      }),
+    );
+    expect(active.socket.closed).toBe(true);
+    expect(firstSocket.closed).toBe(false);
+    expect(secondSocket.closed).toBe(false);
+    expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
+
+    first.onMessage(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "first",
+        browserVersion: "Chrome/145.0.0.0",
+        extensionVersion: "2.0.0",
+        tabs: [],
+      }),
+    );
+    expect(firstSocket).toMatchObject({
+      closed: true,
+      closeCode: 4000,
+      closeReason: "superseded by newer extension connection",
+    });
+    expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
+
+    first.onClose();
+    active.handlers.onClose();
+    expect(bridge.extensionConnected).toBe(true);
+    expect(secondSocket.closed).toBe(false);
   });
 
   it("answers the Puppeteer connect bootstrap without protocol errors", async () => {

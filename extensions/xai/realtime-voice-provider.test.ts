@@ -776,6 +776,60 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
   it.each([
     {
+      name: "non-array output",
+      output: { unexpected: true },
+      expectedTranscript: undefined,
+    },
+    {
+      name: "a null output item beside a valid message",
+      output: [
+        null,
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Valid terminal text" }],
+        },
+      ],
+      expectedTranscript: "Valid terminal text",
+    },
+    {
+      name: "null message content beside a valid part",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [null, { type: "output_audio", transcript: "Valid terminal audio" }],
+        },
+      ],
+      expectedTranscript: "Valid terminal audio",
+    },
+  ])("continues after malformed terminal output: $name", async ({ output, expectedTranscript }) => {
+    const onTranscript = vi.fn();
+    const bridge = createTestBridge({ onTranscript });
+    const socket = await openRealtimeBridge(bridge);
+
+    socket.emitServer({ type: "response.created" });
+    bridge.sendUserMessage?.("Continue after malformed terminal output.");
+    socket.emitServer({ type: "response.done", response: { status: "completed", output } });
+
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Continue after malformed terminal output." }],
+        },
+      },
+      { type: "response.create" },
+    ]);
+    expect(onTranscript.mock.calls).toEqual(
+      expectedTranscript ? [["assistant", expectedTranscript, true]] : [],
+    );
+  });
+
+  it.each([
+    {
       name: "lets server VAD own interruption before an audio item exists",
       hasAudio: false,
       timestamp: 1000,

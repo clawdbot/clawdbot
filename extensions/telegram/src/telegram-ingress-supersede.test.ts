@@ -233,6 +233,52 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(true);
   });
 
+  it("does not supersede when a bot_command entity appears inside ordinary text", async () => {
+    const ourBotAuth = {
+      ...auth,
+      botUsername: "mybot",
+    };
+    const shouldSupersedeOurBot = createShouldSupersedeTelegramSpooledPending(ourBotAuth);
+    const commandText = "/deploy@mybot";
+    const ordinaryText = `Please run ${commandText} after this finishes`;
+    const ordinaryMessage = messageUpdate({
+      updateId: 2,
+      text: ordinaryText,
+      senderId: OWNER_ID,
+      entities: [
+        {
+          type: "bot_command",
+          offset: ordinaryText.indexOf(commandText),
+          length: commandText.length,
+        },
+      ],
+    });
+    const ordinaryCaption = {
+      update_id: 3,
+      message: {
+        caption: ordinaryText,
+        caption_entities: [
+          {
+            type: "bot_command",
+            offset: ordinaryText.indexOf(commandText),
+            length: commandText.length,
+          },
+        ],
+        from: { id: Number(OWNER_ID) },
+        chat: { id: Number(OWNER_ID), type: "private" },
+      },
+    };
+
+    for (const update of [ordinaryMessage, ordinaryCaption]) {
+      expect(
+        await shouldSupersedeOurBot(
+          record(String(update.update_id), update),
+          claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("does not supersede bot_command entities addressed to another bot", async () => {
     const ourBotAuth = {
       ...auth,

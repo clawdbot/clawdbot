@@ -1,6 +1,7 @@
 /** Tests live model switching behavior in active agent command sessions. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -247,6 +248,10 @@ vi.mock("./main-session-recovery-store.js", () => ({
 
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+}));
+
+vi.mock("./runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
 }));
 
 // Harness selection has dedicated coverage; this command suite registers no auto harnesses.
@@ -753,12 +758,7 @@ function setupAcpSession(): void {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -1163,6 +1163,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "claude",
       configuredAuthProfileId: "anthropic:verified",
     });
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userLockedAuthProfileId: undefined }),
+    );
   });
 
   it("retries a same-model switch with the runtime carried by the error", async () => {
@@ -1435,6 +1438,41 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.any(String),
       "post-restart-generation",
     );
+  });
+
+  it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const secret = ["sk", "strict-delivery-secret-value"].join("-");
+    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+      (
+        params as {
+          onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
+        }
+      ).onDeliveryResult?.({
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: `Authorization: Bearer ${secret}`,
+          target: "discord:dm:private",
+        },
+      });
+      throw new Error("strict delivery failed");
+    });
+
+    await expect(runDiscordDelivery()).rejects.toThrow("strict delivery failed");
+
+    const lifecycleError = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
+    expect(lifecycleError?.data?.terminalDelivery).toEqual({
+      status: "failed",
+      resultCount: 0,
+    });
+    for (const field of ["stopReason", "terminalReceipt", "terminalReply"]) {
+      expect(lifecycleError?.data).not.toHaveProperty(field);
+    }
+    expect(JSON.stringify(lifecycleError)).not.toContain(secret);
+    expect(JSON.stringify(lifecycleError)).not.toContain("discord:dm:private");
   });
 
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
@@ -4129,6 +4167,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(capturedAuthProfileProvider).toBe("codex-cli");
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userLockedAuthProfileId: "openai:work" }),
+    );
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
   });
 

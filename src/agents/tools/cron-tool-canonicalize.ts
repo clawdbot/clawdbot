@@ -4,6 +4,7 @@
  * Recovers flat or partial model/tool inputs into the structured cron job/patch shape.
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
@@ -73,10 +74,6 @@ function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KIND
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
   return value === "systemEvent" || value === "agentTurn" || value === "script";
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function isStringArrayOrNull(value: unknown): boolean {

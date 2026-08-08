@@ -8,7 +8,7 @@ import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, type CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { browserCloseTabByRawTargetId } from "./client.js";
 import type { BrowserTabOwnership } from "./client.types.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import {
   type CleanupKind,
@@ -78,6 +78,9 @@ type DurableTab = DurableRecord & {
 
 type TrackedTab = VolatileTab | DurableTab;
 type DurableOwnership = Extract<BrowserTabOwnership, { status: "durable" }>;
+type DurableCleanupResult =
+  | CloseTrackedCdpTargetResult
+  | { status: "unavailable"; reason: "extension-relay-unavailable" };
 type CloseTab = (tab: {
   targetId: string;
   nativeTargetId?: string;
@@ -90,6 +93,7 @@ type CloseParams = {
     tab: DurableTab,
     options: { shouldClose: () => boolean },
   ) => Promise<CloseTrackedCdpTargetResult>;
+  getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
   onWarn?: (message: string) => void;
 };
 
@@ -473,12 +477,19 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
 async function closeCurrentDurableTab(
   tab: DurableTab,
   shouldClose: () => boolean,
-): Promise<CloseTrackedCdpTargetResult> {
-  const cfg = getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null,
+): Promise<DurableCleanupResult> {
+  let resolved = getResolvedBrowserConfig?.();
+  if (!resolved) {
+    const cfg = getRuntimeConfig();
+    resolved = resolveBrowserConfig(cfg.browser, cfg);
+  }
   const profile = resolveProfile(resolved, tab.profile);
   if (!profile?.cdpUrl) {
     return { status: "ownership-mismatch" };
+  }
+  if (profile.driver === "extension" && !resolved.extensionRelayInternalTokens[profile.name]) {
+    return { status: "unavailable", reason: "extension-relay-unavailable" };
   }
   const cdpControlPolicy = resolveCdpControlPolicy(profile, resolved.ssrfPolicy);
   return await closeTrackedCdpTarget({
@@ -504,7 +515,7 @@ async function performDurableCleanup(
     return 0;
   }
   const shouldClose = () => ownsCleanupAttempt(tab);
-  let outcome: CloseTrackedCdpTargetResult;
+  let outcome: DurableCleanupResult;
   try {
     if (params.closeDurableTab) {
       outcome = await params.closeDurableTab(tab, { shouldClose });
@@ -519,7 +530,7 @@ async function performDurableCleanup(
       });
       outcome = { status: "closed" };
     } else {
-      outcome = await closeCurrentDurableTab(tab, shouldClose);
+      outcome = await closeCurrentDurableTab(tab, shouldClose, params.getResolvedBrowserConfig);
     }
   } catch (error) {
     if (isIgnorableTabCloseError(error)) {
@@ -533,6 +544,12 @@ async function performDurableCleanup(
     return 0;
   }
   if (outcome.status === "unavailable") {
+    if (outcome.reason === "extension-relay-unavailable") {
+      params.onWarn?.(
+        `deferred tracked browser tab ${tab.nativeTargetId}: extension relay runtime unavailable`,
+      );
+      return 0;
+    }
     // A browser that never comes back leaves its rows unreachable forever: the
     // sweep re-claims them, fails ownership lookup, and defers again. Without an
     // age bound the namespace fills to its reject-new cap and every later

@@ -88,11 +88,17 @@ export function createDiscordMessageProgressRuntime(params: {
   const buildProgressSummaryLine = () => `-# ${progressReceipt.buildSummaryLine()}`;
 
   const replyOptions: Partial<ReplyOptions> = {
-    onAssistantMessageStart: draftPreview.draftStream ? handleAssistantMessageBoundary : undefined,
+    onAssistantMessageStart: draftPreview.draftStream
+      ? () => {
+          handleAssistantMessageBoundary();
+          return false;
+        }
+      : undefined,
     onReasoningEnd: draftPreview.draftStream
       ? () => {
           progressReceipt.closeReasoning();
           handleAssistantMessageBoundary();
+          return false;
         }
       : undefined,
     onQueuedFollowupAdmitted: draftPreview.draftStream
@@ -140,27 +146,27 @@ export function createDiscordMessageProgressRuntime(params: {
     narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
     onReasoningStream: async (payload) => {
       if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
-        return;
+        return false;
       }
       if (payload?.text) {
         progressReceipt.noteReasoning();
       }
       await params.reactions.controller.setThinking();
-      await draftPreview.pushReasoningProgress(payload?.text, {
+      return await draftPreview.pushReasoningProgress(payload?.text, {
         snapshot: payload?.isReasoningSnapshot === true,
       });
     },
     streamReasoningInNonStreamModes: reasoningWindowEnabled,
     onToolStart: async (payload) => {
       if (isProcessAborted(abortSignal)) {
-        return;
+        return false;
       }
       await params.reactions.maybeBindToToolReaction(payload);
       await params.reactions.controller.setTool(payload.name);
       if (payload.phase === "start") {
         progressReceipt.noteToolCall(payload.name);
       }
-      await draftPreview.pushToolEvent(payload);
+      return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
       if (isFailedProgress(payload)) {
@@ -174,38 +180,40 @@ export function createDiscordMessageProgressRuntime(params: {
           progressReceipt.noteCommentary(itemId, text);
         });
       }
-      await draftPreview.pushItemEvent(payload);
+      return await draftPreview.pushItemEvent(payload);
     },
     onPlanUpdate: async (payload) => {
       if (payload.phase === "update") {
-        await draftPreview.pushPlanProgress(payload.steps, {
+        return await draftPreview.pushPlanProgress(payload.steps, {
           explanation: payload.explanation,
         });
       }
+      return false;
     },
     onApprovalEvent: async (payload) => {
-      await draftPreview.pushApprovalEvent(payload);
+      return await draftPreview.pushApprovalEvent(payload);
     },
     onCommandOutput: async (payload) => {
       if (isFailedProgress(payload)) {
         return false;
       }
-      await draftPreview.pushCommandOutputEvent(payload);
-      return undefined;
+      return await draftPreview.pushCommandOutputEvent(payload);
     },
     onPatchSummary: async (payload) => {
-      await draftPreview.pushPatchEvent(payload);
+      return await draftPreview.pushPatchEvent(payload);
     },
     onCompactionStart: async () => {
       if (!isProcessAborted(abortSignal)) {
         await params.reactions.controller.setCompacting();
       }
+      return false;
     },
     onCompactionEnd: async () => {
       if (!isProcessAborted(abortSignal)) {
         params.reactions.controller.cancelPending();
         await params.reactions.controller.setThinking();
       }
+      return false;
     },
   };
 

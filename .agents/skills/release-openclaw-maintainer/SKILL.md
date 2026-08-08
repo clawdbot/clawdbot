@@ -742,7 +742,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`. If either cannot be injected, stop
   before starting those local long lanes and report the missing key.
 - Live credentialed channel QA is the GitHub Actions workflow
-  `QA-Lab - All Lanes` (`.github/workflows/qa-live-telegram-convex.yml`), not a
+  `QA-Lab - All Lanes` (`.github/workflows/qa-live-transports-convex.yml`), not a
   local substitute. Dispatch it from Actions against the release tag and wait
   for it to pass before npm preflight/publish readiness. Use a SHA only when it
   satisfies the workflow's secret-bearing trust gate: main ancestor or open PR

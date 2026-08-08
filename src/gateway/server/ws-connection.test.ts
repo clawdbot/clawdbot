@@ -15,16 +15,14 @@ const {
   attachGatewayWsMessageHandlerMock,
   attachWorkerWsMessageHandlerMock,
   broadcastPresenceSnapshotMock,
-  closeTalkRealtimeRelaySessionsForConnectionMock,
-  closeTalkTranscriptionRelaySessionsForConnectionMock,
+  cleanupTalkConnectionMock,
   touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   attachGatewayWsMessageHandlerMock: vi.fn(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   broadcastPresenceSnapshotMock: vi.fn(),
-  closeTalkRealtimeRelaySessionsForConnectionMock: vi.fn(),
-  closeTalkTranscriptionRelaySessionsForConnectionMock: vi.fn(),
+  cleanupTalkConnectionMock: vi.fn(),
   touchPresenceMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -42,12 +40,8 @@ vi.mock("../../infra/system-presence.js", () => ({
 vi.mock("./presence-events.js", () => ({
   broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
 }));
-vi.mock("../talk-realtime-relay.js", () => ({
-  closeTalkRealtimeRelaySessionsForConnection: closeTalkRealtimeRelaySessionsForConnectionMock,
-}));
-vi.mock("../talk-transcription-relay.js", () => ({
-  closeTalkTranscriptionRelaySessionsForConnection:
-    closeTalkTranscriptionRelaySessionsForConnectionMock,
+vi.mock("../talk-session-registry.js", () => ({
+  cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -102,8 +96,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
-    closeTalkRealtimeRelaySessionsForConnectionMock.mockReset();
-    closeTalkTranscriptionRelaySessionsForConnectionMock.mockReset();
+    cleanupTalkConnectionMock.mockReset();
     touchPresenceMock.mockReset();
     upsertPresenceMock.mockReset();
   });
@@ -275,7 +268,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.ping).toHaveBeenCalledOnce();
   });
 
-  it("releases connection-owned Talk relays when a gateway connection closes", async () => {
+  it("runs connection-owned Talk cleanup when a gateway connection closes", async () => {
     const { passed, socket } = await connectTestWs();
     const handlerParams = passed as {
       connId: string;
@@ -292,13 +285,10 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     socket.emit("close", 1000, Buffer.from("done"));
 
-    expect(closeTalkRealtimeRelaySessionsForConnectionMock).toHaveBeenCalledOnce();
-    expect(closeTalkRealtimeRelaySessionsForConnectionMock).toHaveBeenCalledWith(
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledOnce();
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledWith(
       handlerParams.connId,
-    );
-    expect(closeTalkTranscriptionRelaySessionsForConnectionMock).toHaveBeenCalledOnce();
-    expect(closeTalkTranscriptionRelaySessionsForConnectionMock).toHaveBeenCalledWith(
-      handlerParams.connId,
+      expect.objectContaining({ warn: expect.any(Function) }),
     );
   });
 

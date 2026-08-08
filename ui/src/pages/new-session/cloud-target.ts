@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import type {
   EnvironmentsListResult,
@@ -7,7 +6,7 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { readDraftCloudProfiles } from "./discovery.ts";
@@ -70,7 +69,7 @@ async function readPlacement(
     if (!isAmbiguousDispatchError(error)) {
       return {
         status: "rejected",
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
       };
     }
     return { status: "unavailable" };
@@ -96,7 +95,7 @@ async function cancelActivePlacement(
     await client.request("environments.destroy", { environmentId });
     return undefined;
   } catch (error) {
-    return formatErrorMessage(error, { redact: redactToolDetail });
+    return formatUiError(error);
   }
 }
 
@@ -232,7 +231,7 @@ export async function deleteCloudDraftSession(
     await client.request("sessions.delete", { key, agentId, deleteTranscript: true });
     return undefined;
   } catch (error) {
-    return formatErrorMessage(error, { redact: redactToolDetail });
+    return formatUiError(error);
   }
 }
 
@@ -334,7 +333,7 @@ export async function startCloudInitialTurn(
         isCurrent,
       );
     } catch (error) {
-      dispatchError = formatErrorMessage(error, { redact: redactToolDetail });
+      dispatchError = formatUiError(error);
       if (!isAmbiguousDispatchError(error)) {
         return { status: "dispatch-rejected", error: dispatchError };
       }
@@ -433,13 +432,13 @@ export async function startCloudInitialTurn(
         ? { status: "cleanup-rejected", error: cleanupError, messageId }
         : {
             status: "send-definitive-rejected",
-            error: formatErrorMessage(error, { redact: redactToolDetail }),
+            error: formatUiError(error),
             messageId,
           };
     }
     return {
       status: "send-rejected",
-      error: formatErrorMessage(error, { redact: redactToolDetail }),
+      error: formatUiError(error),
       messageId,
     };
   }

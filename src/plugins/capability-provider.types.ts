@@ -52,6 +52,8 @@ export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 export type WorkerSshEndpoint = {
   host: string;
   port: number;
+  /** Up to 10 ordered unique integer ports (1..65535) after `port`; excludes the primary. */
+  fallbackPorts?: readonly number[];
   user: string;
   /** OpenSSH public host-key line obtained from trusted provisioning output. */
   hostKey: string;

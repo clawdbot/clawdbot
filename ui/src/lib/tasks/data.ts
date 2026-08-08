@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as optionalString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import {
   TasksCancelResultSchema,
@@ -19,10 +20,6 @@ type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 const STATUS_LABEL_KEYS = {
   queued: "tasksPage.status.queued",

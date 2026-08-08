@@ -1,5 +1,4 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { expectDefined } from "@openclaw/normalization-core";
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -525,8 +524,8 @@ describe("openai transport stream", () => {
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
   });
 
-  it("strips nested encrypted reasoning content from retry payloads without changing ids", () => {
-    const params = {
+  it("retries mixed replay without reasoning first and preserves compaction on success", async () => {
+    const request = {
       model: "gpt-5.5",
       stream: true,
       input: [
@@ -538,6 +537,11 @@ describe("openai transport stream", () => {
           nested: { encrypted_content: "nested-ciphertext", keep: "value" },
         },
         {
+          type: "compaction",
+          id: "cmp_prior",
+          encrypted_content: "compaction-ciphertext",
+        },
+        {
           type: "function_call",
           id: "fc_prior",
           call_id: "call_abc",
@@ -546,23 +550,192 @@ describe("openai transport stream", () => {
         },
       ],
     };
+    const recoveredStream = streamChunks([]);
+    const recoveredResponse = new Response(null, { status: 200 });
+    const create = vi
+      .fn()
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockRejectedValue(
+          Object.assign(new Error("invalid reasoning"), {
+            code: "invalid_encrypted_content",
+          }),
+        ),
+      })
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockResolvedValue({
+          data: recoveredStream,
+          response: recoveredResponse,
+        }),
+      });
+    const onCompactionRejected = vi.fn();
 
-    const stripped = testing.stripResponsesRequestEncryptedContent(
-      params as never,
-    ) as typeof params;
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: request as never,
+        requestOptions: undefined,
+        model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
+        onCompactionRejected,
+      }),
+    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
 
-    expect(stripped).not.toBe(params);
-    expect(stripped.input[0]).toMatchObject({
+    expect(create).toHaveBeenCalledTimes(2);
+    const retry = create.mock.calls[1]?.[0] as typeof request;
+    expect(retry.input[0]).toMatchObject({
       type: "reasoning",
       id: "rs_prior",
       summary: [{ type: "summary_text", text: "checked" }],
       nested: { keep: "value" },
     });
-    expect(stripped.input[0]).not.toHaveProperty("encrypted_content");
-    expect(
-      expectDefined(stripped.input[0], "stripped.input[0] test invariant").nested,
-    ).not.toHaveProperty("encrypted_content");
-    expect(stripped.input[1]).toEqual(params.input[1]);
+    expect(retry.input[0]).not.toHaveProperty("encrypted_content");
+    expect(retry.input[0]?.nested).not.toHaveProperty("encrypted_content");
+    expect(retry.input[1]).toEqual(request.input[1]);
+    expect(onCompactionRejected).not.toHaveBeenCalled();
+  });
+
+  it("removes compaction only after a compaction-preserving retry rejects it", async () => {
+    const request = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        { type: "reasoning", encrypted_content: "reasoning-ciphertext", summary: [] },
+        { type: "compaction", id: "cmp_prior", encrypted_content: "compaction-ciphertext" },
+      ],
+    };
+    const invalidEncryptedContent = () =>
+      Object.assign(new Error("invalid encrypted content"), {
+        code: "invalid_encrypted_content",
+      });
+    const recoveredStream = streamChunks([]);
+    const recoveredResponse = new Response(null, { status: 200 });
+    const create = vi
+      .fn()
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent()) })
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent()) })
+      .mockReturnValueOnce({
+        withResponse: vi.fn().mockResolvedValue({
+          data: recoveredStream,
+          response: recoveredResponse,
+        }),
+      });
+    const onCompactionRejected = vi.fn();
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: request as never,
+        requestOptions: undefined,
+        model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
+        onCompactionRejected,
+      }),
+    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(create.mock.calls[1]?.[0])).not.toContain("reasoning-ciphertext");
+    expect(JSON.stringify(create.mock.calls[1]?.[0])).toContain("compaction-ciphertext");
+    expect(JSON.stringify(create.mock.calls[2]?.[0])).not.toContain("compaction-ciphertext");
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
+  });
+
+  it("does not tombstone compaction when the final recovery attempt fails", async () => {
+    const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
+      code: "invalid_encrypted_content",
+    });
+    const finalFailure = new Error("final recovery failed");
+    const create = vi
+      .fn()
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent) })
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent) })
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(finalFailure) });
+    const onCompactionRejected = vi.fn();
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: {
+          model: "gpt-5.5",
+          stream: true,
+          input: [
+            { type: "reasoning", encrypted_content: "reasoning", summary: [] },
+            { type: "compaction", encrypted_content: "compaction" },
+          ],
+        } as never,
+        requestOptions: undefined,
+        model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
+        onCompactionRejected,
+      }),
+    ).rejects.toBe(finalFailure);
+    expect(onCompactionRejected).not.toHaveBeenCalled();
+  });
+
+  it("does not advance past an unrelated error from the reasoning-free attempt", async () => {
+    const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
+      code: "invalid_encrypted_content",
+    });
+    const unrelatedFailure = new OpenAI.RateLimitError(
+      429,
+      { code: "rate_limit_exceeded", message: "rate limited", type: "rate_limit_error" },
+      undefined,
+      new Headers(),
+    );
+    const create = vi
+      .fn()
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(invalidEncryptedContent) })
+      .mockReturnValueOnce({ withResponse: vi.fn().mockRejectedValue(unrelatedFailure) });
+    const onCompactionRejected = vi.fn();
+
+    await expect(
+      testing.createResponsesStreamWithEncryptedContentRetry({
+        client: { responses: { create } } as never,
+        request: {
+          model: "gpt-5.5",
+          stream: true,
+          input: [
+            { type: "reasoning", encrypted_content: "reasoning", summary: [] },
+            { type: "compaction", encrypted_content: "compaction" },
+          ],
+        } as never,
+        requestOptions: undefined,
+        model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
+        onCompactionRejected,
+      }),
+    ).rejects.toBe(unrelatedFailure);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).not.toHaveBeenCalled();
+  });
+
+  it("does not retry encrypted-content failures emitted after stream creation", async () => {
+    const streamFailure = Object.assign(new Error("stream rejected encrypted content"), {
+      code: "invalid_encrypted_content",
+    });
+    const responseStream = (async function* () {
+      yield { type: "response.created", response: { id: "resp_stream" } };
+      throw streamFailure;
+    })();
+    const create = vi.fn().mockReturnValue({
+      withResponse: vi.fn().mockResolvedValue({
+        data: responseStream,
+        response: new Response(null, { status: 200 }),
+      }),
+    });
+    const result = await testing.createResponsesStreamWithEncryptedContentRetry({
+      client: { responses: { create } } as never,
+      request: {
+        model: "gpt-5.5",
+        stream: true,
+        input: [{ type: "reasoning", encrypted_content: "reasoning", summary: [] }],
+      } as never,
+      requestOptions: undefined,
+      model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
+    });
+
+    await expect(async () => {
+      for await (const event of result.stream) {
+        // Consume until the provider stream rejects.
+        void event;
+      }
+    }).rejects.toBe(streamFailure);
+    expect(create).toHaveBeenCalledOnce();
   });
 
   it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {

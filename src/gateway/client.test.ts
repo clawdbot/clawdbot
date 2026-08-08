@@ -1,7 +1,8 @@
-// Gateway client tests cover WebSocket protocol negotiation, auth persistence,
-// proxy bypass setup, command dispatch, reconnect, and error handling.
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
+// Gateway client tests cover WebSocket protocol negotiation, auth persistence,
+// proxy bypass setup, command dispatch, reconnect, and error handling.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -25,8 +26,11 @@ type MockLoggingConfig = {
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unknown) => void> => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const clearOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const loadOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const storeOriginDeviceTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
 const readLoggingConfigMock = vi.hoisted(() =>
@@ -180,8 +184,11 @@ vi.mock("../infra/device-auth-store.js", async () => {
   return {
     ...actual,
     loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
+    loadOriginDeviceToken: (...args: unknown[]) => loadOriginDeviceTokenMock(...args),
     storeDeviceAuthToken: (...args: unknown[]) => storeDeviceAuthTokenMock(...args),
+    storeOriginDeviceToken: (...args: unknown[]) => storeOriginDeviceTokenMock(...args),
     clearDeviceAuthToken: (...args: unknown[]) => clearDeviceAuthTokenMock(...args),
+    clearOriginDeviceToken: (...args: unknown[]) => clearOriginDeviceTokenMock(...args),
   };
 });
 
@@ -222,12 +229,7 @@ function getLatestWs(): MockWebSocket {
   return ws;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,
@@ -1146,8 +1148,11 @@ describe("GatewayClient connect auth payload", () => {
     vi.useRealTimers();
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockReset();
+    clearOriginDeviceTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
+    loadOriginDeviceTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
+    storeOriginDeviceTokenMock.mockReset();
     readLoggingConfigMock.mockReset();
     readLoggingConfigMock.mockReturnValue(undefined);
     logDebugMock.mockClear();
@@ -1508,6 +1513,102 @@ describe("GatewayClient connect auth payload", () => {
       token: "shared-token",
     });
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("binds stored device auth to the exact gateway origin", () => {
+    loadOriginDeviceTokenMock.mockImplementation(({ gatewayScope }: { gatewayScope: string }) =>
+      gatewayScope === "wss://one.example/rpc"
+        ? { token: "origin-one-token", scopes: ["operator.read"] }
+        : null,
+    );
+    const first = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://one.example/rpc",
+    });
+
+    first.start();
+    const firstWs = getLatestWs();
+    firstWs.emitOpen();
+    emitConnectChallenge(firstWs);
+    expect(connectFrameFrom(firstWs)).toMatchObject({
+      token: "origin-one-token",
+      deviceToken: "origin-one-token",
+    });
+    first.stop();
+
+    const second = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://two.example/rpc",
+    });
+    second.start();
+    const secondWs = getLatestWs();
+    secondWs.emitOpen();
+    emitConnectChallenge(secondWs);
+    expect(connectFrameFrom(secondWs).token).toBeUndefined();
+    expect(connectFrameFrom(secondWs).deviceToken).toBeUndefined();
+    expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+    second.stop();
+  });
+
+  it("keeps explicit shared auth ahead of origin-scoped auth across reconnects", async () => {
+    loadOriginDeviceTokenMock.mockReturnValue({ token: "origin-token" });
+    const onReconnectPaused = vi.fn();
+    const client = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://one.example/rpc",
+      token: "explicit-token",
+      onReconnectPaused,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+
+    expect(connectFrameFrom(ws)).toMatchObject({ token: "explicit-token" });
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws,
+      connectId: connect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISMATCH",
+    });
+  });
+
+  it("stores hello-ok device tokens in the bound gateway origin", async () => {
+    const client = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://one.example/rpc",
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            deviceToken: "issued-origin-token",
+          },
+        },
+      }),
+    );
+
+    await waitForFast(() => {
+      expect(storeOriginDeviceTokenMock).toHaveBeenCalledWith({
+        gatewayScope: "wss://one.example/rpc",
+        deviceId: "device-1",
+        role: "operator",
+        token: "issued-origin-token",
+        scopes: ["operator.read"],
+        env: undefined,
+      });
+    });
+    expect(storeDeviceAuthTokenMock).not.toHaveBeenCalled();
     client.stop();
   });
 

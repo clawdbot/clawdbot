@@ -309,7 +309,7 @@ describe("release validation no-push transport", () => {
     expect(releaseHelper.with?.["persist-credentials"]).toBe(false);
   });
 
-  it("rejects every child whose workflow SHA differs from the parent workflow SHA", () => {
+  it("owns identified children before rejecting a mismatched workflow SHA", () => {
     const full = readWorkflow(FULL_RELEASE);
     for (const [jobName, stepName] of [
       ["normal_ci", "Dispatch and monitor CI"],
@@ -319,9 +319,31 @@ describe("release validation no-push transport", () => {
       ["performance", "Dispatch and monitor OpenClaw Performance"],
     ] as const) {
       const dispatch = step(job(full, jobName), stepName);
+      const dispatchRun = dispatch.run ?? "";
       expect(dispatch.env?.PARENT_WORKFLOW_SHA, jobName).toBe("${{ github.sha }}");
-      expect(dispatch.run, jobName).toContain('"$child_head_sha" != "$PARENT_WORKFLOW_SHA"');
-      expect(dispatch.run, jobName).toContain("expected parent workflow SHA");
+      expect(dispatchRun, jobName).toContain(
+        'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
+      );
+      expect(dispatchRun.match(/\.head_sha == \$head_sha/gu), jobName).toBeNull();
+      expect(dispatchRun, jobName).toContain('run_json="$(validate_child_run "$run_id")"');
+      expect(dispatchRun, jobName).toContain('active_child_run_id="$run_id"');
+      expect(dispatchRun, jobName).toContain("trap cancel_child EXIT INT TERM");
+      expect(
+        dispatchRun.indexOf('run_json="$(validate_child_run "$run_id")"'),
+        jobName,
+      ).toBeLessThan(dispatchRun.indexOf('active_child_run_id="$run_id"'));
+      expect(dispatchRun.indexOf('active_child_run_id="$run_id"'), jobName).toBeLessThan(
+        dispatchRun.indexOf("trap cancel_child EXIT INT TERM"),
+      );
+      expect(dispatchRun.indexOf("trap cancel_child EXIT INT TERM"), jobName).toBeLessThan(
+        dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'),
+      );
+      const shaMismatch = dispatchRun.slice(
+        dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'),
+        dispatchRun.indexOf("fail_fast_failed_jobs()"),
+      );
+      expect(shaMismatch, jobName).toContain("cancel_child");
+      expect(shaMismatch, jobName).toContain("trap - EXIT INT TERM");
     }
 
     const verify = step(job(full, "summary"), "Verify child workflow results");

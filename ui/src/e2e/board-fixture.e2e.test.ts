@@ -16,7 +16,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeBoardFixture = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const describeStandaloneMockServer =
+  chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 type FixtureProcess = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -74,7 +75,7 @@ async function startFixtureServer(): Promise<FixtureServer> {
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`board fixture server exited before startup\n${output}`);
+      throw new Error(`Control UI mock server exited before startup\n${output}`);
     }
     try {
       const response = await fetch(url);
@@ -86,7 +87,7 @@ async function startFixtureServer(): Promise<FixtureServer> {
   }
 
   child.kill("SIGTERM");
-  throw new Error(`timed out waiting for board fixture server\n${output}`);
+  throw new Error(`timed out waiting for Control UI mock server\n${output}`);
 }
 
 async function stopFixtureServer(server: FixtureServer | undefined): Promise<void> {
@@ -154,7 +155,7 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 let browser: Browser;
 let fixtureServer: FixtureServer;
 
-describeBoardFixture("standalone board fixture", () => {
+describeStandaloneMockServer("standalone Control UI mock server", () => {
   beforeAll(async () => {
     fixtureServer = await startFixtureServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
@@ -211,6 +212,36 @@ describeBoardFixture("standalone board fixture", () => {
       await expect.poll(() => page.locator("html").getAttribute("class")).toBe("wa-light");
     } finally {
       await context.close();
+    }
+  });
+
+  it("opens a visible catalog session with its transcript in chronological order", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.getByText("Release checklist sweep", { exact: true }).click();
+
+      const transcript = [
+        "Please sweep the release checklist for anything we missed.",
+        "The release checklist is complete and ready for review.",
+      ];
+      await Promise.all(transcript.map((text) => page.getByText(text, { exact: true }).waitFor()));
+
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-thread .chat-bubble")
+            .allTextContents()
+            .then((messages) => messages.map((message) => message.trim())),
+        )
+        .toEqual(transcript);
+      expect(
+        await page
+          .getByText("Cannot read properties of undefined (reading 'toReversed')", { exact: false })
+          .count(),
+      ).toBe(0);
+    } finally {
+      await page.close();
     }
   });
 });

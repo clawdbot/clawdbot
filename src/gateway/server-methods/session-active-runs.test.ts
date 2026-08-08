@@ -15,6 +15,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import {
   collectTrackedActiveSessionRuns,
+  hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
@@ -291,4 +292,52 @@ it("does not project an aborted embedded handle retained for cleanup as active",
   } finally {
     clearActiveEmbeddedRun(sessionId, handle, sessionKey);
   }
+});
+
+it("counts settled but still registered chat runs for a session key", () => {
+  const context = {
+    chatAbortControllers: new Map([
+      [
+        "run-finalizing",
+        {
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          projectSessionActive: false,
+          controlUiVisible: false,
+        },
+      ],
+      ["run-global-work", { sessionKey: "global", agentId: "work" }],
+    ]),
+  } as never;
+
+  expect(
+    hasRegisteredChatRunForSessionKey({
+      context,
+      sessionKey: "agent:main:main",
+      agentId: undefined,
+    }),
+  ).toBe(true);
+  expect(
+    hasRegisteredChatRunForSessionKey({
+      context,
+      sessionKey: "agent:other:other",
+      agentId: undefined,
+    }),
+  ).toBe(false);
+  expect(
+    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: "work" }),
+  ).toBe(true);
+  expect(
+    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: "other" }),
+  ).toBe(false);
+  expect(
+    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: undefined }),
+  ).toBe(true);
+  expect(
+    hasRegisteredChatRunForSessionKey({
+      context: {},
+      sessionKey: "agent:main:main",
+      agentId: undefined,
+    }),
+  ).toBe(false);
 });

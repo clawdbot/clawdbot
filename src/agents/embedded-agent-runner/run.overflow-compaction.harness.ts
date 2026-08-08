@@ -760,6 +760,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: mockedResolveContextEngine,
     resolveContextEngineOwnerPluginId: mockedResolveContextEngineOwnerPluginId,
+    resolveLogicalTurnContextEngines: async () => {
+      const engine = await mockedResolveContextEngine();
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    },
   }));
 
   vi.doMock("../harness/runtime-plugin.js", () => ({

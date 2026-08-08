@@ -580,7 +580,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("relays commentary-phase assistant text in parent progress mode by default", () => {
+  it("relays commentary-phase assistant text in explicit parent progress mode", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-default",
       parentSessionKey: "agent:main:main",
@@ -588,7 +588,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       agentId: "codex",
       cfg: {
         channels: {
-          discord: {},
+          discord: { streaming: { mode: "progress" } },
         },
       },
       deliveryContext: {
@@ -819,11 +819,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("uses Discord default progress mode for parent commentary", () => {
+  it("suppresses Discord parent progress commentary when streaming is unset", () => {
     const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-discord-default-progress",
+      runId: "run-discord-unset-streaming",
       parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-discord-default-progress",
+      childSessionKey: "agent:codex:acp:child-discord-unset-streaming",
       agentId: "codex",
       cfg: {
         channels: {
@@ -840,7 +840,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     emitAgentEvent({
-      runId: "run-discord-default-progress",
+      runId: "run-discord-unset-streaming",
       stream: "item",
       data: {
         itemId: "preamble-1",
@@ -850,7 +850,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(15);
 
-    expect(collectedTexts()).toEqual(["codex: Checking the app-server stream"]);
+    expect(collectedTexts()).toEqual([]);
     relay.dispose();
   });
 
