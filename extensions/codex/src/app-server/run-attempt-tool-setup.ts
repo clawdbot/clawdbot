@@ -15,6 +15,7 @@ import {
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -146,62 +147,64 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   });
   // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
   // Specs come from the session advertised-catalog cache so fingerprints stay stable.
-  const scopedMcpTools = await materializeRequesterScopedMcpToolsForHarnessRun({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    workspaceDir: effectiveWorkspace,
-    agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
-    cfg: params.config,
-    requesterSenderId: params.senderId,
-    agentAccountId: params.agentAccountId,
-    messageChannel: params.messageChannel ?? params.messageProvider,
-    reservedToolNames: [
-      ...tools.map((tool) => tool.name),
-      ...registeredTools.map((tool) => tool.name),
-    ],
-    toolsAllow: params.toolsAllow,
-    policyContext: {
-      config: params.config,
-      sessionKey: sandboxSessionKey,
-      runSessionKey:
-        params.sessionKey && params.sessionKey !== sandboxSessionKey
-          ? params.sessionKey
-          : undefined,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      agentId: sessionAgentId,
-      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
-      agentAccountId: params.agentAccountId,
-      messageProvider: params.messageProvider ?? params.messageChannel,
-      messageChannel: params.messageChannel,
-      chatType: params.chatType,
-      messageTo: params.messageTo,
-      messageThreadId: params.messageThreadId,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      memberRoleIds: params.memberRoleIds,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
-      modelProvider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.model.api,
-      modelContextWindowTokens: params.model.contextWindow,
-      modelHasVision: params.model.input?.includes("image") ?? false,
-      workspaceDir: effectiveWorkspace,
-      cwd: effectiveCwd ?? effectiveWorkspace,
-      sandboxToolPolicy: sandbox?.tools,
-    },
-    warn: (message) => embeddedAgentLog.warn(message),
-  });
+  const scopedMcpTools = params.factoryNativeAuthority
+    ? undefined
+    : await materializeRequesterScopedMcpToolsForHarnessRun({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: effectiveWorkspace,
+        agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+        cfg: params.config,
+        requesterSenderId: params.senderId,
+        agentAccountId: params.agentAccountId,
+        messageChannel: params.messageChannel ?? params.messageProvider,
+        reservedToolNames: [
+          ...tools.map((tool) => tool.name),
+          ...registeredTools.map((tool) => tool.name),
+        ],
+        toolsAllow: params.toolsAllow,
+        policyContext: {
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          runSessionKey:
+            params.sessionKey && params.sessionKey !== sandboxSessionKey
+              ? params.sessionKey
+              : undefined,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          agentId: sessionAgentId,
+          agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+          agentAccountId: params.agentAccountId,
+          messageProvider: params.messageProvider ?? params.messageChannel,
+          messageChannel: params.messageChannel,
+          chatType: params.chatType,
+          messageTo: params.messageTo,
+          messageThreadId: params.messageThreadId,
+          currentChannelId: params.currentChannelId,
+          currentMessagingTarget: params.currentMessagingTarget,
+          currentThreadTs: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          memberRoleIds: params.memberRoleIds,
+          spawnedBy: params.spawnedBy,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
+          modelProvider: params.provider,
+          modelId: params.modelId,
+          modelApi: params.model.api,
+          modelContextWindowTokens: params.model.contextWindow,
+          modelHasVision: params.model.input?.includes("image") ?? false,
+          workspaceDir: effectiveWorkspace,
+          cwd: effectiveCwd ?? effectiveWorkspace,
+          sandboxToolPolicy: sandbox?.tools,
+        },
+        warn: (message) => embeddedAgentLog.warn(message),
+      });
   // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
   // MCP tools exactly like every other dynamic tool. Filter both lists with the
   // same rule so execution and advertised specs stay name-aligned.
@@ -249,6 +252,17 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
+  if (params.factoryNativeAuthority) {
+    const expected = [...params.factoryNativeAuthority.authority.toolSurface.openClawDynamicTools];
+    const exposed = flattenCodexDynamicToolFunctions(toolBridge.specs)
+      .map((tool) => tool.name)
+      .toSorted();
+    if (JSON.stringify(exposed) !== JSON.stringify(expected.toSorted())) {
+      throw new Error(
+        `factory native Codex dynamic tool surface drifted: expected ${expected.join(",") || "none"}, received ${exposed.join(",") || "none"}`,
+      );
+    }
+  }
   return {
     tools: toolsWithScopedMcp,
     registeredTools: registeredWithScopedMcp,

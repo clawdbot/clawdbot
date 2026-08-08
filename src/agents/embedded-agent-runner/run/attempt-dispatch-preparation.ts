@@ -237,7 +237,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       skipPreparedUserTurnMessage: sessionPromptState.activePrompt.internal,
       apiKeyInfo: runtime.apiKeyInfo,
       runtimeAuthActive: runtime.runtimeAuthState !== null,
-      captureRuntimeArtifact: Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact),
+      captureRuntimeArtifact: Boolean(
+        params.onSuccessfulAuthBinding || expectedHarnessArtifact || params.factoryNativeAuthority,
+      ),
     },
     control: {
       lifecycleGeneration,

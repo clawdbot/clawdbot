@@ -296,8 +296,9 @@ function readStringParam(params: unknown, key: string): string | undefined {
   return normalizeOptionalString((params as Record<string, unknown>)[key]);
 }
 
-const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
+const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey" | "requesterSessionKey">([
   ["agent", "sessionKey"],
+  ["agent.collector.spawn", "requesterSessionKey"],
   ["board.event", "sessionKey"],
   ["board.update", "sessionKey"],
   ["board.widget.grant", "sessionKey"],
@@ -329,6 +330,7 @@ const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
 ]);
 
 const REQUIRED_SESSION_TARGET_METHODS = new Set([
+  "agent.collector.spawn",
   "board.action",
   "board.event",
   "board.update",

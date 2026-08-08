@@ -38,6 +38,8 @@ export const AgentControlProtocolSchemas = {
   AgentIdentityParams: agent.AgentIdentityParamsSchema,
   AgentIdentityResult: agent.AgentIdentityResultSchema,
   AgentWaitParams: agent.AgentWaitParamsSchema,
+  AgentResultGetParams: agent.AgentResultGetParamsSchema,
+  AgentCollectorSpawnParams: agent.AgentCollectorSpawnParamsSchema,
   WakeParams: agent.WakeParamsSchema,
   WorktreeRecord: worktrees.WorktreeRecordSchema,
   WorktreesListParams: worktrees.WorktreesListParamsSchema,

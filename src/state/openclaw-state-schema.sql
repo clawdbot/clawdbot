@@ -1589,6 +1589,36 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_archive_at
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_ended_cleanup
   ON subagent_runs(ended_at, cleanup_handled, run_id);
 
+CREATE TABLE IF NOT EXISTS swarm_replay_launches (
+  requester_session_key TEXT NOT NULL,
+  replay_key TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  public_run_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('reserved', 'accepted', 'terminal', 'failed', 'expired')),
+  requester_session_id TEXT NOT NULL,
+  requester_lifecycle_revision TEXT,
+  child_session_key TEXT,
+  agent_id TEXT,
+  launch_identity_digest TEXT,
+  authority_profile_id TEXT NOT NULL,
+  authority_json TEXT NOT NULL,
+  worktree_fence_token TEXT NOT NULL,
+  worktree_ownership_generation INTEGER NOT NULL CHECK (worktree_ownership_generation > 0),
+  cwd TEXT NOT NULL,
+  workspace_root TEXT NOT NULL,
+  terminal_evidence_json TEXT,
+  failure_error TEXT,
+  archive_at_ms INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  PRIMARY KEY (requester_session_key, replay_key),
+  UNIQUE (public_run_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_swarm_replay_launches_expires
+  ON swarm_replay_launches(expires_at, status, requester_session_key, replay_key);
+
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,

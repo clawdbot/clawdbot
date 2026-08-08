@@ -13,6 +13,7 @@ import {
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
+import { assertCodexFactoryNativeThreadAttestation } from "./factory-native-attestation.js";
 import {
   applyCodexNativeSkillIsolation,
   type CodexNativeSkillIsolation,
@@ -225,7 +226,24 @@ export async function resumeExistingCodexThread(
         signal: params.signal,
       }),
     );
-    if (ringZeroActive || isMessageOnlyCodexSourceReply(params.params)) {
+    let factoryNativeStartupProof;
+    if (params.params.factoryNativeAuthority) {
+      try {
+        factoryNativeStartupProof = assertCodexFactoryNativeThreadAttestation({
+          binding: params.params.factoryNativeAuthority,
+          request: resumeParams,
+          response,
+        });
+      } catch (error) {
+        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
+        throw new CodexRingZeroAttestationError(error);
+      }
+    }
+    if (
+      params.params.factoryNativeAuthority ||
+      ringZeroActive ||
+      isMessageOnlyCodexSourceReply(params.params)
+    ) {
       try {
         await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
           attestCodexRingZeroThreadHasNoMcpServers(
@@ -337,6 +355,7 @@ export async function resumeExistingCodexThread(
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),
       },
+      ...(factoryNativeStartupProof ? { factoryNativeStartupProof } : {}),
     };
   } catch (error) {
     resumeReservation?.release();
@@ -473,6 +492,19 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
+  let factoryNativeStartupProof;
+  if (params.params.factoryNativeAuthority) {
+    try {
+      factoryNativeStartupProof = assertCodexFactoryNativeThreadAttestation({
+        binding: params.params.factoryNativeAuthority,
+        request: startParams,
+        response,
+      });
+    } catch (error) {
+      await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
+      throw error;
+    }
+  }
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
   // A deny-by-default app becomes callable only under this exact thread's
   // allowlist. Never persist or run the thread before Codex confirms it.
@@ -503,7 +535,11 @@ export async function startFreshCodexThread(
     }
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  if (ringZeroActive || isMessageOnlyCodexSourceReply(params.params)) {
+  if (
+    params.params.factoryNativeAuthority ||
+    ringZeroActive ||
+    isMessageOnlyCodexSourceReply(params.params)
+  ) {
     try {
       await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
         attestCodexRingZeroThreadHasNoMcpServers(params.client, response.thread.id, params.signal),
@@ -629,5 +665,6 @@ export async function startFreshCodexThread(
       action: "started",
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
+    ...(factoryNativeStartupProof ? { factoryNativeStartupProof } : {}),
   };
 }

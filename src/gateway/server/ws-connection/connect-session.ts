@@ -324,6 +324,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
+    transportRemoteIp: remoteAddr,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0

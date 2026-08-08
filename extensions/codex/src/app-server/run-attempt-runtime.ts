@@ -5,6 +5,7 @@ import {
   loadCodexBundleMcpThreadConfig,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
+  type CodexBundleMcpThreadConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
@@ -138,14 +139,16 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");
-  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
-    workspaceDir: effectiveWorkspace,
-    cfg: params.config,
-    toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
-    disableTools: params.disableTools,
-    toolsAllow: params.toolsAllow,
-    toolOverrides: params.toolOverrides,
-  });
+  const bundleMcpThreadConfig: CodexBundleMcpThreadConfig = connection.factoryNativeAuthority
+    ? { diagnostics: [], evaluated: true }
+    : await loadCodexBundleMcpThreadConfig({
+        workspaceDir: effectiveWorkspace,
+        cfg: params.config,
+        toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
+        disableTools: params.disableTools,
+        toolsAllow: params.toolsAllow,
+        toolOverrides: params.toolOverrides,
+      });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -154,12 +157,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     { agentId: sessionAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
   preDynamicStartupStages.mark("native-tool-surface");
-  const nativeProviderWebSearchSupport =
-    resolveCodexWebSearchPlan({
-      config: params.config,
-      disableTools: params.disableTools,
-      nativeToolSurfaceEnabled,
-    }).kind === "native-hosted"
+  const nativeProviderWebSearchSupport = connection.factoryNativeAuthority
+    ? ("unsupported" as const)
+    : resolveCodexWebSearchPlan({
+          config: params.config,
+          disableTools: params.disableTools,
+          nativeToolSurfaceEnabled,
+        }).kind === "native-hosted"
       ? await resolveCodexProviderWebSearchSupport({
           clientFactory: attemptClientFactory,
           appServer,

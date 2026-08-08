@@ -404,6 +404,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
+    factoryNativeAuthority: params.factoryNativeAuthority,
+    onFactoryNativeAuthorityProof: params.onFactoryNativeAuthorityProof,
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceCodeModeTools: params.forceCodeModeTools,
     forceMessageTool: params.forceMessageTool,

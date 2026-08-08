@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { listCoreGatewayMethodMetadata } from "./core-descriptors.js";
 
 const CURRENT_TRAIN_METHODS = [
+  "agent.collector.spawn",
+  "agent.result.get",
   "question.request",
   "question.waitAnswer",
   "question.resolve",

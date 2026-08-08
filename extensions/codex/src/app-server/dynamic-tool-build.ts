@@ -556,6 +556,12 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (params.disableTools) {
     return false;
   }
+  // A host-attested factory collector deliberately uses Codex's native
+  // code-mode shell/file surface. Its named macOS permission profile is the
+  // authority boundary; generic collectors remain dynamic-tool-only below.
+  if (params.factoryNativeAuthority) {
+    return true;
+  }
   // Collector children must not inherit Codex-native Bash/shell/file tools.
   // OpenClaw config allow/deny alone is not a native-harness authority boundary.
   if (isSwarmCollectorStructuredOutputAttempt(params)) {

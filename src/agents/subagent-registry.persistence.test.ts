@@ -492,7 +492,7 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("reloads waitable swarm collector completions after a gateway restart", async () => {
+  it("reloads waitable swarm collector completions from SQLite after a gateway restart", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const run: SubagentRunRecord = {
@@ -507,6 +507,8 @@ describe("subagent registry persistence", () => {
       collect: true,
       swarmRequesterSessionKey: "agent:worker:subagent:owner",
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
+      swarmLaunchReplayKey: "factory:attempt-1:collector-1",
+      swarmLaunchRequestFingerprint: `sha256:${"a".repeat(64)}`,
       groupId: "swarm:agent:main:main:parent-run",
       outputSchema: { type: "object", required: ["answer"] },
       completion: { required: false, resultText: "raw answer", capturedAt: 2 },
@@ -531,6 +533,8 @@ describe("subagent registry persistence", () => {
       collect: true,
       swarmRequesterSessionKey: run.swarmRequesterSessionKey,
       swarmWaitOwnerSessionKeys: run.swarmWaitOwnerSessionKeys,
+      swarmLaunchReplayKey: run.swarmLaunchReplayKey,
+      swarmLaunchRequestFingerprint: run.swarmLaunchRequestFingerprint,
       groupId: run.groupId,
       outputSchema: run.outputSchema,
       completion: { resultText: "raw answer" },

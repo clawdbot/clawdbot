@@ -7,6 +7,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  FACTORY_AUTHORITY_PROFILE_ID,
+  type FactoryNativeRunAuthority,
+} from "../../agents/factory-authority-profile.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
   findAuthorizedSwarmCollectorRequest,
@@ -64,6 +68,7 @@ type AgentRequestPreflight = {
   isOneShotModelRun: boolean;
   isRawModelRun: boolean;
   agentDedupeKeys: string[];
+  factoryNativeAuthority?: FactoryNativeRunAuthority;
 };
 
 export function prepareAgentRequestPreflight(
@@ -84,6 +89,7 @@ export function prepareAgentRequestPreflight(
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const requestSessionKey = request.sessionKey?.trim();
+  let factoryNativeAuthority: FactoryNativeRunAuthority | undefined;
   const collectorSession = findSwarmCollectorSession(requestSessionKey);
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
@@ -155,6 +161,28 @@ export function prepareAgentRequestPreflight(
         ),
       );
       return undefined;
+    }
+    if (
+      registeredCollector.swarmLaunchAuthority?.authorityProfileId === FACTORY_AUTHORITY_PROFILE_ID
+    ) {
+      const launchIdentityDigest = registeredCollector.swarmLaunchIdentityDigest;
+      const registeredRunId = registeredCollector.swarmRunId ?? registeredCollector.runId;
+      if (!launchIdentityDigest || registeredRunId !== request.idempotencyKey) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "factory native collector authority is incomplete or bound to another run",
+          ),
+        );
+        return undefined;
+      }
+      factoryNativeAuthority = {
+        runId: registeredRunId,
+        launchIdentityDigest,
+        authority: registeredCollector.swarmLaunchAuthority,
+      };
     }
   }
   if (request.cwd && !path.isAbsolute(request.cwd)) {
@@ -335,5 +363,6 @@ export function prepareAgentRequestPreflight(
     isOneShotModelRun,
     isRawModelRun,
     agentDedupeKeys,
+    ...(factoryNativeAuthority ? { factoryNativeAuthority } : {}),
   };
 }

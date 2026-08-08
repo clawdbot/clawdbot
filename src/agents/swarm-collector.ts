@@ -1,9 +1,19 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCommitHash } from "../infra/git-commit.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { VERSION } from "../version.js";
 import { ensureCompletionState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { backfillCollectorArchiveAtMs } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord, SwarmCollectorStatus } from "./subagent-registry.types.js";
+import type {
+  SubagentRunRecord,
+  SwarmCollectorCompletion,
+  SwarmCollectorStatus,
+  SwarmTerminalEvidence,
+} from "./subagent-registry.types.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+import { hashSwarmEvidenceBytes } from "./swarm-replay-ledger.js";
 import { consumeSwarmStructuredOutput } from "./tools/structured-output-tool.js";
 
 function resolveStatus(
@@ -24,6 +34,93 @@ function resolveStatus(
   return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
 }
 
+function resolveRuntimePins(
+  entry: SubagentRunRecord,
+  session: ReturnType<typeof loadSubagentSessionEntry>,
+): SwarmTerminalEvidence["runtime"] {
+  const harness = session?.agentHarnessId ?? session?.agentRuntimeOverride;
+  const provider = session?.modelProvider ?? session?.providerOverride;
+  const modelName = session?.model ?? session?.modelOverride ?? entry.model;
+  const model =
+    modelName && provider && !modelName.includes("/") ? `${provider}/${modelName}` : modelName;
+  const commit = resolveCommitHash({ moduleUrl: import.meta.url });
+  return {
+    openClawVersion: VERSION,
+    openClawBuildIdentity: commit ? `git:${commit}` : `version:${VERSION}`,
+    ...(harness ? { harness } : {}),
+    ...(model ? { model } : {}),
+    ...(session?.reasoningLevel ? { reasoning: session.reasoningLevel } : {}),
+    ...(session?.thinkingLevel ? { thinking: session.thinkingLevel } : {}),
+    ...(entry.swarmEffectiveAuthorityProof
+      ? { authorityProof: entry.swarmEffectiveAuthorityProof }
+      : {}),
+  };
+}
+
+function buildTerminalEvidence(params: {
+  entry: SubagentRunRecord;
+  completion: SwarmCollectorCompletion;
+  endedAt: number;
+  frozenAt: number;
+  session: ReturnType<typeof loadSubagentSessionEntry>;
+}): SwarmTerminalEvidence | undefined {
+  const { entry } = params;
+  const replayKey = entry.swarmLaunchReplayKey;
+  const requestFingerprint = entry.swarmLaunchRequestFingerprint;
+  const launchIdentityDigest = entry.swarmLaunchIdentityDigest;
+  const requesterSessionId = entry.swarmRequesterSessionId;
+  const authority = entry.swarmLaunchAuthority;
+  if (
+    !replayKey ||
+    !requestFingerprint?.startsWith("sha256:") ||
+    !launchIdentityDigest ||
+    !requesterSessionId ||
+    !authority
+  ) {
+    return undefined;
+  }
+  const schemaCanonicalJson = stableStringify(entry.outputSchema ?? null);
+  const resultCanonicalJson =
+    params.completion.structured === undefined
+      ? undefined
+      : stableStringify(params.completion.structured);
+  return {
+    evidenceContractVersion: 1,
+    launchIdentityDigest,
+    runId: entry.swarmRunId ?? entry.runId,
+    sessionKey: entry.childSessionKey,
+    agentId: resolveAgentIdFromSessionKey(entry.childSessionKey),
+    requesterSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+    requesterSessionId,
+    ...(entry.swarmRequesterLifecycleRevision
+      ? { requesterLifecycleRevision: entry.swarmRequesterLifecycleRevision }
+      : {}),
+    ...(entry.taskRunId ? { taskId: entry.taskRunId } : {}),
+    replayKey,
+    requestFingerprint: requestFingerprint as `sha256:${string}`,
+    authority,
+    schemaContractVersion: "openclaw/agent-structured-result/v1",
+    schemaCanonicalJson,
+    schemaHash: hashSwarmEvidenceBytes(schemaCanonicalJson),
+    ...(resultCanonicalJson !== undefined
+      ? {
+          result: {
+            canonicalJson: resultCanonicalJson,
+            contentHash: hashSwarmEvidenceBytes(resultCanonicalJson),
+          },
+        }
+      : {}),
+    outcome: {
+      status: params.completion.status,
+      ...(params.completion.schemaError ? { schemaError: params.completion.schemaError } : {}),
+    },
+    endedAt: params.endedAt,
+    frozenAt: params.frozenAt,
+    runtime: resolveRuntimePins(entry, params.session),
+    ...(params.completion.usage ? { usage: params.completion.usage } : {}),
+  };
+}
+
 /** Freeze the waitable collector record after raw completion capture. */
 export function updateSwarmCollectorCompletion(
   entry: SubagentRunRecord,
@@ -37,9 +134,11 @@ export function updateSwarmCollectorCompletion(
   const completion = ensureCompletionState(entry);
   const capturedAtAdded = completion.capturedAt === undefined;
   completion.capturedAt ??= Date.now();
+  const endedAtAdded = entry.execution.endedAt === undefined;
+  entry.execution.endedAt ??= completion.capturedAt;
   const archiveDeadlineAdded = backfillCollectorArchiveAtMs(entry, cfg);
   if (entry.collectorCompletion) {
-    return clearedPendingLaunch || capturedAtAdded || archiveDeadlineAdded;
+    return clearedPendingLaunch || capturedAtAdded || endedAtAdded || archiveDeadlineAdded;
   }
   const executionCaptured = consumeSwarmStructuredOutput(entry.runId);
   const publicCaptured =
@@ -48,10 +147,15 @@ export function updateSwarmCollectorCompletion(
       : undefined;
   const captured = executionCaptured ?? publicCaptured ?? entry.structuredOutput;
   entry.structuredOutput = undefined;
-  const schemaError = entry.outputSchema
+  const outputSchemaError = entry.outputSchema
     ? (captured?.schemaError ??
       (captured?.structured === undefined ? "structured_output was not called" : undefined))
     : undefined;
+  const authorityProofError =
+    entry.swarmLaunchAuthority && !entry.swarmEffectiveAuthorityProof
+      ? "factory native effective authority proof was not durably recorded"
+      : undefined;
+  const schemaError = outputSchemaError ?? authorityProofError;
   const session = loadSubagentSessionEntry({ childSessionKey: entry.childSessionKey });
   const usage =
     typeof session?.inputTokens === "number" || typeof session?.outputTokens === "number"
@@ -71,5 +175,14 @@ export function updateSwarmCollectorCompletion(
     return false;
   }
   entry.collectorCompletion = next;
+  if (!entry.swarmTerminalEvidence) {
+    entry.swarmTerminalEvidence = buildTerminalEvidence({
+      entry,
+      completion: next,
+      endedAt: entry.execution.endedAt,
+      frozenAt: completion.capturedAt,
+      session,
+    });
+  }
   return true;
 }

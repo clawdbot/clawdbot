@@ -1,4 +1,7 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  assertFactoryNativeLaunchAuthority,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import type {
@@ -41,15 +44,21 @@ export function buildTurnStartParams(
         agentDir: params.agentDir,
         config: params.config,
       });
-  const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
+  const factoryAuthority = params.factoryNativeAuthority
+    ? assertFactoryNativeLaunchAuthority(params.factoryNativeAuthority.authority)
+    : undefined;
+  const useThreadPermissionProfile =
+    Boolean(factoryAuthority) || (options.appServer.networkProxy && !options.sandboxPolicy);
   return {
     threadId: options.threadId,
     input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
     cwd: options.cwd,
-    approvalPolicy: options.appServer.approvalPolicy,
+    approvalPolicy: factoryAuthority ? "never" : options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...(useThreadPermissionProfile
-      ? {}
+      ? factoryAuthority
+        ? { permissions: factoryAuthority.permissionProfile.id }
+        : {}
       : {
           sandboxPolicy:
             options.sandboxPolicy ??

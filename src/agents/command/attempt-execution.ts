@@ -1215,6 +1215,8 @@ export function runAgentAttempt(params: {
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
+    factoryNativeAuthority: params.opts.factoryNativeAuthority,
+    onFactoryNativeAuthorityProof: params.opts.onFactoryNativeAuthorityProof,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
     forceCodeModeTools: params.opts.forceCodeModeTools,
     streamParams: params.opts.streamParams,

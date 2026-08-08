@@ -190,6 +190,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
+    if (params.factoryNativeAuthority) {
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:

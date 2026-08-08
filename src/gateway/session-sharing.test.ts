@@ -293,6 +293,67 @@ describe("session sharing policy", () => {
     ).toBeNull();
   });
 
+  it("binds collector spawn to its requester but leaves durable result reads session-independent", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const requesterSessionKey = "agent:main:subagent:factory-owner";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: requesterSessionKey },
+        {
+          sessionId: "factory-owner-session",
+          updatedAt: 1,
+          visibility: "draft",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+      const context = {
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+      } as never;
+
+      expect(
+        resolveSessionMutationAuthorization({
+          client: client({ user: "outsider@example.com" }),
+          method: "agent.collector.spawn",
+          requestParams: { requesterSessionKey },
+          context,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      expect(
+        resolveSessionMutationAuthorization({
+          client: client({ user: "owner@example.com" }),
+          method: "agent.collector.spawn",
+          requestParams: { requesterSessionKey },
+          context,
+        }).error,
+      ).toBeNull();
+      expect(
+        resolveSessionMutationAuthorization({
+          client: client({ user: "owner@example.com" }),
+          method: "agent.collector.spawn",
+          requestParams: {},
+          context,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+
+      expect(
+        resolveSessionMutationAuthorization({
+          client: client({ user: "outsider@example.com" }),
+          method: "agent.result.get",
+          requestParams: { requesterSessionKey: "agent:main:subagent:deleted-factory-owner" },
+          context,
+        }).error,
+      ).toBeNull();
+      expect(
+        resolveSessionMutationAuthorization({
+          client: client({ user: "outsider@example.com" }),
+          method: "agent.result.get",
+          requestParams: {},
+          context,
+        }).error,
+      ).toBeNull();
+    });
+  });
+
   it("fails closed for scoped events whose session row was deleted", () => {
     expect(
       canReceiveSessionEvent({

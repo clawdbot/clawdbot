@@ -1,0 +1,141 @@
+import { describe, expect, it } from "vitest";
+import {
+  assertFactoryNativeAuthorityProof,
+  assertFactoryNativeLaunchAuthority,
+  buildFactoryNativeLaunchAuthority,
+  FACTORY_NATIVE_BASE_PATH_ENTRIES,
+} from "./factory-authority-profile.js";
+import {
+  buildTestFactoryNativeAuthority,
+  buildTestFactoryNativeAuthorityProof,
+} from "./factory-authority-profile.test-helpers.js";
+
+const ROOT = "/tmp/openclaw-factory-authority-test";
+const LAUNCH_DIGEST = `sha256:${"a".repeat(64)}` as const;
+
+describe("factory native authority profile", () => {
+  it("preserves caller toolchain precedence and appends only the fixed safe fallback", () => {
+    const authority = buildFactoryNativeLaunchAuthority({
+      cwd: `${ROOT}/worktree`,
+      workspaceRoot: `${ROOT}/worktree`,
+      paths: {
+        factoryStateRoot: `${ROOT}/factory-state`,
+        attemptRoot: `${ROOT}/factory-state/attempts/run-1`,
+        scratchRoot: `${ROOT}/factory-state/attempts/run-1/scratch`,
+        sanitizedHome: `${ROOT}/factory-state/attempts/run-1/scratch/home`,
+        tempDir: `${ROOT}/factory-state/attempts/run-1/scratch/tmp`,
+      },
+      manifest: {
+        readableRoots: ["/Library/Developer/CommandLineTools", "/opt/homebrew"],
+        pathEntries: ["/opt/homebrew/opt/elixir/bin", "/opt/homebrew/opt/node@24/bin"],
+        environment: { MIX_ENV: "test" },
+      },
+      gitMetadataRoot: `${ROOT}/repository/.git`,
+      worktreeFenceToken: "fence-1",
+      worktreeOwnershipGeneration: 1,
+    });
+
+    expect(authority.shellEnvironmentPolicy.orderedNativePathEntries).toEqual([
+      "/opt/homebrew/opt/elixir/bin",
+      "/opt/homebrew/opt/node@24/bin",
+    ]);
+    expect(authority.shellEnvironmentPolicy.effectivePath.split(":")).toEqual([
+      "/opt/homebrew/opt/elixir/bin",
+      "/opt/homebrew/opt/node@24/bin",
+      ...FACTORY_NATIVE_BASE_PATH_ENTRIES,
+    ]);
+    expect(authority.shellEnvironmentPolicy.effectivePath).not.toContain("/usr/local/bin");
+    expect(authority.network).toBe("none");
+    expect(authority.permissionProfile.definition.network).toEqual({ enabled: false });
+    expect(authority.permissionProfile.platformDefaultTempAccess).toBe("read_write");
+  });
+
+  it("rejects secret-bearing environment names", () => {
+    expect(() =>
+      buildFactoryNativeLaunchAuthority({
+        cwd: `${ROOT}/worktree`,
+        workspaceRoot: `${ROOT}/worktree`,
+        paths: {
+          factoryStateRoot: `${ROOT}/factory-state`,
+          attemptRoot: `${ROOT}/factory-state/attempts/run-1`,
+          scratchRoot: `${ROOT}/factory-state/attempts/run-1/scratch`,
+          sanitizedHome: `${ROOT}/factory-state/attempts/run-1/scratch/home`,
+          tempDir: `${ROOT}/factory-state/attempts/run-1/scratch/tmp`,
+        },
+        manifest: {
+          readableRoots: ["/Library/Developer/CommandLineTools", "/opt/homebrew"],
+          pathEntries: ["/usr/bin"],
+          environment: { API_TOKEN: "must-not-cross-the-boundary" },
+        },
+        gitMetadataRoot: `${ROOT}/repository/.git`,
+        worktreeFenceToken: "fence-1",
+        worktreeOwnershipGeneration: 1,
+      }),
+    ).toThrow("environment variable is not approved");
+  });
+
+  it("rejects unrelated system read roots", () => {
+    expect(() =>
+      buildFactoryNativeLaunchAuthority({
+        cwd: `${ROOT}/worktree`,
+        workspaceRoot: `${ROOT}/worktree`,
+        paths: {
+          factoryStateRoot: `${ROOT}/factory-state`,
+          attemptRoot: `${ROOT}/factory-state/attempts/run-1`,
+          scratchRoot: `${ROOT}/factory-state/attempts/run-1/scratch`,
+          sanitizedHome: `${ROOT}/factory-state/attempts/run-1/scratch/home`,
+          tempDir: `${ROOT}/factory-state/attempts/run-1/scratch/tmp`,
+        },
+        manifest: {
+          readableRoots: ["/Library/Developer/CommandLineTools", "/opt/homebrew", "/private/etc"],
+          pathEntries: ["/usr/bin"],
+          environment: {},
+        },
+        gitMetadataRoot: `${ROOT}/repository/.git`,
+        worktreeFenceToken: "fence-1",
+        worktreeOwnershipGeneration: 1,
+      }),
+    ).toThrow("system read root is outside the approved toolchain area");
+  });
+
+  it("rejects persisted launch-authority drift", () => {
+    const authority = buildTestFactoryNativeAuthority(ROOT);
+    const drifted = structuredClone(authority) as unknown as Record<string, unknown>;
+    drifted.network = "host";
+
+    expect(() => assertFactoryNativeLaunchAuthority(drifted)).toThrow(
+      "does not match the enforced profile",
+    );
+  });
+
+  it("accepts an exact runtime proof and rejects active-profile inheritance", () => {
+    const authority = buildTestFactoryNativeAuthority(ROOT);
+    const proof = buildTestFactoryNativeAuthorityProof({
+      authority,
+      launchIdentityDigest: LAUNCH_DIGEST,
+    });
+    const binding = {
+      runId: `swarm_${"b".repeat(32)}`,
+      launchIdentityDigest: LAUNCH_DIGEST,
+      authority,
+    };
+
+    expect(assertFactoryNativeAuthorityProof({ binding, proof })).toEqual(proof);
+    const drifted = structuredClone(proof);
+    drifted.runtime.activePermissionProfile.extends = "default";
+    expect(() => assertFactoryNativeAuthorityProof({ binding, proof: drifted })).toThrow(
+      "does not match the launch contract",
+    );
+
+    const sandboxDrifted = structuredClone(proof) as unknown as {
+      runtime: { sandbox: { networkAccess: boolean } };
+    };
+    sandboxDrifted.runtime.sandbox.networkAccess = true;
+    expect(() =>
+      assertFactoryNativeAuthorityProof({
+        binding,
+        proof: sandboxDrifted as unknown as typeof proof,
+      }),
+    ).toThrow("does not match the launch contract");
+  });
+});
