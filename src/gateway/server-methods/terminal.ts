@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -68,11 +69,7 @@ function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknow
   if (!payloadJSON) {
     return payload;
   }
-  try {
-    return JSON.parse(payloadJSON) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(payloadJSON);
 }
 
 async function stageNodeTerminalUpload(

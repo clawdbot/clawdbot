@@ -56,6 +56,13 @@ describe("sidebar entries", () => {
     expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
   });
 
+  it("places Updates in the System group immediately before About", () => {
+    const system = SETTINGS_NAVIGATION_GROUPS.find(
+      (group) => group.labelKey === "nav.settingsGroupSystem",
+    );
+    expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
+  });
+
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
     expect(settingsRoutes).not.toContain("model-setup");
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);

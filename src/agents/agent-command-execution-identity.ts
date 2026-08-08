@@ -19,7 +19,7 @@ function systemIngress(boundary: string): AgentCommandAdmissionIngress {
 }
 
 function recordAgentCommandExecutionIdentity(params: {
-  attribution?: AgentCommandOpts["executionAttribution"];
+  admission?: AgentCommandOpts["executionIdentityAdmission"];
   agentId: string;
   cfg: OpenClawConfig;
   ingress: AgentCommandAdmissionIngress;
@@ -37,17 +37,8 @@ function recordAgentCommandExecutionIdentity(params: {
     },
     {
       enabled: isExecutionIdentityCollectionEnabled(params.cfg),
-      ...(params.attribution
-        ? params.attribution.executionIdentityAdmission
-          ? {
-              token: params.attribution.executionIdentityAdmission.token,
-              retryOnly: params.attribution.executionIdentityAdmission.retryOnly,
-            }
-          : {
-              contextId: params.attribution.contextId,
-              executionId: params.attribution.executionId,
-              now: params.attribution.createdAt,
-            }
+      ...(params.admission
+        ? { token: params.admission.token, retryOnly: params.admission.retryOnly }
         : {}),
     },
   );

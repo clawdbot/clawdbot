@@ -5,6 +5,8 @@ import {
   waitForCondition,
 } from "./modules/page-share-core.js";
 import { createPageShareRelay } from "./modules/page-share-relay.js";
+import { createRelayCommandHandler } from "./modules/relay-command-handler.js";
+import { openAuthenticatedRelaySocket } from "./modules/relay-connection.js";
 // OpenClaw extension service worker.
 //
 // Thin transport between the OpenClaw extension relay (loopback WebSocket) and
@@ -14,12 +16,18 @@ import { createPageShareRelay } from "./modules/page-share-relay.js";
 // consent boundary: only grouped tabs are reported to (and driven by) OpenClaw.
 import {
   OPENCLAW_TAB_GROUP_TITLE,
-  buildRelayWsProtocols,
+  createPairingConfigStore,
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
   toRelayTabInfo,
 } from "./modules/relay-core.js";
+import {
+  findOpenClawGroups,
+  isOpenClawGroupId,
+  listSharedTabs,
+  requireSharedTab,
+} from "./modules/relay-tab-groups.js";
 
 const BADGE = {
   off: { text: "", color: "#000000" },
@@ -35,7 +43,7 @@ const COPILOT_RELAY_LABEL = {
 };
 const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
 const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
-const RELAY_OPENING_TIMEOUT_MS = 30_000;
+const RELAY_AUTH_TIMEOUT_MS = 10_000;
 
 /** @type {WebSocket|null} */
 let relayWs = null;
@@ -44,12 +52,16 @@ let copilot = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let relayOpeningDeadlineAt = 0;
+let relayOpeningDeadlineTimer = null;
+let relayAuthenticatedSocket = null;
+let relayStatusHint = "";
+let reconciledPairingInvalidationRevision = 0;
 /** Tab ids with an active chrome.debugger attachment. */
 const attachedTabs = new Set();
 /** Tabs denied to every relay attach while copilot run cleanup is pending. */
 const copilotDeniedTabs = new Set();
-/** Monotonic revocation epochs invalidate attaches already in flight. */
-const copilotAccessRevisions = new Map();
+/** Monotonic revocation epochs invalidate debugger attaches already in flight. */
+const tabAccessRevisions = new Map();
 /** In-flight attach promises per tab id (coalesces concurrent attaches). */
 const attachingTabs = new Map();
 /** Latest revocation task per tab; restoration waits for its exact epoch. */
@@ -58,16 +70,32 @@ const copilotRevocations = new Map();
 let tabsSyncTimer = null;
 let pageShareBadgeTimer = null;
 const pageShareRelay = createPageShareRelay();
+const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
 
 function closeRelaySocket() {
   const socket = relayWs;
   if (!socket) {
     return;
   }
+  relayWs = null;
+  if (relayAuthenticatedSocket === socket) {
+    relayAuthenticatedSocket = null;
+  }
   // Chrome completes close asynchronously; fail pending requests before the
   // handshake so pairing and unpairing never leave a popup stuck on Sending.
   pageShareRelay.rejectSocket(socket);
   socket.close();
+}
+
+async function reconcilePairingInvalidation() {
+  if (reconciledPairingInvalidationRevision === pairingConfigStore.invalidationRevision) {
+    return;
+  }
+  reconciledPairingInvalidationRevision = pairingConfigStore.invalidationRevision;
+  clearRelayOpeningDeadline();
+  closeRelaySocket();
+  setBadge("off");
+  await copilot?.refreshConfig();
 }
 
 function setBadge(kind) {
@@ -97,44 +125,16 @@ function flashPageShareBadge(ok) {
 }
 
 async function getConfig() {
-  const stored = await chrome.storage.local.get(["relayUrl", "token", "groupColor"]);
-  return {
-    relayUrl: typeof stored.relayUrl === "string" ? stored.relayUrl : "",
-    token: typeof stored.token === "string" ? stored.token : "",
-    groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
-  };
-}
-
-async function getCopilotConfig() {
-  const config = await getConfig();
-  const stored = await chrome.storage.local.get(["gatewayUrl"]);
-  return {
-    ...config,
-    gatewayUrl: typeof stored.gatewayUrl === "string" ? stored.gatewayUrl : "",
-  };
+  const config = await pairingConfigStore.read();
+  if (config.pairingStatusHint) {
+    relayStatusHint = config.pairingStatusHint;
+  }
+  return config;
 }
 
 // ---------------------------------------------------------------------------
 // Tab group management (the consent boundary)
 // ---------------------------------------------------------------------------
-
-async function findOpenClawGroups() {
-  try {
-    return await chrome.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
-  } catch {
-    return [];
-  }
-}
-
-async function listSharedTabs() {
-  const groups = await findOpenClawGroups();
-  const tabs = [];
-  for (const group of groups) {
-    const groupTabs = await chrome.tabs.query({ groupId: group.id });
-    tabs.push(...groupTabs);
-  }
-  return tabs.filter((tab) => typeof tab.id === "number");
-}
 
 async function addTabToOpenClawGroup(tabId) {
   const tab = await chrome.tabs.get(tabId);
@@ -171,18 +171,6 @@ async function isTabShared(tabId) {
   return shared.some((tab) => tab.id === tabId);
 }
 
-async function isOpenClawGroupId(groupId) {
-  if (!Number.isInteger(groupId) || groupId < 0) {
-    return false;
-  }
-  try {
-    const group = await chrome.tabGroups.get(groupId);
-    return group.title === OPENCLAW_TAB_GROUP_TITLE;
-  } catch {
-    return false;
-  }
-}
-
 function scheduleTabsSync() {
   if (tabsSyncTimer) {
     return;
@@ -194,7 +182,7 @@ function scheduleTabsSync() {
 }
 
 async function syncTabsToRelay() {
-  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+  if (!relayWs || relayWs.readyState !== WebSocket.OPEN || relayAuthenticatedSocket !== relayWs) {
     return;
   }
   const shared = await listSharedTabs();
@@ -215,29 +203,40 @@ async function syncTabsToRelay() {
 
 async function attachDebugger(tabId) {
   await copilotCustodyReady;
+  const accessRevision = tabAccessRevisions.get(tabId) ?? 0;
+  const assertAccess = async () => {
+    if (copilotDeniedTabs.has(tabId)) {
+      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
+    }
+    if ((tabAccessRevisions.get(tabId) ?? 0) !== accessRevision) {
+      throw new Error(`tab ${tabId} access was revoked`);
+    }
+    await requireSharedTab(tabId);
+    if (copilotDeniedTabs.has(tabId)) {
+      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
+    }
+    if ((tabAccessRevisions.get(tabId) ?? 0) !== accessRevision) {
+      throw new Error(`tab ${tabId} access was revoked`);
+    }
+  };
+  await assertAccess();
   // Coalesce concurrent attaches for one tab. Two relay attach commands (or an
   // auto-attach racing an explicit share) would otherwise both call
   // chrome.debugger.attach and the second throws "Another debugger is already
   // attached". The bridge and this worker can also disagree after an MV3 restart.
   const inFlight = attachingTabs.get(tabId);
   if (inFlight) {
-    return await inFlight;
+    const result = await inFlight;
+    try {
+      await assertAccess();
+    } catch (error) {
+      await detachDebugger(tabId);
+      throw error;
+    }
+    return result;
   }
-  const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
-  const assertAccess = () => {
-    if (
-      copilotDeniedTabs.has(tabId) ||
-      (copilotAccessRevisions.get(tabId) ?? 0) !== accessRevision
-    ) {
-      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
-    }
-  };
   const attach = (async () => {
-    assertAccess();
-    if (!(await isTabShared(tabId))) {
-      throw new Error(`tab ${tabId} is not in the ${OPENCLAW_TAB_GROUP_TITLE} tab group`);
-    }
-    assertAccess();
+    await assertAccess();
     if (!attachedTabs.has(tabId)) {
       try {
         await chrome.debugger.attach({ tabId }, "1.3");
@@ -248,7 +247,7 @@ async function attachDebugger(tabId) {
         }
       }
       try {
-        assertAccess();
+        await assertAccess();
       } catch (error) {
         await detachDebugger(tabId);
         throw error;
@@ -257,7 +256,7 @@ async function attachDebugger(tabId) {
     }
     const targets = await chrome.debugger.getTargets();
     try {
-      assertAccess();
+      await assertAccess();
     } catch (error) {
       await detachDebugger(tabId);
       throw error;
@@ -285,7 +284,7 @@ async function detachDebugger(tabId) {
 }
 
 async function revokeCopilotDebugger(tabId) {
-  copilotAccessRevisions.set(tabId, (copilotAccessRevisions.get(tabId) ?? 0) + 1);
+  tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
   copilotDeniedTabs.add(tabId);
   const previous = copilotRevocations.get(tabId) ?? Promise.resolve();
   const revocation = previous
@@ -305,9 +304,9 @@ async function revokeCopilotDebugger(tabId) {
 }
 
 async function restoreCopilotDebugger(tabId) {
-  const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
+  const accessRevision = tabAccessRevisions.get(tabId) ?? 0;
   await copilotRevocations.get(tabId);
-  if ((copilotAccessRevisions.get(tabId) ?? 0) === accessRevision) {
+  if ((tabAccessRevisions.get(tabId) ?? 0) === accessRevision) {
     copilotDeniedTabs.delete(tabId);
   }
 }
@@ -344,80 +343,50 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 // ---------------------------------------------------------------------------
 
 function send(message) {
-  if (relayWs && relayWs.readyState === WebSocket.OPEN) {
+  if (relayWs && relayWs.readyState === WebSocket.OPEN && relayAuthenticatedSocket === relayWs) {
     relayWs.send(JSON.stringify(message));
   }
 }
 
 function clearRelayOpeningDeadline() {
   relayOpeningDeadlineAt = 0;
+  if (relayOpeningDeadlineTimer) {
+    clearTimeout(relayOpeningDeadlineTimer);
+    relayOpeningDeadlineTimer = null;
+  }
   void chrome.alarms.clear(RELAY_OPENING_DEADLINE_ALARM);
 }
 
 function armRelayOpeningDeadline() {
-  relayOpeningDeadlineAt = Date.now() + RELAY_OPENING_TIMEOUT_MS;
+  clearRelayOpeningDeadline();
+  relayOpeningDeadlineAt = Date.now() + RELAY_AUTH_TIMEOUT_MS;
+  relayOpeningDeadlineTimer = setTimeout(handleRelayOpeningDeadline, RELAY_AUTH_TIMEOUT_MS);
   chrome.alarms.create(RELAY_OPENING_DEADLINE_ALARM, { when: relayOpeningDeadlineAt });
 }
 
-async function handleRelayCommand(msg) {
-  const { seq } = msg;
+function failRelayAuthentication(ws, error) {
+  if (relayWs !== ws) {
+    return;
+  }
+  relayStatusHint =
+    "Relay authentication v2 failed. Update OpenClaw, or re-pair after a relay key rotation.";
   try {
-    switch (msg.type) {
-      case "ping":
-        send({ type: "pong" });
-        return;
-      case "attach": {
-        const result = await attachDebugger(msg.tabId);
-        send({ type: "result", seq, result });
-        return;
-      }
-      case "detach": {
-        await detachDebugger(msg.tabId);
-        send({ type: "result", seq, result: {} });
-        return;
-      }
-      case "cdp": {
-        const target = msg.sessionId
-          ? { tabId: msg.tabId, sessionId: msg.sessionId }
-          : { tabId: msg.tabId };
-        const result = await chrome.debugger.sendCommand(target, msg.method, msg.params ?? {});
-        send({ type: "result", seq, result: result ?? {} });
-        return;
-      }
-      case "createTab": {
-        const tab = await chrome.tabs.create({ url: msg.url, active: msg.background !== true });
-        await addTabToOpenClawGroup(tab.id);
-        if (msg.focus === true) {
-          await focusWindowForTab(tab);
-        }
-        scheduleTabsSync();
-        send({ type: "result", seq, result: { tabId: tab.id } });
-        return;
-      }
-      case "closeTab": {
-        await detachDebugger(msg.tabId);
-        await chrome.tabs.remove(msg.tabId);
-        send({ type: "result", seq, result: {} });
-        return;
-      }
-      case "activateTab": {
-        const tab = await chrome.tabs.get(msg.tabId);
-        await chrome.tabs.update(msg.tabId, { active: true });
-        await focusWindowForTab(tab);
-        send({ type: "result", seq, result: {} });
-        return;
-      }
-      default:
-        if (typeof seq === "number") {
-          send({ type: "error", seq, message: `unknown relay command: ${msg.type}` });
-        }
-    }
-  } catch (err) {
-    if (typeof seq === "number") {
-      send({ type: "error", seq, message: err instanceof Error ? err.message : String(err) });
-    }
+    ws.close(4001, error instanceof Error ? error.message.slice(0, 120) : "authentication failed");
+  } catch {
+    closeRelaySocket();
+    setBadge("error");
+    scheduleReconnect();
   }
 }
+
+const handleRelayCommand = createRelayCommandHandler({
+  send,
+  attachDebugger,
+  detachDebugger,
+  addTabToOpenClawGroup,
+  focusWindowForTab,
+  scheduleTabsSync,
+});
 
 async function sendHello() {
   const shared = await listSharedTabs();
@@ -433,6 +402,7 @@ async function sendHello() {
 
 async function connectRelay() {
   const { relayUrl, token } = await getConfig();
+  await reconcilePairingInvalidation();
   if (!relayUrl || !token) {
     clearRelayOpeningDeadline();
     setBadge("off");
@@ -447,52 +417,57 @@ async function connectRelay() {
   setBadge("connecting");
   let ws;
   try {
-    ws = new WebSocket(relayUrl, buildRelayWsProtocols(token));
+    ws = openAuthenticatedRelaySocket({
+      relayUrl,
+      token,
+      isCurrent: (socket) => relayWs === socket,
+      onAuthenticated: async (socket) => {
+        relayAuthenticatedSocket = socket;
+        relayStatusHint = "";
+        clearRelayOpeningDeadline();
+        reconnectAttempt = 0;
+        setBadge("on");
+        await sendHello();
+      },
+      onApplicationMessage: (socket, msg) => {
+        if (msg?.type === "pageShareResult") {
+          pageShareRelay.settle(socket, msg);
+          return;
+        }
+        void handleRelayCommand(msg);
+      },
+      onAuthenticationFailure: (socket, error) => failRelayAuthentication(socket, error),
+      onClose: (socket, authenticated) => {
+        pageShareRelay.rejectSocket(socket);
+        if (relayWs !== socket) {
+          return;
+        }
+        clearRelayOpeningDeadline();
+        relayWs = null;
+        if (authenticated) {
+          relayAuthenticatedSocket = null;
+        } else if (!relayStatusHint) {
+          relayStatusHint =
+            "Relay authentication v2 failed. Update OpenClaw, or re-pair after a relay key rotation.";
+        }
+        setBadge("error");
+        scheduleReconnect();
+      },
+    });
   } catch {
     setBadge("error");
     scheduleReconnect();
     return;
   }
   relayWs = ws;
+  relayAuthenticatedSocket = null;
   armRelayOpeningDeadline();
-  ws.addEventListener("open", () => {
-    if (relayWs !== ws) {
-      ws.close();
-      return;
-    }
-    clearRelayOpeningDeadline();
-    reconnectAttempt = 0;
-    setBadge("on");
-    void sendHello();
-  });
-  ws.addEventListener("message", (event) => {
-    let msg;
-    try {
-      msg = JSON.parse(String(event.data));
-    } catch {
-      return;
-    }
-    if (msg?.type === "pageShareResult") {
-      pageShareRelay.settle(ws, msg);
-      return;
-    }
-    void handleRelayCommand(msg);
-  });
-  ws.addEventListener("close", () => {
-    pageShareRelay.rejectSocket(ws);
-    if (relayWs === ws) {
-      clearRelayOpeningDeadline();
-      relayWs = null;
-      setBadge("error");
-      scheduleReconnect();
-    }
-  });
   // onclose follows onerror and drives the reconnect, so no error handler needed.
 }
 
 async function sendPageShareRequest(payload) {
   const socket = relayWs;
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || relayAuthenticatedSocket !== socket) {
     throw new Error("Relay not connected.");
   }
   await pageShareRelay.send(socket, payload);
@@ -500,12 +475,18 @@ async function sendPageShareRequest(payload) {
 
 async function ensureRelayReady() {
   const config = await getConfig();
+  await reconcilePairingInvalidation();
   if (!config.relayUrl || !config.token) {
     throw new Error("Pair the extension first.");
   }
-  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
+  if (!relayWs || relayWs.readyState !== WebSocket.OPEN || relayAuthenticatedSocket !== relayWs) {
     await connectRelay();
-    if (!(await waitForCondition(() => relayWs?.readyState === WebSocket.OPEN, 3_000))) {
+    if (
+      !(await waitForCondition(
+        () => relayWs?.readyState === WebSocket.OPEN && relayAuthenticatedSocket === relayWs,
+        RELAY_AUTH_TIMEOUT_MS,
+      ))
+    ) {
       throw new Error("Relay not connected.");
     }
   }
@@ -558,7 +539,7 @@ async function installPageShareContextMenu() {
 }
 
 copilot = createCopilotController({
-  getConfig: getCopilotConfig,
+  getConfig,
   isTabShared,
   addTabToOpenClawGroup,
   attachDebugger,
@@ -571,34 +552,38 @@ const copilotCustodyReady = copilot.initializeCustody();
 const copilotReady = copilot.initialize();
 
 function handleRelayOpeningDeadline() {
+  // Unit-test module isolation can outlive the mocked Chrome global. The real
+  // MV3 worker always has chrome; a detached test timer has no owner to mutate.
+  if (typeof chrome === "undefined") {
+    relayOpeningDeadlineAt = 0;
+    relayOpeningDeadlineTimer = null;
+    return;
+  }
   const ws = relayWs;
   if (!ws) {
     clearRelayOpeningDeadline();
-    void connectRelay();
     return;
   }
-  if (ws.readyState === WebSocket.OPEN) {
+  if (relayAuthenticatedSocket === ws) {
     clearRelayOpeningDeadline();
     return;
   }
-  if (
-    ws.readyState !== WebSocket.CONNECTING ||
-    relayOpeningDeadlineAt === 0 ||
-    Date.now() < relayOpeningDeadlineAt
-  ) {
+  if (relayOpeningDeadlineAt === 0 || Date.now() < relayOpeningDeadlineAt) {
     return;
   }
 
   // Clear ownership before close so a delayed close/open event from this
   // socket cannot mutate the replacement connection's badge or deadline.
   relayWs = null;
+  relayAuthenticatedSocket = null;
   clearRelayOpeningDeadline();
   try {
-    ws.close();
+    ws.close(4001, "relay authentication timed out");
   } catch {
     // The socket may have changed state while the alarm event was queued.
   }
   setBadge("error");
+  relayStatusHint = "Relay authentication v2 timed out. Make sure OpenClaw is up to date.";
   scheduleReconnect();
 }
 
@@ -635,12 +620,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     switch (msg?.type) {
       case "getStatus": {
         const { relayUrl } = await getConfig();
+        await reconcilePairingInvalidation();
         const shared = await listSharedTabs();
         sendResponse({
           paired: Boolean(relayUrl),
           state: relayState,
           sharedTabCount: shared.length,
           relayUrl: relayUrl ?? "",
+          ...(relayStatusHint ? { hint: relayStatusHint } : {}),
         });
         return;
       }
@@ -650,26 +637,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
           sendResponse({ ok: false, error: "Invalid pairing string." });
           return;
         }
-        await chrome.storage.local.set({
-          relayUrl: parsed.relayUrl,
-          token: parsed.token,
-          groupColor: nearestGroupColor(msg.groupColor),
-        });
+        await pairingConfigStore.save(parsed, nearestGroupColor(msg.groupColor));
+        relayStatusHint = "";
         reconnectAttempt = 0;
         clearRelayOpeningDeadline();
         closeRelaySocket();
-        relayWs = null;
-        await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
         await connectRelay();
         await copilot.refreshConfig();
         sendResponse({ ok: true });
         return;
       }
       case "unpair": {
-        await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
+        await pairingConfigStore.clear();
+        relayStatusHint = "";
         clearRelayOpeningDeadline();
         closeRelaySocket();
-        relayWs = null;
         setBadge("off");
         await copilot.refreshConfig();
         sendResponse({ ok: true });
@@ -727,7 +709,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  copilotAccessRevisions.set(tabId, (copilotAccessRevisions.get(tabId) ?? 0) + 1);
+  tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
   attachedTabs.delete(tabId);
   copilotDeniedTabs.delete(tabId);
   scheduleTabsSync();
@@ -741,9 +723,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
   // changeInfo.groupId is the event-time membership snapshot. Preserve a
   // revocation even if a later event re-shares the tab before async cleanup.
-  void isOpenClawGroupId(changeInfo.groupId).then((shared) =>
-    copilot.onConsentChanged(tabId, { revoked: !shared }),
-  );
+  void isOpenClawGroupId(changeInfo.groupId).then(async (shared) => {
+    if (!shared) {
+      tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
+      await detachDebugger(tabId);
+    }
+    await copilot.onConsentChanged(tabId, { revoked: !shared });
+  });
 });
 chrome.tabGroups.onUpdated.addListener(() => {
   scheduleTabsSync();

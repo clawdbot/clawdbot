@@ -125,14 +125,25 @@ suite.define(() => {
     await context.close();
   });
 
-  it("keeps missing same-origin avatar initials through a live rerender", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
+  it("keeps missing local-viewer avatar initials through a live rerender", async () => {
+    const artifactDir = resolveArtifactDir();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 760, width: 1180 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 760, width: 1180 } } }
+        : {}),
+    });
     const page = await context.newPage();
-    const sender = {
+    const viewer = {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
       name: "Hannah",
+      avatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7",
     };
     let avatarRequestCount = 0;
+    const avatarRequests: Array<{ resourceType: string; url: string }> = [];
     let releaseRetry: () => void = () => undefined;
     const retryGate = new Promise<void>((resolve) => {
       releaseRetry = resolve;
@@ -145,7 +156,11 @@ suite.define(() => {
     const retrySettled = new Promise<void>((resolve) => {
       markRetrySettled = resolve;
     });
-    await page.route(`**/api/users/${sender.id}/avatar`, async (route) => {
+    await page.route(`**/api/users/${viewer.id}/avatar*`, async (route) => {
+      avatarRequests.push({
+        resourceType: route.request().resourceType(),
+        url: route.request().url(),
+      });
       const requestIndex = ++avatarRequestCount;
       if (requestIndex === 2) {
         markRetryStarted();
@@ -164,9 +179,8 @@ suite.define(() => {
       presenceUsers: [
         {
           self: true,
-          id: "viewer-profile",
-          name: "Viewer",
-          email: "viewer@example.test",
+          ...viewer,
+          email: "hannah@example.test",
           watchedSessions: ["agent:main:main"],
         },
       ],
@@ -174,13 +188,7 @@ suite.define(() => {
         {
           role: "user",
           content: "Please keep my fallback avatar readable.",
-          timestamp: Date.now(),
-          __openclaw: {
-            id: "missing-avatar-message",
-            senderId: sender.id,
-            senderName: sender.name,
-            seq: 1,
-          },
+          timestamp: Date.now() - 60_000,
         },
       ],
     });
@@ -197,11 +205,20 @@ suite.define(() => {
       const initials = slot.locator(".chat-avatar--sender-initials");
       await retryStarted;
       expect(avatarRequestCount).toBe(2);
+      expect(
+        avatarRequests.map((request) => ({
+          resourceType: request.resourceType,
+          url: new URL(request.url).pathname + new URL(request.url).search,
+        })),
+      ).toEqual([
+        { resourceType: "fetch", url: viewer.avatarUrl },
+        { resourceType: "fetch", url: viewer.avatarUrl },
+      ]);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect.poll(() => image.getAttribute("src")).toBeNull();
+      await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
-      await captureProof(page, "missing-avatar-after-404.png");
+      await captureProof(page, "missing-local-avatar-after-404.png");
 
       await userGroup.hover();
       await userGroup.getByRole("button", { name: "Reply to message" }).click();
@@ -219,10 +236,10 @@ suite.define(() => {
 
       expect(avatarRequestCount).toBe(2);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect.poll(() => image.getAttribute("src")).toBeNull();
+      await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
-      await captureProof(page, "missing-avatar-after-rerender.png");
+      await captureProof(page, "missing-local-avatar-after-rerender.png");
 
       releaseRetry();
       await retrySettled;

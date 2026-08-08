@@ -11,7 +11,9 @@ type BuildControlUiSessionPathParams = {
   shortIdLength?: number;
 };
 
-const SESSION_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
+export const SESSION_UUID_SUFFIX_RE =
+  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
+export const SHORT_SESSION_ID_RE = /^[0-9a-f]{8,32}$/iu;
 const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
 const VALID_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/iu;
 const INVALID_AGENT_ID_CHARS_RE = /[^a-z0-9_-]+/giu;

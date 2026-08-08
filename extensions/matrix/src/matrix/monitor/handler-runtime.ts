@@ -4,6 +4,7 @@ import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 
 export type MatrixDraftStreamHandle = {
   update: (text: string) => void;
+  flush: () => Promise<void>;
   stop: () => Promise<string | undefined>;
   discardPending: () => Promise<void>;
   eventId: () => string | undefined;

@@ -6,6 +6,7 @@ export interface WatchPrCiArgs {
   attachTimeout: number;
   timeout: number;
   interval: number;
+  completion: "rollup" | "ci-run";
 }
 
 export interface RollupCheck {
@@ -59,6 +60,10 @@ export interface RunAttachmentClassification {
   warning?: string;
 }
 
+export type AttachedCiRunClassification =
+  | { verdict: "PENDING" | "GREEN" }
+  | { verdict: "FAILING"; conclusion: string };
+
 export interface PollUntilDeadlineOptions<T> {
   deadline: number;
   interval: number;
@@ -80,4 +85,5 @@ export function classifyRunAttachment(
   run: RunStatus,
   after?: number,
 ): RunAttachmentClassification;
+export function classifyAttachedCiRun(run: RunStatus): AttachedCiRunClassification;
 export function pollUntilDeadline<T>(options: PollUntilDeadlineOptions<T>): Promise<T | undefined>;

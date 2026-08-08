@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { isMissingPathError } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -237,7 +238,7 @@ async function shouldPreserveOrphanCandidate(
     try {
       listedKey = await canonicalPathKey(entry.path);
     } catch (error) {
-      if (isMissingFileError(error)) {
+      if (isMissingPathError(error)) {
         continue;
       }
       throw error;
@@ -336,21 +337,17 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
   }
 }
 
-function isMissingFileError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
 /**
  * Sums file sizes without following symlinks, so a link cannot inflate or escape
- * the worktree. Only ENOENT is tolerated (cleanup races with removals); other
- * failures propagate so an unreadable tree is never measured as zero bytes.
+ * the worktree. Missing paths are tolerated because cleanup races with removals;
+ * other failures propagate so an unreadable tree is never measured as zero bytes.
  */
 async function directorySizeBytes(root: string): Promise<number> {
   let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return 0;
     }
     throw error;
@@ -364,7 +361,7 @@ async function directorySizeBytes(root: string): Promise<number> {
       try {
         total += (await fs.lstat(child)).size;
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
       }
@@ -378,7 +375,7 @@ async function containsGitMarker(root: string, checkoutRoot = false): Promise<bo
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return false;
     }
     throw error;
@@ -431,7 +428,7 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
     await fs.lstat(target);
     return true;
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return false;
     }
     throw error;
@@ -570,6 +567,14 @@ export class ManagedWorktreeService {
     this.now = options.now ?? Date.now;
   }
 
+  private async worktreesRoot(): Promise<string> {
+    const root = path.join(resolveStateDir(this.env), "worktrees");
+    await fs.mkdir(root, { recursive: true });
+    // Git canonicalizes paths in `git worktree list`; minting below the real root keeps
+    // lock-state and adoption comparisons aligned when the state path traverses symlinks.
+    return await fs.realpath(root);
+  }
+
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
     const repository = await resolveRepository(params.repoRoot);
     if (params.ownerId) {
@@ -633,7 +638,7 @@ export class ManagedWorktreeService {
     repository: Awaited<ReturnType<typeof resolveRepository>>,
     inferredName: string,
   ): Promise<ManagedWorktreeRecord> {
-    const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
+    const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name = validateName(
       params.name ??
         (await generateName(
@@ -962,10 +967,7 @@ export class ManagedWorktreeService {
         throw commandError("git branch -D", branchDelete);
       }
       await requireGit(record.repoRoot, ["worktree", "prune"]);
-      await removeEmptyParents(
-        path.dirname(record.path),
-        path.join(resolveStateDir(this.env), "worktrees"),
-      );
+      await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
       const removedAt = this.now();
       updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
       finalizeWorktreeRemoval(this.env, record.id);
@@ -1278,12 +1280,12 @@ export class ManagedWorktreeService {
       try {
         managedPaths.add(await canonicalPathKey(record.path));
       } catch (error) {
-        if (!isMissingFileError(error)) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
       }
     }
-    const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
+    const worktreesRoot = await this.worktreesRoot();
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
     let deleted = 0;
     for (const fingerprint of fingerprints) {

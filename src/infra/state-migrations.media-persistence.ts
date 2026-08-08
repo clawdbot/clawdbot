@@ -321,7 +321,7 @@ function migrateRegisteredDatabase(params: {
       pathname: params.pathname,
     });
     let userVersion = readSqliteUserVersion(database);
-    if (userVersion < PREVIOUS_MEDIA_SCHEMA_VERSION) {
+    if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
       migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(database, {
         agentId: params.agentId,
         path: params.pathname,

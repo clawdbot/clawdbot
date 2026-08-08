@@ -13,7 +13,6 @@ import {
   validateModelsListParams,
   validateModelsProbeParams,
   validateNodePluginToolsUpdateParams,
-  validateNodeProtocolFeaturesUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
   validateSessionsListParams,
@@ -22,6 +21,7 @@ import {
   validateSessionsCompanionStateParams,
   validateSessionsCreateParams,
   validateSessionsObserverVisibilityParams,
+  validateSessionsArchiveManyParams,
   validateSessionsPatchParams,
   validateSessionsSearchParams,
   validateSessionsSendParams,
@@ -199,6 +199,40 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it("validates bounded closed bulk session archive requests", () => {
+    const target = {
+      key: "agent:main:archive-me",
+      agentId: "main",
+      expectedSessionId: "session-archive-me",
+      expectedLifecycleRevision: "revision-archive-me",
+    };
+    expectAccepted(validateSessionsArchiveManyParams, [
+      { targets: [target], archived: true },
+      {
+        targets: Array.from({ length: 100 }, (_, index) => ({
+          key: `agent:main:archive-${index}`,
+        })),
+        archived: false,
+      },
+    ]);
+    expectRejected(validateSessionsArchiveManyParams, [
+      { targets: [], archived: true },
+      {
+        targets: Array.from({ length: 101 }, (_, index) => ({
+          key: `agent:main:archive-${index}`,
+        })),
+        archived: true,
+      },
+      { targets: [{ key: "" }], archived: true },
+      { targets: [{ key: target.key, agentId: "" }], archived: true },
+      { targets: [{ key: target.key, expectedSessionId: "" }], archived: true },
+      { targets: [{ key: target.key, expectedLifecycleRevision: "" }], archived: true },
+      { targets: [{ key: target.key, extra: true }], archived: true },
+      { targets: [target], archived: "yes" },
+      { targets: [target], archived: true, extra: true },
+    ]);
+  });
+
   it("validates sparse session tool overrides", () => {
     expectAccepted(validateSessionsPatchParams, [
       sessionPatch({
@@ -290,24 +324,6 @@ describe("lazy protocol validators", () => {
         })),
       },
     ]);
-  });
-
-  it("validates bounded transient node protocol features", () => {
-    expect(
-      validateNodeProtocolFeaturesUpdateParams({
-        features: [protocol.NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE],
-      }),
-    ).toBe(true);
-    expect(
-      validateNodeProtocolFeaturesUpdateParams({
-        features: ["duplicate", "duplicate"],
-      }),
-    ).toBe(false);
-    expect(
-      validateNodeProtocolFeaturesUpdateParams({
-        features: ["x".repeat(129)],
-      }),
-    ).toBe(false);
   });
 
   it("accepts selected-agent scope on chat send, history, and abort params", () => {

@@ -15,6 +15,7 @@ import {
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -189,12 +190,10 @@ function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefin
   if (!profileId) {
     return {};
   }
-  const profileSource = sessionEntry?.authProfileOverrideSource;
-  const legacyUserProfile =
-    profileSource === undefined && sessionEntry?.authProfileOverrideCompactionCount === undefined;
+  const profileSource = resolveSessionAuthProfileOverrideSource(sessionEntry);
   return {
     preferredProfileId: profileId,
-    ...(profileSource === "user" || legacyUserProfile ? { lockedProfileId: profileId } : {}),
+    ...(profileSource === "user" ? { lockedProfileId: profileId } : {}),
   };
 }
 

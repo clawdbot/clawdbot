@@ -45,7 +45,8 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes Windows SQLite path tests to Windows", () => {
     for (const testPath of [
-      "src/infra/update-managed-service-handoff.test.ts",
+      "src/infra/update-managed-service-handoff-command.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
       "src/state/openclaw-database-paths.windows.test.ts",
     ]) {
       expect(detectChangedScope([testPath]), testPath).toMatchObject({
@@ -111,6 +112,41 @@ describe("detectChangedScope Windows routing", () => {
         runNode: true,
         runWindows: true,
       });
+    }
+  });
+
+  it("routes SecretRef path-security changes and native fixtures to Windows", () => {
+    for (const secretRefPath of [
+      "src/commands/doctor-gateway-auth-token.ts",
+      "src/commands/doctor-gateway-auth-token.windows.test.ts",
+      "src/flows/doctor-core-checks.ts",
+      "src/flows/doctor-health-contributions.ts",
+      "src/gateway/auth-token-resolution.ts",
+      "src/gateway/resolve-configured-secret-input-string.ts",
+      "src/infra/fs-safe.ts",
+      "src/infra/fs-safe-defaults.ts",
+      "src/infra/permissions.ts",
+      "src/secrets/resolve-errors.ts",
+      "src/secrets/resolve.ts",
+      "src/secrets/test-node-command.test-support.ts",
+      "src/security/audit-fs.ts",
+      "src/test-utils/vitest-spies.ts",
+      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
+      "test/fixtures/windows-acl-tools-unavailable.mjs",
+    ]) {
+      expect(detectChangedScope([secretRefPath]), secretRefPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("does not route SecretRef unit tests omitted from the Windows shard", () => {
+    for (const testPath of [
+      "src/gateway/resolve-configured-secret-input-string.test.ts",
+      "src/secrets/resolve.test.ts",
+    ]) {
+      expect(detectChangedScope([testPath]).runWindows, testPath).toBe(false);
     }
   });
 });

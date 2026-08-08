@@ -13,6 +13,7 @@ import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/s
 import { pickPrimaryLanIPv4 } from "../../../../src/gateway/net.js";
 import { startGatewayServer, type GatewayServer } from "../../../../src/gateway/server.js";
 import { getFreeGatewayPort } from "../../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { rawDataToString } from "../../../../src/infra/ws.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
@@ -27,6 +28,7 @@ const SCENARIO_ID = "gateway-loopback-lan-access";
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",

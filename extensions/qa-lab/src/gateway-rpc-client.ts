@@ -1,9 +1,10 @@
 // Qa Lab plugin module implements gateway rpc client behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
 type QaGatewayRpcRequestOptions = {
+  deadlineMs?: number;
   expectFinal?: boolean;
   timeoutMs?: number;
 };
@@ -25,6 +26,31 @@ function runQueuedQaGatewayRpc<T>(queue: Promise<void>, task: () => Promise<T>) 
     () => undefined,
   );
   return { run, nextQueue };
+}
+
+function qaGatewayDeadlineError() {
+  return new Error("gateway request deadline exceeded");
+}
+
+function waitForQaGatewayRpcDeadline<T>(run: Promise<T>, deadlineMs: number) {
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    return Promise.reject(qaGatewayDeadlineError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(qaGatewayDeadlineError()), remainingMs);
+    void run.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        const rejectionError: Error = toErrorObject(error, "Gateway RPC request failed");
+        reject(rejectionError);
+      },
+    );
+  });
 }
 
 export async function startQaGatewayRpcClient(params: {
@@ -51,12 +77,21 @@ export async function startQaGatewayRpcClient(params: {
       try {
         const { run, nextQueue } = runQueuedQaGatewayRpc(queue, async () => {
           assertNotStopped();
+          const remainingMs =
+            opts?.deadlineMs === undefined ? undefined : opts.deadlineMs - Date.now();
+          if (remainingMs !== undefined && remainingMs <= 0) {
+            throw qaGatewayDeadlineError();
+          }
           return await callGatewayFromCli(
             method,
             {
               url: params.wsUrl,
               token: params.token,
-              timeout: String(opts?.timeoutMs ?? 20_000),
+              timeout: String(
+                remainingMs === undefined
+                  ? (opts?.timeoutMs ?? 20_000)
+                  : Math.min(opts?.timeoutMs ?? 20_000, remainingMs),
+              ),
               expectFinal: opts?.expectFinal,
               json: true,
             },
@@ -71,8 +106,12 @@ export async function startQaGatewayRpcClient(params: {
             },
           );
         });
+        // Caller deadline rejection must not release serialization. The queue stays on
+        // the underlying run, which rechecks expiry before dispatch when its turn arrives.
         queue = nextQueue;
-        return await run;
+        return await (opts?.deadlineMs === undefined
+          ? run
+          : waitForQaGatewayRpcDeadline(run, opts.deadlineMs));
       } catch (error) {
         throw wrapError(error);
       }

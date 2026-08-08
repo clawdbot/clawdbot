@@ -19,6 +19,27 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createTestAdmission(params: {
+  entryId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}) {
+  return {
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    generation: "test-generation",
+    entryId: params.entryId,
+    rawSeq: 1,
+    effectiveParentId: null,
+    activeMessagePosition: 0,
+    logicalTurnId: `${params.entryId}:turn`,
+    role: "user" as const,
+  };
+}
+
 function replaceSessionEntryFromIndependentConnection(params: {
   entry: SessionEntry;
   sessionKey: string;
@@ -98,10 +119,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
     await replaceSessionEntry({ storePath, sessionKey }, entry);
 
     let persistedTarget: UserTurnTranscriptTarget | undefined;
+    const admission = createTestAdmission({
+      entryId: "user-turn-1",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>(async (params) => {
       persistedTarget =
         typeof params?.target === "function" ? await params.target() : params?.target;
       return {
+        admission,
         appended: true,
         message: { role: "user", content: "hello", timestamp: Date.now() },
         messageId: "user-turn-1",
@@ -112,6 +140,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     const recorder = {
       message: undefined,
       resolveMessage: async () => undefined,
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -172,6 +201,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
       status: "done",
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>();
     const recorder = {
       message: undefined,
@@ -188,6 +223,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           timestamp: Date.now(),
         };
       },
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -249,10 +285,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
       idempotencyKey: sourceTurnId,
       timestamp: Date.now(),
     };
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const recorder = {
       message: undefined,
       getPersistedMessage: () => sourceMessage,
       resolveMessage: async () => sourceMessage,
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},

@@ -11,12 +11,22 @@ import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
+export {
+  SESSIONS_ARCHIVE_MANY_MAX_TARGETS,
+  SessionsArchiveManyParamsSchema,
+  SessionsArchiveManyResultSchema,
+  SessionsArchiveManyTargetSchema,
+  type SessionsArchiveManyParams,
+  type SessionsArchiveManyResult,
+} from "./sessions-archive-many.js";
 export {
   SessionCreatedActorSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionRunStatus,
   type SessionToolOverrides,
 } from "./sessions-row.js";
 
@@ -154,6 +164,7 @@ export const SessionCompactionCheckpointSchema = closedObject({
   reason: SessionCompactionCheckpointReasonSchema,
   tokensBefore: Type.Optional(Type.Integer({ minimum: 0 })),
   tokensAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+  tokensVersion: Type.Optional(Type.Literal(1)),
   summary: Type.Optional(Type.String()),
   firstKeptEntryId: Type.Optional(NonEmptyString),
   preCompaction: SessionCompactionTranscriptReferenceSchema,
@@ -415,19 +426,6 @@ export const SessionsDescribeParamsSchema = closedObject({
   key: NonEmptyString,
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
-});
-
-/** Resolves a session by key, raw session id, label, or parent/agent scope. */
-export const SessionsResolveParamsSchema = closedObject({
-  key: Type.Optional(NonEmptyString),
-  sessionId: Type.Optional(NonEmptyString),
-  label: Type.Optional(SessionLabelString),
-  agentId: Type.Optional(NonEmptyString),
-  spawnedBy: Type.Optional(NonEmptyString),
-  includeGlobal: Type.Optional(Type.Boolean()),
-  includeUnknown: Type.Optional(Type.Boolean()),
-  /** Return a successful `{ ok: false }` response when the selector does not match a session. */
-  allowMissing: Type.Optional(Type.Boolean()),
 });
 
 export const SessionWorktreeInfoSchema = closedObject({
@@ -824,7 +822,6 @@ export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
-export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
 export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
 export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;

@@ -131,6 +131,58 @@ export type RelayToExtensionMessage =
   | RelayPingMessage
   | RelayPageShareResultMessage;
 
+function hasExactOwnKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function isRelayTabInfo(value: unknown): value is RelayTabInfo {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if (!hasExactOwnKeys(value, ["tabId", "url", "title", "active"])) {
+    return false;
+  }
+  const tab = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(tab.tabId) &&
+    (tab.tabId as number) >= 0 &&
+    typeof tab.url === "string" &&
+    tab.url.length <= 16_384 &&
+    typeof tab.title === "string" &&
+    tab.title.length <= 4_096 &&
+    typeof tab.active === "boolean"
+  );
+}
+
+function isExtensionHelloMessage(value: object): value is ExtensionHelloMessage {
+  if (
+    !hasExactOwnKeys(value, ["type", "userAgent", "browserVersion", "extensionVersion", "tabs"])
+  ) {
+    return false;
+  }
+  const hello = value as Record<string, unknown>;
+  if (
+    hello.type !== "hello" ||
+    typeof hello.userAgent !== "string" ||
+    hello.userAgent.length === 0 ||
+    hello.userAgent.length > 2_048 ||
+    typeof hello.browserVersion !== "string" ||
+    hello.browserVersion.length === 0 ||
+    hello.browserVersion.length > 512 ||
+    typeof hello.extensionVersion !== "string" ||
+    hello.extensionVersion.length === 0 ||
+    hello.extensionVersion.length > 128 ||
+    !Array.isArray(hello.tabs) ||
+    hello.tabs.length > 1_000 ||
+    !hello.tabs.every(isRelayTabInfo)
+  ) {
+    return false;
+  }
+  const tabIds = new Set(hello.tabs.map((tab) => tab.tabId));
+  return tabIds.size === hello.tabs.length;
+}
+
 /** Parse one extension frame; returns null for malformed input. */
 export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | null {
   let parsed: unknown;
@@ -148,6 +200,7 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
   }
   switch (type) {
     case "hello":
+      return isExtensionHelloMessage(parsed) ? parsed : null;
     case "tabs":
     case "cdpEvent":
     case "result":
