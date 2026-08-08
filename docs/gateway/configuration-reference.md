@@ -4,6 +4,7 @@ title: "Configuration reference"
 read_when:
   - You need exact field-level config semantics or defaults
   - You are validating channel, model, gateway, or tool config blocks
+doc-schema-version: 1
 ---
 
 Field-level reference for `~/.openclaw/openclaw.json`: keys, defaults, and links to deeper subsystem pages. For task-oriented setup guidance, see [Configuration](/gateway/configuration). Channel- and plugin-owned command catalogs and deep memory/QMD knobs live on their own pages, not here.
@@ -813,10 +814,6 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
           // Optional absolute path. Default: sibling ../crabbox/bin/crabbox, then PATH.
           binary: "/usr/local/bin/crabbox",
         },
-        lifetime: {
-          idleTimeoutMinutes: 60,
-          maxLifetimeMinutes: 1440,
-        },
       },
     },
   },
@@ -825,10 +822,14 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 
 - `settings.provider` (required): Crabbox backend passed through `--provider`. Use a backend whose inspect output includes an SSH endpoint; `aws` selects the direct AWS backend.
 - `settings.class` (required): Crabbox machine class passed to `--class`.
-- `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout`. These provider-side failsafes are distinct from OpenClaw's stored `lifetime` policy below.
+- `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout` as provider-side failsafes.
 - `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`, and finally invokes `crabbox` so a missing CLI remains a visible provider error.
 
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
+
+For coordinator-backed AWS, Crabbox's own `aws.sshCIDRs` should include the Gateway host's outbound IPv4 as a `/32`. Verify it with `crabbox config show --json` and `crabbox doctor --provider aws --json` before provisioning; do not place this provider-ingress setting in OpenClaw `settings`. See [Coordinator-backed Crabbox](/gateway/cloud-workers#coordinator-backed-crabbox).
+
+Crabbox inspect may expose ordered `sshFallbackPorts` in addition to its primary `sshPort`. OpenClaw persists the advertised order across Gateway restarts. The shared pinned SSH transport uses the current candidate first and retries the remaining advertised ports only when a fresh authenticated SSH or workspace-transfer connection fails at the transport layer. Network policies must allow at least one advertised candidate.
 
 <Note>
   OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver and pins the authoritative `sshHostKey` returned by `crabbox inspect --json`. AWS admission also requires `providerMetadata.instanceProfileAttached`. Install Crabbox 0.38.1 or newer for this closed inspection contract.
@@ -853,10 +854,6 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
             id: "OPENCLAW_WORKER_SSH_KEY",
           },
         },
-        lifetime: {
-          idleTimeoutMinutes: 60,
-          maxLifetimeMinutes: 1440,
-        },
       },
     },
   },
@@ -868,16 +865,14 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 - `install`: worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`.
 - Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
 - `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
-- `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
-- `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
 
 A supported Node runtime (22.22.3+, 24.15+, or 25.9+) with WAL-reset-safe SQLite must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
 
-This foundation installs and verifies the gateway build and provides tunnel start/stop lifecycle, but it does not launch the general OpenClaw CLI. The self-contained worker entry and loop land in the next cloud-worker milestone.
+The Gateway installs and verifies the selected OpenClaw build, launches the self-contained worker loop, proxies model inference through the Gateway, and reconciles the session workspace and transcript through the durable placement lifecycle.
 
-Each durable environment record retains its validated provider settings, resolved install method, and lifetime policy in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
+Each durable environment record retains its validated provider settings and resolved install method in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
-Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
+Profile changes require a Gateway restart. With the default `gateway.reload.mode: "hybrid"`, the config watcher performs the restart automatically; `"off"` mode requires a manual restart.
 
 <Warning>
   The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.

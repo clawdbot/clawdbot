@@ -2,13 +2,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
 import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
@@ -31,6 +33,7 @@ const MISMATCHED_SWIFT_RAW_PRIVATE_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
 });
 
 function storeOptions(rootDir: string, identityKey?: string): DeviceIdentityStoreOptions {
@@ -177,6 +180,84 @@ describe("device identity SQLite store", () => {
           busyTimeoutMs: 0,
         }),
       ).toThrow(/real directory/);
+    });
+  });
+
+  it("bridges process-temp and state-local coordinator owners", async () => {
+    await withTempDir("openclaw-device-identity-bridge-", async (rawRootDir) => {
+      const rootDir = fs.realpathSync.native(rawRootDir);
+      const databasePath = path.join(rootDir, "selected-state", "state", "openclaw.sqlite");
+      const stateDir = path.join(rootDir, "selected-state");
+      const temporaryDirectory = path.join(rootDir, "process-temp");
+      fs.mkdirSync(temporaryDirectory, { recursive: true });
+      vi.spyOn(os, "tmpdir").mockReturnValue(temporaryDirectory);
+
+      const paths = resolveDeviceIdentityCoordinatorPaths({
+        databasePath,
+        stateDir,
+        temporaryDirectory,
+        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+      });
+      expect(paths).toHaveLength(2);
+      const processTempPath = paths[0];
+      const stateLocalPath = paths[1];
+      if (!processTempPath || !stateLocalPath) {
+        throw new Error("coordinator bridge paths are unavailable");
+      }
+      const processTempLockDir = path.dirname(processTempPath);
+      const stateLockDir = path.dirname(stateLocalPath);
+
+      const stateOnly = acquireDeviceIdentityCoordinator({
+        databasePath,
+        lockDir: stateLockDir,
+        busyTimeoutMs: 0,
+      });
+      try {
+        expect(() =>
+          acquireDeviceIdentityCoordinator({ databasePath, stateDir, busyTimeoutMs: 0 }),
+        ).toThrow(/migration or creation already owns this state database/);
+        const oldAfterPartialFailure = acquireDeviceIdentityCoordinator({
+          databasePath,
+          lockDir: processTempLockDir,
+          busyTimeoutMs: 0,
+        });
+        oldAfterPartialFailure.release();
+      } finally {
+        stateOnly.release();
+      }
+
+      const dual = acquireDeviceIdentityCoordinator({ databasePath, stateDir, busyTimeoutMs: 0 });
+      try {
+        expect(() =>
+          acquireDeviceIdentityCoordinator({
+            databasePath,
+            lockDir: processTempLockDir,
+            busyTimeoutMs: 0,
+          }),
+        ).toThrow(/migration or creation already owns this state database/);
+        expect(() =>
+          acquireDeviceIdentityCoordinator({
+            databasePath,
+            lockDir: stateLockDir,
+            busyTimeoutMs: 0,
+          }),
+        ).toThrow(/migration or creation already owns this state database/);
+      } finally {
+        dual.release();
+      }
+
+      const oldRuntime = acquireDeviceIdentityCoordinator({
+        databasePath,
+        lockDir: processTempLockDir,
+        busyTimeoutMs: 0,
+      });
+      const transitionalRuntime = acquireDeviceIdentityCoordinator({
+        databasePath,
+        lockDir: stateLockDir,
+        busyTimeoutMs: 0,
+      });
+      transitionalRuntime.release();
+      oldRuntime.release();
     });
   });
 

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
@@ -14,6 +15,7 @@ import {
   type WorkerSshRunner,
 } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
 import type {
   WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -28,6 +30,7 @@ function waitForFast<T>(
 
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const SSH: WorkerSshEndpoint = {
   host: "worker.example.test",
@@ -36,6 +39,7 @@ const SSH: WorkerSshEndpoint = {
   hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "workers", id: "/identity" },
 };
+const PWD_COMMAND = { transportRetry: "idempotent", argv: ["pwd"] } as const;
 
 function success(stdout = "", stderr = ""): SpawnResult {
   return {
@@ -90,12 +94,13 @@ class FakeProcess implements WorkerSshProcess {
     this.readyDeferred.resolve();
   }
 
-  failReady(message = "connect failed") {
+  failReady(message = "connect failed", code = 1) {
     this.readyDeferred.reject(new Error(message));
+    this.exitDeferred.resolve({ code, signal: null });
   }
 
-  exit() {
-    this.exitDeferred.resolve({ code: 1, signal: null });
+  exit(code = 1) {
+    this.exitDeferred.resolve({ code, signal: null });
   }
 
   blockStopUntil(barrier: Promise<void>) {
@@ -205,20 +210,48 @@ async function waitForStarts(starts: unknown[], count: number) {
   await waitForFast(() => expect(starts).toHaveLength(count));
 }
 
+type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner" | "starts">;
+type TunnelManagerOptions = NonNullable<Parameters<typeof createWorkerTunnelManager>[0]>;
+type TunnelManager = ReturnType<typeof createWorkerTunnelManager>;
+
+function startTestTunnel(
+  manager: TunnelManager,
+  environmentId: string,
+  ownerEpoch: number,
+  ssh: WorkerSshEndpoint = SSH,
+) {
+  return manager.start({
+    environmentId,
+    ownerEpoch,
+    ssh,
+    gateway: { host: "127.0.0.1", port: 18789 },
+    resolveIdentity,
+  });
+}
+
+async function startConnectedTunnel(
+  fake: TunnelTestFake,
+  environmentId: string,
+  ownerEpoch: number,
+  options: {
+    ssh?: WorkerSshEndpoint;
+    manager?: Omit<TunnelManagerOptions, "runner">;
+    beforeReady?: (start: TunnelTestFake["starts"][number]) => void;
+  } = {},
+) {
+  const manager = createWorkerTunnelManager({ ...options.manager, runner: fake.runner });
+  const starting = startTestTunnel(manager, environmentId, ownerEpoch, options.ssh);
+  await waitForStarts(fake.starts, 1);
+  const start = fake.starts[0]!;
+  options.beforeReady?.(start);
+  start.process.becomeReady();
+  return { manager, handle: await starting, start };
+}
+
 describe("worker tunnel manager", () => {
   it("establishes a pinned reverse socket with keepalives and a separate workspace connection", async () => {
     const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:one",
-      ownerEpoch: 3,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-
-    await waitForStarts(fake.starts, 1);
-    const tunnel = fake.starts[0];
+    const { manager, handle, start: tunnel } = await startConnectedTunnel(fake, "worker:one", 3);
     expect(tunnel?.argv).toContain("ClearAllForwardings=no");
     expect(tunnel?.argv).toContain("ServerAliveInterval=15");
     expect(tunnel?.argv).toContain("ServerAliveCountMax=3");
@@ -228,18 +261,14 @@ describe("worker tunnel manager", () => {
     expect(tunnel?.argv[tunnel.argv.indexOf("-R") + 1]).toMatch(
       /^\/tmp\/ocw-[a-f0-9]{16}-3\/gateway\.sock:127\.0\.0\.1:18789$/u,
     );
-    tunnel?.process.becomeReady();
-    const handle = await starting;
     expect(manager.status("worker:one")).toBe("connected");
-
-    await expect(handle.runWorkspaceCommand({ argv: ["pwd"] })).resolves.toEqual(success());
+    await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
     const workspace = fake.runs.at(-1);
     expect(workspace?.argv).toContain("ClearAllForwardings=yes");
     expect(workspace?.argv).toContain("ControlMaster=no");
     expect(workspace?.argv).toContain("ControlPath=none");
     expect(workspace?.argv.at(-1)).toContain("pwd");
     expect(fake.starts).toHaveLength(1);
-
     await handle.stop();
     expect(tunnel?.process.stopCount).toBe(1);
     expect(manager.status("worker:one")).toBe("stopped");
@@ -257,17 +286,7 @@ describe("worker tunnel manager", () => {
       }
       return undefined;
     });
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:quiescence-renewal",
-      ownerEpoch: 3,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
+    const { handle } = await startConnectedTunnel(fake, "worker:quiescence-renewal", 3);
 
     vi.useFakeTimers();
     try {
@@ -314,17 +333,7 @@ describe("worker tunnel manager", () => {
       }
       return undefined;
     });
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:sync",
-      ownerEpoch: 5,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
+    const { handle } = await startConnectedTunnel(fake, "worker:sync", 5);
 
     try {
       await expect(
@@ -372,17 +381,9 @@ describe("worker tunnel manager", () => {
       }
       return undefined;
     });
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:sync-failure",
-      ownerEpoch: 2,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
+    const { handle } = await startConnectedTunnel(fake, "worker:sync-failure", 2, {
+      ssh: { ...SSH, fallbackPorts: [22] },
     });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
 
     await expect(
       handle.syncWorkspace({
@@ -394,8 +395,69 @@ describe("worker tunnel manager", () => {
     expect(
       fake.runs.some((entry) => entry.argv.at(-1)?.includes("worker workspace symlink escapes")),
     ).toBe(false);
+    const rsyncCalls = fake.runs.filter((entry) => entry.argv[0] === "rsync");
+    expect(rsyncCalls).toHaveLength(1);
+    expect(rsyncArgvPort(rsyncCalls[0]!.argv)).toBe(2202);
 
     await handle.stop();
+  });
+
+  it("moves a later fresh workspace transfer to an advertised fallback", async () => {
+    const endpoint = { ...SSH, port: 2222, fallbackPorts: [22] };
+    const remoteWorkspaceDir = "/home/worker/.openclaw-worker/workspaces/env/session/1";
+    const manifestRef = `sha256:${"c".repeat(64)}`;
+    const localPath = tempDirs.make("openclaw-worker-fallback-sync-");
+    await fs.writeFile(path.join(localPath, "artifact.txt"), "transfer me\n");
+    const fake = fakeRunner((argv, options) => {
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
+        return success(`${remoteWorkspaceDir}\n`);
+      }
+      if (argv[0] === "rsync") {
+        return rsyncArgvPort(argv) === 2222
+          ? { ...success("", "primary transport unavailable"), code: 255 }
+          : success();
+      }
+      if (argv.at(-1)?.includes("worker workspace symlink escapes")) {
+        return success(`${manifestRef}\n`);
+      }
+      return undefined;
+    });
+    const { handle } = await startConnectedTunnel(fake, "worker:fallback-sync", 1, {
+      ssh: endpoint,
+      beforeReady: (start) => expect(sshArgvPort(start.argv)).toBe(2222),
+    });
+
+    try {
+      await expect(
+        handle.syncWorkspace({ localPath, sessionId: "session:fallback", generation: 1 }),
+      ).resolves.toEqual({ mode: "plain", remoteWorkspaceDir, manifestRef });
+      await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+
+      const freshConnections = fake.runs.filter(
+        (entry) => entry.argv[0] === "ssh" || entry.argv[0] === "rsync",
+      );
+      const ports = freshConnections.map((entry) =>
+        entry.argv[0] === "ssh" ? sshArgvPort(entry.argv) : rsyncArgvPort(entry.argv),
+      );
+      expect(ports).toEqual(expect.arrayContaining([2222, 22]));
+      expect(new Set(ports)).toEqual(new Set([2222, 22]));
+      expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
+
+      const identityPath = fake.runs[0]!.argv[fake.runs[0]!.argv.indexOf("-i") + 1]!;
+      const knownHostsOption = fake.runs[0]!.argv.find((value) =>
+        value.startsWith("UserKnownHostsFile="),
+      )!;
+      for (const connection of [...freshConnections, ...fake.starts]) {
+        expect(connection.argv.join(" ")).toContain(identityPath);
+        expect(connection.argv.join(" ")).toContain(knownHostsOption);
+      }
+    } finally {
+      await handle.stop();
+      await fs.rm(localPath, { recursive: true, force: true });
+    }
   });
 
   it("does not downgrade an operational HEAD probe failure to plain sync", async () => {
@@ -422,17 +484,7 @@ describe("worker tunnel manager", () => {
       }
       return undefined;
     });
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:head-probe-failure",
-      ownerEpoch: 3,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
+    const { handle } = await startConnectedTunnel(fake, "worker:head-probe-failure", 3);
 
     try {
       await expect(
@@ -469,17 +521,7 @@ describe("worker tunnel manager", () => {
       }
       return undefined;
     });
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:root-probe-failure",
-      ownerEpoch: 4,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
+    const { handle } = await startConnectedTunnel(fake, "worker:root-probe-failure", 4);
 
     try {
       await expect(
@@ -541,17 +583,7 @@ describe("worker tunnel manager", () => {
     ]);
 
     const fake = localWorkspaceRunner(remoteHome);
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:real-git-sync",
-      ownerEpoch: 11,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
+    const { handle } = await startConnectedTunnel(fake, "worker:real-git-sync", 11);
 
     try {
       const result = await handle.syncWorkspace({
@@ -736,17 +768,7 @@ describe("worker tunnel manager", () => {
     await fs.symlink(path.join(root, "outside"), path.join(gitPath, "escape"));
 
     const fake = localWorkspaceRunner(remoteHome);
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:real-sync-modes",
-      ownerEpoch: 12,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
+    const { handle } = await startConnectedTunnel(fake, "worker:real-sync-modes", 12);
 
     try {
       const plain = await handle.syncWorkspace({
@@ -782,23 +804,14 @@ describe("worker tunnel manager", () => {
   it("reconnects with capped backoff after unexpected exits and failed attempts", async () => {
     const fake = fakeRunner();
     const delays: number[] = [];
-    const manager = createWorkerTunnelManager({
-      runner: fake.runner,
-      backoff: { initialMs: 5, maxMs: 10, factor: 2, jitter: 0 },
-      sleep: async (ms) => {
-        delays.push(ms);
+    const { manager, handle } = await startConnectedTunnel(fake, "worker:retry", 1, {
+      manager: {
+        backoff: { initialMs: 5, maxMs: 10, factor: 2, jitter: 0 },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
       },
     });
-    const starting = manager.start({
-      environmentId: "worker:retry",
-      ownerEpoch: 1,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
 
     fake.starts[0]?.process.exit();
     await waitForStarts(fake.starts, 2);
@@ -812,33 +825,111 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
+  it("reconnects on the next advertised port after SSH transport exit 255", async () => {
+    const fake = fakeRunner();
+    const { handle } = await startConnectedTunnel(fake, "worker:port-reconnect", 1, {
+      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
+      manager: { sleep: async () => {} },
+      beforeReady: (start) => expect(sshArgvPort(start.argv)).toBe(2222),
+    });
+
+    fake.starts[0]!.process.exit(255);
+    await waitForStarts(fake.starts, 2);
+    expect(sshArgvPort(fake.starts[1]!.argv)).toBe(22);
+    expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
+    fake.starts[1]!.process.becomeReady();
+    await handle.stop();
+  });
+
+  it("shares setup and best-effort stop cleanup deadlines across fallback candidates", async () => {
+    let nowMs = 1_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const setupAttempts: Array<{ port: number; timeoutMs: number }> = [];
+    const cleanupAttempts: Array<{ port: number; timeoutMs: number }> = [];
+    const fake = fakeRunner((argv, options) => {
+      const port = sshArgvPort(argv);
+      if (port === undefined) {
+        throw new Error("missing tunnel SSH port");
+      }
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker tunnel directory")
+      ) {
+        const timeoutMs = options.timeoutMs;
+        if (timeoutMs === undefined) {
+          throw new Error("missing tunnel setup timeout");
+        }
+        setupAttempts.push({ port, timeoutMs });
+        if (setupAttempts.length === 1) {
+          nowMs += 7_000;
+          return { ...success("", "primary transport unavailable"), code: 255 };
+        }
+        return success();
+      }
+      if (typeof options.input === "string" && options.input.includes('rmdir -- "$directory"')) {
+        const timeoutMs = options.timeoutMs;
+        if (timeoutMs === undefined) {
+          throw new Error("missing tunnel cleanup timeout");
+        }
+        cleanupAttempts.push({ port, timeoutMs });
+        if (cleanupAttempts.length === 1) {
+          nowMs += 5_000;
+          return { ...success("", "selected transport unavailable"), code: 255 };
+        }
+        return success();
+      }
+      return undefined;
+    });
+    const manager = createWorkerTunnelManager({ runner: fake.runner, sleep: async () => {} });
+    try {
+      const starting = startTestTunnel(manager, "worker:operation-deadline", 1, {
+        ...SSH,
+        port: 2222,
+        fallbackPorts: [22],
+      });
+      await waitForStarts(fake.starts, 1);
+      expect(sshArgvPort(fake.starts[0]!.argv)).toBe(22);
+      fake.starts[0]!.process.becomeReady();
+      const handle = await starting;
+
+      fake.starts[0]!.process.exit();
+      await waitForStarts(fake.starts, 2);
+      expect(sshArgvPort(fake.starts[1]!.argv)).toBe(22);
+      fake.starts[1]!.process.becomeReady();
+      await handle.stop();
+      expect(setupAttempts).toEqual([
+        { port: 2222, timeoutMs: 20_000 },
+        { port: 22, timeoutMs: 13_000 },
+        { port: 22, timeoutMs: 20_000 },
+      ]);
+      expect(cleanupAttempts).toEqual([
+        { port: 22, timeoutMs: 20_000 },
+        { port: 2222, timeoutMs: 15_000 },
+      ]);
+      expect(manager.status("worker:operation-deadline")).toBe("stopped");
+    } finally {
+      dateNow.mockRestore();
+      await manager.stopAll();
+    }
+  });
+
   it("backs off repeated short-lived connected tunnels", async () => {
     const fake = fakeRunner();
     const delays: number[] = [];
-    const manager = createWorkerTunnelManager({
-      runner: fake.runner,
-      backoff: { initialMs: 5, maxMs: 10, factor: 2, jitter: 0 },
-      sleep: async (ms) => {
-        delays.push(ms);
+    const { handle } = await startConnectedTunnel(fake, "worker:flap", 1, {
+      manager: {
+        backoff: { initialMs: 5, maxMs: 10, factor: 2, jitter: 0 },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
       },
     });
-    const starting = manager.start({
-      environmentId: "worker:flap",
-      ownerEpoch: 1,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
 
     for (let index = 0; index < 3; index += 1) {
       fake.starts[index]?.process.exit();
       await waitForStarts(fake.starts, index + 2);
       fake.starts[index + 1]?.process.becomeReady();
     }
-
     expect(delays).toEqual([5, 10, 10]);
     await handle.stop();
   });
@@ -846,28 +937,19 @@ describe("worker tunnel manager", () => {
   it("fences reconnect before teardown and ignores a late process readiness signal", async () => {
     const fake = fakeRunner();
     const sleepStarted = deferred<AbortSignal>();
-    const manager = createWorkerTunnelManager({
-      runner: fake.runner,
-      sleep: async (_ms, signal) => {
-        if (!signal) {
-          throw new Error("missing reconnect signal");
-        }
-        sleepStarted.resolve(signal);
-        await new Promise<void>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-        });
+    const { manager, handle } = await startConnectedTunnel(fake, "worker:drain", 8, {
+      manager: {
+        sleep: async (_ms, signal) => {
+          if (!signal) {
+            throw new Error("missing reconnect signal");
+          }
+          sleepStarted.resolve(signal);
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        },
       },
     });
-    const starting = manager.start({
-      environmentId: "worker:drain",
-      ownerEpoch: 8,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await starting;
     fake.starts[0]?.process.exit();
     await sleepStarted.promise;
 
@@ -875,13 +957,7 @@ describe("worker tunnel manager", () => {
     expect(manager.status("worker:drain")).toBe("stopped");
     expect(fake.starts).toHaveLength(1);
 
-    const pending = manager.start({
-      environmentId: "worker:late",
-      ownerEpoch: 1,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
+    const pending = startTestTunnel(manager, "worker:late", 1);
     const pendingResult = expect(pending).rejects.toThrow("stopped before connecting");
     await waitForStarts(fake.starts, 2);
     const late = fake.starts[1]?.process;
@@ -894,54 +970,20 @@ describe("worker tunnel manager", () => {
 
   it("rejects stale owner epochs without replacing the current tunnel", async () => {
     const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const current = manager.start({
-      environmentId: "worker:epoch",
-      ownerEpoch: 4,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    const handle = await current;
+    const { manager, handle } = await startConnectedTunnel(fake, "worker:epoch", 4);
 
-    await expect(
-      manager.start({
-        environmentId: "worker:epoch",
-        ownerEpoch: 3,
-        ssh: SSH,
-        gateway: { host: "127.0.0.1", port: 18789 },
-        resolveIdentity,
-      }),
-    ).rejects.toThrow("epoch is stale");
+    await expect(startTestTunnel(manager, "worker:epoch", 3)).rejects.toThrow("epoch is stale");
     expect(fake.starts).toHaveLength(1);
     await handle.stop();
   });
 
   it("publishes a replacement epoch before awaiting prior teardown", async () => {
     const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const current = manager.start({
-      environmentId: "worker:replacement",
-      ownerEpoch: 1,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
-    await waitForStarts(fake.starts, 1);
-    fake.starts[0]?.process.becomeReady();
-    await current;
+    const { manager } = await startConnectedTunnel(fake, "worker:replacement", 1);
 
     const releaseStop = deferred<void>();
     fake.starts[0]?.process.blockStopUntil(releaseStop.promise);
-    const replacement = manager.start({
-      environmentId: "worker:replacement",
-      ownerEpoch: 2,
-      ssh: SSH,
-      gateway: { host: "127.0.0.1", port: 18789 },
-      resolveIdentity,
-    });
+    const replacement = startTestTunnel(manager, "worker:replacement", 2);
     const rejectedReplacement = expect(replacement).rejects.toThrow("stopped before connecting");
     await waitForFast(() => expect(fake.starts[0]?.process.stopCount).toBe(1));
 

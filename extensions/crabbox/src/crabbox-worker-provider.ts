@@ -60,6 +60,14 @@ type LeaseCommandContext = {
   provider: string;
 };
 
+type ProvisionInspectContext = {
+  binary: string;
+  deadline: number;
+  inspect: ParsedInspect;
+  provider: string;
+  runCommand: CrabboxCommandRunner;
+};
+
 type InspectCommandResult = { status: "found"; inspect: ParsedInspect } | { status: "unknown" };
 
 class InvalidInspectResultError extends Error {}
@@ -350,6 +358,7 @@ function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
     ssh: {
       host: inspect.host,
       port: inspect.sshPort,
+      fallbackPorts: inspect.sshFallbackPorts,
       user: inspect.sshUser,
       hostKey: requireHostKey(inspect.sshHostKey),
       keyRef: {
@@ -361,13 +370,7 @@ function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
   };
 }
 
-async function leaseFromProvisionInspect(params: {
-  binary: string;
-  deadline: number;
-  inspect: ParsedInspect;
-  provider: string;
-  runCommand: CrabboxCommandRunner;
-}): Promise<WorkerLease> {
+async function leaseFromProvisionInspect(params: ProvisionInspectContext): Promise<WorkerLease> {
   try {
     assertProvisionSecurityPolicy(params);
     return leaseFromInspect(params.inspect);
@@ -381,40 +384,43 @@ function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provide
   if (params.inspect.tailscaleEnabled) {
     throw new WorkerProviderError("Crabbox cloud worker lease must not have Tailscale enabled");
   }
-  if (params.provider === "aws" && params.inspect.awsInstanceProfileAttached !== false) {
+  const attached = params.inspect.awsInstanceProfileAttached;
+  const pending = !params.inspect.ready && !isUnusableProvisionState(params.inspect.state);
+  if (params.provider === "aws" && attached !== false && (attached || !pending)) {
     throw new WorkerProviderError(
       "Crabbox AWS inspect must attest that no instance profile is attached",
     );
   }
 }
 
-async function waitForProvisionReady(params: {
-  binary: string;
-  deadline: number;
-  inspect: ParsedInspect;
-  provider: string;
-  runCommand: CrabboxCommandRunner;
-  sleep: (milliseconds: number) => Promise<void>;
-}): Promise<ParsedInspect> {
+async function waitForProvisionReady(
+  params: ProvisionInspectContext & {
+    refresh?: boolean;
+    sleep: (milliseconds: number) => Promise<void>;
+  },
+): Promise<ParsedInspect> {
   let inspect = params.inspect;
+  const inspectAgain = async (): Promise<ParsedInspect> => {
+    const replay = await inspectWithContext({
+      context: { binary: params.binary, provider: params.provider },
+      expectedLeaseId: inspect.id,
+      id: inspect.id,
+      runCommand: params.runCommand,
+      timeoutMs: remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS),
+    });
+    if (replay.status === "unknown") {
+      throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
+    }
+    return replay.inspect;
+  };
   try {
-    // Credential and private-network attestation is authoritative before SSH readiness.
-    // Reject immediately so a forbidden lease cannot remain live during polling.
+    inspect = params.refresh ? await inspectAgain() : params.inspect;
+    // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
       const remaining = remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS);
       await params.sleep(Math.min(READY_POLL_INTERVAL_MS, remaining));
-      const replay = await inspectWithContext({
-        context: { binary: params.binary, provider: params.provider },
-        expectedLeaseId: inspect.id,
-        id: inspect.id,
-        runCommand: params.runCommand,
-        timeoutMs: remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS),
-      });
-      if (replay.status === "unknown") {
-        throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
-      }
-      inspect = replay.inspect;
+      inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     }
     if (isUnusableProvisionState(inspect.state)) {
@@ -430,14 +436,9 @@ async function waitForProvisionReady(params: {
 // Setup runs on every provision attempt (including replay adoption), so commands
 // must be idempotent. A failed setup stops the lease before surfacing the error;
 // otherwise the caller cannot release a box it never learned about.
-async function runProvisionSetup(params: {
-  binary: string;
-  deadline: number;
-  inspect: ParsedInspect;
-  provider: string;
-  runCommand: CrabboxCommandRunner;
-  setup: string;
-}): Promise<void> {
+async function runProvisionSetup(
+  params: ProvisionInspectContext & { setup: string },
+): Promise<void> {
   let result: SpawnResult;
   try {
     result = await runCrabboxCommand({
@@ -476,13 +477,19 @@ async function runProvisionSetup(params: {
   throw error;
 }
 
-async function stopProvisionInspect(params: {
-  binary: string;
-  deadline: number;
-  inspect: ParsedInspect;
-  provider: string;
-  runCommand: CrabboxCommandRunner;
-}): Promise<void> {
+async function runProvisionSetupAndWaitReady(
+  params: ProvisionInspectContext & {
+    setup: string;
+    sleep: (milliseconds: number) => Promise<void>;
+  },
+): Promise<ParsedInspect> {
+  await runProvisionSetup(params);
+  // Setup may restart SSH or change its endpoint. Re-read the authoritative lease before
+  // returning any endpoint or security attestation to core bootstrap.
+  return await waitForProvisionReady({ ...params, refresh: true });
+}
+
+async function stopProvisionInspect(params: ProvisionInspectContext): Promise<void> {
   await stopProvisionId({ ...params, id: params.inspect.id });
 }
 
@@ -607,12 +614,15 @@ export function createCrabboxWorkerProvider(
           await stopProvisionInspect(existingParams);
         } else {
           existingParams.inspect = await waitForProvisionReady({ ...existingParams, sleep });
-          const lease = await leaseFromProvisionInspect(existingParams);
           if (parsed.setup) {
             existingParams.deadline = setupDeadline;
-            await runProvisionSetup({ ...existingParams, setup: parsed.setup });
+            existingParams.inspect = await runProvisionSetupAndWaitReady({
+              ...existingParams,
+              setup: parsed.setup,
+              sleep,
+            });
           }
-          return lease;
+          return await leaseFromProvisionInspect(existingParams);
         }
       }
 
@@ -693,12 +703,15 @@ export function createCrabboxWorkerProvider(
         throw new Error("Crabbox warmup lease entered a terminal state");
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
-      const lease = await leaseFromProvisionInspect(inspectedParams);
       if (parsed.setup) {
         inspectedParams.deadline = setupDeadline;
-        await runProvisionSetup({ ...inspectedParams, setup: parsed.setup });
+        inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+          ...inspectedParams,
+          setup: parsed.setup,
+          sleep,
+        });
       }
-      return lease;
+      return await leaseFromProvisionInspect(inspectedParams);
     },
     async inspect(lease): Promise<WorkerLeaseStatus> {
       const context = resolveLeaseContext(lease);

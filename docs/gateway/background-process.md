@@ -93,6 +93,7 @@ Notes:
 - `process list` includes a derived `name` (command verb + target) for quick scans.
 - `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
 - `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
+- `process poll` marks omitted output when a pending burst exceeds its display buffer or a completed session returns only its retained tail. Use `process log` with `offset` and `limit` to inspect the retained output.
 - `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 

@@ -458,7 +458,7 @@ export const en: TranslationMap = {
       default: "Check the gateway logs for the replacement failure.",
     },
   },
-  nodes: {
+  devices: {
     pairing: {
       button: "Pair mobile device",
       adminRequired: "Administrator access is required to create setup codes.",
@@ -469,9 +469,11 @@ export const en: TranslationMap = {
       generating: "Creating a secure setup code…",
       accessTitle: "Mobile access",
       fullAccess: "Full access (recommended)",
-      fullAccessHint: "Node plus complete Gateway controls, including settings and upgrades.",
+      fullAccessHint:
+        "Device capabilities plus complete Gateway controls, including settings and upgrades.",
       limitedAccess: "Limited access",
-      limitedAccessHint: "Node, chat, and approvals without administrative controls.",
+      limitedAccessHint:
+        "Device capabilities, chat, and approvals without administrative controls.",
       generateCode: "Create setup code",
       transportLimitedTitle: "Limited for network safety",
       transportLimitedHint:
@@ -520,10 +522,10 @@ export const en: TranslationMap = {
       autoPaired: "auto-paired",
       versionDrift: "version drift",
       versionDriftTitle:
-        "Node {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
+        "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       manualWake: "manual wake required",
       manualWakeTitle:
-        "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection.",
+        "The Gateway cannot wake an offline Windows device. Start the machine or restore its network connection.",
       approvalNeeded: "approval needed",
       inputAgo: "input {time} ago",
       seen: "seen {time}",
@@ -1815,6 +1817,8 @@ export const en: TranslationMap = {
     detached: "detached",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    dockMain: "Fill main content area",
+    dockMode: "Terminal panel position",
     unavailable: "The terminal is not available on this gateway.",
     uploadTooLarge: "File exceeds the 16 MiB terminal upload limit: {file}",
     uploadUnsafeCmdPath: "Cannot safely insert an uploaded path containing % or ! into cmd.exe",
@@ -1897,7 +1901,7 @@ export const en: TranslationMap = {
     skills: "Skills",
     plugins: "Plugins",
     skillWorkshop: "Skill Workshop",
-    nodes: "Devices",
+    devices: "Devices",
     chat: "Chat",
     dashboards: "Dashboards",
     custodian: "OpenClaw",
@@ -1937,7 +1941,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
-    nodes: "Paired devices, pairing approvals, and exec bindings.",
+    devices: "Paired devices, pairing approvals, and exec bindings.",
     chat: "Gateway chat for quick interventions.",
     dashboards: "Sessions that open on their dashboard face.",
     custodian: "System setup and care.",
@@ -2806,7 +2810,7 @@ export const en: TranslationMap = {
       },
       android: {
         title: "Android",
-        desc: "Your Android phone as a full OpenClaw node — chat, camera, and Canvas.",
+        desc: "Your Android phone as a full OpenClaw device — chat, camera, and Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2822,7 +2826,7 @@ export const en: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "The Windows companion connects your PC as an OpenClaw node.",
+        desc: "The Windows companion connects your PC as an OpenClaw device.",
       },
       linux: {
         title: "Linux",
@@ -3161,7 +3165,7 @@ export const en: TranslationMap = {
       capturing: "Capturing every {seconds}s",
       paused: "Capture paused",
       disabled: "Capture off",
-      nodeHelp: "Node providing screen snapshots.",
+      nodeHelp: "Device providing screen snapshots.",
       pending: "{count} frames queued",
       pendingHelp: "Snapshots waiting for the next analysis batch.",
       analyzing: "Analyzing…",
@@ -4348,7 +4352,6 @@ export const en: TranslationMap = {
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
     },
-    outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     sessionRoute: {
       chooseTitle: "Choose a session",
@@ -4538,7 +4541,7 @@ export const en: TranslationMap = {
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },
     catalog: {
-      remoteViewOnly: "This session is on a paired node and is view-only.",
+      remoteViewOnly: "This session is on a paired device and is view-only.",
       unsupportedViewOnly: "This external session source is view-only.",
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
@@ -4813,10 +4816,6 @@ export const en: TranslationMap = {
       activity: "Activity",
       copySelection: "Copy",
       forkFromHere: "Fork from here",
-      hide: "Hide",
-      hideConfirm: "Hide this message in this browser? The agent still sees it.",
-      hideMessage: "Hide message",
-      hideTooltip: "Hide in this browser only",
       fullContentLoadFailed: "Could not load the full message.",
       reply: "Reply",
       replyToMessage: "Reply to message",
@@ -4829,6 +4828,7 @@ export const en: TranslationMap = {
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
+      dontAskAgain: "Don't ask again",
       rewindToHere: "Rewind to here",
       rewindUnavailable: "Rewind is unavailable while the agent is working",
       forkUnavailable: "Fork is unavailable while the agent is working",

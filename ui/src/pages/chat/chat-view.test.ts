@@ -1554,17 +1554,37 @@ describe("chat goal status", () => {
 });
 
 describe("chat scroll-to-bottom affordance", () => {
-  it("renders a centered icon button above the composer when the transcript is away from latest", () => {
+  it("anchors immediately after the transcript and above every rendered footer surface", () => {
     const onScrollToBottom = vi.fn();
-    const container = renderChatView({ showNewMessages: true, onScrollToBottom });
+    const container = renderChatView({
+      showNewMessages: true,
+      onScrollToBottom,
+      inlineApproval: {
+        id: "approval-below-scroll-anchor",
+        kind: "exec",
+        request: {
+          command: "pnpm test",
+          agentId: "main",
+          sessionKey: "agent:main:current",
+          commandSpans: [],
+        },
+        createdAtMs: 1,
+        expiresAtMs: 61_000,
+      },
+      onApprovalDecision: vi.fn(),
+      queue: [{ id: "queued-below-scroll-anchor", text: "queued message", createdAt: 1 }],
+    });
 
     const button = container.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
     const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
     expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
     expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(wrapper?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(
-      true,
-    );
+    expect(wrapper?.nextElementSibling?.classList.contains("chat-inline-approval")).toBe(true);
+    for (const surface of container.querySelectorAll(
+      ".chat-inline-approval, .chat-queue, .agent-chat__composer-shell",
+    )) {
+      expect(wrapper?.compareDocumentPosition(surface) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    }
     expect(button?.textContent?.trim()).toBe("");
     expect(container.querySelector(".chat-new-messages")).toBeNull();
 
@@ -2590,28 +2610,6 @@ describe("chat loading skeleton", () => {
       renderMessageGroupMock.mock.calls.find(([group]) => group.key === secondReply.key)?.[1]
         .turnRecap,
     ).toBeDefined();
-  });
-
-  it("keeps live status standalone when the preceding response is hidden", () => {
-    const sessionKey = "deleted-active-status";
-    renderChatView({
-      sessionKey,
-      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
-    });
-    const onDelete = renderMessageGroupMock.mock.calls[0]?.[1].onDelete;
-    expect(onDelete).toBeTypeOf("function");
-    onDelete?.();
-    renderMessageGroupMock.mockClear();
-
-    const container = renderChatView({
-      canAbort: true,
-      sessionKey,
-      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
-      stream: null,
-    });
-
-    expect(renderMessageGroupMock).not.toHaveBeenCalled();
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
@@ -6190,7 +6188,7 @@ describe("right-click Reply", () => {
     const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
       button.textContent?.trim(),
     );
-    expect(labels).toEqual(["Reply", "Rewind to here", "Hide message", "Fork from here"]);
+    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
     document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
@@ -6209,7 +6207,7 @@ describe("right-click Reply", () => {
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply", "Hide message", "Copy as markdown"]);
+    ).toEqual(["Reply", "Copy as markdown"]);
     expect(
       document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
     ).toBeNull();
@@ -6219,49 +6217,18 @@ describe("right-click Reply", () => {
     expect(onCopy).toHaveBeenCalledOnce();
   });
 
-  it("confirms Hide before hiding every member of an aggregate activity row", () => {
-    const storedValues = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      clear: () => storedValues.clear(),
-      getItem: (key: string) => storedValues.get(key) ?? null,
-      key: (index: number) => [...storedValues.keys()][index] ?? null,
-      get length() {
-        return storedValues.size;
-      },
-      removeItem: (key: string) => storedValues.delete(key),
-      setItem: (key: string, value: string) => storedValues.set(key, value),
-    } satisfies Storage);
-    const onRequestUpdate = vi.fn();
-    const { bubble, group } = renderChatBubble(
-      { sessionKey: "context-hide-test", onRequestUpdate },
-      { groupClass: "chat-group assistant" },
-    );
-    group.dataset.chatRowKey = "group:tool:first";
-    group.dataset.chatRowKeys = JSON.stringify(["group:tool:first", "group:tool:second"]);
-
-    dispatchContextMenu(bubble);
-    document.querySelector<HTMLButtonElement>('[aria-label="Hide message"]')!.click();
-    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
-    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
-
-    expect(storedValues.get("openclaw:deleted:context-hide-test")).toBe(
-      JSON.stringify(["group:tool:first", "group:tool:second"]),
-    );
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-  });
-
   it("dismisses an inline confirmation before opening the reply context menu", () => {
     const container = renderChatView({ onSetReply: vi.fn() });
     document.body.appendChild(container);
     const section = container.querySelector<HTMLElement>(".card.chat")!;
     const confirmationOwner = document.createElement("span");
-    confirmationOwner.className = "chat-delete-wrap";
+    confirmationOwner.className = "chat-confirm-wrap";
     const confirmationTrigger = document.createElement("button");
     confirmationOwner.appendChild(confirmationTrigger);
     section.appendChild(confirmationOwner);
     window.localStorage.removeItem("openclaw:skip-rewind-confirm");
     chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
-    const confirmation = document.querySelector<HTMLElement>(".chat-delete-confirm");
+    const confirmation = document.querySelector<HTMLElement>(".chat-confirm-popover");
     const { bubble } = appendChatBubble(container, { text: "open message actions" });
 
     try {
@@ -6403,7 +6370,7 @@ describe("right-click Reply", () => {
     rewindButton!.click();
     flushFrames();
 
-    const cancel = document.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
+    const cancel = document.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel");
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     expect(document.activeElement).toBe(cancel);
     const confirmationEscape = new KeyboardEvent("keydown", {
@@ -6414,7 +6381,7 @@ describe("right-click Reply", () => {
     cancel!.dispatchEvent(confirmationEscape);
 
     expect(confirmationEscape.defaultPrevented).toBe(true);
-    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
     expect(document.activeElement).toBe(rewindButton);
 
@@ -6443,12 +6410,12 @@ describe("right-click Reply", () => {
 
     resetChatThreadPresentationState("pane-b");
     expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
-    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(document.querySelector(".chat-confirm-popover")).not.toBeNull();
 
     resetChatThreadPresentationState("pane-a");
 
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
-    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(onRewindMessage).not.toHaveBeenCalled();
     expect(removeDocumentListener).toHaveBeenCalledWith("click", expect.any(Function), true);
     expect(removeWindowListener).toHaveBeenCalledWith("keydown", expect.any(Function), true);

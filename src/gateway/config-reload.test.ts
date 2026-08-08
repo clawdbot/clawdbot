@@ -305,6 +305,7 @@ describe("buildGatewayReloadPlan", () => {
   it.each([
     "gateway.port",
     "gateway.terminal.enabled",
+    "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",

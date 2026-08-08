@@ -58,7 +58,6 @@ import {
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
-  deletedChatItemsSignature,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedAssistantMessages,
@@ -68,7 +67,6 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import {
@@ -87,7 +85,6 @@ import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
-  openChatHideConfirmation,
   openChatRewindConfirmation,
   renderMessageGroup,
   renderActivityGroup,
@@ -104,7 +101,6 @@ import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcom
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
-const deletedMessagesMap = new Map<string, DeletedMessages>();
 
 type ChatThreadState = {
   searchOpen: boolean;
@@ -134,8 +130,6 @@ type ChatThreadProps = {
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
-  /** Suppresses transcript mutations while preserving read-only presentation controls. */
-  readOnly?: boolean;
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
@@ -843,14 +837,6 @@ function getPinnedMessages(sessionKey: string): PinnedMessages {
   );
 }
 
-function getDeletedMessages(sessionKey: string): DeletedMessages {
-  return getOrCreateSessionCacheValue(
-    deletedMessagesMap,
-    sessionKey,
-    () => new DeletedMessages(sessionKey),
-  );
-}
-
 function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
@@ -1111,22 +1097,6 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
   return false;
 }
 
-function chatGroupRowKeys(group: HTMLElement): string[] {
-  const serialized = group.dataset.chatRowKeys;
-  if (serialized) {
-    try {
-      const keys = JSON.parse(serialized);
-      if (Array.isArray(keys) && keys.every((key) => typeof key === "string")) {
-        return keys;
-      }
-    } catch {
-      // Fall through to the canonical single-row key.
-    }
-  }
-  const key = group.dataset.chatRowKey?.trim();
-  return key ? [key] : [];
-}
-
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
@@ -1150,7 +1120,6 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
   const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
-  const groupKeys = chatGroupRowKeys(group);
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
   // Grouped rows can contain several bubbles. Match the clicked bubble to its
   // own action owner so copy never targets a sibling message.
@@ -1160,10 +1129,9 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
-  const canHide = !props.readOnly && groupKeys.length > 0;
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
-  if (!canReply && !canRewind && !canHide && !canCopy && !canFork) {
+  if (!canReply && !canRewind && !canCopy && !canFork) {
     return;
   }
 
@@ -1225,27 +1193,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         });
       },
     });
-    action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
-    menu.append(action.element);
-    focusCandidates.push(action.button);
-  }
-  if (canHide) {
-    const action = createMessageActionContextButton({
-      label: t("chat.messages.hideMessage"),
-      disabled: false,
-      tooltip: t("chat.messages.hideTooltip"),
-      onClick: () => {
-        openChatHideConfirmation(action.button, () => {
-          removeReplyContextMenu();
-          const deleted = getDeletedMessages(props.sessionKey);
-          for (const key of groupKeys) {
-            deleted.delete(key);
-          }
-          props.onRequestUpdate?.();
-        });
-      },
-    });
-    action.element.classList.add("chat-delete-wrap");
+    action.element.classList.add("chat-confirm-wrap", "chat-rewind-wrap");
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
@@ -1481,7 +1429,6 @@ function renderChatThreadContents(
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
-  const deleted = getDeletedMessages(props.sessionKey);
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const chatItems = buildCachedChatItems({
@@ -1627,7 +1574,7 @@ function renderChatThreadContents(
     ...sharedMessageRenderOptions,
     assistant: assistantIdentity,
   } satisfies StreamGroupOptions;
-  const renderGroupOptions = (item: MessageGroup, onDelete: () => void) => {
+  const renderGroupOptions = (item: MessageGroup) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
       item.role.toLowerCase() === "user" && lastMessage
@@ -1665,7 +1612,6 @@ function renderChatThreadContents(
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply,
-      onDelete: props.readOnly ? undefined : onDelete,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1682,16 +1628,7 @@ function renderChatThreadContents(
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
   const renderGroupItem = (item: MessageGroup) => {
-    if (deleted.has(item.key)) {
-      return nothing;
-    }
-    return renderMessageGroup(
-      item,
-      renderGroupOptions(item, () => {
-        deleted.delete(item.key);
-        requestUpdate();
-      }),
-    );
+    return renderMessageGroup(item, renderGroupOptions(item));
   };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
@@ -1746,23 +1683,14 @@ function renderChatThreadContents(
       `;
     }
     if (item.kind === "activity-run") {
-      const visibleGroups = item.groups.filter((group) => !deleted.has(group.key));
-      const firstGroup = visibleGroups[0];
+      const firstGroup = item.groups[0];
       if (!firstGroup) {
         return nothing;
       }
-      if (visibleGroups.length === 1) {
+      if (item.groups.length === 1) {
         return renderGroupItem(firstGroup);
       }
-      return renderActivityGroup(
-        visibleGroups,
-        renderGroupOptions(firstGroup, () => {
-          for (const group of item.groups) {
-            deleted.delete(group.key);
-          }
-          requestUpdate();
-        }),
-      );
+      return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
     if (item.kind === "group") {
       return renderGroupItem(item);
@@ -1798,7 +1726,6 @@ function renderChatThreadContents(
     if (
       previous?.kind !== "group" ||
       !isActiveStatusRun ||
-      deleted.has(previous.key) ||
       !assistantGroupCanOwnActiveRunStatus(previous)
     ) {
       return true;
@@ -1821,11 +1748,7 @@ function renderChatThreadContents(
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
-    if (
-      lastItem?.kind === "group" &&
-      !deleted.has(lastItem.key) &&
-      assistantGroupCanOwnActiveRunStatus(lastItem)
-    ) {
+    if (lastItem?.kind === "group" && assistantGroupCanOwnActiveRunStatus(lastItem)) {
       turnRecapByGroupKey.set(lastItem.key, turnRecap);
       turnRecapOwnerKey = lastItem.key;
     }
@@ -1864,7 +1787,6 @@ function renderChatThreadContents(
   trackTranscriptRenderDependencies(state, [
     chatItems,
     locale,
-    deletedChatItemsSignature(deleted, chatItems),
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
@@ -1891,7 +1813,6 @@ function renderChatThreadContents(
     props.planStatus,
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
-    Boolean(props.readOnly),
     props.assistantName,
     assistantIdentity.avatar,
     props.userId,

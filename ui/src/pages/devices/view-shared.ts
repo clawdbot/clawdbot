@@ -1,4 +1,4 @@
-// Nodes page owns these pure view helpers.
+// Devices page owns these pure view helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import {
@@ -142,8 +142,8 @@ export function deviceIcon(source: DeviceIconSource): TemplateResult {
    the tile stays a purely decorative form-factor glyph. */
 export function renderDeviceTile(icon: TemplateResult) {
   return html`
-    <div class="nodes-entry__tile" aria-hidden="true">
-      <span class="nodes-entry__tile-icon">${icon}</span>
+    <div class="device-entry__tile" aria-hidden="true">
+      <span class="device-entry__tile-icon">${icon}</span>
     </div>
   `;
 }

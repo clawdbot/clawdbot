@@ -438,13 +438,13 @@ export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 echo "Checking dirty-state config before update..."
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+configure_clawhub_fixture
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   # shellcheck disable=SC1091
   source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
 fi
 
-configure_clawhub_fixture
 configure_plugin_registry
 echo "Running package update against the mounted tarball..."
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
@@ -461,8 +461,10 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
   exit "$update_status"
 fi
-[ -z "${OPENCLAW_CLAWHUB_URL:-}" ] || CLAWHUB_EXPECTED_VERSION="$package_version" \
-  node -e 'const n="@openclaw/whatsapp",v=encodeURIComponent(process.env.CLAWHUB_EXPECTED_VERSION),p=`/api/v1/packages/${encodeURIComponent(n)}`,expected=[`GET ${p}`,`GET ${p}/versions/${v}/artifact`,`GET ${p}/versions/${v}/security`,`GET ${p}/versions/${v}/artifact/download`];fetch(`${process.env.OPENCLAW_CLAWHUB_URL}/__fixture__/requests`).then((response)=>response.json()).then(({requests})=>{if(JSON.stringify(requests)!==JSON.stringify(expected))throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`)})'
+if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+  node "$OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER" \
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"
+fi
 
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."

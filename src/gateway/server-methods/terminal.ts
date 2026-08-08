@@ -293,10 +293,13 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
     const terminalEnv = buildTerminalEnv(process.env);
-    if (catalogPlan?.kind === "local" && catalogPlan.pathEnv) {
-      // Preserve the PATH that found a login-shell CLI so env-based shebangs
-      // can resolve their interpreter inside the spawned terminal process.
-      terminalEnv.PATH = catalogPlan.pathEnv;
+    if (catalogPlan?.kind === "local") {
+      Object.assign(terminalEnv, catalogPlan.env);
+      if (catalogPlan.pathEnv) {
+        // Preserve the PATH that found a login-shell CLI so env-based shebangs
+        // can resolve their interpreter inside the spawned terminal process.
+        terminalEnv.PATH = catalogPlan.pathEnv;
+      }
     }
     let openingTerminal: ReturnType<typeof manager.open> | undefined;
     let outcome: Awaited<ReturnType<typeof manager.open>>;

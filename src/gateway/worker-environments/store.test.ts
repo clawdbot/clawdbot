@@ -3,14 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerEnvironmentStore,
+  normalizeWorkerSshEndpoint,
+  type WorkerEnvironmentStore,
+} from "./store.js";
 
 type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
@@ -19,7 +26,8 @@ type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
   host: "worker.example.test",
-  port: 22,
+  port: 2222,
+  fallbackPorts: [22, 2200],
   user: "openclaw",
   hostKey: HOST_KEY,
   keyRef: {
@@ -67,6 +75,17 @@ describe("worker environment store", () => {
       profileSnapshot,
       provisionOperationId: `provision:${environmentId}`,
     });
+  }
+
+  function fallbackPortRows(environmentId: string) {
+    return database.db
+      .prepare(
+        `SELECT position, port
+         FROM worker_environment_ssh_fallback_ports
+         WHERE environment_id = ?
+         ORDER BY position`,
+      )
+      .all(environmentId);
   }
 
   function seedBootstrapping(environmentId: string, leaseId: string) {
@@ -184,6 +203,11 @@ describe("worker environment store", () => {
         protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
       },
     });
+    expect(store.list()[0]?.sshEndpoint).toEqual(SSH_ENDPOINT);
+    expect(fallbackPortRows("worker-1")).toEqual([
+      { position: 0, port: 22 },
+      { position: 1, port: 2200 },
+    ]);
     nowMs = 1_040;
     expect(
       store.transition({
@@ -225,8 +249,115 @@ describe("worker environment store", () => {
       stateChangedAtMs: 1_080,
       idleSinceAtMs: null,
       attachedSessionIds: [],
+      sshEndpoint: SSH_ENDPOINT,
     });
+    expect(fallbackPortRows("worker-1")).toEqual([
+      { position: 0, port: 22 },
+      { position: 1, port: 2200 },
+    ]);
     expect(store.listForReconcile()).toEqual([]);
+  });
+
+  it("replaces ordered SSH fallback rows when the endpoint changes", () => {
+    seedBootstrapping("worker-endpoint-change", "lease-endpoint-change");
+    const replacement = { ...SSH_ENDPOINT, fallbackPorts: [2201, 22] };
+
+    expect(
+      store.transition({
+        environmentId: "worker-endpoint-change",
+        from: "bootstrapping",
+        to: "ready",
+        patch: { ...readyPatch(), sshEndpoint: replacement },
+      }).sshEndpoint,
+    ).toEqual(replacement);
+    expect(fallbackPortRows("worker-endpoint-change")).toEqual([
+      { position: 0, port: 2201 },
+      { position: 1, port: 22 },
+    ]);
+  });
+
+  it("lazily ensures the companion table once for a current database", () => {
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const current = new DatabaseSync(databasePath);
+    current.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
+    current.close();
+
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports"),
+    ).toBeUndefined();
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("worker_environment_ssh_fallback_ports"),
+    ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
+    expect(() =>
+      assertOpenClawStateDatabaseForMaintenance(database.db, {
+        pathname: database.path,
+      }),
+    ).not.toThrow();
+  });
+
+  it("enforces canonical companion-table constraints and cascading ownership", () => {
+    createIntent("worker-constraints");
+    expect(
+      database.db
+        .prepare(
+          "SELECT strict FROM pragma_table_list WHERE name = 'worker_environment_ssh_fallback_ports'",
+        )
+        .get(),
+    ).toEqual({ strict: 1 });
+    const insert = database.db.prepare(
+      `INSERT INTO worker_environment_ssh_fallback_ports (environment_id, position, port)
+       VALUES (?, ?, ?)`,
+    );
+    expect(() => insert.run("worker-constraints", -1, 22)).toThrow();
+    expect(() => insert.run("worker-constraints", 10, 22)).toThrow();
+    expect(() => insert.run("worker-constraints", 0, 0)).toThrow();
+    expect(() => insert.run("worker-constraints", 0, 65_536)).toThrow();
+    expect(() => insert.run("missing-worker", 0, 22)).toThrow();
+
+    insert.run("worker-constraints", 0, 22);
+    expect(() => insert.run("worker-constraints", 0, 2200)).toThrow();
+    expect(() => insert.run("worker-constraints", 1, 22)).toThrow();
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run("worker-constraints");
+    expect(fallbackPortRows("worker-constraints")).toEqual([]);
+  });
+
+  it("normalizes provider-advertised SSH fallback ports at the durable boundary", () => {
+    expect(
+      normalizeWorkerSshEndpoint({
+        ...SSH_ENDPOINT,
+        fallbackPorts: [22, 2200, 22, 2222],
+      }),
+    ).toEqual(SSH_ENDPOINT);
+  });
+
+  it.each([
+    ["non-array", "22"],
+    ["non-integer", [22.5]],
+    ["below range", [0]],
+    ["above range", [65_536]],
+    ["more than ten", Array.from({ length: 11 }, (_, index) => 2300 + index)],
+  ])("rejects %s SSH fallback ports", (_name, fallbackPorts) => {
+    expect(() =>
+      normalizeWorkerSshEndpoint({
+        ...SSH_ENDPOINT,
+        fallbackPorts,
+      } as unknown as WorkerEnvironmentSshEndpoint),
+    ).toThrow("SSH fallback ports");
   });
 
   it("keeps renewal on one owner epoch and fences session replacement", () => {
@@ -570,6 +701,8 @@ describe("worker environment store", () => {
       leaseId: null,
       teardownTerminalState: "failed",
     });
+    expect(store.get(pending.environmentId)?.sshEndpoint).toBeNull();
+    expect(fallbackPortRows(pending.environmentId)).toEqual([]);
   });
 
   it("persists retryable errors without a self-transition", () => {

@@ -429,10 +429,11 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
       : cleanStaleGatewayProcessesSync(port, options),
 }));
 
-vi.mock("../infra/ports.js", () => ({
-  inspectPortUsage,
+vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics,
 }));
+
+vi.mock("../infra/ports-inspect.js", () => ({ inspectPortUsage }));
 
 vi.mock("../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
@@ -1552,11 +1553,31 @@ describe("launchd install", () => {
       programArguments: defaultProgramArguments,
     });
 
+    const plist = state.files.get(resolveLaunchAgentPlistPath(env)) ?? "";
+    expect(plist).toContain("<key>Comment</key>\n    <string>OpenClaw Gateway</string>");
+    expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
     const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     const installKickstartIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "kickstart" && c[2] === serviceId,
     );
     expect(installKickstartIndex).toBe(-1);
+  });
+
+  it("writes a version-free node service description", async () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+    };
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: ["node", "node-host.js"],
+      description: "OpenClaw Node Host",
+    });
+
+    const plist = state.files.get(resolveLaunchAgentPlistPath(env)) ?? "";
+    expect(plist).toContain("<key>Comment</key>\n    <string>OpenClaw Node Host</string>");
+    expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
   });
 
   it("writes LaunchAgent environment to an owner-only env file when provided", async () => {
@@ -1879,6 +1900,11 @@ describe("launchd install", () => {
         "      <string>node</string>",
         "      <string>gateway.js</string>",
         "    </array>",
+        "    <key>EnvironmentVariables</key>",
+        "    <dict>",
+        "      <key>OPENCLAW_SERVICE_VERSION</key>",
+        "      <string>2026.4.24</string>",
+        "    </dict>",
         "  </dict>",
         "</plist>",
       ].join("\n"),
@@ -1897,6 +1923,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<string>node</string>");
+    expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
     const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);
     const bootstrapIndex = state.launchctlCalls.findIndex((call) => call[0] === "bootstrap");
     expect(rewriteIndex).toBeGreaterThanOrEqual(0);

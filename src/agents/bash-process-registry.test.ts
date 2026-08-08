@@ -7,6 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
+  acknowledgeNotifyOnExit,
   addSession,
   appendOutput,
   createSessionSlug,
@@ -18,6 +19,8 @@ import {
   listRunningSessions,
   markBackgrounded,
   markExited,
+  markTerminalPollObserved,
+  recordNotifyOnExitRemoval,
   setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
@@ -55,6 +58,26 @@ describe("bash process registry", () => {
     resetProcessRegistryForTests();
   });
 
+  it("suppresses a notify-on-exit event when terminal poll wins the race", () => {
+    const session = createRegistrySession({
+      id: "poll-first",
+      maxOutputChars: 10_000,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    addSession(session);
+    markTerminalPollObserved(session);
+    markExited(session, 0, null, "completed");
+
+    const remove = vi.fn(() => true);
+    recordNotifyOnExitRemoval(session, remove);
+
+    expect(remove).toHaveBeenCalledOnce();
+    expect(getFinishedSession("poll-first")?.terminalPollObserved).toBe(true);
+    acknowledgeNotifyOnExit(getFinishedSession("poll-first") ?? {});
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
   it("captures output and truncates", () => {
     const session = createRegistrySession({
       maxOutputChars: 10,
@@ -83,8 +106,10 @@ describe("bash process registry", () => {
 
     const drained = drainSession(session);
     expect(drained.stdout).toBe("b".repeat(20_000));
+    expect(drained.outputDropped).toBe(true);
     expect(session.pendingStdout).toHaveLength(0);
     expect(session.pendingStdoutChars).toBe(0);
+    expect(drainSession(session).outputDropped).toBe(false);
     expect(session.truncated).toBe(true);
   });
 

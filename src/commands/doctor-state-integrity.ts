@@ -1474,7 +1474,9 @@ export async function noteStateIntegrity(
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
-    if (mainEntry?.sessionId) {
+    // SQLite-owned transcripts live in the agent DB after import.
+    // Do not require the archived legacy JSONL for those sessions.
+    if (mainEntry?.sessionId && !sqliteSessionKeys.has(mainKey)) {
       const transcriptPath = resolveSessionFilePath(
         mainEntry.sessionId,
         mainEntry,

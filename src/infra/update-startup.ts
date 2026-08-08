@@ -646,6 +646,7 @@ async function runCampaignUpdate(params: {
   channel: "stable" | "beta" | "dev";
   version: string;
   tag: string;
+  forced: boolean;
   root?: string;
   devTargetSha?: string;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
@@ -670,6 +671,7 @@ async function runCampaignUpdate(params: {
       channel: params.channel,
       version: params.version,
       tag: params.tag,
+      forced: params.forced,
       ...(outcome.command ? { command: outcome.command } : {}),
       ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
     });
@@ -684,6 +686,7 @@ async function runCampaignUpdate(params: {
       channel: params.channel,
       version: params.version,
       tag: params.tag,
+      forced: params.forced,
     });
     return "applied";
   }
@@ -691,6 +694,7 @@ async function runCampaignUpdate(params: {
     channel: params.channel,
     version: params.version,
     tag: params.tag,
+    forced: params.forced,
     reason: outcome.reason ?? `exit:${outcome.code}`,
   });
   return "failed";
@@ -754,6 +758,32 @@ export async function runGatewayUpdateCheck(params: {
     const current = updateScheduleCache;
     if (!current || current.channel !== configuredChannel) {
       return;
+    }
+    const target =
+      current.target?.kind === "package"
+        ? current.target.version
+        : current.target?.kind === "git"
+          ? {
+              upstreamSha: current.target.upstreamSha,
+              commitsBehind: current.target.commitsBehind,
+            }
+          : undefined;
+    if (campaign) {
+      params.log.info(`update campaign ${campaign.state}`, {
+        campaignId: campaign.id,
+        state: campaign.state,
+        channel: configuredChannel,
+        ...(target === undefined ? {} : { target }),
+        ...(campaign.applyAtMs === undefined ? {} : { applyAtMs: campaign.applyAtMs }),
+        ...(campaign.holdUntilMs === undefined ? {} : { holdUntilMs: campaign.holdUntilMs }),
+        forceAtMs: campaign.forceAtMs,
+      });
+    } else {
+      params.log.info("update campaign ended", {
+        ...(current.campaign?.id ? { campaignId: current.campaign.id } : {}),
+        channel: configuredChannel,
+        ...(target === undefined ? {} : { target }),
+      });
     }
     setUpdateScheduleCache({
       next: campaign ? { ...current, campaign } : withoutCampaign(current),
@@ -964,12 +994,13 @@ export async function runGatewayUpdateCheck(params: {
           target,
           inspect: params.activeWorkInspectors,
           onChange: onCampaignChange,
-          apply: async () =>
+          apply: async ({ forced }) =>
             await runCampaignUpdate({
               identity: upstreamSha,
               channel: "dev",
               version: upstreamSha,
               tag: "dev",
+              forced,
               root: root ?? status.root ?? undefined,
               devTargetSha: target.upstreamSha,
               log: params.log,
@@ -1116,12 +1147,13 @@ export async function runGatewayUpdateCheck(params: {
           target,
           inspect: params.activeWorkInspectors,
           onChange: onCampaignChange,
-          apply: async () =>
+          apply: async ({ forced }) =>
             await runCampaignUpdate({
               identity: resolvedVersion,
               channel,
               version: resolvedVersion,
               tag,
+              forced,
               root: root ?? status.root ?? undefined,
               log: params.log,
               runAuto,

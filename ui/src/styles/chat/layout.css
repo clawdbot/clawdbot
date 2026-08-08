@@ -316,6 +316,12 @@ openclaw-chat-page {
   background: transparent;
 }
 
+/* The oversized clipped transcript owns its focus ring, so it stays inward to keep every edge visible. */
+.chat-thread:focus-visible {
+  outline: 2px solid var(--muted-strong);
+  outline-offset: -2px;
+}
+
 :root .chat-thread::-webkit-scrollbar-thumb {
   background: var(--muted-strong);
 }

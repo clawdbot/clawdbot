@@ -1684,6 +1684,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
                     ]
@@ -2014,21 +2015,31 @@
             "tab": "Release & CI",
             "groups": [
               {
-                "group": "Release and CI",
+                "group": "Release notes",
                 "pages": [
-                  {
-                    "group": "Release notes",
-                    "pages": [
-                      "releases/index",
-                      "releases/2026.7.1",
-                      "releases/2026.6.11"
-                    ]
-                  },
+                  "releases/index",
+                  "releases/2026.7.1",
+                  "releases/2026.6.11"
+                ]
+              },
+              {
+                "group": "Maturity",
+                "pages": [
                   "maturity/scorecard",
-                  "maturity/taxonomy",
+                  "maturity/taxonomy"
+                ]
+              },
+              {
+                "group": "Release process",
+                "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
-                  "reference/release-performance-sweep",
+                  "reference/release-performance-sweep"
+                ]
+              },
+              {
+                "group": "Testing and CI",
+                "pages": [
                   "reference/test",
                   "ci",
                   "help/scripts"
