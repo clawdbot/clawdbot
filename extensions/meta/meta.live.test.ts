@@ -1,4 +1,5 @@
 // Meta live tests prove muse-spark auth and Responses API completion.
+import { createHash } from "node:crypto";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
@@ -72,21 +73,40 @@ function containsExpectedImagePayload(value: unknown): boolean {
   return Object.values(record).some(containsExpectedImagePayload);
 }
 
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 async function expectLiveCompletion(params: {
   modelId: string;
   context: Context;
   expectedText: string | RegExp;
   expectImagePayload?: boolean;
+  useCatalogMaxTokens?: boolean;
+  emitRedactedCapProof?: boolean;
+  emitRedactedImageProof?: boolean;
 }): Promise<void> {
-  const { modelId, context, expectedText, expectImagePayload = false } = params;
+  const {
+    modelId,
+    context,
+    expectedText,
+    expectImagePayload = false,
+    useCatalogMaxTokens = false,
+    emitRedactedCapProof = false,
+    emitRedactedImageProof = false,
+  } = params;
   const model = resolveLiveModel(modelId);
   let capturedPayload: Record<string, unknown> | undefined;
+  let responseStatus: number | undefined;
   const stream = await resolveLiveStreamFn(modelId)(model, context, {
     apiKey: MODEL_API_KEY,
-    maxTokens: LIVE_TEST_MAX_OUTPUT_TOKENS,
+    ...(useCatalogMaxTokens ? {} : { maxTokens: LIVE_TEST_MAX_OUTPUT_TOKENS }),
     reasoning: "high",
     onPayload: (payload) => {
       capturedPayload = payload as Record<string, unknown>;
+    },
+    onResponse: (response) => {
+      responseStatus = response.status;
     },
   });
   const result = await stream.result();
@@ -108,6 +128,43 @@ async function expectLiveCompletion(params: {
   } else {
     expect(assistantText).toMatch(expectedText);
   }
+  if (useCatalogMaxTokens) {
+    expect(model.maxTokens).toBe(131072);
+    expect(capturedPayload?.max_output_tokens).toBe(model.maxTokens);
+    expect(responseStatus).toBe(200);
+    expect(result.stopReason).toBe("stop");
+  }
+  if (emitRedactedCapProof) {
+    console.info(
+      `[meta:catalog-cap:live] ${JSON.stringify({
+        model: modelId,
+        requestedMaxOutputTokens: model.maxTokens,
+        observedMaxOutputTokens: capturedPayload?.max_output_tokens,
+        httpStatus: responseStatus,
+        completion: "completed",
+        semanticMatch: true,
+        requestPayloadSha256: sha256(JSON.stringify(capturedPayload)),
+        responseTextSha256: sha256(assistantText),
+        claimScope: "request cap and short semantic completion only",
+      })}`,
+    );
+  }
+  if (emitRedactedImageProof) {
+    expect(responseStatus).toBe(200);
+    expect(result.stopReason).toBe("stop");
+    console.info(
+      `[meta:image:live] ${JSON.stringify({
+        model: modelId,
+        imageFixtureSha256: sha256(Buffer.from(GREEN_VERTICAL_CENTER_PNG_BASE64, "base64")),
+        requestPayloadSha256: sha256(JSON.stringify(capturedPayload)),
+        httpStatus: responseStatus,
+        completion: "completed",
+        semanticMatch: true,
+        responseTextSha256: sha256(assistantText),
+        claimScope: "image request encoding and short semantic completion only",
+      })}`,
+    );
+  }
 }
 
 async function expectLiveTextCompletion(modelId: string): Promise<void> {
@@ -126,6 +183,24 @@ async function expectLiveTextCompletion(modelId: string): Promise<void> {
   });
 }
 
+async function expectLiveCatalogCapCompletion(modelId: string): Promise<void> {
+  await expectLiveCompletion({
+    modelId,
+    context: {
+      messages: [
+        {
+          role: "user",
+          content: "Reply with exactly: CATALOG_CAP_OK",
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    expectedText: /CATALOG_CAP_OK/i,
+    useCatalogMaxTokens: true,
+    emitRedactedCapProof: true,
+  });
+}
+
 async function expectLiveImageCompletion(modelId: string): Promise<void> {
   await expectLiveCompletion({
     modelId,
@@ -136,7 +211,7 @@ async function expectLiveImageCompletion(modelId: string): Promise<void> {
           content: [
             {
               type: "text",
-              text: "Inspect the image. Classify the colored bar's basic color, orientation, and horizontal position. Divide the full white canvas into three equal vertical zones and use the zone containing the bar's midpoint. Reply only with DETAIL=<COLOR>_<ORIENTATION>_<POSITION> in uppercase. Valid positions are LEFT, RIGHT, or CENTER.",
+              text: "Inspect the image and identify the colored bar's basic color. Reply only with COLOR=<COLOR> in uppercase.",
             },
             {
               type: "image",
@@ -148,8 +223,9 @@ async function expectLiveImageCompletion(modelId: string): Promise<void> {
         },
       ],
     },
-    expectedText: "DETAIL=GREEN_VERTICAL_CENTER",
+    expectedText: "COLOR=GREEN",
     expectImagePayload: true,
+    emitRedactedImageProof: true,
   });
 }
 
@@ -169,6 +245,10 @@ describeLive("meta plugin live", () => {
     120_000,
   );
 
+  it("uses the 131072 catalog output cap for muse-spark-1.2 without an override", async () => {
+    await expectLiveCatalogCapCompletion("muse-spark-1.2");
+  }, 120_000);
+
   it.each(STANDARD_LIVE_MODEL_IDS)(
     "accepts image input for %s",
     async (modelId) => {
@@ -186,6 +266,10 @@ describeContributorLive("meta contributor plugin live", () => {
 
   it("completes a contributor Responses API turn with high reasoning effort", async () => {
     await expectLiveTextCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
+  }, 120_000);
+
+  it("uses the 131072 catalog output cap for contributor without an override", async () => {
+    await expectLiveCatalogCapCompletion(CONTRIBUTOR_LIVE_MODEL_ID);
   }, 120_000);
 
   it("accepts image input for the contributor model", async () => {

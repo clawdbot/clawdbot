@@ -104,9 +104,6 @@
           {
             "id": "muse-spark-1.2-contributor",
             "name": "Muse Spark 1.2 Contributor",
-            "tags": [
-              "contributor"
-            ],
             "reasoning": true,
             "input": [
               "text",

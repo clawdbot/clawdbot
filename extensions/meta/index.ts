@@ -30,6 +30,7 @@ export default defineSingleProviderPluginEntry({
       liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+    wrapSimpleCompletionStreamFn: wrapMetaProviderStream,
     wrapStreamFn: wrapMetaProviderStream,
     resolveThinkingProfile: resolveMetaThinkingProfile,
   },

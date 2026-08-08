@@ -18,9 +18,14 @@ function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): v
 }
 
 function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
+  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model, options }) => {
     if (model.provider !== "meta" || model.api !== "openai-responses") {
       return;
+    }
+    // The catalog limit is the no-override request default. Preserve an explicit
+    // caller or provider payload cap while filling the direct stream path gap.
+    if (options?.maxTokens === undefined && payload.max_output_tokens === undefined) {
+      payload.max_output_tokens = model.maxTokens;
     }
     if (!model.reasoning) {
       return;
