@@ -37,7 +37,7 @@ import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
-  hasCommittedOutboundDeliveryEvidence,
+  hasCommittedNonMessagingOutboundDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
   hasPayloadOutcomeSendEvidence,
@@ -1204,9 +1204,12 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
-    );
+    const hasCompletionSideEffect =
+      hasMessagingToolDelivery ||
+      Boolean(
+        directAnnounceResult &&
+        hasCommittedNonMessagingOutboundDeliveryEvidence(directAnnounceResult),
+      );
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&

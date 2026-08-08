@@ -3164,6 +3164,74 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "rejects off-target messaging alone",
+      sideEffects: {},
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
+    },
+    {
+      name: "accepts an accepted session spawn despite off-target messaging",
+      sideEffects: committedSessionSpawnEvidence,
+      expected: { delivered: true, path: "direct" },
+    },
+    {
+      name: "accepts a successful cron add despite off-target messaging",
+      sideEffects: { successfulCronAdds: 1 },
+      expected: { delivered: true, path: "direct" },
+    },
+  ])("$name for required no-output completion", async ({ sideEffects, expected }) => {
+    const childSessionKey = "agent:worker:subagent:off-target-no-output";
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:OTHER",
+            text: "An unrelated channel update.",
+          },
+        ],
+        ...sideEffects,
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-off-target-no-output",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "off-target no-output completion smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      }),
+    });
+
+    expect(result).toMatchObject(expected);
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("delivers Telegram forum-topic subagent completions through the normal parent handoff", async () => {
     const callGateway = createPayloadGatewayMock({ text: "The delegated task is complete." });
 
