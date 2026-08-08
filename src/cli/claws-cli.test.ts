@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => {
     exportClawAgent: vi.fn(),
     callGatewayFromCli: vi.fn(),
     sleep: vi.fn(),
+    preflightClawPackage: vi.fn(),
   };
 });
 
@@ -66,6 +67,11 @@ vi.mock("./gateway-rpc.js", () => ({
 
 vi.mock("../utils/sleep.js", () => ({
   sleep: mocks.sleep,
+}));
+
+vi.mock("../claws/packages.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/packages.js")>("../claws/packages.js")),
+  preflightClawPackage: mocks.preflightClawPackage,
 }));
 
 vi.mock("../state/openclaw-state-db.js", async () => ({
@@ -183,6 +189,12 @@ describe("claws cli", () => {
     mocks.callGatewayFromCli.mockReset();
     mocks.sleep.mockReset();
     mocks.sleep.mockResolvedValue(undefined);
+    mocks.preflightClawPackage.mockReset();
+    mocks.preflightClawPackage.mockResolvedValue({
+      ok: false,
+      code: "package_install_unavailable",
+      message: "Package preflight is unavailable.",
+    });
     mocks.closeReadOnlyDatabase.mockReset();
     mocks.stateTableGet.mockReset();
     mocks.stateTableGet.mockReturnValue({ 1: 1 });
