@@ -1,11 +1,18 @@
-import type { InternalToolBatchCall, ToolLoopIntervention } from "@openclaw/agent-core";
+import type {
+  InternalBeforeToolBatchResult,
+  InternalToolBatchCall,
+  ToolLoopIntervention,
+} from "@openclaw/agent-core";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
   shouldEmitLoopWarning,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import { recordBatchAdmittedToolCall } from "./agent-tools.before-tool-call.state.js";
+import {
+  recordBatchAdmittedToolCall,
+  releaseBatchAdmittedToolCalls,
+} from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -113,15 +120,16 @@ export async function admitSingleToolCallLoop(
 }
 
 /**
- * Admit an assistant tool batch atomically. Calls are only recorded after every
- * sibling passes detection, so no side effect can start before a later veto.
+ * Admit an assistant tool batch atomically. Successful calls reserve exact
+ * markers here, then agent-core commits their history in assistant order at
+ * the final launch boundary. A later veto still records only denial evidence.
  */
 export async function admitToolCallBatch(
   calls: InternalToolBatchCall[],
   ctx: HookContext,
-): Promise<ToolLoopIntervention | undefined> {
+): Promise<InternalBeforeToolBatchResult> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return undefined;
+    return {};
   }
   const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
   const sessionState = getDiagnosticSessionState({
@@ -185,21 +193,37 @@ export async function admitToolCallBatch(
           recordLoopVeto(sessionState, rejectedCall);
         }
       }
-      return intervention;
+      return { intervention };
     }
     // A later sibling must assume this candidate makes no progress.
     projectLoopVeto(call);
   }
   for (const call of calls) {
-    await recordToolLoopCall(
-      {
-        toolName: call.toolCall.name,
-        params: call.args,
-        toolCallId: call.toolCall.id,
-      },
-      ctx,
-    );
     recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
   }
-  return undefined;
+  const committedIds = new Set<string>();
+  return {
+    commitReadyCalls(toolCallIds) {
+      const readyIds = new Set(toolCallIds);
+      for (const call of calls) {
+        const toolCallId = call.toolCall.id;
+        if (!readyIds.has(toolCallId) || committedIds.has(toolCallId)) {
+          continue;
+        }
+        recordToolCall(
+          sessionState,
+          normalizeToolName(call.toolCall.name || "tool"),
+          call.args,
+          toolCallId,
+          ctx.loopDetection,
+          ctx.runId ? { runId: ctx.runId } : undefined,
+        );
+        committedIds.add(toolCallId);
+      }
+    },
+    releaseSkippedCalls(toolCallIds) {
+      // Agent-core only supplies admitted prepared calls suppressed at a steering checkpoint.
+      releaseBatchAdmittedToolCalls(toolCallIds, ctx.runId);
+    },
+  };
 }

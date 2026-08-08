@@ -22,8 +22,7 @@ export function createToolLoopBatchAdmission(
         : call.args,
     }));
     try {
-      const intervention = await admitToolCallBatch(canonicalCalls, ctx);
-      return intervention ? { intervention } : undefined;
+      return await admitToolCallBatch(canonicalCalls, ctx);
     } catch (error) {
       const first = canonicalCalls[0];
       log.error(`tool-loop batch admission failed: ${String(error)}`);

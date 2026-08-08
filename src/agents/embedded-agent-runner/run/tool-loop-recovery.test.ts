@@ -5,7 +5,19 @@ import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
 
 const mocks = vi.hoisted(() => ({
-  admitToolCallBatch: vi.fn(async (_calls: InternalToolBatchCall[]) => undefined),
+  committedArgs: [] as unknown[],
+  releasedIds: [] as string[][],
+  admitToolCallBatch: vi.fn(async (calls: InternalToolBatchCall[]) => ({
+    commitReadyCalls(ids: readonly string[]) {
+      const readyIds = new Set(ids);
+      mocks.committedArgs.push(
+        ...calls.filter((call) => readyIds.has(call.toolCall.id)).map((call) => call.args),
+      );
+    },
+    releaseSkippedCalls(ids: readonly string[]) {
+      mocks.releasedIds.push([...ids]);
+    },
+  })),
 }));
 
 vi.mock("../../tool-loop-admission.js", () => ({
@@ -34,6 +46,8 @@ function batchCall(id: string, args: Record<string, unknown>): InternalToolBatch
 
 describe("tool-loop recovery batch admission", () => {
   it("canonicalizes equivalent Code Mode exec aliases before loop detection", async () => {
+    mocks.committedArgs.length = 0;
+    mocks.releasedIds.length = 0;
     const admission = createToolLoopBatchAdmission({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -44,7 +58,7 @@ describe("tool-loop recovery batch admission", () => {
       throw new Error("Expected batch admission hook");
     }
 
-    await admission({
+    const first = await admission({
       assistantMessage: {
         role: "assistant",
         content: [],
@@ -65,7 +79,9 @@ describe("tool-loop recovery batch admission", () => {
       calls: [batchCall("code-alias", { code: "return 1;" })],
       context: { systemPrompt: "", messages: [] },
     });
-    await admission({
+    first?.commitReadyCalls?.(["code-alias"]);
+    first?.releaseSkippedCalls?.([]);
+    const second = await admission({
       assistantMessage: {
         role: "assistant",
         content: [],
@@ -86,11 +102,16 @@ describe("tool-loop recovery batch admission", () => {
       calls: [batchCall("command-alias", { command: "return 1;" })],
       context: { systemPrompt: "", messages: [] },
     });
+    second?.commitReadyCalls?.(["command-alias"]);
+    second?.releaseSkippedCalls?.([]);
 
     const admittedArgs = mocks.admitToolCallBatch.mock.calls.map(([calls]) => calls[0]?.args);
     expect(admittedArgs).toEqual([
       { code: "return 1;", command: "return 1;" },
       { command: "return 1;", code: "return 1;" },
     ]);
+    expect(mocks.committedArgs).toEqual(admittedArgs);
+    expect(mocks.releasedIds).toEqual([[], []]);
+    expect(first?.commitReadyCalls).not.toBe(second?.commitReadyCalls);
   });
 });

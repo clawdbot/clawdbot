@@ -33,6 +33,7 @@ import type {
   AgentTool,
   AgentToolCall,
   AgentToolResult,
+  InternalBeforeToolBatchResult,
   StreamFn,
   ToolLoopIntervention,
 } from "./types.js";
@@ -633,6 +634,7 @@ async function executeToolCalls(
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
   const resolvedToolCalls = new Map<AgentToolCall, ResolvedToolCallOutcome>();
   const validatedToolCalls = new Map<AgentToolCall, ValidatedToolCallOutcome>();
+  let batchAdmission: InternalBeforeToolBatchResult | undefined;
   if (config.beforeToolBatch) {
     for (const toolCall of toolCalls) {
       if (signal?.aborted) {
@@ -678,6 +680,7 @@ async function executeToolCalls(
           terminal: criticalToolLoopSeen,
         });
       }
+      batchAdmission = admission;
     }
   }
   let hasSequentialToolCall = false;
@@ -707,6 +710,7 @@ async function executeToolCalls(
       toolCalls,
       resolvedToolCalls,
       validatedToolCalls,
+      batchAdmission,
       config,
       signal,
       emit,
@@ -718,6 +722,7 @@ async function executeToolCalls(
     toolCalls,
     resolvedToolCalls,
     validatedToolCalls,
+    batchAdmission,
     config,
     signal,
     emit,
@@ -755,6 +760,7 @@ async function executeToolCallsSequential(
   toolCalls: AgentToolCall[],
   resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   validatedToolCalls: Map<AgentToolCall, ValidatedToolCallOutcome>,
+  batchAdmission: InternalBeforeToolBatchResult | undefined,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -827,6 +833,9 @@ async function executeToolCallsSequential(
         skippedStartIndex = callIndex;
         break;
       }
+      if (!signal?.aborted) {
+        batchAdmission?.commitReadyCalls?.([toolCall.id]);
+      }
       const executed = await executePreparedToolCall(
         preparation,
         { assistantMessage, toolCall: preparation.toolCall },
@@ -857,6 +866,14 @@ async function executeToolCallsSequential(
 
   // Complete the unstarted tail through one lifecycle path so committed tool
   // calls remain paired and outcome hooks observe every synthetic result.
+  if (steeringMessages.length > 0) {
+    batchAdmission?.releaseSkippedCalls?.(
+      toolCalls
+        .slice(skippedStartIndex)
+        .filter((toolCall) => validatedToolCalls.get(toolCall)?.kind === "validated")
+        .map((toolCall) => toolCall.id),
+    );
+  }
   for (let i = skippedStartIndex; i < toolCalls.length; i++) {
     const skippedToolCall = toolCalls[i];
     if (!skippedToolCall) {
@@ -899,6 +916,7 @@ async function executeToolCallsParallel(
   toolCalls: AgentToolCall[],
   resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   validatedToolCalls: Map<AgentToolCall, ValidatedToolCallOutcome>,
+  batchAdmission: InternalBeforeToolBatchResult | undefined,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -960,6 +978,24 @@ async function executeToolCallsParallel(
 
   const steering = signal?.aborted ? [] : getSteeringAtCheckpoint(config);
   const steeringMessages = Array.isArray(steering) ? steering : await steering;
+  const preparedCallsLaunch = !signal?.aborted && steeringMessages.length === 0;
+  const readyToolCallIds = finalizedCalls.flatMap((entry) =>
+    "kind" in entry && preparedCallsLaunch ? [entry.toolCall.id] : [],
+  );
+  const skippedToolCallIds = [
+    ...(steeringMessages.length > 0
+      ? finalizedCalls.flatMap((entry) => ("kind" in entry ? [entry.toolCall.id] : []))
+      : []),
+    ...(steeringMessages.length > 0
+      ? toolCalls.slice(finalizedCalls.length).map((toolCall) => toolCall.id)
+      : []),
+  ];
+  if (readyToolCallIds.length > 0) {
+    batchAdmission?.commitReadyCalls?.(readyToolCallIds);
+  }
+  if (skippedToolCallIds.length > 0) {
+    batchAdmission?.releaseSkippedCalls?.(skippedToolCallIds);
+  }
   const orderedFinalizedCalls: FinalizedToolCallOutcome[] = [];
   if (steeringMessages.length > 0) {
     for (const entry of finalizedCalls) {

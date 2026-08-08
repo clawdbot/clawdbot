@@ -85,6 +85,10 @@ export interface InternalBeforeToolBatchContext {
 /** Result of OpenClaw-owned whole-batch tool admission. */
 export interface InternalBeforeToolBatchResult {
   intervention?: ToolLoopIntervention;
+  /** Commit admitted calls whose tool implementations are about to start. May throw before launch. */
+  commitReadyCalls?: (toolCallIds: readonly string[]) => void;
+  /** Release admission state for admitted prepared calls suppressed by steering. */
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 }
 
 export interface DeferredToolCallContext {

@@ -1062,6 +1062,8 @@ describe("agentLoop tool termination", () => {
       requestMessages,
     );
     const afterToolOutcome = vi.fn(async () => undefined);
+    const commitReadyCalls = vi.fn();
+    const releaseSkippedCalls = vi.fn();
     const events: AgentEvent[] = [];
     const agent = new Agent({
       initialState: {
@@ -1082,6 +1084,7 @@ describe("agentLoop tool termination", () => {
       toolExecution: "sequential",
       afterToolOutcome,
     });
+    setInternalBeforeToolBatch(agent, async () => ({ commitReadyCalls, releaseSkippedCalls }));
     agent.subscribe((event) => {
       events.push(event);
     });
@@ -1097,6 +1100,8 @@ describe("agentLoop tool termination", () => {
 
     expect(firstExecute).toHaveBeenCalledOnce();
     expect(secondExecute).not.toHaveBeenCalled();
+    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith(["call-first"]);
+    expect(releaseSkippedCalls).toHaveBeenCalledWith(["call-second"]);
     expect(requestMessages).toHaveLength(3);
     expect(agent.state.messages.slice(1, 5)).toMatchObject([
       { role: "assistant", stopReason: "toolUse" },
@@ -1219,6 +1224,9 @@ describe("agentLoop tool termination", () => {
       streamFn,
       toolExecution: "sequential",
     });
+    const commitReadyCalls = vi.fn();
+    const releaseSkippedCalls = vi.fn();
+    setInternalBeforeToolBatch(agent, async () => ({ commitReadyCalls, releaseSkippedCalls }));
     const events: AgentEvent[] = [];
     const steer = { role: "user" as const, content: "before tools", timestamp: 2 };
     agent.subscribe(async (event) => {
@@ -1234,6 +1242,8 @@ describe("agentLoop tool termination", () => {
     await agent.prompt("start");
 
     expect(execute).not.toHaveBeenCalled();
+    expect(commitReadyCalls).not.toHaveBeenCalled();
+    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["before-first", "before-second"]);
     expect(requestMessages[1]?.slice(-4)).toMatchObject([
       { role: "assistant", stopReason: "toolUse" },
       { role: "toolResult", toolCallId: "before-first", isError: true },
@@ -1249,6 +1259,59 @@ describe("agentLoop tool termination", () => {
       { id: "before-first", started: false },
       { id: "before-second", started: false },
     ]);
+  });
+
+  it("releases only admitted sequential calls when steering suppresses a mixed tail", async () => {
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const requestMessages: Message[][] = [];
+    const streamFn = createTurnSequenceStream(
+      [
+        [
+          { type: "toolCall", id: "invalid-tail", name: "required", arguments: {} },
+          { type: "toolCall", id: "valid-tail", name: "valid", arguments: {} },
+        ],
+        [{ type: "text", text: "steer handled" }],
+      ],
+      requestMessages,
+    );
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [
+          {
+            name: "required",
+            label: "required",
+            description: "requires input",
+            parameters: Type.Object({ value: Type.String() }),
+            execute,
+          },
+          { ...makeTool("valid", []), execute },
+        ],
+      },
+      streamFn,
+      toolExecution: "sequential",
+    });
+    const commitReadyCalls = vi.fn();
+    const releaseSkippedCalls = vi.fn();
+    setInternalBeforeToolBatch(agent, async ({ calls }) => {
+      expect(calls.map((call) => call.toolCall.id)).toEqual(["valid-tail"]);
+      return { commitReadyCalls, releaseSkippedCalls };
+    });
+    agent.subscribe((event) => {
+      if (
+        event.type === "message_end" &&
+        event.message.role === "assistant" &&
+        event.message.stopReason === "toolUse"
+      ) {
+        agent.steer({ role: "user", content: "redirect", timestamp: 2 });
+      }
+    });
+
+    await agent.prompt("start");
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(commitReadyCalls).not.toHaveBeenCalled();
+    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["valid-tail"]);
   });
 
   it("checks steering once before launching a prepared parallel batch", async () => {
@@ -1290,6 +1353,12 @@ describe("agentLoop tool termination", () => {
         return undefined;
       },
     });
+    const commitReadyCalls = vi.fn();
+    const releaseSkippedCalls = vi.fn();
+    setInternalBeforeToolBatch(agent, async ({ calls }) => {
+      expect(calls.map((call) => call.toolCall.id)).toEqual(["prepared"]);
+      return { commitReadyCalls, releaseSkippedCalls };
+    });
     const events: AgentEvent[] = [];
     agent.subscribe((event) => {
       events.push(event);
@@ -1303,6 +1372,8 @@ describe("agentLoop tool termination", () => {
     await run;
 
     expect(execute).not.toHaveBeenCalled();
+    expect(commitReadyCalls).not.toHaveBeenCalled();
+    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["prepared"]);
     expect(requestMessages[1]?.slice(-4)).toMatchObject([
       { role: "assistant", stopReason: "toolUse" },
       { role: "toolResult", toolCallId: "invalid", isError: true },
@@ -1322,6 +1393,100 @@ describe("agentLoop tool termination", () => {
       { id: "invalid", kind: "argument-validation" },
       { id: "prepared", kind: "steering" },
     ]);
+  });
+
+  it("commits a prepared parallel batch in assistant order before launch", async () => {
+    const order: string[] = [];
+    const requestMessages: Message[][] = [];
+    const streamFn = createTurnSequenceStream(
+      [
+        [
+          { type: "toolCall", id: "parallel-first", name: "first", arguments: {} },
+          { type: "toolCall", id: "parallel-second", name: "second", arguments: {} },
+        ],
+        [{ type: "text", text: "done" }],
+      ],
+      requestMessages,
+    );
+    const commitReadyCalls = vi.fn((ids: readonly string[]) => {
+      order.push(`commit:${ids.join(",")}`);
+    });
+    const releaseSkippedCalls = vi.fn();
+
+    await runAgentLoop(
+      [{ role: "user", content: "run in parallel", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            ...makeTool("first", []),
+            execute: async () => {
+              order.push("execute:parallel-first");
+              return { content: [], details: {} };
+            },
+          },
+          {
+            ...makeTool("second", []),
+            execute: async () => {
+              order.push("execute:parallel-second");
+              return { content: [], details: {} };
+            },
+          },
+        ],
+      },
+      {
+        ...config,
+        toolExecution: "parallel",
+        beforeToolBatch: async () => ({ commitReadyCalls, releaseSkippedCalls }),
+      },
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(order).toEqual([
+      "commit:parallel-first,parallel-second",
+      "execute:parallel-first",
+      "execute:parallel-second",
+    ]);
+    expect(releaseSkippedCalls).not.toHaveBeenCalled();
+  });
+
+  it("does not launch prepared tools when the admission commit fails", async () => {
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const streamFn = createTurnSequenceStream(
+      [[{ type: "toolCall", id: "commit-failure", name: "side-effect", arguments: {} }]],
+      [],
+    );
+    const commitError = new Error("admission commit failed");
+    const releaseSkippedCalls = vi.fn();
+
+    await expect(
+      runAgentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        {
+          systemPrompt: "",
+          messages: [],
+          tools: [{ ...makeTool("side-effect", []), execute }],
+        },
+        {
+          ...config,
+          toolExecution: "parallel",
+          beforeToolBatch: async () => ({
+            commitReadyCalls: () => {
+              throw commitError;
+            },
+            releaseSkippedCalls,
+          }),
+        },
+        () => {},
+        undefined,
+        streamFn,
+      ),
+    ).rejects.toBe(commitError);
+    expect(execute).not.toHaveBeenCalled();
+    expect(releaseSkippedCalls).not.toHaveBeenCalled();
   });
 
   it("gives the model one recovery turn with the normal tool catalog", async () => {
@@ -2932,6 +3097,8 @@ describe("agentLoop tool termination", () => {
     const controller = new AbortController();
     const executed: string[] = [];
     const afterToolCall = vi.fn(async () => undefined);
+    const commitReadyCalls = vi.fn();
+    const releaseSkippedCalls = vi.fn();
     const streamFn: StreamFn = () => {
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
@@ -2962,6 +3129,7 @@ describe("agentLoop tool termination", () => {
       {
         ...config,
         toolExecution: "parallel",
+        beforeToolBatch: async () => ({ commitReadyCalls, releaseSkippedCalls }),
         beforeToolCall: async ({ toolCall }) => {
           if (toolCall.name === "gated") {
             await Promise.resolve();
@@ -2985,6 +3153,8 @@ describe("agentLoop tool termination", () => {
 
     expect(executed).toEqual([]);
     expect(afterToolCall).not.toHaveBeenCalled();
+    expect(commitReadyCalls).not.toHaveBeenCalled();
+    expect(releaseSkippedCalls).not.toHaveBeenCalled();
     expect(
       abortedMessages
         .filter((message) => message.role === "toolResult")
