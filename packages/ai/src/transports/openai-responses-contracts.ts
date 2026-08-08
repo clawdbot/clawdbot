@@ -56,7 +56,7 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
   egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "encrypted-content-retry";
+  payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;

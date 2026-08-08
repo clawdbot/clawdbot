@@ -231,7 +231,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
 
-  it("observes initial and encrypted-content retry application attempts", async () => {
+  it("observes each staged encrypted-content recovery attempt", async () => {
     const prompt = "PRIVATE-REPLAY-PROMPT";
     const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
       code: "invalid_encrypted_content",
@@ -265,8 +265,8 @@ describe("OpenAI Responses provider prompt observer", () => {
     ]);
     expect(run.observations.map((entry) => entry.payloadVariant)).toEqual([
       "initial",
-      "encrypted-content-retry",
-      "encrypted-content-retry",
+      "reasoning-stripped",
+      "compaction-stripped",
     ]);
     expect(run.observations.every((entry) => entry.egress === "responses-sdk")).toBe(true);
     expect(run.observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);

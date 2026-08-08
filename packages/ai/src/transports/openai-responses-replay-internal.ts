@@ -104,26 +104,38 @@ function stripEncryptedReasoningContentFields(value: unknown): {
   return changed ? { value: next, changed: true } : { value, changed: false };
 }
 
-function stripResponsesRequestEncryptedReasoning(
-  params: OpenAIResponsesRequestParams,
-): OpenAIResponsesRequestParams {
-  const stripped = stripEncryptedReasoningContentFields(params.input);
+type ResponsesEncryptedContentRequest = { input?: ResponseInput };
+
+export type ResponsesEncryptedContentAttemptKind =
+  | "initial"
+  | "reasoning-stripped"
+  | "compaction-stripped";
+
+export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
+  kind: ResponsesEncryptedContentAttemptKind;
+  request: TRequest;
+};
+
+function stripResponsesRequestEncryptedReasoning<TRequest extends ResponsesEncryptedContentRequest>(
+  request: TRequest,
+): TRequest {
+  const stripped = stripEncryptedReasoningContentFields(request.input);
   if (!stripped.changed) {
-    return params;
+    return request;
   }
   return {
-    ...params,
+    ...request,
     input: stripped.value as ResponseInput,
   };
 }
 
-function stripResponsesRequestCompaction(
-  params: OpenAIResponsesRequestParams,
-): OpenAIResponsesRequestParams {
-  if (!Array.isArray(params.input)) {
-    return params;
+function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedContentRequest>(
+  request: TRequest,
+): TRequest {
+  if (!Array.isArray(request.input)) {
+    return request;
   }
-  const input = params.input.filter(
+  const input = request.input.filter(
     (item) =>
       !(
         item !== null &&
@@ -131,7 +143,28 @@ function stripResponsesRequestCompaction(
         (item as { type?: unknown }).type === "compaction"
       ),
   );
-  return input.length === params.input.length ? params : { ...params, input };
+  return input.length === request.input.length ? request : { ...request, input };
+}
+
+export function resolveNextResponsesEncryptedContentAttempt<
+  TRequest extends ResponsesEncryptedContentRequest,
+>(
+  attempt: ResponsesEncryptedContentAttempt<TRequest>,
+  error: unknown,
+): ResponsesEncryptedContentAttempt<TRequest> | undefined {
+  if (!isInvalidEncryptedContentError(error) || attempt.kind === "compaction-stripped") {
+    return undefined;
+  }
+  if (attempt.kind === "initial") {
+    const reasoningStripped = stripResponsesRequestEncryptedReasoning(attempt.request);
+    if (reasoningStripped !== attempt.request) {
+      return { kind: "reasoning-stripped", request: reasoningStripped };
+    }
+  }
+  const compactionStripped = stripResponsesRequestCompaction(attempt.request);
+  return compactionStripped === attempt.request
+    ? undefined
+    : { kind: "compaction-stripped", request: compactionStripped };
 }
 
 export function tagOpenAIResponsesReasoningReplayItem(
@@ -234,56 +267,46 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   onCompactionRejected?: () => void;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
-  type Attempt =
-    | { kind: "initial"; request: OpenAIResponsesRequestParams }
-    | { kind: "without-encrypted-reasoning"; request: OpenAIResponsesRequestParams }
-    | { kind: "without-compaction"; request: OpenAIResponsesRequestParams };
-
-  const sendAttempt = async (attempt: Attempt) => {
+  const sendAttempt = async (
+    attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
+  ) => {
     params.observePrompt?.(attempt.request, {
       egress: "responses-sdk",
-      payloadVariant: attempt.kind === "initial" ? "initial" : "encrypted-content-retry",
+      payloadVariant: attempt.kind,
     });
     const { data, response } = await params.client.responses
       .create(attempt.request as never, params.requestOptions as never)
       .withResponse();
-    if (attempt.kind === "without-compaction") {
+    if (attempt.kind === "compaction-stripped") {
       params.onCompactionRejected?.();
     }
     return { stream: data as unknown as AsyncIterable<unknown>, response };
   };
 
-  let attempt: Attempt = { kind: "initial", request: params.request };
+  let attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams> = {
+    kind: "initial",
+    request: params.request,
+  };
   while (true) {
     try {
       return await sendAttempt(attempt);
     } catch (error) {
-      if (!isInvalidEncryptedContentError(error)) {
+      const nextAttempt = resolveNextResponsesEncryptedContentAttempt(attempt, error);
+      if (!nextAttempt) {
         throw error;
       }
-      if (attempt.kind === "without-compaction") {
-        throw error;
-      }
-
-      const withoutReasoning = stripResponsesRequestEncryptedReasoning(attempt.request);
-      if (attempt.kind === "initial" && withoutReasoning !== attempt.request) {
+      if (nextAttempt.kind === "reasoning-stripped") {
         log.warn(
           `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
             `api=${params.model.api} model=${params.model.id}`,
         );
-        attempt = { kind: "without-encrypted-reasoning", request: withoutReasoning };
-        continue;
+      } else {
+        log.warn(
+          `[responses] retrying without encrypted compaction content provider=${params.model.provider} ` +
+            `api=${params.model.api} model=${params.model.id}`,
+        );
       }
-
-      const withoutCompaction = stripResponsesRequestCompaction(attempt.request);
-      if (withoutCompaction === attempt.request) {
-        throw error;
-      }
-      log.warn(
-        `[responses] retrying without encrypted compaction content provider=${params.model.provider} ` +
-          `api=${params.model.api} model=${params.model.id}`,
-      );
-      attempt = { kind: "without-compaction", request: withoutCompaction };
+      attempt = nextAttempt;
     }
   }
 }
