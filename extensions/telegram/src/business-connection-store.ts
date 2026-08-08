@@ -8,6 +8,7 @@
 // outbound sends can attach business_connection_id without needing the
 // original inbound Message object in scope.
 import type { BusinessConnection } from "grammy/types";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { getOptionalTelegramRuntime } from "./runtime.js";
 
 const BUSINESS_CONNECTION_NAMESPACE = "telegram.business-connections";
@@ -29,6 +30,15 @@ type StoredBusinessChatRoute = {
   latestUnreadMessageId?: number;
   updatedAt: number;
 };
+
+// Multiple configured Telegram accounts can each have their own Business
+// Connect link to a different personal account. chatId alone is not a safe
+// store key: two accounts connected to the same counterpart (same chatId)
+// would otherwise overwrite each other's route, risking a reply or
+// read-receipt going out through the wrong connected account.
+function buildBusinessChatRouteKey(accountId: string | undefined, chatId: number | string): string {
+  return `${normalizeAccountId(accountId)}:${chatId}`;
+}
 
 class BusinessConnectionNotReadyError extends Error {}
 
@@ -150,6 +160,7 @@ export async function assertBusinessConnectionCanRead(
 
 /** Called on every inbound business_message from a real counterpart (not the connection owner's own echo). */
 export async function recordBusinessChatMessage(params: {
+  accountId?: string;
   chatId: number | string;
   businessConnectionId: string;
   messageId: number;
@@ -159,7 +170,7 @@ export async function recordBusinessChatMessage(params: {
   if (!store) {
     return;
   }
-  const key = String(params.chatId);
+  const key = buildBusinessChatRouteKey(params.accountId, params.chatId);
   const next: StoredBusinessChatRoute = {
     businessConnectionId: params.businessConnectionId,
     latestUnreadMessageId: params.messageId,
@@ -172,24 +183,34 @@ export async function recordBusinessChatMessage(params: {
   }
 }
 
-export async function resolveBusinessChatRoute(
-  chatId: number | string,
-  env?: NodeJS.ProcessEnv,
-): Promise<StoredBusinessChatRoute | undefined> {
-  return await openBusinessChatRouteStore(env)?.lookup(String(chatId));
+export async function resolveBusinessChatRoute(params: {
+  accountId?: string;
+  chatId: number | string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<StoredBusinessChatRoute | undefined> {
+  return await openBusinessChatRouteStore(params.env)?.lookup(
+    buildBusinessChatRouteKey(params.accountId, params.chatId),
+  );
 }
 
 /** Clears the pending unread marker once a read receipt has been sent; keeps the connection routing. */
-export async function clearBusinessChatUnread(
-  chatId: number | string,
-  env?: NodeJS.ProcessEnv,
-): Promise<void> {
-  const store = openBusinessChatRouteStore(env);
+export async function clearBusinessChatUnread(params: {
+  accountId?: string;
+  chatId: number | string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const store = openBusinessChatRouteStore(params.env);
   if (!store?.update) {
     return;
   }
-  const key = String(chatId);
-  await store.update(key, (current) =>
-    current ? { ...current, latestUnreadMessageId: undefined, updatedAt: Date.now() } : current,
-  );
+  const key = buildBusinessChatRouteKey(params.accountId, params.chatId);
+  await store.update(key, (current) => {
+    if (!current) {
+      return current;
+    }
+    // The plugin state store rejects literal `undefined` property values as
+    // non-JSON-serializable, so the marker must be omitted, not nulled out.
+    const { latestUnreadMessageId: _clearedUnreadMessageId, ...rest } = current;
+    return { ...rest, updatedAt: Date.now() };
+  });
 }

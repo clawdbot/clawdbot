@@ -27,7 +27,7 @@ import {
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export function registerTelegramMessageHandlers(
-  { bot, opts, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
+  { accountId, bot, opts, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
   messageRuntime: TelegramHandlerMessageRuntime,
   authorizationRuntime: TelegramHandlerAuthorizationRuntime,
   inboundRuntime: TelegramHandlerInboundRuntime,
@@ -323,6 +323,7 @@ export function registerTelegramMessageHandlers(
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
     await recordBusinessChatMessage({
+      accountId,
       chatId: normalizedMsg.chat.id,
       businessConnectionId,
       messageId: normalizedMsg.message_id,

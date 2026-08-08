@@ -129,7 +129,9 @@ async function resolveTelegramOutboundSendContext(
   const outboundTo = normalizeTelegramOutboundTarget(params.to);
   const { send, baseOpts } = await resolveTelegramSendContext(params);
   const chatKey = parseTelegramTarget(outboundTo).chatId;
-  const businessRoute = chatKey ? await resolveBusinessChatRoute(chatKey) : undefined;
+  const businessRoute = chatKey
+    ? await resolveBusinessChatRoute({ accountId: params.accountId ?? undefined, chatId: chatKey })
+    : undefined;
   if (!businessRoute) {
     return { outboundTo, send, baseOpts };
   }
@@ -586,7 +588,7 @@ export function createTelegramOutboundAdapter(
       const outboundTo = normalizeTelegramOutboundTarget(to);
       const pollChatKey = parseTelegramTarget(outboundTo).chatId;
       const pollBusinessRoute = pollChatKey
-        ? await resolveBusinessChatRoute(pollChatKey)
+        ? await resolveBusinessChatRoute({ accountId: accountId ?? undefined, chatId: pollChatKey })
         : undefined;
       if (pollBusinessRoute) {
         // MVP: fail loudly instead of silently sending the poll as the bot's
