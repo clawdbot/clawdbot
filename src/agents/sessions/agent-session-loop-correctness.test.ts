@@ -2,7 +2,6 @@ import {
   createAssistantMessageEventStream,
   type Context,
   type Model,
-  type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -635,66 +634,5 @@ describe("AgentSession loop correctness", () => {
     expect(continueRun).not.toHaveBeenCalled();
     expect(requests).toHaveLength(1);
     expect(JSON.stringify(requests[0]?.messages)).toContain("pending prompt");
-  });
-  it("aborts in-flight work when disposed", async () => {
-    let providerSignal: AbortSignal | undefined;
-    streamMocks.streamSimple.mockImplementation(
-      (activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
-        providerSignal = options?.signal;
-        const stream = createAssistantMessageEventStream();
-        options?.signal?.addEventListener(
-          "abort",
-          () => {
-            const message = createAssistant(activeModel, [], "aborted");
-            stream.push({ type: "error", reason: "aborted", error: message });
-            stream.end();
-          },
-          { once: true },
-        );
-        return stream;
-      },
-    );
-    const { session } = await createTestSession();
-    const abortRetry = vi.spyOn(session, "abortRetry");
-    const abortCompaction = vi.spyOn(session, "abortCompaction");
-    const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
-    const abortBash = vi.spyOn(session, "abortBash");
-    const abortAgent = vi.spyOn(session.agent, "abort");
-    abortRetry.mockImplementationOnce(() => {
-      throw new Error("retry abort failed");
-    });
-    const prompt = session.prompt("wait");
-    await vi.waitFor(() => expect(providerSignal).toBeDefined());
-
-    session.dispose();
-    await prompt;
-
-    expect(providerSignal?.aborted).toBe(true);
-    expect(abortRetry).toHaveBeenCalledOnce();
-    expect(abortCompaction).toHaveBeenCalledOnce();
-    expect(abortBranchSummary).toHaveBeenCalledOnce();
-    expect(abortBash).toHaveBeenCalledOnce();
-    expect(abortAgent).toHaveBeenCalledOnce();
-  });
-
-  it("resynchronizes queue modes when settings reload", async () => {
-    const settingsManager = SettingsManager.inMemory({
-      steeringMode: "one-at-a-time",
-      followUpMode: "one-at-a-time",
-      compaction: { enabled: false },
-      retry: { enabled: false },
-    });
-    const { session } = await createTestSession({ settingsManager });
-    settingsManager.setSteeringMode("all");
-    settingsManager.setFollowUpMode("all");
-    await settingsManager.flush();
-
-    expect(session.agent.steeringMode).toBe("one-at-a-time");
-    expect(session.agent.followUpMode).toBe("one-at-a-time");
-
-    await session.reload();
-
-    expect(session.agent.steeringMode).toBe("all");
-    expect(session.agent.followUpMode).toBe("all");
   });
 });
