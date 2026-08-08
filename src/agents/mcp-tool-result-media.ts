@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { mediaKindFromMime, maxBytesForKind } from "@openclaw/media-core/constants";
@@ -153,10 +154,17 @@ async function stageMcpBinaryAttachment(params: {
       contentType: mimeType,
       filename: name,
     });
+    const stagedMimeType = normalizeMimeType(staged.contentType);
+    if (!stagedMimeType || mediaKindFromMime(stagedMimeType) !== params.type) {
+      await rm(staged.path, { force: true }).catch(() => {});
+      throw new Error(
+        `detected MIME type ${stagedMimeType ?? "missing"} does not match MCP ${params.type} content`,
+      );
+    }
     return {
       type: params.type,
       mediaUrl: staged.path,
-      mimeType: staged.contentType ?? mimeType,
+      mimeType: stagedMimeType,
       name,
       sizeBytes: decodedBytes,
     };
