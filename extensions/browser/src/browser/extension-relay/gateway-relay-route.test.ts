@@ -1,6 +1,7 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 // Gateway extension relay upgrade handler: auth + routing decisions.
-import type { IncomingMessage } from "node:http";
+import http, { type IncomingMessage } from "node:http";
+import net from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,7 +52,10 @@ vi.mock("./relay-auth.js", async (importOriginal) => {
 });
 
 import { invalidateBrowserRelayAuthV2Authority } from "./auth-v2.js";
-import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
+import {
+  disposeGatewayExtensionRelay,
+  handleGatewayExtensionUpgrade,
+} from "./gateway-relay-route.js";
 
 const TOKEN = "a".repeat(64);
 const ROTATED_TOKEN = "b".repeat(64);
@@ -59,7 +63,7 @@ const ROTATED_TOKEN = "b".repeat(64);
 function fakeSocket() {
   const writes: string[] = [];
   let destroyed = false;
-  const socket = {
+  const socket = Object.assign(new EventEmitter(), {
     write: (chunk: string) => {
       writes.push(chunk);
       return true;
@@ -67,7 +71,7 @@ function fakeSocket() {
     destroy: () => {
       destroyed = true;
     },
-  } as unknown as Duplex;
+  }) as unknown as Duplex;
   return { socket, writes, isDestroyed: () => destroyed };
 }
 
@@ -105,10 +109,25 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disposeGatewayExtensionRelay();
   invalidateBrowserRelayAuthV2Authority();
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
+
+function oversizedMaskedTextFrame(): Buffer {
+  const payload = Buffer.alloc(18 * 1024, 0x20);
+  const header = Buffer.alloc(8);
+  header[0] = 0x81;
+  header[1] = 0x80 | 126;
+  header.writeUInt16BE(payload.length, 2);
+  const mask = Buffer.from([0x12, 0x34, 0x56, 0x78]);
+  mask.copy(header, 4);
+  for (let index = 0; index < payload.length; index += 1) {
+    payload[index] = payload[index]! ^ mask[index % 4]!;
+  }
+  return Buffer.concat([header, payload]);
+}
 
 // Default: the requested profile resolves to a valid extension profile.
 function primeProfile() {
@@ -260,6 +279,49 @@ describe("handleGatewayExtensionUpgrade", () => {
       bridge,
       expect.objectContaining({ readyState: 1 }),
     );
+  });
+
+  it("rejects oversized direct-Gateway upgrade-head data before ws auth or lazy startup", async () => {
+    const server = http.createServer();
+    server.on("upgrade", (request, socket, head) => {
+      void handleGatewayExtensionUpgrade(request, socket, head);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected direct-Gateway test port");
+    }
+    const socket = net.createConnection({ host: "127.0.0.1", port: address.port });
+    socket.on("error", () => {});
+    await once(socket, "connect");
+    const response: Buffer[] = [];
+    socket.on("data", (chunk) => response.push(Buffer.from(chunk)));
+    const closed = once(socket, "close");
+    const request = Buffer.from(
+      [
+        "GET /browser/extension HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Protocol: openclaw-extension-relay.v2",
+        "Origin: chrome-extension://relay-auth-v2-test",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    socket.write(Buffer.concat([request, oversizedMaskedTextFrame()]));
+    await closed;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    const text = Buffer.concat(response).toString("utf8");
+    expect(text).not.toContain("auth.challenge");
+    expect(text).not.toContain("auth.ok");
+    expect(authenticateExtensionWebSocketMock).not.toHaveBeenCalled();
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
+    expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
   });
 
   it("binds v2 to the exact profile resource and refuses mixed-protocol downgrade", async () => {

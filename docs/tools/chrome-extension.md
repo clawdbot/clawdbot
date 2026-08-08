@@ -147,6 +147,9 @@ connection failure.
 
 - Existing valid pairing strings migrate locally to `authVersion: 2`; you do
   not need to pair again for the protocol upgrade.
+- Stored direct-Gateway pairings behind a path-prefix proxy are cleared during
+  migration. Re-run `openclaw browser extension pair` with a Gateway URL that
+  has no path prefix; v2 supports the exact `/browser/extension` route only.
 - Upgrade OpenClaw before upgrading the extension. A v2 extension reports an
   old server as needing an upgrade instead of sending the old token.
 - Old extensions and external CDP clients continue to work for one migration

@@ -14,7 +14,14 @@ const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
 const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
 const RELAY_SECRET = "a".repeat(64);
 const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
-const PAIRING_CONFIG_KEYS = ["relayUrl", "gatewayUrl", "token", "authVersion", "groupColor"];
+const PAIRING_CONFIG_KEYS = [
+  "relayUrl",
+  "gatewayUrl",
+  "token",
+  "authVersion",
+  "pairingStatus",
+  "groupColor",
+];
 
 async function loadBackground({
   deferSocketClose = false,
@@ -317,10 +324,10 @@ describe("persisted relay pairing validation", () => {
   it("opens the canonical persisted pairing on startup", async () => {
     const harness = await loadBackground({
       storedConfig: {
-        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        relayUrl: "wss://gateway.example.com/browser/extension",
         token: RELAY_SECRET,
         authVersion: 2,
-        gatewayUrl: "wss://gateway.example.com/base",
+        gatewayUrl: "wss://gateway.example.com",
         groupColor: "blue",
       },
     });
@@ -330,10 +337,40 @@ describe("persisted relay pairing validation", () => {
       expect(harness.gatewaySockets).toHaveLength(1);
     });
     expect(harness.relaySockets[0]).toMatchObject({
-      url: "wss://gateway.example.com/base/browser/extension",
+      url: "wss://gateway.example.com/browser/extension",
       protocols: ["openclaw-extension-relay.v2"],
     });
     expect(harness.storageRemove).not.toHaveBeenCalled();
+  });
+
+  it("clears a stored proxy-prefixed direct pairing before opening sockets and surfaces re-pair guidance", async () => {
+    const harness = await loadBackground({
+      storedConfig: {
+        relayUrl: "wss://gateway.example.com/proxy/browser/extension",
+        token: RELAY_SECRET,
+        authVersion: 2,
+        gatewayUrl: "wss://gateway.example.com/proxy",
+        groupColor: "blue",
+      },
+    });
+
+    expect(harness.relaySockets).toHaveLength(0);
+    expect(harness.gatewaySockets).toHaveLength(0);
+    expect(harness.storageValues).not.toHaveProperty("token");
+    expect(harness.storageValues).toMatchObject({ pairingStatus: "proxy-prefix-unsupported" });
+    const response = vi.fn();
+    harness.messageListener({ type: "getStatus" }, {}, response);
+    await vi.waitFor(() => {
+      expect(response).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paired: false,
+          state: "off",
+          relayUrl: "",
+          hint: expect.stringContaining("no path prefix"),
+        }),
+      );
+    });
+    expect(JSON.stringify(response.mock.calls)).not.toContain(RELAY_SECRET);
   });
 
   it("migrates a canonical existing pairing to authVersion 2 before connecting", async () => {
@@ -401,9 +438,9 @@ describe("persisted relay pairing validation", () => {
     [
       "mismatched direct state",
       {
-        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        relayUrl: "wss://gateway.example.com/browser/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://other.example.com/base",
+        gatewayUrl: "wss://other.example.com",
       },
     ],
   ])("clears %s before startup can open a socket", async (_label, storedConfig) => {

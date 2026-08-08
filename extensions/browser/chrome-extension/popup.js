@@ -61,7 +61,7 @@ async function refresh() {
   unpairButton.classList.toggle("hidden", !status.paired);
   unpairNote.classList.toggle("hidden", !status.paired);
   if (!status.paired) {
-    statusLine.textContent = actionError ?? "Not paired with a gateway";
+    statusLine.textContent = actionError ?? status.hint ?? "Not paired with a gateway";
     return;
   }
   const label = STATE_LABEL[status.state] ?? STATE_LABEL.off;

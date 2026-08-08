@@ -22,6 +22,7 @@ import {
   attachExtensionWebSocket,
   authenticateExtensionWebSocket,
   EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
+  handlePreAuthWebSocketUpgrade,
   isAllowedExtensionOrigin,
   requestExtensionProtocolToken,
 } from "./relay-server.js";
@@ -115,25 +116,36 @@ export async function handleGatewayExtensionUpgrade(
 
   if (protocols.length === 1 && protocols[0] === BROWSER_RELAY_EXTENSION_SUBPROTOCOL) {
     const authority = getBrowserRelayAuthV2Authority(token);
-    getWss().handleUpgrade(req, socket, head, (ws) => {
-      authenticateExtensionWebSocket({
-        ws,
-        authority,
-        resource,
-        prepareAuthenticated: async () => {
-          // The proof may finish while an operator rotates the host key. Never
-          // let an old authenticated socket lazy-start or claim a new bridge.
-          if (readExtensionRelayToken() !== token) {
-            throw new Error("browser relay key rotated during authentication");
-          }
-          const { bridge, profileName } = await resolveGatewayBridge(resource);
-          return () => {
-            attachExtensionWebSocket(bridge, ws);
-            log.info(`extension authenticated over gateway for profile "${profileName}"`);
-          };
+    if (
+      !handlePreAuthWebSocketUpgrade({
+        wss: getWss(),
+        req,
+        socket,
+        head,
+        onUpgrade: (ws, removePreAuthGuard) => {
+          authenticateExtensionWebSocket({
+            ws,
+            authority,
+            resource,
+            removePreAuthGuard,
+            prepareAuthenticated: async () => {
+              // The proof may finish while an operator rotates the host key. Never
+              // let an old authenticated socket lazy-start or claim a new bridge.
+              if (readExtensionRelayToken() !== token) {
+                throw new Error("browser relay key rotated during authentication");
+              }
+              const { bridge, profileName } = await resolveGatewayBridge(resource);
+              return () => {
+                attachExtensionWebSocket(bridge, ws);
+                log.info(`extension authenticated over gateway for profile "${profileName}"`);
+              };
+            },
+          });
         },
-      });
-    });
+      })
+    ) {
+      destroy(socket, "400 Bad Request");
+    }
     return true;
   }
 

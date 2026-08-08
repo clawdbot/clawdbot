@@ -125,7 +125,11 @@ function flashPageShareBadge(ok) {
 }
 
 async function getConfig() {
-  return await pairingConfigStore.read();
+  const config = await pairingConfigStore.read();
+  if (config.pairingStatusHint) {
+    relayStatusHint = config.pairingStatusHint;
+  }
+  return config;
 }
 
 // ---------------------------------------------------------------------------

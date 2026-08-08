@@ -1,7 +1,7 @@
 /** Loopback extension relay with connection-bound Browser Relay Authentication v2. */
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
+import { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
@@ -32,6 +32,12 @@ const LEGACY_EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token."
 const INTERNAL_CDP_USERNAME = "openclaw-internal";
 const MAX_AUTH_BODY_BYTES = 8 * 1024;
 const MAX_WEBSOCKET_AUTH_MESSAGE_BYTES = 16 * 1024;
+// A masked 16 KiB frame needs at most 8 bytes of framing. Keep a small bounded
+// allowance for a few fragments without letting pre-auth traffic approach the
+// authenticated receiver's 64 MiB application limit.
+const MAX_WEBSOCKET_AUTH_WIRE_OVERHEAD_BYTES = 1024;
+const MAX_WEBSOCKET_PREAUTH_WIRE_BYTES =
+  MAX_WEBSOCKET_AUTH_MESSAGE_BYTES + MAX_WEBSOCKET_AUTH_WIRE_OVERHEAD_BYTES;
 
 export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 
@@ -209,6 +215,94 @@ function boundedRawDataByteLength(data: RawData, limit: number): number {
   return length;
 }
 
+class PreAuthWebSocketTransport extends Duplex {
+  private guardActive = true;
+  private wireBytes: number;
+
+  constructor(
+    private readonly rawSocket: Duplex,
+    headBytes: number,
+  ) {
+    super();
+    this.wireBytes = headBytes;
+    rawSocket.on("data", this.onRawData);
+    rawSocket.once("end", this.onRawEnd);
+    rawSocket.once("close", this.onRawClose);
+    rawSocket.once("error", this.onRawError);
+  }
+
+  removeGuard = () => {
+    this.guardActive = false;
+  };
+
+  override _read(): void {
+    this.rawSocket.resume();
+  }
+
+  override _write(
+    chunk: Buffer,
+    encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    this.rawSocket.write(chunk, encoding, callback);
+  }
+
+  override _final(callback: (error?: Error | null) => void): void {
+    this.rawSocket.end(callback);
+  }
+
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    this.rawSocket.off("data", this.onRawData);
+    this.rawSocket.off("end", this.onRawEnd);
+    this.rawSocket.off("close", this.onRawClose);
+    this.rawSocket.off("error", this.onRawError);
+    if (!this.rawSocket.destroyed) {
+      this.rawSocket.destroy();
+    }
+    callback(error);
+  }
+
+  private readonly onRawData = (chunk: Buffer) => {
+    if (this.guardActive) {
+      this.wireBytes += chunk.byteLength;
+      if (this.wireBytes > MAX_WEBSOCKET_PREAUTH_WIRE_BYTES) {
+        this.destroy();
+        return;
+      }
+    }
+    if (!this.push(chunk)) {
+      this.rawSocket.pause();
+    }
+  };
+
+  private readonly onRawEnd = () => this.push(null);
+  private readonly onRawClose = () => this.destroy();
+  private readonly onRawError = (error: Error) => this.destroy(error);
+}
+
+/** Keep both v2 entry points on the same pre-receiver admission path. */
+export function handlePreAuthWebSocketUpgrade(params: {
+  wss: WebSocketServer;
+  req: IncomingMessage;
+  socket: Duplex;
+  head: Buffer;
+  onUpgrade: (ws: WebSocket, removePreAuthGuard: () => void) => void;
+}): boolean {
+  if (params.head.byteLength > MAX_WEBSOCKET_PREAUTH_WIRE_BYTES) {
+    return false;
+  }
+  const transport = new PreAuthWebSocketTransport(params.socket, params.head.byteLength);
+  try {
+    params.wss.handleUpgrade(params.req, transport, params.head, (ws) => {
+      params.onUpgrade(ws, transport.removeGuard);
+    });
+  } catch (err) {
+    transport.destroy();
+    throw err;
+  }
+  return true;
+}
+
 function trackAuthenticatedSocket(authority: BrowserRelayAuthV2Authority, ws: WebSocket): boolean {
   if (
     !authority.registerAuthenticatedConnection(ws, () =>
@@ -251,9 +345,18 @@ export function authenticateExtensionWebSocket(params: {
   authority: BrowserRelayAuthV2Authority;
   resource: string;
   prepareAuthenticated: () => Promise<() => void>;
+  removePreAuthGuard?: () => void;
 }): void {
   const { ws, authority } = params;
   let stage: "hello" | "response" | "authenticated" | "failed" = "hello";
+  let preAuthGuardActive = true;
+  const removePreAuthGuard = () => {
+    if (!preAuthGuardActive) {
+      return;
+    }
+    preAuthGuardActive = false;
+    params.removePreAuthGuard?.();
+  };
   const timer = setTimeout(() => {
     stage = "failed";
     ws.off("message", onMessage);
@@ -263,9 +366,15 @@ export function authenticateExtensionWebSocket(params: {
   timer.unref?.();
   const release = () => {
     clearTimeout(timer);
+    removePreAuthGuard();
     authority.releaseConnection(ws);
   };
-  if (!authority.registerPendingConnection(ws, () => ws.close(4003, "browser relay key rotated"))) {
+  if (
+    !authority.registerPendingConnection(ws, () => {
+      ws.close(4003, "browser relay key rotated");
+    })
+  ) {
+    clearTimeout(timer);
     ws.close(4013, "browser relay auth capacity reached");
     return;
   }
@@ -275,6 +384,7 @@ export function authenticateExtensionWebSocket(params: {
       return;
     }
     stage = "failed";
+    clearTimeout(timer);
     ws.off("message", onMessage);
     ws.close(code, reason);
     const terminateTimer = setTimeout(() => ws.terminate(), 100);
@@ -327,13 +437,16 @@ export function authenticateExtensionWebSocket(params: {
         return;
       }
       stage = "authenticated";
+      // The proof deadline owns only challenge completion. Promotion is now
+      // authoritative, so cold Browser/Gateway preparation must not race it.
+      clearTimeout(timer);
+      removePreAuthGuard();
       void params
         .prepareAuthenticated()
         .then((attach) => {
           if (ws.readyState !== 1) {
             return;
           }
-          clearTimeout(timer);
           ws.off("message", onMessage);
           attach();
           ws.send(JSON.stringify(completed.ok), (err) => {
@@ -624,17 +737,28 @@ export async function startExtensionRelayServer(params: {
           destroySocket(socket, "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
           return;
         }
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          authenticateExtensionWebSocket({
-            ws,
-            authority,
-            resource,
-            prepareAuthenticated: async () => () => {
-              attachExtensionWebSocket(bridge, ws);
-              log.info("extension authenticated and connected to relay");
+        if (
+          !handlePreAuthWebSocketUpgrade({
+            wss,
+            req,
+            socket,
+            head,
+            onUpgrade: (ws, removePreAuthGuard) => {
+              authenticateExtensionWebSocket({
+                ws,
+                authority,
+                resource,
+                removePreAuthGuard,
+                prepareAuthenticated: async () => () => {
+                  attachExtensionWebSocket(bridge, ws);
+                  log.info("extension authenticated and connected to relay");
+                },
+              });
             },
-          });
-        });
+          })
+        ) {
+          destroySocket(socket, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+        }
         return;
       }
       if (protocols.includes(BROWSER_RELAY_EXTENSION_SUBPROTOCOL)) {

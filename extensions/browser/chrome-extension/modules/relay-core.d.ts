@@ -19,6 +19,7 @@ export function createPairingConfigStore(storage: {
     gatewayUrl: string;
     authVersion?: 2;
     groupColor: string;
+    pairingStatusHint: string;
   }>;
   save(
     pairing: { relayUrl: string; token: string; gatewayUrl?: string },
