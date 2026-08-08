@@ -854,6 +854,73 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the split-pane close button reachable as the pane narrows", async () => {
+    const page = await openBrowserPage(1100, 240);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
+      const settingsCss = readStyleSheet("ui/src/styles/settings.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${settingsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 320px;">
+            <div class="chat-pane__header">
+              <span class="chat-pane__session-title">A deliberately long split-pane session title</span>
+              <openclaw-session-owner-chip>
+                <span class="session-owner-chip session-owner-chip--header">O</span>
+              </openclaw-session-owner-chip>
+              <button class="chat-pane__workspace-chip" type="button">
+                ${iconSvg()}<span>openclaw-workspace</span>
+              </button>
+              <div class="chat-pane__face-switch">
+                <div class="settings-segmented">
+                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Chat</button>
+                  <button class="settings-segmented__btn" type="button">Board</button>
+                </div>
+              </div>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle" type="button">D</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle" type="button">T</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle" type="button">W</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle" type="button">C</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn" data-board-dock-menu type="button">B</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right" type="button">H</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const selectors = [
+        "openclaw-session-owner-chip",
+        ".chat-session-diff-toggle",
+        ".chat-tasks-toggle",
+        ".chat-workspace-toggle",
+        ".chat-session-discussion-toggle",
+        "[data-board-dock-menu]",
+        ".chat-pane__split-down",
+        ".chat-pane__split-right",
+      ];
+      const displayValues = async () =>
+        await page
+          .locator(selectors.join(","))
+          .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).display));
+
+      const header = await getBoundingBox(page, ".chat-pane__header");
+      const close = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(close.x + close.width).toBeLessThanOrEqual(header.x + header.width);
+      expect(await displayValues()).toEqual(selectors.map(() => "none"));
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "1000px";
+      });
+      expect(await displayValues()).not.toContain("none");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps a Done status disjoint from a long compact session headline", async () => {
     const page = await openBrowserPage(320, 240);
     try {

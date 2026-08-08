@@ -121,6 +121,7 @@ openclaw-chat-pane {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+  container-type: inline-size;
   /* 48px centers the 28px actions on the app's shared 24px chrome
      centerline (sidebar brand row, floating toggles), so split headers
      line up with the sidebar across the top of the shell. */
@@ -421,7 +422,27 @@ openclaw-chat-pane {
   font-size: 13px;
 }
 
-@media (max-width: 480px) {
+/* Narrow split panes shed controls by priority: close stays visible at the
+   320px pane minimum; secondary controls return as the pane widens. */
+@container (max-width: 640px) {
+  .chat-pane__split-down,
+  .chat-pane__split-right {
+    display: none;
+  }
+}
+
+@container (max-width: 520px) {
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-session-diff-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-tasks-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-workspace-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-session-discussion-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) [data-board-dock-menu],
+  .chat-pane__header:has(.chat-pane__close-pane) openclaw-session-owner-chip {
+    display: none;
+  }
+}
+
+@container (max-width: 480px) {
   .chat-pane__workspace-chip {
     width: 28px;
     padding: 0 6px;
