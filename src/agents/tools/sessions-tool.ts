@@ -1,6 +1,7 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -327,12 +328,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           error: "Model patch needs in-process gateway.",
         });
       }
-      const callSessionPatch = async (sessionPatch: typeof patch) =>
+      const callSessionPatch = async (sessionPatch: typeof patch): Promise<SessionsPatchResult> =>
         sessionPatch.model === undefined
-          ? await gatewayCall("sessions.patch", sessionPatch)
+          ? await gatewayCall<SessionsPatchResult>("sessions.patch", sessionPatch)
           : await withAgentSessionModelPatchOrigin(
-              async () => await gatewayCall("sessions.patch", sessionPatch),
+              async () => await gatewayCall<SessionsPatchResult>("sessions.patch", sessionPatch),
             );
+      const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
 
       if (patch.archived === true && key === requesterKey && key !== "global") {
         const agentId = resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(cfg));
@@ -352,8 +354,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 : {}),
             };
             const { archived: _archived, ...immediatePatch } = patch;
+            let immediateResult: SessionsPatchResult | undefined;
             if (Object.keys(immediatePatch).length > 1) {
-              await callSessionPatch({ ...immediatePatch, ...expectedSessionIdentity });
+              immediateResult = await callSessionPatch({
+                ...immediatePatch,
+                ...expectedSessionIdentity,
+              });
             }
 
             // Archive only after the final tool result, transcript, and every
@@ -446,16 +452,20 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
               status: "scheduled",
               sessionKey: key,
               message: "Session will be archived after the current agent run finishes.",
+              ...(includeResolved && immediateResult?.resolved
+                ? { resolved: immediateResult.resolved }
+                : {}),
             });
           }
         }
       }
 
-      await callSessionPatch(patch);
+      const result = await callSessionPatch(patch);
       return jsonResult({
         status: "updated",
         sessionKey: key,
         updated: Object.keys(patch).filter((field) => field !== "key"),
+        ...(includeResolved && result.resolved ? { resolved: result.resolved } : {}),
       });
     },
   };
