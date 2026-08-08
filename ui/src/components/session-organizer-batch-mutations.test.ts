@@ -271,7 +271,7 @@ describe("patchSessionRows", () => {
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
-      "Connect to the Gateway to change threads.",
+      "Connect to the Gateway to change sessions.",
     );
   });
 
