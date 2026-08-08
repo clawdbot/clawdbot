@@ -494,6 +494,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("steers ordered current-turn images with the active prompt", async () => {
+    const onHostStagingOwnershipTransferred = vi.fn();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -513,6 +514,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        onHostStagingOwnershipTransferred,
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
@@ -537,6 +539,8 @@ describe("runReplyAgent media path normalization", () => {
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledOnce();
+    expect(onHostStagingOwnershipTransferred).toHaveBeenCalledWith();
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
   });

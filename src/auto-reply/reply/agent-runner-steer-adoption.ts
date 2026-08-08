@@ -139,9 +139,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     params.providedReplyOperation?.key === sessionKey
       ? params.providedReplyOperation
       : (registeredReplyOperation ?? params.providedReplyOperation);
-  const activeOwnerSettlement = params.onHostStagingOwnershipTransferred
-    ? expectDefined(activeReplyOperation?.ownerSettlement, "active reply owner settlement")
-    : undefined;
+  const activeOwnerSettlement = activeReplyOperation?.ownerSettlement;
   let stagingOwnershipTransferred = false;
   const transferStagingToQueue = () => {
     if (stagingOwnershipTransferred) {
@@ -151,7 +149,11 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     params.onHostStagingOwnershipTransferred?.();
   };
   const transferStagingToActiveRun = () => {
-    if (stagingOwnershipTransferred || !activeOwnerSettlement) {
+    if (stagingOwnershipTransferred) {
+      return;
+    }
+    if (!activeOwnerSettlement) {
+      transferStagingToQueue();
       return;
     }
     stagingOwnershipTransferred = true;
