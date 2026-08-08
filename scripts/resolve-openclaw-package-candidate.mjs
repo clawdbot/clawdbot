@@ -18,6 +18,7 @@ import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
+import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const ROOT_DIR = resolveRepoRoot(import.meta.url);
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
@@ -73,7 +74,7 @@ function usage() {
 
 Options:
   --package-spec <spec>       Published npm spec for source=npm.
-  --package-ref <ref>         Trusted repo ref for source=ref.
+  --package-ref <ref>         Trusted repo ref for source=ref or npm companion packaging.
   --package-url <url>         HTTPS tarball URL for source=url or source=trusted-url.
   --package-sha256 <sha256>   Expected tarball SHA-256 for source=url, source=trusted-url, or source=artifact.
   --trusted-source-id <id>    Named trusted URL policy for source=trusted-url.
@@ -82,6 +83,10 @@ Options:
   --artifact-dir <dir>        Directory containing exactly one .tgz for source=artifact.
   --output-name <name>        Output tarball filename. Default: ${DEFAULT_OUTPUT_NAME}
   --metadata <file>           Write package metadata JSON.
+  --plugin-registry-output-dir <dir>
+                              Build an immutable registry for source=ref before cleanup.
+  --required-plugin-packages-json <json>
+                              Scoped package names to include in that registry.
   --github-output <file>      Append tarball, sha256, package name/version outputs.`;
 }
 
@@ -96,6 +101,8 @@ export function parseArgs(argv) {
     packageSha256: "",
     packageSpec: "",
     packageUrl: "",
+    pluginRegistryOutputDir: "",
+    requiredPluginPackagesJson: "[]",
     source: "",
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
@@ -110,6 +117,8 @@ export function parseArgs(argv) {
         ["--metadata", "metadata"],
         ["--output-dir", "outputDir"],
         ["--output-name", "outputName"],
+        ["--plugin-registry-output-dir", "pluginRegistryOutputDir"],
+        ["--required-plugin-packages-json", "requiredPluginPackagesJson"],
         ["--source", "source"],
         ["--trusted-source-policy", "trustedSourcePolicy"],
       ].map(([flag, key]) =>
@@ -1464,7 +1473,9 @@ async function resolveCandidate(options) {
   let packageTrustedReason = "";
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
+  let pluginRegistrySource;
   let artifactMetadata = {};
+  let pluginRegistryIdentity;
   let resolveError;
 
   try {
@@ -1472,6 +1483,9 @@ async function resolveCandidate(options) {
       packageRef = options.packageRef || "main";
       const packageSource = await preparePackageSourceWorktree(packageRef);
       packageWorktreeDir = packageSource.sourceDir;
+      if (options.pluginRegistryOutputDir) {
+        pluginRegistrySource = packageSource;
+      }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
       await installPackageSourceDeps(packageSource.sourceDir);
@@ -1501,6 +1515,12 @@ async function resolveCandidate(options) {
         packOutput,
         options.outputName || DEFAULT_OUTPUT_NAME,
       );
+      if (options.pluginRegistryOutputDir) {
+        pluginRegistrySource = await preparePackageSourceWorktree(options.packageRef);
+        packageWorktreeDir = pluginRegistrySource.sourceDir;
+        packageRef = options.packageRef;
+        await installPackageSourceDeps(pluginRegistrySource.sourceDir);
+      }
     } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
         throw new Error(`${options.source} requires --package-url`);
@@ -1544,6 +1564,29 @@ async function resolveCandidate(options) {
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
+    if (options.pluginRegistryOutputDir && !pluginRegistrySource) {
+      throw new Error(
+        "--plugin-registry-output-dir is only supported with source=ref or source=npm",
+      );
+    }
+    if (options.pluginRegistryOutputDir && pluginRegistrySource) {
+      const requiredPackages = JSON.parse(options.requiredPluginPackagesJson);
+      const rootPackage = JSON.parse(
+        await fs.readFile(path.join(pluginRegistrySource.sourceDir, "package.json"), "utf8"),
+      );
+      const registry = createPrepublishPluginRegistryArtifact({
+        repoRoot: pluginRegistrySource.sourceDir,
+        outputDir: path.resolve(ROOT_DIR, options.pluginRegistryOutputDir),
+        sourceSha: pluginRegistrySource.selectedSha,
+        candidateVersion: rootPackage.version,
+        requiredPackages,
+      });
+      pluginRegistryIdentity = {
+        candidateVersion: rootPackage.version,
+        manifestSha256: registry.manifestSha256,
+        sourceSha: pluginRegistrySource.selectedSha,
+      };
+    }
   } catch (error) {
     resolveError = error;
     throw error;
@@ -1570,12 +1613,22 @@ async function resolveCandidate(options) {
       packageTrustedReason = "package-build-info";
     }
   }
+  if (
+    pluginRegistryIdentity &&
+    (pluginRegistryIdentity.candidateVersion !== pkg.version ||
+      pluginRegistryIdentity.sourceSha !== packageSourceSha)
+  ) {
+    throw new Error(
+      "prepublish plugin registry source SHA/version differs from the package candidate",
+    );
+  }
   const metadata = {
     name: pkg.name,
     packageRef,
     packageSpec: options.packageSpec || "",
     packageSourceSha,
     packageTrustedReason,
+    pluginRegistryManifestSha256: pluginRegistryIdentity?.manifestSha256 ?? "",
     trustedSourceId: packageTrustedSourceId,
     sha256: digest,
     source: options.source,
@@ -1601,6 +1654,7 @@ async function resolveCandidate(options) {
     package_name: pkg.name,
     package_source_sha: packageSourceSha,
     package_version: pkg.version,
+    plugin_registry_manifest_sha256: pluginRegistryIdentity?.manifestSha256 ?? "",
     sha256: digest,
     tarball: metadata.tarball,
   });
