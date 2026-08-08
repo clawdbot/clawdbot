@@ -139,6 +139,30 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     });
   });
 
+  it("drops a prior-lifecycle outcome write after a concurrent remove and restore", async () => {
+    const created = await materialize("aba-restore-race");
+    const staleActiveAt = created.lastActiveAt;
+    // Restore must move the activity stamp, so this test needs a ticking clock.
+    let tick = now;
+    const tickingService = new ManagedWorktreeService({ env, now: () => ++tick });
+    await tickingService.acquire(created.id);
+    await expect(tickingService.removeIfLossless(created.id)).resolves.toBe(true);
+    const restored = await tickingService.restore({ id: created.id });
+    expect(restored.lastActiveAt).not.toBe(staleActiveAt);
+
+    // A stale remover from the pre-restore lifecycle writes with the activity
+    // stamp it observed (recordOutcome's condition); against the revived row it
+    // must be a no-op instead of stamping a prior-lifecycle outcome.
+    updateRegistryWorktree(
+      env,
+      created.id,
+      { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
+      { onlyIfLive: true, onlyIfActiveAt: staleActiveAt },
+    );
+
+    expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
+  });
+
   it("records dirty retention and keeps the checkout intact", async () => {
     const created = await materialize("dirty");
     await service.acquire(created.id);

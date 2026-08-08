@@ -1062,10 +1062,11 @@ export class ManagedWorktreeService {
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
       // Retained/failed writes happen after this remover released or aborted its
-      // claim, so a racing remover may have finalized the row; the live-row
-      // condition keeps a winner's removed-lossless authoritative. The winning
-      // removal itself persists its outcome atomically inside remove()'s
-      // finalization update, never through this path.
+      // claim, so racing removers may have finalized the row, or removed AND
+      // restored it into a new lifecycle. The live condition blocks the first;
+      // conditioning on the activity stamp this remover observed blocks the
+      // second (restore bumps lastActiveAt). The winning removal persists its
+      // outcome atomically inside remove()'s finalization update, never here.
       updateRegistryWorktree(
         this.env,
         id,
@@ -1078,7 +1079,7 @@ export class ManagedWorktreeService {
               : {}),
           },
         },
-        { onlyIfLive: true },
+        { onlyIfLive: true, onlyIfActiveAt: record.lastActiveAt },
       );
     };
     // Run-end cleanup must leave a durable outcome even when safety retains the checkout.

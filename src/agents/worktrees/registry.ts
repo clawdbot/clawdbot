@@ -401,7 +401,7 @@ export function updateRegistryWorktree(
     provisionedPaths?: readonly string[];
     provisionedState?: readonly ProvisionedFileState[];
   },
-  options: { onlyIfLive?: boolean } = {},
+  options: { onlyIfLive?: boolean; onlyIfActiveAt?: number } = {},
 ): void {
   const db = dbFor(env);
   const values: Partial<WorktreeRow> = {};
@@ -424,13 +424,18 @@ export function updateRegistryWorktree(
     values.provisioned_paths_json = JSON.stringify(patch.provisionedPaths);
   }
   runOpenClawStateWriteTransaction(() => {
-    const update = kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id);
-    // Busy is authoritative only while the row is live; the conditional write cannot
-    // overwrite a concurrent remover's terminal cleanup outcome after finalization.
-    executeSqliteQuerySync(
-      db,
-      options.onlyIfLive ? update.where("removed_at", "is", null) : update,
-    );
+    let update = kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id);
+    // Busy/retained/failed outcomes are authoritative only for the lifecycle the
+    // writer observed: the live condition blocks post-finalization overwrites, and
+    // the activity condition blocks prior-lifecycle writes after a concurrent
+    // remove-plus-restore revives the row (restore bumps last_active_at).
+    if (options.onlyIfLive) {
+      update = update.where("removed_at", "is", null);
+    }
+    if (options.onlyIfActiveAt !== undefined) {
+      update = update.where("last_active_at", "=", options.onlyIfActiveAt);
+    }
+    executeSqliteQuerySync(db, update);
   });
 }
 
