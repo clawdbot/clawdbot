@@ -152,6 +152,7 @@ function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): b
     left.sendState === right.sendState &&
     left.agentId === right.agentId &&
     left.sessionKey === right.sessionKey &&
+    left.steerTargetRunId === right.steerTargetRunId &&
     left.transcriptRevision?.sessionId === right.transcriptRevision?.sessionId &&
     left.transcriptRevision?.expectedLeafEntryId === right.transcriptRevision?.expectedLeafEntryId
   );

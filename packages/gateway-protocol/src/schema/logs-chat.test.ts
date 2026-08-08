@@ -60,8 +60,9 @@ describe("ChatSendParamsSchema", () => {
     expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
   });
 
-  it("rejects empty transcript generation and leaf identifiers", () => {
+  it("rejects empty transcript and run identifiers", () => {
     expect(Value.Check(ChatSendParamsSchema, { ...send, sessionId: "" })).toBe(false);
     expect(Value.Check(ChatSendParamsSchema, { ...send, expectedLeafEntryId: "" })).toBe(false);
+    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedRunId: "" })).toBe(false);
   });
 });

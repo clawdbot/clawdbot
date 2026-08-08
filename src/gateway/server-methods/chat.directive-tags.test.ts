@@ -1884,6 +1884,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx).toBeUndefined();
   });
 
+  it("allows an exact-run steer when logical leaf identity is unavailable", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-exact-steer-unavailable-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "unidentified-current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      path: suiteDatabasePath,
+    })
+      .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
+      .run(mockState.sessionId, "unidentified-current-leaf");
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-active-run-output",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-exact-steer-unavailable-leaf",
+        requestParams: {
+          sessionId: mockState.sessionId,
+          expectedLeafEntryId: "unidentified-current-leaf",
+          expectedRunId: "active-run",
+          queueMode: "steer",
+        },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
   it("starts exact-run injection before ACK and does not dispatch after the owner clears", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-before-ack-");
     const { context, respond, send } = createChatRequestFixture();

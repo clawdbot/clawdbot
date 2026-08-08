@@ -114,8 +114,7 @@ function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): Stee
   const activeRow = matchingRows.find((row) => row.activeRunIds?.includes(runId));
   const displayedRevision =
     host.chatRunId?.trim() === runId ? resolveDisplayedTranscriptRevision(host) : undefined;
-  const transcriptRevision =
-    displayedRevision ?? resolveSessionRowTranscriptRevision(activeRow);
+  const transcriptRevision = displayedRevision ?? resolveSessionRowTranscriptRevision(activeRow);
   return {
     runId,
     ...(transcriptRevision ? { transcriptRevision } : {}),
@@ -363,6 +362,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
+    steerTargetRunId: claimed.steerTargetRunId,
     transcriptRevision: claimed.transcriptRevision,
   };
   const steeringChip = buildInflightSteerChip(pendingItem, claimed.sendRunId, activeRunId);

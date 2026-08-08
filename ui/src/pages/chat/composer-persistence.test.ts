@@ -410,6 +410,30 @@ describe("chat composer persistence", () => {
     );
   });
 
+  it("treats the immutable steer target as part of the durable item version", () => {
+    const state = createState();
+    const original = {
+      ...reconnectItem("steer-target-versioned", 1),
+      kind: "steered" as const,
+      steerTargetRunId: "active-run",
+    };
+    const staleTarget = { ...original, steerTargetRunId: "different-run" };
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+
+    expect(
+      updateStoredChatComposerQueueItem(state, state.sessionKey, staleTarget, {
+        ...staleTarget,
+        sendState: "failed",
+      }),
+    ).toBe(false);
+    expect(
+      removeStoredChatComposerQueueItem(state, state.sessionKey, staleTarget.id, staleTarget),
+    ).toBe(false);
+    expect(removeStoredChatComposerQueueItem(state, state.sessionKey, original.id, original)).toBe(
+      true,
+    );
+  });
+
   it("keeps unresolved bare main and raw global independent until their owners resolve", () => {
     const offlineMain = createState({ agentsList: null, hello: null, sessionKey: "main" });
     const offlineGlobal = createState({ agentsList: null, hello: null, sessionKey: "global" });
