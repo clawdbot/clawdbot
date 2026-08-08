@@ -2232,6 +2232,61 @@ describe("agentLoop tool termination", () => {
     ).toMatchObject({ executionStarted: false, isError: true });
   });
 
+  it("continues after blocking siblings in an original rejected recovery batch", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "invalid", name: "edit", arguments: {} },
+                { type: "toolCall", id: "sibling", name: "read", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "correcting" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const edit = makeTool("edit", executed);
+    edit.parameters = Type.Object({ path: Type.String() }, { additionalProperties: false });
+
+    await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [edit, makeTool("read", executed)] },
+        {
+          ...config,
+          beforeToolBatch: async ({ rejections }) =>
+            rejections?.length
+              ? {
+                  intervention: {
+                    kind: "invalid-tool-arguments-recovery",
+                    toolCallId: "invalid",
+                    toolName: "edit",
+                    reason: "correct once",
+                    rejection: { classification: "invalid_tool_arguments" },
+                    continueRecovery: true,
+                  },
+                }
+              : undefined,
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(executed).toEqual([]);
+  });
+
   it("does not resolve or prepare an uncached call after cancellation", async () => {
     const controller = new AbortController();
     const resolveDeferredTool = vi.fn(async () => makeTool("deferred", []));

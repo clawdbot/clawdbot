@@ -32,9 +32,17 @@ type RecoveryEntry = {
   rejection?: Rejection;
 };
 
+type TranscriptEntry = {
+  type: string;
+  customType?: string;
+  data?: unknown;
+  message?: { role?: unknown } & Partial<MessageIdentity>;
+};
+
 type SessionManager = {
   appendCustomEntry(customType: string, data?: unknown): string;
-  getEntries(): Array<{ type: string; customType?: string; data?: unknown }>;
+  getEntries?(): TranscriptEntry[];
+  getBranch?(): TranscriptEntry[];
 };
 
 type RejectionNotifier = (event: Rejection) => Promise<void> | void;
@@ -186,18 +194,45 @@ function parseRecoveryEntry(value: unknown): RecoveryEntry | undefined {
   };
 }
 
-function latestRecoveryEntry(sessionManager: SessionManager): RecoveryEntry | undefined {
-  const entries =
-    typeof sessionManager.getEntries === "function" ? sessionManager.getEntries() : [];
-  for (const entry of entries.toReversed()) {
-    if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) {
-      const recovery = parseRecoveryEntry(entry.data);
-      if (recovery) {
-        return recovery;
+function activeTranscriptEntries(sessionManager: SessionManager): TranscriptEntry[] {
+  if (typeof sessionManager.getBranch === "function") {
+    return sessionManager.getBranch();
+  }
+  return typeof sessionManager.getEntries === "function" ? sessionManager.getEntries() : [];
+}
+
+function latestRecoveryState(sessionManager: SessionManager): {
+  entry?: RecoveryEntry;
+  laterAssistant?: MessageIdentity;
+} {
+  const entries = activeTranscriptEntries(sessionManager);
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const transcriptEntry = entries[index];
+    if (transcriptEntry?.type === "custom" && transcriptEntry.customType === CUSTOM_TYPE) {
+      const recovery = parseRecoveryEntry(transcriptEntry.data);
+      if (!recovery) {
+        continue;
       }
+      const laterAssistantEntry = entries
+        .slice(index + 1)
+        .find(
+          (candidate) => candidate.type === "message" && candidate.message?.role === "assistant",
+        );
+      const laterAssistant = laterAssistantEntry?.message;
+      return {
+        entry: recovery,
+        ...(laterAssistant?.api && laterAssistant.provider
+          ? {
+              laterAssistant: {
+                api: laterAssistant.api,
+                provider: laterAssistant.provider,
+              },
+            }
+          : {}),
+      };
     }
   }
-  return undefined;
+  return {};
 }
 
 function createRecoveryId(params: {
@@ -326,11 +361,22 @@ export async function createInvalidToolArgumentsRecovery(params: {
   let pending: RecoveryEntry | undefined;
   let claimed: RecoveryEntry | undefined;
   let claimedToolCallId: string | undefined;
-  let pendingReceipt: RecoveryEntry | undefined;
   let replayIndeterminate: RecoveryEntry | undefined;
-  const latest = latestRecoveryEntry(params.sessionManager);
+  const latestState = latestRecoveryState(params.sessionManager);
+  const latest = latestState.entry;
   if (latest?.state === "retry_available") {
-    pending = latest;
+    if (latestState.laterAssistant) {
+      const event = rejection(latest, latestState.laterAssistant, "retry_not_matched");
+      await append({
+        ...latest,
+        state: "retry_not_matched",
+        attempt: 2,
+        rejection: event,
+      });
+      await params.notifyRejected(event);
+    } else {
+      pending = latest;
+    }
   } else if (latest?.state === "retry_claimed") {
     const event = rejection(
       latest,
@@ -347,7 +393,6 @@ export async function createInvalidToolArgumentsRecovery(params: {
       rejection: event,
     };
     await append(replayIndeterminate);
-    await params.notifyRejected(event);
   }
 
   const closePending = async (
@@ -428,7 +473,18 @@ export async function createInvalidToolArgumentsRecovery(params: {
         };
       }
       if (candidate.rejected) {
-        const closed = await closePending(pending, context.assistantMessage, "retry_exhausted");
+        const correctionEvidence: RecoveryEntry = {
+          ...pending,
+          turnId: stableTurnId(context.assistantMessage),
+          toolCallId: bounded(candidate.toolCall.id),
+          callOrdinal: toolCallOrdinal(context.assistantMessage, candidate.toolCall),
+          validation: candidate.validation,
+        };
+        const closed = await closePending(
+          correctionEvidence,
+          context.assistantMessage,
+          "retry_exhausted",
+        );
         return {
           intervention: {
             kind: "invalid-tool-arguments-recovery",
@@ -471,16 +527,18 @@ export async function createInvalidToolArgumentsRecovery(params: {
         callOrdinal,
         validation: first.validation,
       };
-      await append(opened);
-      pending = opened;
-      const closed = await closePending(opened, context.assistantMessage, "retry_not_matched");
+      const event = rejection(opened, context.assistantMessage, "schema_validation_failed");
+      const offered = { ...opened, rejection: event };
+      await append(offered);
+      pending = offered;
       return {
         intervention: {
           kind: "invalid-tool-arguments-recovery",
           toolCallId: first.toolCall.id,
           toolName: first.toolCall.name,
-          reason: terminalText("retry_not_matched"),
-          rejection: closed.rejection,
+          reason: correctionText(first.toolCall.name),
+          rejection: event,
+          continueRecovery: true,
         },
       };
     }
@@ -529,13 +587,17 @@ export async function createInvalidToolArgumentsRecovery(params: {
         };
         const event = rejection(opened, context.assistantMessage, "schema_validation_failed");
         const offered = { ...opened, rejection: event };
-        if (!(await appendIfActive(offered, signal))) {
-          return await previousAfterToolOutcome?.(context, signal);
+        const alreadyOffered = pending?.recoveryId === offered.recoveryId;
+        if (!alreadyOffered) {
+          if (!(await appendIfActive(offered, signal))) {
+            return await previousAfterToolOutcome?.(context, signal);
+          }
+          pending = offered;
         }
-        pending = offered;
+        const activeEvent = pending?.rejection ?? event;
         return {
           content: [{ type: "text", text: correctionText(context.toolCall.name) }],
-          details: event,
+          details: activeEvent,
           isError: true,
           terminate: false,
         };
@@ -543,11 +605,12 @@ export async function createInvalidToolArgumentsRecovery(params: {
       const prior = await previousAfterToolOutcome?.(context, signal);
       const effective = mergeOutcome(context, prior);
       if (claimed && context.toolCall.id === claimedToolCallId) {
-        pendingReceipt = {
+        const receipt: RecoveryEntry = {
           ...claimed,
           state: terminalState(effective),
           attempt: 2,
         };
+        await append(receipt);
         claimed = undefined;
         claimedToolCallId = undefined;
         return prior;
@@ -556,10 +619,6 @@ export async function createInvalidToolArgumentsRecovery(params: {
     };
 
     agent.prepareNextTurnWithContext = async (context, signal) => {
-      if (pendingReceipt) {
-        await append(pendingReceipt);
-        pendingReceipt = undefined;
-      }
       if (pending && stableTurnId(context.message) !== pending.turnId) {
         const closed = await closePending(pending, context.message, "retry_not_matched");
         if (closed.rejection) {

@@ -176,14 +176,20 @@ export function convertMessages(
 
       const toolCalls = msg.content.filter(isToolCallBlock);
       if (toolCalls.length > 0) {
-        assistantMsg.tool_calls = toolCalls.map((toolCall) => ({
-          id: toolCall.id,
-          type: "function" as const,
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        }));
+        assistantMsg.tool_calls = toolCalls.map((toolCall) => {
+          const replayArguments = JSON.stringify(toolCall.arguments);
+          return {
+            id: toolCall.id,
+            type: "function" as const,
+            function: {
+              name: toolCall.name,
+              // Malformed provider bytes are retained internally as undefined
+              // for generic validation, but replay must remain valid JSON so
+              // the provider can deliver the one correction turn.
+              arguments: replayArguments ?? "{}",
+            },
+          };
+        });
         const reasoningDetails = toolCalls.flatMap((toolCall) => {
           const signature = toolCall.thoughtSignature;
           if (!signature) {

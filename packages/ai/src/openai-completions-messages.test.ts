@@ -97,4 +97,36 @@ describe("convertMessages assistant text replay", () => {
     expect(normalizedAssistantId).toBe(prefix);
     expect(normalizedToolResultId).toBe(prefix);
   });
+
+  it("replays malformed provider arguments as valid JSON for the correction turn", () => {
+    const assistant: AssistantMessage = {
+      role: "assistant",
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      content: [
+        {
+          type: "toolCall",
+          id: "malformed-call",
+          name: "lookup",
+          arguments: undefined as never,
+        },
+      ],
+      usage: emptyUsage,
+      stopReason: "toolUse",
+      timestamp: 1,
+    };
+
+    const converted = convertMessages(
+      model,
+      { messages: [assistant] },
+      resolveOpenAICompletionsCompat(model),
+    );
+    const replayed = converted.find((message) => message.role === "assistant");
+    const replayedToolCall = replayed?.role === "assistant" ? replayed.tool_calls?.[0] : undefined;
+
+    expect(
+      replayedToolCall?.type === "function" ? replayedToolCall.function.arguments : undefined,
+    ).toBe("{}");
+  });
 });

@@ -82,6 +82,8 @@ export interface InvalidToolArgumentsIntervention {
   toolName: string;
   reason: string;
   rejection: unknown;
+  /** Continue to the single correction turn after blocking an original multi-call batch. */
+  continueRecovery?: boolean;
 }
 
 export type ToolBatchIntervention = ToolLoopIntervention | InvalidToolArgumentsIntervention;

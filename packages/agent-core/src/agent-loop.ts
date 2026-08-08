@@ -1502,6 +1502,7 @@ async function completeToolBatchIntervention(params: {
       ? params.intervention
       : undefined;
   const isInvalidArgumentsRecovery = invalidArgumentsIntervention !== undefined;
+  const continueInvalidArgumentsRecovery = invalidArgumentsIntervention?.continueRecovery === true;
   for (const toolCall of params.toolCalls) {
     const hideFromChannelProgress = hidesToolCallFromChannelProgress(
       params.currentContext,
@@ -1552,7 +1553,9 @@ async function completeToolBatchIntervention(params: {
                 deniedReason: "tool-loop",
                 intervention: params.intervention,
               },
-          ...(params.terminal || isInvalidArgumentsRecovery ? { terminate: true } : {}),
+          ...(params.terminal || (isInvalidArgumentsRecovery && !continueInvalidArgumentsRecovery)
+            ? { terminate: true }
+            : {}),
         },
         isError: true,
         executionStarted: false,
@@ -1577,7 +1580,9 @@ async function completeToolBatchIntervention(params: {
     // honor the outcome hooks: if every finalized outcome says terminate, the
     // batch ends without another provider turn.
     terminate:
-      params.terminal || isInvalidArgumentsRecovery || shouldTerminateToolBatch(finalizedCalls),
+      params.terminal ||
+      (isInvalidArgumentsRecovery && !continueInvalidArgumentsRecovery) ||
+      shouldTerminateToolBatch(finalizedCalls),
     terminateRun: !isInvalidArgumentsRecovery && params.terminal,
     intervention: params.intervention,
   };

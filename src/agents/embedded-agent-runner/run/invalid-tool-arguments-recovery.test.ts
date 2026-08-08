@@ -39,7 +39,15 @@ function assistant(
   };
 }
 
-function harness(entries: Array<{ type: string; customType?: string; data?: unknown }> = []) {
+type HarnessEntry = {
+  type: string;
+  customType?: string;
+  data?: unknown;
+  message?: AssistantMessage;
+  active?: boolean;
+};
+
+function harness(entries: HarnessEntry[] = []) {
   const notifyRejected = vi.fn(async () => {});
   const sessionManager = {
     appendCustomEntry(customType: string, data?: unknown) {
@@ -47,6 +55,7 @@ function harness(entries: Array<{ type: string; customType?: string; data?: unkn
       return String(entries.length);
     },
     getEntries: () => entries,
+    getBranch: () => entries.filter((entry) => entry.active !== false),
   };
   const sessionLockController = {
     withSessionWriteLock: async <T>(run: () => T | Promise<T>) => await run(),
@@ -146,12 +155,13 @@ describe("invalid tool argument recovery", () => {
       executionStarted: true,
       context: { systemPrompt: "", messages: [] },
     });
-    await settleTurn(agent, correction);
     expect(fixture.entries.map((entry) => (entry.data as { state?: string }).state)).toEqual([
       "retry_available",
       "retry_claimed",
       "succeeded",
     ]);
+    await settleTurn(agent, correction);
+    expect(fixture.entries).toHaveLength(3);
   });
 
   it("exhausts the chain on a second malformed call without opening another chain", async () => {
@@ -163,16 +173,27 @@ describe("invalid tool argument recovery", () => {
     await agent.afterToolOutcome?.(invalidOutcome(original, "original"));
     const correction = assistant("turn-correction", [{ id: "correction", name: "edit" }]);
     const correctionCall = correction.content.find((item) => item.type === "toolCall")!;
+    const correctionValidation = {
+      argumentShape: "string" as const,
+      issueCount: 2,
+      issues: [{ code: "type" as const, path: "replacement" }],
+      truncated: false,
+    };
 
     const admission = await controller.beforeToolBatch({
       assistantMessage: correction,
       calls: [],
-      rejections: [{ toolCall: correctionCall, validation }],
+      rejections: [{ toolCall: correctionCall, validation: correctionValidation }],
       context: { systemPrompt: "", messages: [] },
     });
     expect(admission?.intervention).toMatchObject({
       kind: "invalid-tool-arguments-recovery",
-      rejection: { reason: "retry_exhausted", recovery: { remainingAttempts: 0 } },
+      rejection: {
+        reason: "retry_exhausted",
+        correlation: { turnId: "turn-correction", providerToolCallId: "correction" },
+        recovery: { remainingAttempts: 0 },
+        validation: correctionValidation,
+      },
     });
     expect(fixture.entries.map((entry) => (entry.data as { state?: string }).state)).toEqual([
       "retry_available",
@@ -283,9 +304,7 @@ describe("invalid tool argument recovery", () => {
     const recovered = await createController(restarted);
     const restartedAgent = fakeAgent();
     recovered.install(restartedAgent);
-    expect(restarted.notifyRejected).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "retry_claimed_without_receipt" }),
-    );
+    expect(restarted.notifyRejected).not.toHaveBeenCalled();
     const admission = await recovered.beforeToolBatch({
       assistantMessage: correction,
       calls: [{ toolCall: correctionCall, args: {} }],
@@ -332,6 +351,56 @@ describe("invalid tool argument recovery", () => {
       }),
     ).resolves.toBeUndefined();
     expect((restarted.entries.at(-1)?.data as { state?: string }).state).toBe("retry_claimed");
+  });
+
+  it("closes retry_available when a later provider turn ended before admission", async () => {
+    const first = harness();
+    const originalController = await createController(first);
+    const originalAgent = fakeAgent();
+    originalController.install(originalAgent);
+    const original = assistant("turn-original", [{ id: "original", name: "edit" }]);
+    await originalAgent.afterToolOutcome?.(invalidOutcome(original, "original"));
+    first.entries.push({
+      type: "message",
+      message: {
+        ...assistant("turn-provider-error", []),
+        content: [{ type: "text", text: "provider failed" }],
+        stopReason: "error",
+        errorMessage: "provider failed",
+      },
+    });
+
+    const restarted = harness(first.entries);
+    await createController(restarted);
+
+    expect((restarted.entries.at(-1)?.data as { state?: string }).state).toBe("retry_not_matched");
+    expect(restarted.notifyRejected).toHaveBeenCalledOnce();
+  });
+
+  it("ignores recovery entries outside the active transcript branch", async () => {
+    const first = harness();
+    const originalController = await createController(first);
+    const originalAgent = fakeAgent();
+    originalController.install(originalAgent);
+    const original = assistant("turn-original", [{ id: "original", name: "edit" }]);
+    await originalAgent.afterToolOutcome?.(invalidOutcome(original, "original"));
+    first.entries[0]!.active = false;
+
+    const restarted = harness(first.entries);
+    const recovered = await createController(restarted);
+    const unrelated = assistant("turn-unrelated", [{ id: "unrelated", name: "read" }]);
+    const unrelatedCall = unrelated.content.find((item) => item.type === "toolCall")!;
+
+    await expect(
+      recovered.beforeToolBatch({
+        assistantMessage: unrelated,
+        calls: [{ toolCall: unrelatedCall, args: {} }],
+        rejections: [],
+        context: { systemPrompt: "", messages: [] },
+      }),
+    ).resolves.toBeUndefined();
+    expect(restarted.entries).toHaveLength(1);
+    expect(restarted.notifyRejected).not.toHaveBeenCalled();
   });
 
   it("treats a completed receipt as terminal when the transcript is reopened", async () => {
@@ -399,6 +468,47 @@ describe("invalid tool argument recovery", () => {
     ).resolves.toBeUndefined();
     expect(fixture.entries).toEqual([]);
     expect(fixture.notifyRejected).not.toHaveBeenCalled();
+  });
+
+  it("blocks siblings in an original rejected batch but preserves the correction turn", async () => {
+    const fixture = harness();
+    const controller = await createController(fixture);
+    const agent = fakeAgent();
+    controller.install(agent);
+    const original = assistant("turn-original", [
+      { id: "invalid", name: "edit" },
+      { id: "sibling", name: "read" },
+    ]);
+    const [invalidCall, siblingCall] = original.content.filter((item) => item.type === "toolCall");
+
+    const admission = await controller.beforeToolBatch({
+      assistantMessage: original,
+      calls: [{ toolCall: siblingCall!, args: {} }],
+      rejections: [{ toolCall: invalidCall!, validation }],
+      context: { systemPrompt: "", messages: [] },
+    });
+    expect(admission?.intervention).toMatchObject({
+      kind: "invalid-tool-arguments-recovery",
+      continueRecovery: true,
+      rejection: { reason: "schema_validation_failed" },
+    });
+    expect((fixture.entries.at(-1)?.data as { state?: string }).state).toBe("retry_available");
+
+    const offered = await agent.afterToolOutcome?.(invalidOutcome(original, "invalid"));
+    expect(offered).toMatchObject({ terminate: false });
+    expect(fixture.entries).toHaveLength(1);
+
+    const correction = assistant("turn-correction", [{ id: "correction", name: "EDIT" }]);
+    const correctionCall = correction.content.find((item) => item.type === "toolCall")!;
+    await expect(
+      controller.beforeToolBatch({
+        assistantMessage: correction,
+        calls: [{ toolCall: correctionCall, args: {} }],
+        rejections: [],
+        context: { systemPrompt: "", messages: [] },
+      }),
+    ).resolves.toBeUndefined();
+    expect((fixture.entries.at(-1)?.data as { state?: string }).state).toBe("retry_claimed");
   });
 
   it("closes retry_available on an ambiguous multi-call recovery batch", async () => {
