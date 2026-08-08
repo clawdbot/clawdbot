@@ -69,7 +69,7 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
-import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import { buildQaMockProfileId, stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
@@ -88,6 +88,7 @@ const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
+const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -179,13 +180,64 @@ async function runQaGatewayCliCommand(params: {
   args: readonly string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  stdin?: string;
 }): Promise<string> {
+  const hasStdin = params.stdin !== undefined;
   const child = spawn(params.executablePath, [...params.argsPrefix, ...params.args], {
     cwd: params.cwd,
     env: { ...params.env, OPENCLAW_CLI: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [hasStdin ? "pipe" : "ignore", "pipe", "pipe"],
   });
-  return await readQaGatewayCliCommand(child);
+  const result = readQaGatewayCliCommand(child);
+  if (hasStdin) {
+    child.stdin?.once("error", () => {});
+    child.stdin?.end(params.stdin);
+  }
+  return await result;
+}
+
+function createQaPackagedMockApiKey(): string {
+  const prefix = ["s", "k"].join("");
+  return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
+}
+
+async function stageQaPackagedMockAuthProfiles(params: {
+  command: QaGatewayChildCommand;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  providers: readonly string[];
+}): Promise<void> {
+  for (const provider of uniqueStrings(params.providers)) {
+    try {
+      await runQaGatewayCliCommand({
+        executablePath: params.command.executablePath,
+        argsPrefix: params.command.argsPrefix ?? [],
+        args: [
+          "models",
+          "auth",
+          "--agent",
+          "qa",
+          "paste-api-key",
+          "--provider",
+          provider,
+          "--profile-id",
+          buildQaMockProfileId(provider),
+        ],
+        cwd: params.command.cwd ?? params.cwd,
+        env: params.env,
+        stdin: `${createQaPackagedMockApiKey()}\n`,
+      });
+    } catch (error) {
+      const errorMessage = toErrorObject(error, "installed package auth command failed").message;
+      const details = sliceUtf16Safe(
+        redactQaGatewayDebugText(errorMessage),
+        0,
+        QA_PACKAGE_AUTH_FAILURE_MAX_CHARS,
+      );
+      // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
+      throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
+    }
+  }
 }
 
 type QaChildFailure = {
@@ -1189,6 +1241,7 @@ export async function startQaGatewayChild(params: {
     const gatewayCommand =
       params.command ??
       (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
+    const usesPackagedCandidate = params.command?.usePackagedPlugins === true;
     const gatewayExecutablePath = gatewayCommand?.executablePath;
     const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
     const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -1282,12 +1335,14 @@ export async function startQaGatewayChild(params: {
       });
       const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
       if (mockAuthProviders && mockAuthProviders.length > 0) {
-        cfg = await stageQaMockAuthProfiles({
-          cfg,
-          stateDir,
-          agentIds: params.mockAuthAgentIds,
-          providers: mockAuthProviders,
-        });
+        if (!usesPackagedCandidate) {
+          cfg = await stageQaMockAuthProfiles({
+            cfg,
+            stateDir,
+            agentIds: params.mockAuthAgentIds,
+            providers: mockAuthProviders,
+          });
+        }
       }
       return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
     };
@@ -1506,6 +1561,15 @@ export async function startQaGatewayChild(params: {
           encoding: "utf8",
           mode: 0o600,
         });
+        const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+        if (usesPackagedCandidate && gatewayCommand && mockAuthProviders?.length) {
+          await stageQaPackagedMockAuthProfiles({
+            command: gatewayCommand,
+            cwd: gatewayCwd,
+            env,
+            providers: mockAuthProviders,
+          });
+        }
       }
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");
