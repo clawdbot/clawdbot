@@ -179,10 +179,23 @@ describe("resolve-openclaw-package-candidate", () => {
       packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
       packageUrl: "",
+      pluginRegistryOutputDir: "",
+      requiredPluginPackagesJson: "[]",
       source: "npm",
       trustedSourceId: "",
       trustedSourcePolicy: ".github/package-trusted-sources.json",
     });
+  });
+
+  it("creates a source-built companion registry before removing the trusted worktree", () => {
+    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
+    const createIndex = script.indexOf("createPrepublishPluginRegistryArtifact({");
+    const cleanupIndex = script.indexOf("cleanupPackageSourceWorktree(packageWorktreeDir");
+
+    expect(createIndex).toBeGreaterThan(0);
+    expect(createIndex).toBeLessThan(cleanupIndex);
+    expect(script).toContain("requiredPackages,");
+    expect(script).toContain("plugin_registry_manifest_sha256: pluginRegistryManifestSha256");
   });
 
   it("rejects option-shaped package candidate option values", () => {

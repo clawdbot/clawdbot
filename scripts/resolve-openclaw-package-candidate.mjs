@@ -18,6 +18,7 @@ import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
+import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const ROOT_DIR = resolveRepoRoot(import.meta.url);
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
@@ -82,6 +83,10 @@ Options:
   --artifact-dir <dir>        Directory containing exactly one .tgz for source=artifact.
   --output-name <name>        Output tarball filename. Default: ${DEFAULT_OUTPUT_NAME}
   --metadata <file>           Write package metadata JSON.
+  --plugin-registry-output-dir <dir>
+                              Build an immutable registry for source=ref before cleanup.
+  --required-plugin-packages-json <json>
+                              Scoped package names to include in that registry.
   --github-output <file>      Append tarball, sha256, package name/version outputs.`;
 }
 
@@ -96,6 +101,8 @@ export function parseArgs(argv) {
     packageSha256: "",
     packageSpec: "",
     packageUrl: "",
+    pluginRegistryOutputDir: "",
+    requiredPluginPackagesJson: "[]",
     source: "",
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
@@ -110,6 +117,8 @@ export function parseArgs(argv) {
         ["--metadata", "metadata"],
         ["--output-dir", "outputDir"],
         ["--output-name", "outputName"],
+        ["--plugin-registry-output-dir", "pluginRegistryOutputDir"],
+        ["--required-plugin-packages-json", "requiredPluginPackagesJson"],
         ["--source", "source"],
         ["--trusted-source-policy", "trustedSourcePolicy"],
       ].map(([flag, key]) =>
@@ -1465,6 +1474,7 @@ async function resolveCandidate(options) {
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
   let artifactMetadata = {};
+  let pluginRegistryManifestSha256 = "";
   let resolveError;
 
   try {
@@ -1485,6 +1495,20 @@ async function resolveCandidate(options) {
         "--output-name",
         options.outputName || DEFAULT_OUTPUT_NAME,
       ]);
+      if (options.pluginRegistryOutputDir) {
+        const requiredPackages = JSON.parse(options.requiredPluginPackagesJson);
+        const rootPackage = JSON.parse(
+          await fs.readFile(path.join(packageSource.sourceDir, "package.json"), "utf8"),
+        );
+        const registry = createPrepublishPluginRegistryArtifact({
+          repoRoot: packageSource.sourceDir,
+          outputDir: path.resolve(ROOT_DIR, options.pluginRegistryOutputDir),
+          sourceSha: packageSource.selectedSha,
+          candidateVersion: rootPackage.version,
+          requiredPackages,
+        });
+        pluginRegistryManifestSha256 = registry.manifestSha256;
+      }
     } else if (options.source === "npm") {
       const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
         env: process.env,
@@ -1544,6 +1568,9 @@ async function resolveCandidate(options) {
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
+    if (options.source !== "ref" && options.pluginRegistryOutputDir) {
+      throw new Error("--plugin-registry-output-dir is only supported with source=ref");
+    }
   } catch (error) {
     resolveError = error;
     throw error;
@@ -1576,6 +1603,7 @@ async function resolveCandidate(options) {
     packageSpec: options.packageSpec || "",
     packageSourceSha,
     packageTrustedReason,
+    pluginRegistryManifestSha256,
     trustedSourceId: packageTrustedSourceId,
     sha256: digest,
     source: options.source,
@@ -1601,6 +1629,7 @@ async function resolveCandidate(options) {
     package_name: pkg.name,
     package_source_sha: packageSourceSha,
     package_version: pkg.version,
+    plugin_registry_manifest_sha256: pluginRegistryManifestSha256,
     sha256: digest,
     tarball: metadata.tarball,
   });

@@ -11,6 +11,7 @@ export type ProviderConfig = {
   secretEnv: string;
   authChoice: string;
   model: string;
+  requiredCompanionPackages: readonly string[];
   baseUrl?: string;
   timeoutSeconds?: number;
 };
@@ -131,6 +132,7 @@ const providerConfig = {
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
     model: "openai/gpt-5.6-luna",
+    requiredCompanionPackages: ["@openclaw/codex"],
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -139,12 +141,14 @@ const providerConfig = {
     secretEnv: "ANTHROPIC_API_KEY",
     authChoice: "apiKey",
     model: "anthropic/claude-sonnet-4-6",
+    requiredCompanionPackages: [],
   },
   minimax: {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
     model: "minimax/MiniMax-M2.7",
+    requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;
 
@@ -156,6 +160,16 @@ export function resolveProviderConfig(provider: string, env = process.env): Prov
   const providerEnvKey = `OPENCLAW_CROSS_OS_${provider.toUpperCase().replace(/[^A-Z0-9]+/gu, "_")}_MODEL`;
   const model = env[providerEnvKey]?.trim() || env.OPENCLAW_CROSS_OS_MODEL?.trim() || config.model;
   return { ...config, model };
+}
+
+export function assertCrossOsCompanionRegistryAvailable(
+  provider: string,
+  requiredPackages: readonly string[],
+  available: boolean,
+) {
+  if (requiredPackages.length > 0 && !available) {
+    throw new Error(`Provider "${provider}" requires an immutable prerelease companion registry.`);
+  }
 }
 
 const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [

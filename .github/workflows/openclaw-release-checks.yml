@@ -610,12 +610,12 @@ jobs:
       package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}
       package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}
       package_version: ${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}
-      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
-      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
-      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
-      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
-      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
-      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_name: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id && format('docker-e2e-prepublish-plugin-registry-{0}-{1}', github.run_id, github.run_attempt) || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id && github.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id && github.run_id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ steps.package.outputs.plugin_registry_manifest_sha256 || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
@@ -655,13 +655,37 @@ jobs:
         run: |
           set -euo pipefail
           source_args=(--source ref --package-ref "$PACKAGE_REF")
+          registry_args=()
           package_label="ref:${PACKAGE_REF}"
           if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
             source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC")
             package_label="$RELEASE_PACKAGE_SPEC"
+          else
+            provider_packages="$(
+              OPENCLAW_RELEASE_CHECKS_SCRIPT=scripts/openclaw-cross-os-release-checks.ts \
+                bash scripts/github/run-openclaw-cross-os-release-checks.sh \
+                --resolve-provider-required-companion-packages \
+                --provider "${{ needs.resolve_target.outputs.provider }}"
+            )"
+            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+            export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
+            export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${{ needs.resolve_target.outputs.release_profile != 'beta' }}"
+            export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="${{ needs.resolve_target.outputs.release_profile }}"
+            docker_plan="$(node scripts/test-docker-all.mjs --plan-json)"
+            required_packages="$(
+              jq -cn \
+                --argjson provider "$provider_packages" \
+                --argjson docker "$(jq -c '.requiredPrepublishPluginPackages' <<< "$docker_plan")" \
+                '$provider + $docker | unique | sort'
+            )"
+            registry_args=(
+              --plugin-registry-output-dir .artifacts/prepublish-plugin-registry
+              --required-plugin-packages-json "$required_packages"
+            )
           fi
           node scripts/resolve-openclaw-package-candidate.mjs \
             "${source_args[@]}" \
+            "${registry_args[@]}" \
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz \
             --metadata .artifacts/docker-e2e-package/package-candidate.json \
@@ -669,11 +693,13 @@ jobs:
           digest="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).sha256")"
           version="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).version")"
           source_sha="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).packageSourceSha")"
+          plugin_registry_manifest_sha256="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).pluginRegistryManifestSha256 || ''")"
           if [[ "$source_sha" != "$PACKAGE_REF" ]]; then
             echo "Release package source SHA differs from the selected release SHA: expected $PACKAGE_REF, found ${source_sha:-<missing>}." >&2
             exit 1
           fi
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "plugin_registry_manifest_sha256=$plugin_registry_manifest_sha256" >> "$GITHUB_OUTPUT"
           {
             echo "## Release package artifact"
             echo
@@ -693,6 +719,16 @@ jobs:
           path: |
             .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
             .artifacts/docker-e2e-package/package-candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload shared prerelease plugin registry artifact
+        id: prepublish_plugin_registry_upload
+        if: inputs.candidate_artifact_json == '' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/prepublish-plugin-registry/
           retention-days: 14
           if-no-files-found: error
 
@@ -732,6 +768,21 @@ jobs:
             "$PACKAGE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
             -n "${PACKAGE_VERSION// }" ]] || {
             echo "Release package identity is incomplete." >&2
+            exit 1
+          }
+
+      - name: Validate shared prerelease plugin registry binding
+        if: inputs.candidate_artifact_json == '' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
+        env:
+          ARTIFACT_DIGEST: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id }}
+          MANIFEST_SHA256: ${{ steps.package.outputs.plugin_registry_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
+            "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
+            "$MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Shared prerelease plugin registry identity is incomplete." >&2
             exit 1
           }
 
@@ -826,7 +877,6 @@ jobs:
       prepublish_plugin_registry_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_attempt }}
       prepublish_plugin_registry_artifact_run_id: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_id }}
       prepublish_plugin_registry_manifest_sha256: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_manifest_sha256 }}
-      required_companion_packages_json: ${{ needs.resolve_target.outputs.provider == 'openai' && '["@openclaw/codex"]' || '[]' }}
       openai_model: openai/gpt-5.6-luna
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025

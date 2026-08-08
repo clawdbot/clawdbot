@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
   acquireManagedGatewayInstallerHostLease,
+  assertCrossOsCompanionRegistryAvailable,
   buildCrossOsDiscordRoundtripNonces,
   buildCrossOsReleaseAgentSessionId,
   buildCrossOsReleaseSmokePluginAllowlist,
@@ -1007,6 +1008,22 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
+    expect(resolveProviderConfig("openai", {})?.requiredCompanionPackages).toEqual([
+      "@openclaw/codex",
+    ]);
+    expect(resolveProviderConfig("anthropic", {})?.requiredCompanionPackages).toEqual([]);
+    expect(resolveProviderConfig("minimax", {})?.requiredCompanionPackages).toEqual([]);
+  });
+
+  it("requires immutable companions only for providers that own them", () => {
+    expect(() =>
+      assertCrossOsCompanionRegistryAvailable("openai", ["@openclaw/codex"], false),
+    ).toThrow('Provider "openai" requires an immutable prerelease companion registry.');
+    expect(() =>
+      assertCrossOsCompanionRegistryAvailable("openai", ["@openclaw/codex"], true),
+    ).not.toThrow();
+    expect(() => assertCrossOsCompanionRegistryAvailable("anthropic", [], false)).not.toThrow();
+    expect(() => assertCrossOsCompanionRegistryAvailable("minimax", [], false)).not.toThrow();
   });
 
   it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {
@@ -1355,6 +1372,30 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       suite: "packaged-fresh",
       suite_label: "packaged fresh",
     });
+  });
+
+  it("keeps the immutable release matrix at three suites across three operating systems", () => {
+    const matrix = resolveRunnerMatrix({
+      mode: "both",
+      ref: "08753a1d793c040b101c8a26c43445dbbab14995",
+      ubuntuRunner: "ubuntu-24.04",
+      windowsRunner: "windows-2025",
+      macosRunner: "macos-26",
+      varUbuntuRunner: "",
+      varWindowsRunner: "",
+      varMacosRunner: "",
+    });
+
+    expect(matrix.include).toHaveLength(9);
+    expect(matrix.include.map(({ os_id, suite }) => `${os_id}/${suite}`).toSorted()).toEqual(
+      ["ubuntu", "windows", "macos"]
+        .flatMap((os) =>
+          ["packaged-fresh", "packaged-upgrade", "installer-fresh"].map(
+            (suite) => `${os}/${suite}`,
+          ),
+        )
+        .toSorted(),
+    );
   });
 
   it("keeps matrix resolution independent of package dependency imports", () => {

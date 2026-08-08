@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { resolveCrossOsCompanionPackages } from "./lib/cross-os-release-checks/companions.ts";
 import type { CandidateBuild, LaneResult } from "./lib/cross-os-release-checks/config.ts";
 import {
+  assertCrossOsCompanionRegistryAvailable,
   isSupportedCrossOsSuite,
   parseArgs,
   readRunnerOverrideEnv,
@@ -71,6 +72,16 @@ async function main(argv: string[]) {
     return;
   }
 
+  if (args["resolve-provider-required-companion-packages"] === "true") {
+    const provider = args["provider"]?.trim() || "";
+    const selectedProvider = resolveProviderConfig(provider);
+    if (!selectedProvider) {
+      throw new Error(`Unsupported provider "${provider}".`);
+    }
+    process.stdout.write(`${JSON.stringify(selectedProvider.requiredCompanionPackages)}\n`);
+    return;
+  }
+
   const outputDir = resolve(requireArg(args, "output-dir"));
   const prepareOnly = args["prepare-only"] === "true";
   const sourceDir = args["source-dir"]?.trim() ? resolve(args["source-dir"].trim()) : "";
@@ -94,17 +105,13 @@ async function main(argv: string[]) {
     ? resolve(args["plugin-registry-dir"].trim())
     : "";
   const pluginRegistryManifestSha256 = args["plugin-registry-manifest-sha256"]?.trim() || "";
-  const parsedRequiredCompanionPackages: unknown = JSON.parse(
-    args["required-companion-packages-json"] ?? "[]",
-  );
-  if (
-    !Array.isArray(parsedRequiredCompanionPackages) ||
-    parsedRequiredCompanionPackages.some((entry) => typeof entry !== "string")
-  ) {
-    throw new Error("--required-companion-packages-json must be a JSON string array.");
-  }
-  const requiredCompanionPackages = parsedRequiredCompanionPackages as string[];
   const runDiscordRoundtrip = args["run-discord-roundtrip"] === "true";
+
+  const selectedProvider = resolveProviderConfig(provider);
+  if (!selectedProvider) {
+    throw new Error(`Unsupported provider "${provider}".`);
+  }
+  const requiredCompanionPackages = [...selectedProvider.requiredCompanionPackages];
 
   mkdirSync(outputDir, { recursive: true });
   const logsDir = join(outputDir, "logs");
@@ -127,10 +134,6 @@ async function main(argv: string[]) {
     throw new Error(`Unsupported suite "${suite}".`);
   }
 
-  const selectedProvider = resolveProviderConfig(provider);
-  if (!selectedProvider) {
-    throw new Error(`Unsupported provider "${provider}".`);
-  }
   const providerSecretValue = process.env[selectedProvider.secretEnv]?.trim();
   if (!providerSecretValue) {
     throw new Error(`Missing ${selectedProvider.secretEnv}.`);
@@ -177,6 +180,11 @@ async function main(argv: string[]) {
         "--plugin-registry-dir and --plugin-registry-manifest-sha256 must be provided together.",
       );
     }
+    assertCrossOsCompanionRegistryAvailable(
+      provider,
+      requiredCompanionPackages,
+      Boolean(pluginRegistryDir),
+    );
     const companions = pluginRegistryDir
       ? resolveCrossOsCompanionPackages({
           artifactDir: pluginRegistryDir,

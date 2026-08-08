@@ -240,11 +240,6 @@ on:
         required: false
         default: ""
         type: string
-      required_companion_packages_json:
-        description: JSON array of prerelease companion packages required by these lanes
-        required: false
-        default: "[]"
-        type: string
       openai_model:
         description: OpenAI model for release cross-OS agent-turn smoke
         required: false
@@ -296,13 +291,13 @@ jobs:
       candidate_sha256: ${{ steps.candidate_metadata.outputs.sha256 }}
       candidate_version: ${{ steps.candidate_metadata.outputs.version }}
       matrix: ${{ steps.matrix.outputs.value }}
-      prepublish_plugin_registry_artifact_digest: ${{ inputs.prepublish_plugin_registry_artifact_digest || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactDigest || '' }}
-      prepublish_plugin_registry_artifact_id: ${{ inputs.prepublish_plugin_registry_artifact_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactId || '' }}
-      prepublish_plugin_registry_artifact_name: ${{ inputs.prepublish_plugin_registry_artifact_name || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactName || '' }}
-      prepublish_plugin_registry_artifact_run_attempt: ${{ inputs.prepublish_plugin_registry_artifact_run_attempt || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactRunAttempt || '' }}
-      prepublish_plugin_registry_artifact_run_id: ${{ inputs.prepublish_plugin_registry_artifact_run_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactRunId || '' }}
-      prepublish_plugin_registry_manifest_sha256: ${{ inputs.prepublish_plugin_registry_manifest_sha256 || fromJSON(inputs.prepublish_plugin_registry_json || '{}').manifestSha256 || '' }}
-      required_companion_packages_json: ${{ inputs.required_companion_packages_json || toJSON(fromJSON(inputs.prepublish_plugin_registry_json || '{}').requiredPackages || fromJSON('[]')) }}
+      prepublish_plugin_registry_artifact_digest: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-digest || inputs.prepublish_plugin_registry_artifact_digest || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactDigest || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id || inputs.prepublish_plugin_registry_artifact_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactId || '' }}
+      prepublish_plugin_registry_artifact_name: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id && format('openclaw-cross-os-prepublish-plugin-registry-{0}-{1}', github.run_id, github.run_attempt) || inputs.prepublish_plugin_registry_artifact_name || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactName || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id && github.run_attempt || inputs.prepublish_plugin_registry_artifact_run_attempt || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactRunAttempt || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id && github.run_id || inputs.prepublish_plugin_registry_artifact_run_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactRunId || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ steps.source_prepublish_plugin_registry.outputs.manifest_sha256 || inputs.prepublish_plugin_registry_manifest_sha256 || fromJSON(inputs.prepublish_plugin_registry_json || '{}').manifestSha256 || '' }}
+      required_companion_packages_json: ${{ steps.provider_requirements.outputs.json }}
       source_sha: ${{ steps.candidate_metadata.outputs.source_sha }}
       workflow_ref: ${{ steps.workflow_ref.outputs.value }}
     steps:
@@ -529,6 +524,65 @@ jobs:
           lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
           use-actions-cache: ${{ inputs.candidate_artifact_name == '' && 'true' || 'false' }}
 
+      - name: Resolve provider-owned companion requirements
+        id: provider_requirements
+        env:
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          set -euo pipefail
+          packages_json="$(
+            bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
+              --resolve-provider-required-companion-packages \
+              --provider "$PROVIDER"
+          )"
+          jq -e 'type == "array" and all(.[]; type == "string")' <<< "$packages_json" >/dev/null
+          echo "json=$packages_json" >> "$GITHUB_OUTPUT"
+
+      - name: Validate companion registry contract
+        env:
+          CANDIDATE_ARTIFACT_NAME: ${{ inputs.candidate_artifact_name }}
+          PLUGIN_ARTIFACT_DIGEST: ${{ inputs.prepublish_plugin_registry_artifact_digest || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactDigest || '' }}
+          PLUGIN_ARTIFACT_ID: ${{ inputs.prepublish_plugin_registry_artifact_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactId || '' }}
+          PLUGIN_ARTIFACT_NAME: ${{ inputs.prepublish_plugin_registry_artifact_name || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactName || '' }}
+          PLUGIN_ARTIFACT_RUN_ATTEMPT: ${{ inputs.prepublish_plugin_registry_artifact_run_attempt || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactRunAttempt || '' }}
+          PLUGIN_ARTIFACT_RUN_ID: ${{ inputs.prepublish_plugin_registry_artifact_run_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactRunId || '' }}
+          PLUGIN_MANIFEST_SHA256: ${{ inputs.prepublish_plugin_registry_manifest_sha256 || fromJSON(inputs.prepublish_plugin_registry_json || '{}').manifestSha256 || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_JSON: ${{ inputs.prepublish_plugin_registry_json }}
+          REQUIRED_COMPANION_PACKAGES_JSON: ${{ steps.provider_requirements.outputs.json }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${PREPUBLISH_PLUGIN_REGISTRY_JSON// }" ]]; then
+            jq -e 'has("requiredPackages") | not' <<< "$PREPUBLISH_PLUGIN_REGISTRY_JSON" >/dev/null || {
+              echo "Provider-owned companion requirements cannot be overridden by dispatch input." >&2
+              exit 1
+            }
+          fi
+          tuple_count=0
+          for value in \
+            "$PLUGIN_ARTIFACT_DIGEST" \
+            "$PLUGIN_ARTIFACT_ID" \
+            "$PLUGIN_ARTIFACT_NAME" \
+            "$PLUGIN_ARTIFACT_RUN_ATTEMPT" \
+            "$PLUGIN_ARTIFACT_RUN_ID" \
+            "$PLUGIN_MANIFEST_SHA256"; do
+            [[ -n "${value// }" ]] && tuple_count=$((tuple_count + 1))
+          done
+          [[ "$tuple_count" == "0" || "$tuple_count" == "6" ]] || {
+            echo "Prerelease companion registry selection must provide the complete immutable tuple." >&2
+            exit 1
+          }
+          required_count="$(jq -er 'length' <<< "$REQUIRED_COMPANION_PACKAGES_JSON")"
+          if [[ -z "${CANDIDATE_ARTIFACT_NAME// }" ]]; then
+            [[ "$tuple_count" == "0" ]] || {
+              echo "Source-built candidates produce their own companion registry and reject a second tuple." >&2
+              exit 1
+            }
+          elif [[ "$required_count" -gt 0 && "$tuple_count" != "6" ]]; then
+            echo "The selected provider requires a complete immutable companion registry tuple." >&2
+            exit 1
+          fi
+
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
 
@@ -543,11 +597,31 @@ jobs:
         if: inputs.candidate_artifact_name == ''
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
+          PROVIDER: ${{ inputs.provider }}
         run: |
           bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
             --prepare-only \
+            --provider "$PROVIDER" \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
+
+      - name: Pack source-built prerelease companion registry
+        id: source_prepublish_plugin_registry
+        if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
+          REQUIRED_PACKAGES_JSON: ${{ steps.provider_requirements.outputs.json }}
+        run: |
+          set -euo pipefail
+          result="$(
+            node workflow/scripts/prepublish-plugin-registry-artifact.mjs create \
+              --repo-root source \
+              --artifact-dir "$OUTPUT_DIR/plugins" \
+              --source-sha "$(git -C source rev-parse HEAD)" \
+              --candidate-version "$(node -p "require('./source/package.json').version")" \
+              --required-packages-json "$REQUIRED_PACKAGES_JSON"
+          )"
+          echo "manifest_sha256=$(jq -er '.manifestSha256' <<< "$result")" >> "$GITHUB_OUTPUT"
 
       - name: Download provided candidate artifact
         if: inputs.candidate_artifact_name != ''
@@ -723,6 +797,15 @@ jobs:
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
+          if-no-files-found: error
+
+      - name: Upload source-built prerelease companion registry
+        id: upload_prepublish_plugin_registry
+        if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-cross-os-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins/
           if-no-files-found: error
 
       - name: Upload baseline artifact
@@ -1096,7 +1179,6 @@ jobs:
             PLUGIN_ARGS+=(
               --plugin-registry-dir "$PLUGIN_REGISTRY_DIR"
               --plugin-registry-manifest-sha256 "$PLUGIN_REGISTRY_MANIFEST_SHA256"
-              --required-companion-packages-json "$REQUIRED_COMPANION_PACKAGES_JSON"
             )
           fi
           DISCORD_ARGS=()
