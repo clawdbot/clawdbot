@@ -69,7 +69,10 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     preview: string[];
   };
-  worktrees: { hasLegacy: boolean };
+  worktrees: {
+    hasLegacy: boolean;
+    pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
+  };
   taskStateSidecars: {
     taskRunsPath: string;
     flowRunsPath: string;

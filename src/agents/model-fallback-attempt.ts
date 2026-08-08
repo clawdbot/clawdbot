@@ -604,6 +604,7 @@ export function throwFallbackFailureSummary(params: {
   soonestCooldownExpiry?: number | null;
   attribution?: FailoverAttribution;
   cfg?: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
@@ -612,6 +613,7 @@ export function throwFallbackFailureSummary(params: {
   if (params.attribution?.sessionId) {
     void suspendSession({
       cfg: params.cfg,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       sessionId: params.attribution.sessionId,
       laneId: params.attribution.lane,

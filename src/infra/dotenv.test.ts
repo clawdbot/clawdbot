@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { loadGlobalRuntimeDotEnvFiles } from "./dotenv-global.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -141,6 +142,50 @@ describe("loadDotEnv", () => {
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-shell");
+      });
+    });
+  });
+
+  it("lets the state dotenv replace only explicitly service-managed inherited values", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        const stateEnvPath = path.join(stateDir, ".env");
+        await writeEnvFile(
+          stateEnvPath,
+          "MANAGED_API_KEY=from-state\nOPERATOR_API_KEY=from-state\n",
+        );
+        process.env.MANAGED_API_KEY = "stale-service-value";
+        process.env.OPERATOR_API_KEY = "operator-service-value";
+
+        const loaded = loadGlobalRuntimeDotEnvFiles({
+          stateEnvPath,
+          overrideKeys: ["MANAGED_API_KEY"],
+          quiet: true,
+        });
+
+        expect(process.env.MANAGED_API_KEY).toBe("from-state");
+        expect(process.env.OPERATOR_API_KEY).toBe("operator-service-value");
+        expect(loaded.dotenvPresentKeys).toEqual(["MANAGED_API_KEY", "OPERATOR_API_KEY"]);
+      });
+    });
+  });
+
+  it("matches service-managed dotenv override keys case-insensitively", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        const stateEnvPath = path.join(stateDir, ".env");
+        await writeEnvFile(stateEnvPath, "hass_token=from-state\n");
+        process.env.HASS_TOKEN = "stale-uppercase-service-value";
+        process.env.hass_token = "stale-lowercase-service-value";
+
+        loadGlobalRuntimeDotEnvFiles({
+          stateEnvPath,
+          overrideKeys: ["HASS_TOKEN"],
+          quiet: true,
+        });
+
+        expect(process.env.HASS_TOKEN).toBe("from-state");
+        expect(process.env.hass_token).toBe("from-state");
       });
     });
   });

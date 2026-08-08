@@ -114,7 +114,7 @@ export async function runCopilotExecution(context: {
     now,
     scope: input.agentHarnessTaskRuntimeScope,
   });
-  let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
+  let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
@@ -260,7 +260,6 @@ export async function runCopilotExecution(context: {
     if (!settledToolFinalization) {
       try {
         const toolBridge = await createToolBridge({
-          agentHarnessCodingToolsFactory: deps.createOpenClawCodingToolsForAgentHarness,
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
           modelId: modelRef.id,
@@ -273,9 +272,7 @@ export async function runCopilotExecution(context: {
           sandbox,
           spawnWorkspaceDir: sandboxAwareSpawnWorkspaceDir,
           abortSignal: params.abortSignal,
-          admittedAttempt: input,
-          attemptParams: input,
-          observeToolTerminal,
+          attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
           computerContextEpoch,
           sessionRef,
           onYieldDetected: () => {
@@ -542,6 +539,7 @@ export async function runCopilotExecution(context: {
     }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
+      input.replyOperation?.detachBackend(activeRunHandleRef);
       clearActiveEmbeddedRun(
         input.sessionId,
         activeRunHandleRef,

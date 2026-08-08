@@ -574,7 +574,6 @@ describeWin("exec script preflight on windows path syntax", () => {
 
 describe("exec interpreter heuristics ReDoS guard", () => {
   it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
-    // Exercise the parser directly so runner process startup cannot make the timing assertion flaky.
     const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
     const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\nprintf '%s' '${htmlBlock}' >/dev/null`;
 

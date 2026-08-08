@@ -14,17 +14,19 @@ const streamMocks = vi.hoisted(() => ({
 
 import type { AgentTool } from "../runtime/index.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
+import {
+  createCompactionHandlers,
+  createResourceLoader,
+} from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 const testModel: Model = {
   id: "test-model",
@@ -112,68 +114,6 @@ function mockInvalidThenTextSummary(recoveredText: string) {
     );
   });
   return () => requests;
-}
-
-function createResourceLoader(
-  handlers: Map<string, Array<(...args: unknown[]) => Promise<unknown>>> = new Map(),
-): ResourceLoader {
-  const extensionsResult: LoadExtensionsResult = {
-    extensions:
-      handlers.size > 0
-        ? [
-            {
-              path: "<test-extension>",
-              resolvedPath: "<test-extension>",
-              sourceInfo: createSyntheticSourceInfo("<test-extension>", {
-                source: "temporary",
-              }),
-              handlers,
-              tools: new Map(),
-              messageRenderers: new Map(),
-              commands: new Map(),
-              flags: new Map(),
-              shortcuts: new Map(),
-            },
-          ]
-        : [],
-    errors: [],
-    runtime: createExtensionRuntime(),
-  };
-  return {
-    getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
-}
-
-function createCompactionHandlers() {
-  return new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    [
-      "session_before_compact",
-      [
-        async (event: unknown) => {
-          const preparation = (
-            event as {
-              preparation: { firstKeptEntryId: string; tokensBefore: number };
-            }
-          ).preparation;
-          return {
-            compaction: {
-              summary: "condensed history",
-              firstKeptEntryId: preparation.firstKeptEntryId,
-              tokensBefore: preparation.tokensBefore,
-            },
-          };
-        },
-      ],
-    ],
-  ]);
 }
 
 async function createTestSession(
@@ -361,6 +301,60 @@ describe("AgentSession loop correctness", () => {
     expect(compactionEvents).toContainEqual(
       expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
     );
+  });
+
+  it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
+    const model = { ...testModel, contextWindow: 1_000 };
+    const sessionManager = SessionManager.inMemory();
+    appendHistory(
+      sessionManager,
+      createAssistant(model, [{ type: "text", text: "old cumulative turn" }], "stop", 950),
+    );
+    sessionManager.appendMessage({ role: "user", content: "CLI prompt", timestamp: Date.now() });
+    sessionManager.appendMessage({
+      ...createAssistant(model, [{ type: "text", text: "usage unavailable" }]),
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        contextUsage: { state: "unavailable" },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 20 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 20),
+      ),
+    );
+    const { session } = await createTestSession({
+      model,
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_start" || event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      usage: { contextUsage: { state: "unavailable" } },
+    });
+    expect(session.getContextUsage()?.tokens).toBeLessThan(900);
+    await session.prompt("continue after CLI turn");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
+    expect(session.getLastAssistantText()).toBe("complete answer");
   });
 
   it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {

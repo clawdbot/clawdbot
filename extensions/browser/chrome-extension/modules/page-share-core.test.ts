@@ -32,8 +32,63 @@ describe("page share core", () => {
     });
     expect(executeScript.mock.calls[1]?.[0]).toMatchObject({
       target: { tabId: 17 },
-      args: ["document-id_123"],
+      args: ["document-id_123", 30_000],
     });
+  });
+
+  it.each([
+    ["response headers", false],
+    ["response body", true],
+  ] as const)("aborts a Google Docs export stalled during %s", async (_phase, headersReceived) => {
+    type ExecuteScriptDetails = {
+      args?: unknown[];
+      func: (...args: unknown[]) => unknown;
+    };
+    const executeScript = vi.fn(async (details: ExecuteScriptDetails) => {
+      if (!details.args) {
+        return [{ result: "" }];
+      }
+      const result = await details.func(details.args[0], 1);
+      return [{ result }];
+    });
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("Expected export timeout signal");
+      }
+      if (!headersReceived) {
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error(String(signal.reason))), {
+            once: true,
+          });
+        });
+      }
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+        ),
+      );
+    });
+    vi.stubGlobal("chrome", { scripting: { executeScript } });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      capturePageShare({
+        id: 17,
+        url: "https://docs.google.com/document/d/document-id_123/edit",
+        title: "Document",
+      }),
+    ).rejects.toThrow(/timeout|abort/i);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://docs.google.com/document/d/document-id_123/export?format=txt",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("keeps text at the boundary and marks truncation beyond it", () => {

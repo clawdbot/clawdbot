@@ -252,7 +252,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
     compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
     promptTokens,
-    usageIsContextSnapshot: usedCliProvider ? true : undefined,
     isHeartbeat,
     preserveRuntimeModel: fallbackExhausted,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,

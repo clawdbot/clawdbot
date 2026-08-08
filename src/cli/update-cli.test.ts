@@ -6607,6 +6607,51 @@ describe("update-cli", () => {
     expect(getLogOutput()).toContain("- telegram: failed to load plugin dependency: ENOSPC");
   });
 
+  it("merges current auth refs with captured service selectors for updated install refresh", async () => {
+    const invocationCwd = process.cwd();
+    let setup: ReturnType<typeof setupUpdatedRootRefresh> | undefined;
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: undefined,
+        OPENCLAW_STATE_DIR: "./caller-state",
+        OPENCLAW_CONFIG_PATH: "./caller-config/openclaw.json",
+        PATH: "/caller/bin",
+      },
+      async () => {
+        setup = setupUpdatedRootRefresh({
+          gatewayUpdateImpl: async (root) => {
+            process.env.OPENCLAW_GATEWAY_AUTH_TOKEN = "runtime-auth-ref";
+            return {
+              status: "ok",
+              mode: "npm",
+              root,
+              steps: [],
+              durationMs: 100,
+            };
+          },
+        });
+        primeServiceCommand(["node", setup.entrypoints[0], "gateway", "run"], {
+          OPENCLAW_STATE_DIR: "./service-state",
+          OPENCLAW_CONFIG_PATH: "./service-config/openclaw.json",
+          PATH: "/service/bin",
+        });
+
+        await updateCommand({});
+      },
+    );
+
+    const entryPath = expectDefined(setup?.entrypoints[0], "updated entrypoint");
+    const installEnv = gatewayCommandCall(entryPath, "install")?.[1].env as
+      | NodeJS.ProcessEnv
+      | undefined;
+    expect(installEnv?.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-auth-ref");
+    expect(installEnv?.OPENCLAW_STATE_DIR).toBe(path.resolve(invocationCwd, "service-state"));
+    expect(installEnv?.OPENCLAW_CONFIG_PATH).toBe(
+      path.resolve(invocationCwd, "service-config/openclaw.json"),
+    );
+    expect(installEnv?.PATH).toBe("/service/bin");
+  });
+
   it.each([
     {
       name: "updateCommand refreshes service env from updated install root when available",

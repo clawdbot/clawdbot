@@ -103,7 +103,6 @@ describe("invokeNodeClaudeCliRun", () => {
       }),
     );
   });
-
   it.each([
     {
       name: "omits the default marker on Linux",

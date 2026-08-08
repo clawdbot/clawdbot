@@ -287,12 +287,10 @@ export async function executeCliProcess(params: {
         onStderr: consumeStderr,
       });
       managedRunPid = managedRun.pid;
-      let replyBackendCompleted = false;
       const replyBackendHandle = runParams.replyOperation
         ? {
             kind: "cli" as const,
             cancel: () => managedRun.cancel("manual-cancel"),
-            isStreaming: () => !replyBackendCompleted,
           }
         : undefined;
       if (replyBackendHandle) {
@@ -301,7 +299,6 @@ export async function executeCliProcess(params: {
       try {
         result = await managedRun.wait();
       } finally {
-        replyBackendCompleted = true;
         if (replyBackendHandle) {
           runParams.replyOperation?.detachBackend(replyBackendHandle);
         }

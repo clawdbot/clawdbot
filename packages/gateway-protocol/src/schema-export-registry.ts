@@ -117,8 +117,6 @@ export {
   NodePluginToolsUpdateParamsSchema,
   NodeSkillDescriptorSchema,
   NodeSkillsUpdateParamsSchema,
-  NodeProtocolFeaturesUpdateParamsSchema,
-  NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeInvokeInputEventSchema,

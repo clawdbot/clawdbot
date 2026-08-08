@@ -1885,6 +1885,120 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
   });
 
+  it("delivers presentation table blocks as native rich tables on rich accounts", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "plain fallback body",
+          presentationTextMode: "fallback",
+          presentation: {
+            title: "🦞 OpenClaw 2026.7.2",
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["🧠 Model", "anthropic/claude-haiku-4-5"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> };
+    expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = firstMockCallArg(raw.sendRichMessage, 0).rich_message as {
+      blocks: Array<{ type: string; cells?: unknown[][] }>;
+    };
+    const tableBlock = richMessage.blocks.find((block) => block.type === "table");
+    expect(tableBlock).toBeDefined();
+    expect(tableBlock?.cells?.length).toBe(2);
+    const flattened = JSON.stringify(richMessage.blocks);
+    expect(flattened).toContain("OpenClaw 2026.7.2");
+    expect(flattened).not.toContain("plain fallback body");
+  });
+
+  it("keeps the authored fallback text for HTML sends on rich accounts", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "plain fallback body",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["🧠 Model", "anthropic/claude-haiku-4-5"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+      textMode: "html",
+    });
+
+    // HTML deliberately bypasses rich blocks, so a rich account must still ship
+    // the authored fallback body rather than a generated legacy table.
+    const raw = bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> };
+    expect(raw.sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(String(mockCallArg(sendMessage, 0, 1))).toContain("plain fallback body");
+    expect(String(mockCallArg(sendMessage, 0, 1))).not.toContain("<table");
+  });
+
+  it("keeps the authored fallback text for presentation tables on plain accounts", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "plain fallback body",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["🧠 Model", "anthropic/claude-haiku-4-5"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(sendMessage, 0, 1)).toBe("plain fallback body");
+  });
+
   it("skips rich entity detection for reply text with provider-prefixed email addresses", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

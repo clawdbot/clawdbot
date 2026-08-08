@@ -95,6 +95,30 @@ export function checkUnusedExports(output) {
   };
 }
 
+/** Classifies Knip export output, rejecting findings after resolution failures. */
+export function checkExportScan(scanName, output) {
+  const resolutionErrors = output
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("ERROR: Error loading "));
+  if (resolutionErrors.length > 0) {
+    return {
+      ok: false,
+      entries: [],
+      message: [
+        `deadcode ${scanName} could not resolve workspace modules; export findings would be unreliable and are discarded.`,
+        ...resolutionErrors,
+        "Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.",
+      ].join("\n"),
+    };
+  }
+
+  const check = checkUnusedExports(output);
+  return {
+    ...check,
+    message: check.ok ? "" : `${scanName}:\n${check.message}`,
+  };
+}
+
 async function main() {
   // The scans are independent Knip child processes over separate configs;
   // running them concurrently cuts the lane's serial wall clock roughly 2x.
@@ -128,6 +152,12 @@ function reportUnusedExportScan(scan, result) {
     return false;
   }
 
+  const check = checkExportScan(scan.name, result.output);
+  if (!check.ok) {
+    console.error(check.message);
+    return false;
+  }
+
   const parsed = parseKnipCompactUnusedExportsResult(result.output);
   // Knip's compact reporter omits empty sections, so a clean scan (exit 0)
   // legitimately prints no export sections; sectionless output is only a
@@ -140,11 +170,6 @@ function reportUnusedExportScan(scan, result) {
     return false;
   }
 
-  const check = checkUnusedExports(result.output);
-  if (!check.ok) {
-    console.error(`${scan.name}:\n${check.message}`);
-    return false;
-  }
   if (result.status !== 0) {
     console.error(`deadcode ${scan.name} exited with status ${result.status}.`);
     if (result.output) {

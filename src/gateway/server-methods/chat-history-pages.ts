@@ -11,6 +11,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
   resolveClaudeCliBindingSessionId,
 } from "../cli-session-history.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
 import {
@@ -320,10 +321,12 @@ export async function readChatHistoryPage(params: {
       ? projectRecentChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
           maxMessages: max,
+          resolveCurrentUserProfileDisplay,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         })
       : projectChatDisplayMessages(recencyFilteredMessages, {
           maxChars: effectiveMaxChars,
+          resolveCurrentUserProfileDisplay,
           turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
         });
     const windowed = messageId
@@ -415,6 +418,7 @@ export async function readChatHistoryPage(params: {
     );
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       maxChars: effectiveMaxChars,
+      resolveCurrentUserProfileDisplay,
     });
     return {
       activeLeafEntryId,
@@ -440,6 +444,7 @@ export async function readChatHistoryPage(params: {
   const displayMessages = projectRecentChatDisplayMessages(recencyFilteredMessages, {
     maxChars: effectiveMaxChars,
     maxMessages: max,
+    resolveCurrentUserProfileDisplay,
     turnBoundaryPending,
   });
   return {

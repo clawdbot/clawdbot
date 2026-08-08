@@ -189,11 +189,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
   ON audit_events(direction, sequence DESC);
 
-CREATE TABLE IF NOT EXISTS audit_event_source_adoptions (
-  legacy_source_id TEXT NOT NULL PRIMARY KEY,
-  adopted_source_id TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS audit_identity_keys (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   key_id TEXT NOT NULL,
@@ -2158,6 +2153,12 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
   origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  extension_id TEXT,
+  extension_format TEXT,
+  extension_detected_format TEXT,
+  extension_mapped_json TEXT,
+  extension_unavailable_json TEXT,
+  extension_adapter_identity TEXT,
   installed_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)

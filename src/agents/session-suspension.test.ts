@@ -17,12 +17,14 @@ vi.mock("../config/sessions/session-accessor.js", () => sessionAccessorMocks);
 
 vi.mock("../process/command-queue.js", () => commandQueueMocks);
 
-vi.mock("./command/session.js", () => ({
-  resolveStoredSessionKeyForSessionId: () => ({
+const sessionKeyResolverMocks = vi.hoisted(() => ({
+  resolveStoredSessionKeyForSessionId: vi.fn(() => ({
     sessionKey: "session-key",
     storePath: "/tmp/openclaw-session-suspension-test/sessions.json",
-  }),
+  })),
 }));
+
+vi.mock("./command/session.js", () => sessionKeyResolverMocks);
 
 async function suspendLane(ttlMs: number, cfg: OpenClawConfig, laneId: CommandLane) {
   // All cases exercise the public suspendSession path with fixed failure metadata.
@@ -50,6 +52,58 @@ describe("session suspension", () => {
     resetSessionSuspensionStateForTest();
     sessionAccessorMocks.patchSessionEntry.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
+  });
+
+  it("resolves the session store with the explicit agent id, never the agentDir basename", async () => {
+    const { suspendSession } = await import("./session-suspension.js");
+    sessionKeyResolverMocks.resolveStoredSessionKeyForSessionId.mockClear();
+
+    await suspendSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "work",
+      // Default layout: <state>/agents/<id>/agent — basename is always "agent".
+      agentDir: "/state/agents/work/agent",
+      sessionId: "session-1",
+      laneId: CommandLane.Main,
+      reason: "quota_exhausted",
+      failedProvider: "anthropic",
+      failedModel: "claude-opus-4-6",
+      ttlMs: 1,
+    });
+
+    expect(sessionKeyResolverMocks.resolveStoredSessionKeyForSessionId).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work" }),
+    );
+  });
+
+  it("falls back to the registered agent-dir owner when no explicit agent id is given", async () => {
+    const { suspendSession } = await import("./session-suspension.js");
+    const { registerResolvedAgentDir, unregisterResolvedAgentDir } =
+      await import("./agent-dir-registry.js");
+    sessionKeyResolverMocks.resolveStoredSessionKeyForSessionId.mockClear();
+
+    registerResolvedAgentDir({ agentId: "research", agentDir: "/state/agents/research/agent" });
+    try {
+      await suspendSession({
+        cfg: {} as OpenClawConfig,
+        agentDir: "/state/agents/research/agent",
+        sessionId: "session-2",
+        laneId: CommandLane.Main,
+        reason: "quota_exhausted",
+        failedProvider: "anthropic",
+        failedModel: "claude-opus-4-6",
+        ttlMs: 1,
+      });
+    } finally {
+      unregisterResolvedAgentDir({
+        agentId: "research",
+        agentDir: "/state/agents/research/agent",
+      });
+    }
+
+    expect(sessionKeyResolverMocks.resolveStoredSessionKeyForSessionId).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research" }),
+    );
   });
 
   it("auto-resumes main lane to configured agent concurrency", async () => {

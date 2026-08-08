@@ -6,7 +6,6 @@ import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/i
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { shouldHandleNavigationClick } from "../../components/app-sidebar-nav-menus.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
@@ -20,6 +19,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
