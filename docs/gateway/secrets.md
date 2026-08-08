@@ -44,6 +44,8 @@ Do not treat the migration as complete until the re-audit is clean. If the audit
 
 If you save a plan instead of applying during `configure`, apply that saved plan with `openclaw secrets apply --from <plan-path>` before the re-audit.
 
+If your plan includes exec SecretRef providers, add `--allow-exec` to the `configure` or `apply` step. Without it, write mode rejects plans containing exec SecretRefs/providers.
+
 For supported credential fields, see [SecretRef Credential Surface](/reference/secretref-credential-surface). For command details, see [Audit and configure workflow](#audit-and-configure-workflow) below.
 
 ## Runtime model
