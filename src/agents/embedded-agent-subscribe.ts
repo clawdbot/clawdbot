@@ -278,11 +278,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,
     pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
-    pendingToolMediaHostOwnedUrls: new Set(
-      initialPendingToolMedia.mediaUrls.filter(
-        (url) => initialPendingToolMedia.trustByUrl.get(url) === true,
-      ),
-    ),
+    pendingToolMediaHostOwnedUrls: new Set(),
     pendingToolAudioAsVoice: false,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,

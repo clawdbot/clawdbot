@@ -330,6 +330,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
           [trustedPath, true],
           [untrustedPath, false],
         ]),
+        pendingToolMediaHostOwnedUrls: new Set(),
         pendingToolAudioAsVoice: false,
       },
       {},
