@@ -1,4 +1,5 @@
 // Memory Host SDK module implements qmd query parser behavior.
+import { asPositiveSafeInteger as parseQmdLineNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./error-utils.js";
@@ -122,11 +123,6 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   } catch {
     return null;
   }
-}
-
-/** Normalize qmd line numbers, rejecting zero, negative, and non-integer values. */
-function parseQmdLineNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /** Extract the first complete, standalone JSON result array from noisy stdout. */

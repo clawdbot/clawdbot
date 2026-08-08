@@ -29,7 +29,7 @@ import type {
   BoardProvider,
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
-import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { ObserverDigestHistory } from "../../lib/observer-digest.ts";
@@ -47,7 +47,6 @@ import {
   boardChatDockLayout,
   type ChatPageContext,
   type PaneSessionChangeOptions,
-  type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import {
@@ -254,7 +253,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         resolve: (confirmed: boolean) => void;
       }
     | undefined;
-  protected readonly lastVisibleBoardDock = new Map<string, VisibleBoardDock>();
+  protected readonly lastVisibleBoardDock = new Map<string, BoardVisibleChatDock>();
   protected readonly observerDigestHistory = new ObserverDigestHistory();
   protected builtinBoardSnapshot: BoardViewSnapshot | null = null;
   protected builtinBoardSnapshotBase: BoardSnapshot | null = null;

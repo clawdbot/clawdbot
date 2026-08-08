@@ -187,7 +187,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await page.goto(`${server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
-      await expectHoverTooltip(page.getByRole("button", { name: "New thread" }), "New thread");
+      await expectHoverTooltip(page.getByRole("button", { name: "New session" }), "New session");
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
         `Open command palette (${commandPaletteShortcut})`,
@@ -254,42 +254,13 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const inlineActions = group.locator(".chat-group-footer-actions button");
       expect(
         await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
-      ).toEqual(["Reply to message", "Hide message", "Copy as markdown"]);
+      ).toEqual(["Reply to message", "Copy as markdown"]);
       for (const button of await inlineActions.all()) {
-        const label = await button.getAttribute("aria-label");
-        await expectHoverColor(button, label === "Hide message" ? "--danger" : "--accent");
+        await expectHoverColor(button, "--accent");
       }
       const replyButton = group.getByRole("button", { name: "Reply to message" });
       await expectHoverTooltip(replyButton, "Reply");
       await screenshot(page, "01-inline-actions.png");
-
-      const hideButton = group.getByRole("button", { name: "Hide message" });
-      expect(
-        await hideButton.evaluate((element) => {
-          const row = element.closest<HTMLElement>(".chat-virtual-row");
-          return Boolean(row && getComputedStyle(row).transform !== "none");
-        }),
-      ).toBe(true);
-      await hideButton.click();
-      const hideConfirmation = page.locator(".chat-delete-confirm");
-      await hideConfirmation.waitFor({ state: "visible" });
-      expect(
-        await hideConfirmation.evaluate((element) => element.parentElement === document.body),
-      ).toBe(true);
-      const hideConfirmationBounds = await hideConfirmation.boundingBox();
-      const viewport = page.viewportSize();
-      expect(hideConfirmationBounds).not.toBeNull();
-      expect(viewport).not.toBeNull();
-      expect(hideConfirmationBounds!.x).toBeGreaterThanOrEqual(0);
-      expect(hideConfirmationBounds!.y).toBeGreaterThanOrEqual(0);
-      expect(hideConfirmationBounds!.x + hideConfirmationBounds!.width).toBeLessThanOrEqual(
-        viewport!.width,
-      );
-      expect(hideConfirmationBounds!.y + hideConfirmationBounds!.height).toBeLessThanOrEqual(
-        viewport!.height,
-      );
-      await screenshot(page, "02-hide-confirmation.png");
-      await hideConfirmation.getByRole("button", { name: "Cancel" }).click();
 
       await group.hover();
       await replyButton.click();
@@ -332,7 +303,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
         "Copy",
         "Reply",
-        "Hide message",
         "Copy as markdown",
       ]);
       await screenshot(page, "04-selected-text-context-menu.png");
@@ -346,7 +316,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await menu.waitFor({ state: "visible" });
       expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
         "Reply",
-        "Hide message",
         "Copy as markdown",
       ]);
       expect(
@@ -435,11 +404,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
         state: "visible",
       });
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
-
-      await bubble.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Hide message" }).click();
-      await page.locator(".chat-delete-confirm").getByRole("button", { name: "Hide" }).click();
-      await expect.poll(() => group.count()).toBe(0);
     } finally {
       await context.close();
     }

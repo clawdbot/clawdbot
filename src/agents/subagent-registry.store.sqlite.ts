@@ -3,6 +3,8 @@
  * store preserves typed columns for hot delivery state while retaining the
  * normalized payload JSON for forward-compatible record hydration.
  */
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type Insertable, type Selectable, type Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -82,19 +84,11 @@ function parseJson(raw: string | null): unknown {
   if (!raw) {
     return undefined;
   }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(raw);
 }
 
 function boolToSqlite(value: boolean | undefined): number | null {
   return value === undefined ? null : value ? 1 : 0;
-}
-
-function normalizeFiniteNumber(value: number | null): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */

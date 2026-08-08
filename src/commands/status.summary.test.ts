@@ -1,5 +1,6 @@
 // Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
@@ -555,14 +556,62 @@ describe("getStatusSummary", () => {
     ).toBe(false);
   });
 
-  it("keeps stale totals visible without deriving context utilization", async () => {
+  it.each([
+    {
+      name: "fresh v1",
+      checkpoint: {
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      expected: {
+        totalTokensFresh: true,
+        remainingTokens: 150_000,
+        percentUsed: 25,
+      },
+    },
+    {
+      name: "stale v1",
+      checkpoint: {
+        totalTokensFresh: false,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      expected: {
+        totalTokensFresh: false,
+        remainingTokens: null,
+        percentUsed: null,
+      },
+    },
+    {
+      name: "fresh unversioned",
+      checkpoint: {
+        totalTokensFresh: true,
+      },
+      expected: {
+        totalTokensFresh: false,
+        remainingTokens: null,
+        percentUsed: null,
+      },
+    },
+    {
+      name: "wrong-version",
+      checkpoint: {
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION + 1,
+      },
+      expected: {
+        totalTokensFresh: false,
+        remainingTokens: null,
+        percentUsed: null,
+      },
+    },
+  ])("handles $name checkpoint usage provenance", async ({ checkpoint, expected }) => {
     statusSummaryMocks.listSessionEntries.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
-          sessionId: "stale-total",
+          sessionId: "checkpoint-total",
           updatedAt: Date.now(),
           totalTokens: 50_000,
-          totalTokensFresh: false,
+          ...checkpoint,
         },
       }),
     );
@@ -571,9 +620,7 @@ describe("getStatusSummary", () => {
 
     expect(summary.sessions.recent[0]).toMatchObject({
       totalTokens: 50_000,
-      totalTokensFresh: false,
-      remainingTokens: null,
-      percentUsed: null,
+      ...expected,
     });
   });
 

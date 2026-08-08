@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -5,6 +6,11 @@ import { fileURLToPath } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright-core";
 import type { expect as VitestExpect } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
+import {
+  computeRelayAuthProof,
+  deriveRelayAuthKeyId,
+  type RelayAuthProofFields,
+} from "./modules/relay-auth-v2-crypto.js";
 
 type CopilotTurnIsolationGateway = {
   chatSends: Array<Record<string, unknown>>;
@@ -67,7 +73,7 @@ type RelayHarness = {
   setAvailable: (available: boolean) => void;
 };
 
-export async function createRelayHarness(): Promise<RelayHarness> {
+export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayHarness> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -80,7 +86,8 @@ export async function createRelayHarness(): Promise<RelayHarness> {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 1_000_000,
-    handleProtocols: (protocols) => protocols.values().next().value ?? false,
+    handleProtocols: (protocols) =>
+      protocols.has("openclaw-extension-relay.v2") ? "openclaw-extension-relay.v2" : false,
   });
   const hellos: Array<Record<string, unknown>> = [];
   const pendingCommands = new Map<
@@ -90,6 +97,7 @@ export async function createRelayHarness(): Promise<RelayHarness> {
   let available = true;
   let connectionCount = 0;
   let nextCommandSeq = 0;
+  const authenticated = new Set<import("ws").WebSocket>();
   server.on("upgrade", (request, socket, head) => {
     if (!available) {
       socket.destroy();
@@ -100,10 +108,87 @@ export async function createRelayHarness(): Promise<RelayHarness> {
     });
   });
   wss.on("connection", (socket) => {
-    connectionCount += 1;
-    socket.on("message", (data) => {
+    let authState:
+      | { kind: "hello" }
+      | {
+          kind: "response";
+          fields: RelayAuthProofFields;
+          clientProof?: string;
+        }
+      | { kind: "authenticated" } = { kind: "hello" };
+    const handleMessage = async (data: RawData) => {
       const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
+      if (authState.kind === "hello") {
+        if (
+          message.type !== "auth.hello" ||
+          message.v !== 2 ||
+          typeof message.keyId !== "string" ||
+          typeof message.clientNonce !== "string"
+        ) {
+          socket.close(4001, "expected auth.hello");
+          return;
+        }
+        const keyId = await deriveRelayAuthKeyId(token);
+        if (message.keyId !== keyId) {
+          socket.close(4001, "keyId mismatch");
+          return;
+        }
+        const issuedAtMs = Date.now();
+        const fields: RelayAuthProofFields = {
+          keyId,
+          instanceId: randomBytes(16).toString("base64url"),
+          sessionId: randomBytes(16).toString("base64url"),
+          clientNonce: message.clientNonce,
+          serverNonce: randomBytes(32).toString("base64url"),
+          issuedAtMs,
+          expiresAtMs: issuedAtMs + 10_000,
+          role: "extension",
+          transport: "websocket",
+          method: "GET",
+          resource: "/extension",
+          flow: "extension",
+        };
+        authState = { kind: "response", fields };
+        socket.send(
+          JSON.stringify({
+            type: "auth.challenge",
+            v: 2,
+            ...fields,
+            serverProof: await computeRelayAuthProof(token, "server", fields),
+          }),
+        );
+        return;
+      }
+      if (authState.kind === "response") {
+        if (
+          message.type !== "auth.response" ||
+          message.v !== 2 ||
+          message.sessionId !== authState.fields.sessionId ||
+          typeof message.clientProof !== "string"
+        ) {
+          socket.close(4001, "expected auth.response");
+          return;
+        }
+        const fields = authState.fields;
+        const expectedClientProof = await computeRelayAuthProof(token, "client", fields);
+        if (message.clientProof !== expectedClientProof) {
+          socket.close(4001, "clientProof mismatch");
+          return;
+        }
+        authState = { kind: "authenticated" };
+        authenticated.add(socket);
+        socket.send(
+          JSON.stringify({
+            type: "auth.ok",
+            v: 2,
+            sessionId: fields.sessionId,
+            acceptProof: await computeRelayAuthProof(token, "accept", fields, message.clientProof),
+          }),
+        );
+        return;
+      }
       if (message.type === "hello") {
+        connectionCount += 1;
         hellos.push(message);
         return;
       }
@@ -121,7 +206,11 @@ export async function createRelayHarness(): Promise<RelayHarness> {
       } else {
         pending.resolve(message.result);
       }
+    };
+    socket.on("message", (data) => {
+      void handleMessage(data);
     });
+    socket.on("close", () => authenticated.delete(socket));
   });
   return {
     get connectionCount() {
@@ -130,7 +219,7 @@ export async function createRelayHarness(): Promise<RelayHarness> {
     hellos,
     port: address.port,
     command: async (body) => {
-      const client = [...wss.clients].find((candidate) => candidate.readyState === 1);
+      const client = [...authenticated].find((candidate) => candidate.readyState === 1);
       if (!client) {
         throw new Error("extension relay client is not connected");
       }

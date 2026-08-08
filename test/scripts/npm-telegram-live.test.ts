@@ -228,6 +228,13 @@ describe("package Telegram live Docker E2E", () => {
     });
   });
 
+  it("mounts the QA taxonomy without exposing the repository root", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"');
+    expect(script).not.toContain('-v "$ROOT_DIR:/app');
+  });
+
   it("mounts configured output paths before entering the container", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const dockerEnvStart = script.indexOf("docker_env=(");

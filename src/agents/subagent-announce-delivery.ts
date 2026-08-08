@@ -926,6 +926,11 @@ async function sendSubagentAnnounceDirectly(params: {
       subagentCompletionEvents[0]?.childSessionKey === params.sourceSessionKey
         ? subagentCompletionEvents[0]
         : undefined;
+    const hasRequiredSubagentNoOutputCompletion =
+      params.expectsCompletionMessage &&
+      isSubagentCompletion &&
+      (trustedCompletionEvent?.result.trim() === "(no output)" ||
+        hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -1189,21 +1194,34 @@ async function sendSubagentAnnounceDirectly(params: {
       (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
         hasMessagingToolDelivery),
     );
+    const hasVisibleNonSilentGatewayPayload = Boolean(
+      directAnnounceResult &&
+      hasVisibleAgentPayload(directAnnounceResult, {
+        ...completionPayloadVisibility,
+        includeSilentReplyPayloads: false,
+      }),
+    );
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
+    const hasCompletionSideEffect = Boolean(
+      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
+    );
+    const hasVisibleRequiredCompletionReply =
+      hasMessagingToolDelivery ||
+      (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
-      !hasVisibleGatewayPayload &&
+      !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
       const textDelivery = await tryTextCompletionDirectDelivery();
       if (textDelivery) {
         return textDelivery;
       }
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (hasRequiredSubagentNoOutputCompletion && !hasCompletionSideEffect) {
         return {
           delivered: false,
           path: "direct",
@@ -1213,12 +1231,27 @@ async function sendSubagentAnnounceDirectly(params: {
       }
     }
     if (
+      hasRequiredSubagentNoOutputCompletion &&
+      !hasVisibleRequiredCompletionReply &&
+      hasCompletionSideEffect
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      };
+    }
+    if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
       !hasMessagingToolDelivery &&
-      (!hasIntentionalSilentCompletionReply || subagentDirectMessageCompletionRequiresMessageTool)
+      (!hasIntentionalSilentCompletionReply ||
+        subagentDirectMessageCompletionRequiresMessageTool ||
+        hasRequiredSubagentNoOutputCompletion)
     ) {
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (hasRequiredSubagentNoOutputCompletion) {
         return {
           delivered: false,
           path: "direct",
@@ -1267,9 +1300,6 @@ async function sendSubagentAnnounceDirectly(params: {
         ) &&
           (!params.requireVisibleReply ||
             directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
-    );
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;

@@ -288,6 +288,7 @@ suite.define(() => {
           "Advanced",
           "Debug",
           "Logs",
+          "Updates",
           "About",
           "Appearance",
           "Notifications",

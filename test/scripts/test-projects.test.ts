@@ -1302,9 +1302,14 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
+    const changedScopeTestFamily = fs
+      .readdirSync("src/scripts")
+      .filter((file) => /^ci-changed-scope(?:\.[^/]+)?\.test\.ts$/u.test(file))
+      .map((file) => `src/scripts/${file}`)
+      .toSorted((left, right) => left.localeCompare(right));
     expectChangedTargets(
       ["scripts/ci-changed-scope.mjs"],
-      ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+      [...changedScopeTestFamily, "test/scripts/control-ui-i18n.test.ts"],
     );
 
     expectChangedTargets(

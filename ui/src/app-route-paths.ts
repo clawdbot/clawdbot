@@ -45,6 +45,7 @@ const APP_ROUTE_DEFINITIONS = {
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
+  updates: { path: "/settings/updates" },
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
   "model-setup": { path: "/settings/model-setup", aliases: ["/model-setup"] },
@@ -65,7 +66,7 @@ const APP_ROUTE_DEFINITIONS = {
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
   tasks: { path: "/tasks" },
-  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
+  devices: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
 } as const;
 

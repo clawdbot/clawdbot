@@ -429,10 +429,11 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
       : cleanStaleGatewayProcessesSync(port, options),
 }));
 
-vi.mock("../infra/ports.js", () => ({
-  inspectPortUsage,
+vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics,
 }));
+
+vi.mock("../infra/ports-inspect.js", () => ({ inspectPortUsage }));
 
 vi.mock("../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],

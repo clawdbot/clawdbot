@@ -112,13 +112,6 @@ function emitTool(projector: Projector, event: Omit<EventOf<"tool_call">, "type"
   return projector.onEvent({ type: "tool_call", ...event });
 }
 
-function finishTurn(
-  projector: Projector,
-  event: EventOf<"done"> | EventOf<"error"> = { type: "done" },
-) {
-  return projector.onEvent(event);
-}
-
 async function runHiddenBoundaryCase(params: {
   streamOverrides?: Record<string, unknown>;
   toolCallId: string;
@@ -230,7 +223,7 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, "done");
     allowToolSummaries = false;
 
-    await finishTurn(projector);
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "done" }]);
   });
@@ -258,23 +251,9 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, "I don't");
     allowToolSummaries = false;
 
-    await finishTurn(projector);
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "fallback.\n\nI don't" }]);
-  });
-
-  it("does not suppress identical short text across terminal turn boundaries", async () => {
-    const { deliveries, projector } = createStreamHarness("live");
-
-    await emitText(projector, "A");
-    await finishTurn(projector, { type: "done", stopReason: "end_turn" });
-    await emitText(projector, "A");
-    await finishTurn(projector, { type: "done", stopReason: "end_turn" });
-
-    expect(blockDeliveries(deliveries)).toEqual([
-      { kind: "block", text: "A" },
-      { kind: "block", text: "A" },
-    ]);
   });
 
   it("flushes staggered live text deltas after idle gaps", async () => {
@@ -343,7 +322,7 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, " now?");
     expect(deliveries).toStrictEqual([]);
 
-    await finishTurn(projector);
+    await projector.flush(true);
     expect(deliveries).toHaveLength(3);
     expect(deliveries[0]).toEqual({
       kind: "tool",
@@ -366,7 +345,7 @@ describe("createAcpReplyProjector", () => {
     });
     expect(deliveries).toStrictEqual([]);
 
-    await finishTurn(projector, { type: "error", message: "turn failed" });
+    await projector.flush(true);
     expect(deliveries).toHaveLength(2);
     expect(deliveries[0]).toEqual({
       kind: "tool",

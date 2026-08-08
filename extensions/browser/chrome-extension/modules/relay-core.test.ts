@@ -1,6 +1,6 @@
 // Pure-logic tests for the OpenClaw Chrome extension. Runs under the
 // extension-browser vitest glob (extensions/browser/**/*.test.ts).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildRelayWsProtocols,
   createPairingConfigStore,
@@ -29,10 +29,7 @@ describe("parsePairingString", () => {
       throw new Error("expected pairing string to parse");
     }
     expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
-    expect(buildRelayWsProtocols(parsed.token)).toEqual([
-      "openclaw-extension-relay",
-      `openclaw-extension-token.${token}`,
-    ]);
+    expect(buildRelayWsProtocols()).toEqual(["openclaw-extension-relay.v2"]);
   });
 
   it("extracts the additive direct Gateway hint without passing it to the relay", () => {
@@ -45,12 +42,23 @@ describe("parsePairingString", () => {
     });
   });
 
+  it("retains and canonicalizes the profile auth binding while stripping the Gateway hint", () => {
+    const pairing = `ws://127.0.0.1:18797/extension?profile=work&gateway=${encodeURIComponent("wss://gateway.example.com")}#${RELAY_SECRET}`;
+    expect(parsePairingString(pairing)).toEqual({
+      relayUrl: "ws://127.0.0.1:18797/extension?profile=work",
+      token: RELAY_SECRET,
+      gatewayUrl: "wss://gateway.example.com",
+    });
+  });
+
   it.each([
     "ws://localhost.:18797/extension",
     "ws://127.25.0.1:18797/extension",
     "ws://[::1]:18797/extension",
     "ws://[::ffff:127.0.0.1]:18797/extension",
+    "ws://127.0.0.1:18789/browser/extension",
     "wss://gateway.example.com/browser/extension",
+    "wss://gateway.example.com/browser/extension?profile=work",
   ])("accepts the supported relay transport %s", (relayUrl) => {
     expect(parsePairingString(`${relayUrl}#${RELAY_SECRET}`)?.token).toBe(RELAY_SECRET);
   });
@@ -59,12 +67,26 @@ describe("parsePairingString", () => {
     ["an empty string", ""],
     ["an HTTP URL", `http://127.0.0.1/extension#${RELAY_SECRET}`],
     ["a non-loopback plaintext URL", `ws://gateway.example.com/extension#${RELAY_SECRET}`],
+    ["a remote relay path", `wss://gateway.example.com/extension#${RELAY_SECRET}`],
+    [
+      "a proxy-prefixed remote relay path",
+      `wss://gateway.example.com/proxy/browser/extension#${RELAY_SECRET}`,
+    ],
+    [
+      "a proxy-prefixed loopback direct-Gateway path",
+      `ws://127.0.0.1:18789/proxy/browser/extension#${RELAY_SECRET}`,
+    ],
+    [
+      "a suffixed remote relay path",
+      `wss://gateway.example.com/browser/extension/extra#${RELAY_SECRET}`,
+    ],
     ["relay credentials", `wss://user:pass@gateway.example.com/extension#${RELAY_SECRET}`],
     ["the wrong path", `ws://127.0.0.1/other#${RELAY_SECRET}`],
     ["a missing secret", "ws://127.0.0.1/extension#"],
     ["a short secret", "ws://127.0.0.1/extension#abc123"],
     ["an uppercase secret", `ws://127.0.0.1/extension#${"A".repeat(64)}`],
     ["an unknown query parameter", `ws://127.0.0.1/extension?token=nope#${RELAY_SECRET}`],
+    ["duplicate profiles", `ws://127.0.0.1/extension?profile=one&profile=two#${RELAY_SECRET}`],
     [
       "duplicate Gateway hints",
       `ws://127.0.0.1/extension?gateway=wss%3A%2F%2Fone.example&gateway=wss%3A%2F%2Ftwo.example#${RELAY_SECRET}`,
@@ -117,15 +139,96 @@ describe("persisted pairing storage", () => {
       },
     },
     {
-      label: "a direct relay with its matching trailing-slash Gateway hint",
+      label: "an exact direct relay with its matching trailing-slash Gateway hint",
       stored: {
-        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        relayUrl: "wss://gateway.example.com/browser/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com/base/",
+        gatewayUrl: "wss://gateway.example.com/",
       },
     },
   ])("accepts $label", async ({ stored }) => {
     expect(await readStoredPairing(stored)).toEqual(stored);
+  });
+
+  it("migrates a canonical existing pairing to authVersion 2 without re-pairing", async () => {
+    const stored = {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: RELAY_SECRET,
+      gatewayUrl: "",
+      groupColor: "orange",
+    };
+    const set = vi.fn(async (values: Record<string, unknown>) => {
+      Object.assign(stored, values);
+    });
+    const config = await createPairingConfigStore({
+      get: async () => stored,
+      set,
+      remove: async () => undefined,
+    }).read();
+    expect(set).toHaveBeenCalledWith({ authVersion: 2 });
+    expect(config).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: RELAY_SECRET,
+      authVersion: 2,
+    });
+  });
+
+  it("rejects and clears an unsupported stored auth version", async () => {
+    const remove = vi.fn(async () => undefined);
+    const config = await createPairingConfigStore({
+      get: async () => ({
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "",
+        authVersion: 1,
+      }),
+      set: async () => undefined,
+      remove,
+    }).read();
+    expect(config.relayUrl).toBe("");
+    expect(remove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token", "authVersion"]);
+  });
+
+  it.each([
+    {
+      relayUrl: "wss://gateway.example.com/proxy/browser/extension",
+      gatewayUrl: "wss://gateway.example.com/proxy",
+    },
+    {
+      relayUrl: "ws://127.0.0.1:18789/proxy/browser/extension",
+      gatewayUrl: "ws://127.0.0.1:18789/proxy",
+    },
+  ])("clears stored proxy-prefixed direct pairing $relayUrl with safe guidance", async (route) => {
+    const stored: Record<string, unknown> = {
+      relayUrl: route.relayUrl,
+      token: RELAY_SECRET,
+      gatewayUrl: route.gatewayUrl,
+      authVersion: 2,
+    };
+    const set = vi.fn(async (values: Record<string, unknown>) => {
+      Object.assign(stored, values);
+    });
+    const remove = vi.fn(async (keys: string[]) => {
+      for (const key of keys) {
+        delete stored[key];
+      }
+    });
+    const store = createPairingConfigStore({ get: async () => stored, set, remove });
+
+    const config = await store.read();
+
+    expect(config).toMatchObject({ relayUrl: "", token: "", authVersion: undefined });
+    expect(config.pairingStatusHint).toContain("no path prefix");
+    expect(config.pairingStatusHint).not.toContain(RELAY_SECRET);
+    expect(remove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token", "authVersion"]);
+    expect(set).toHaveBeenCalledWith({ pairingStatus: "proxy-prefix-unsupported" });
+
+    const afterWorkerRestart = await createPairingConfigStore({
+      get: async () => stored,
+      set,
+      remove,
+    }).read();
+    expect(afterWorkerRestart.pairingStatusHint).toContain("openclaw browser extension pair");
   });
 
   it.each([
@@ -186,9 +289,9 @@ describe("persisted pairing storage", () => {
     [
       "a mismatched direct Gateway hint",
       {
-        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        relayUrl: "wss://gateway.example.com/browser/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://other.example.com/base",
+        gatewayUrl: "wss://other.example.com",
       },
     ],
   ])("rejects %s", async (_label, stored) => {

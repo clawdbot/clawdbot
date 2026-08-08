@@ -3,6 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  type SessionsArchiveManyResult,
+  validateSessionsArchiveManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
@@ -30,6 +32,7 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import {
   loadSessionEntry,
   resolveCanonicalGatewaySessionStoreKey,
@@ -57,6 +60,56 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
+  "sessions.archiveMany": async (options) => {
+    const { params, respond, context } = options;
+    if (
+      !assertValidParams(params, validateSessionsArchiveManyParams, "sessions.archiveMany", respond)
+    ) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const logicalTargets = new Set<string>();
+    for (const target of params.targets) {
+      const resolved = resolveGatewaySessionTargetFromKey(target.key.trim(), cfg, {
+        agentId: target.agentId,
+      });
+      const logicalId = `${resolved.storePath}\0${resolved.target.canonicalKey ?? target.key}`;
+      if (logicalTargets.has(logicalId)) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Duplicate target."));
+        return;
+      }
+      logicalTargets.add(logicalId);
+    }
+    const patchHandler = sessionMutationHandlers["sessions.patch"];
+    if (!patchHandler) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const outcomes = await Promise.all(
+      params.targets.map(async (target) => {
+        const identity = {
+          key: target.key,
+          ...(target.agentId ? { agentId: target.agentId } : {}),
+        };
+        let outcome: SessionsArchiveManyResult["outcomes"][number] | undefined;
+        try {
+          await patchHandler({
+            ...options,
+            params: { ...target, archived: params.archived },
+            respond: (ok, _payload, error) => {
+              outcome = ok ? { ok: true, ...identity } : { ok: false, ...identity, error: error! };
+            },
+          });
+        } catch (error) {
+          if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+            throw error;
+          }
+          outcome = { ok: false, ...identity, error: error.error };
+        }
+        return outcome!;
+      }),
+    );
+    respond(true, { outcomes } satisfies SessionsArchiveManyResult, undefined);
+  },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;

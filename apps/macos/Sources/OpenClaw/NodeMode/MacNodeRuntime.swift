@@ -113,6 +113,7 @@ actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private let cameraCapture = CameraCaptureService()
+    private let cameraPTZ: any CameraPTZServicing
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
     // Injectable so tests pin the gate instead of racing on process-global UserDefaults.
@@ -136,6 +137,7 @@ actor MacNodeRuntime {
 
     init(
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
+        cameraPTZ: any CameraPTZServicing = CameraPTZService(),
         makeMainActorServices: @escaping @Sendable () async -> any MacNodeRuntimeMainActorServices = {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
@@ -163,6 +165,7 @@ actor MacNodeRuntime {
         })
     {
         self.nodeHostWorker = nodeHostWorker
+        self.cameraPTZ = cameraPTZ
         self.makeMainActorServices = makeMainActorServices
         self.computerControlEnabled = computerControlEnabled
         self.canvasHostedSurfaceResolver = MacNodeCanvasHostedSurfaceResolver(
@@ -208,7 +211,9 @@ actor MacNodeRuntime {
                 return try await self.handleA2UIInvoke(req)
             case OpenClawCameraCommand.snap.rawValue,
                  OpenClawCameraCommand.clip.rawValue,
-                 OpenClawCameraCommand.list.rawValue:
+                 OpenClawCameraCommand.list.rawValue,
+                 OpenClawCameraCommand.ptzStatus.rawValue,
+                 OpenClawCameraCommand.ptzControl.rawValue:
                 return try await self.handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
@@ -242,6 +247,12 @@ actor MacNodeRuntime {
                 req,
                 code: error.isInvalidRequest ? .invalidRequest : .unavailable,
                 message: error.localizedDescription)
+        } catch let error as CameraPTZError {
+            let code: OpenClawNodeErrorCode = switch error {
+            case .invalidRequest, .axisUnsupported: .invalidRequest
+            case .deviceNotFound, .unsupported, .partial: .unavailable
+            }
+            return Self.errorResponse(req, code: code, message: error.localizedDescription)
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
@@ -449,6 +460,24 @@ extension MacNodeRuntime {
         case OpenClawCameraCommand.list.rawValue:
             let devices = await cameraCapture.listDevices()
             let payload = try Self.encodePayload(["devices": devices])
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case OpenClawCameraCommand.ptzStatus.rawValue:
+            let params: OpenClawCameraPTZStatusParams
+            do {
+                params = try Self.decodeParams(OpenClawCameraPTZStatusParams.self, from: req.paramsJSON)
+            } catch {
+                throw CameraPTZError.invalidRequest("invalid camera.ptz.status params")
+            }
+            let payload = try await Self.encodePayload(self.cameraPTZ.status(deviceId: params.deviceId))
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case OpenClawCameraCommand.ptzControl.rawValue:
+            let params: OpenClawCameraPTZControlParams
+            do {
+                params = try Self.decodeParams(OpenClawCameraPTZControlParams.self, from: req.paramsJSON)
+            } catch {
+                throw CameraPTZError.invalidRequest("invalid camera.ptz.control params")
+            }
+            let payload = try await Self.encodePayload(self.cameraPTZ.control(params))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")

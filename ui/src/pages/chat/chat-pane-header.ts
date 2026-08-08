@@ -505,7 +505,7 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         ...(agentId ? { agentId } : {}),
       });
       if (!result.ok) {
-        this.publishHeaderError(result.error ?? "Failed to reveal thread workspace.");
+        this.publishHeaderError(result.error ?? "Failed to reveal session workspace.");
       }
     } catch (error) {
       this.publishHeaderError(error);

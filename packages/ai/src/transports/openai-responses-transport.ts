@@ -25,7 +25,6 @@ import {
   isInvalidEncryptedContentError,
   prepareOpenAIResponsesReasoningItemForReplay,
   resolveAzureOpenAIApiVersion,
-  stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
 } from "./openai-responses-replay-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
@@ -60,7 +59,6 @@ const responsesTesting = {
   prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
-  stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
