@@ -193,7 +193,8 @@ describe("resolveLatestCallUsage", () => {
     expect(
       resolveLatestCallUsage({
         currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, undefined],
-        carriedCandidates: [previous],
+        carriedUsage: previous,
+        transcriptFallback: undefined,
       }),
     ).toEqual({
       currentAttempt: undefined,
@@ -207,20 +208,36 @@ describe("resolveLatestCallUsage", () => {
     expect(
       resolveLatestCallUsage({
         currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, latest],
-        carriedCandidates: [{ input: 12, output: 3, total: 15 }],
+        carriedUsage: { input: 12, output: 3, total: 15 },
+        transcriptFallback: undefined,
       }),
     ).toEqual({
       currentAttempt: latest,
       latest,
     });
   });
+
+  it("keeps carried attempt usage ahead of an older transcript fallback", () => {
+    const carried = { input: 20, output: 4, total: 24 };
+
+    expect(
+      resolveLatestCallUsage({
+        currentAttemptCandidates: [],
+        carriedUsage: carried,
+        transcriptFallback: { contextUsage: { state: "unavailable" } },
+      }),
+    ).toEqual({
+      currentAttempt: undefined,
+      latest: carried,
+    });
+  });
 });
 
 describe("buildUsageAgentMetaFields", () => {
-  it("selects unavailable over older prompt usage", () => {
+  it("selects unavailable current-attempt usage over older prompt usage", () => {
     const fields = buildUsageAgentMetaFields({
       usageAccumulator: createUsageAccumulator(),
-      lastAssistantUsage: { contextUsage: { state: "unavailable" } },
+      latestUsage: { contextUsage: { state: "unavailable" } },
       lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
     });
 
@@ -250,7 +267,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: undefined,
+      latestUsage: undefined,
       lastRunPromptUsage: latestCallUsage,
     });
 
@@ -280,7 +297,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: { input: 0, output: 0, total: 0 },
+      latestUsage: { input: 0, output: 0, total: 0 },
       lastRunPromptUsage: latestCallUsage,
     });
 
@@ -306,7 +323,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: latestCallUsage,
+      latestUsage: latestCallUsage,
       lastRunPromptUsage: latestCallUsage,
     });
 
@@ -325,7 +342,7 @@ describe("buildUsageAgentMetaFields", () => {
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      latestUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
       lastRunPromptUsage: undefined,
     });
 
@@ -336,14 +353,14 @@ describe("buildUsageAgentMetaFields", () => {
 });
 
 describe("buildErrorAgentMeta", () => {
-  it("does not promote historical CLI usage without context provenance", () => {
+  it("does not promote current CLI usage without context provenance", () => {
     const fields = buildErrorAgentMeta({
       sessionId: "session-error",
       provider: "openai",
       model: "gpt-5.6-luna",
       usageAccumulator: createUsageAccumulator(),
       lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
-      lastAssistant: {
+      currentAttemptAssistant: {
         api: "cli",
         usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
       },
@@ -374,7 +391,7 @@ describe("buildErrorAgentMeta", () => {
       model: "claude-opus-4-6",
       usageAccumulator,
       lastRunPromptUsage: latestCallUsage,
-      lastAssistant: { usage: latestCallUsage },
+      currentAttemptAssistant: { usage: latestCallUsage },
     });
 
     expect(fields.usage).toMatchObject({
