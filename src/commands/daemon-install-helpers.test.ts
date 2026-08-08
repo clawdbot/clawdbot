@@ -2212,6 +2212,11 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     expect(result.OPENCLAW_FOO).toBeUndefined();
   });
 
+  it("drops legacy install-time version metadata from canonical rewrites", async () => {
+    const result = await buildEnvironment({ OPENCLAW_SERVICE_VERSION: "2026.4.24" });
+    expect(result.OPENCLAW_SERVICE_VERSION).toBeUndefined();
+  });
+
   it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", async () => {
     const result = await buildEnvironment({
       OPENCLAW_CLI_CONTAINER_BYPASS: "1",

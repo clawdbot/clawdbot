@@ -1326,7 +1326,7 @@ async function writeLaunchAgentPlist({
     warn,
   });
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({ env, description });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -1419,13 +1419,18 @@ async function rewriteLaunchAgentPlistForRestart({
 
   const serviceDescription = resolveGatewayServiceDescription({
     env,
-    environment: existing.environment,
   });
+  // Restart rewrites must retire install provenance from legacy plists instead
+  // of copying it into the next canonical definition.
+  const canonicalEnvironment = {
+    ...existing.environment,
+    OPENCLAW_SERVICE_VERSION: undefined,
+  };
   const prepared = await prepareLaunchAgentProgramArguments({
     env,
     label,
     programArguments: existing.programArguments,
-    environment: existing.environment,
+    environment: canonicalEnvironment,
     stdout,
     warn,
   });
