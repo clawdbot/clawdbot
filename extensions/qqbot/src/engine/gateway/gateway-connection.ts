@@ -39,6 +39,32 @@ import type {
 } from "./types.js";
 import { createQQWSClient } from "./ws-client.js";
 
+// Node clamps setInterval delays into a signed 32-bit range: 0/negative/NaN
+// fire ~every 1ms and anything above 2^31-1 warns (TimeoutOverflowWarning) and
+// also fires ~every 1ms. A malformed HELLO heartbeat_interval would therefore
+// spin the heartbeat until the missed-ACK threshold terminates the socket, so
+// fall back to the QQ default instead of scheduling it.
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 45_000;
+const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
+const MAX_HEARTBEAT_INTERVAL_MS = 2_147_483_647; // setInterval signed 32-bit max
+
+/**
+ * Resolve the HELLO `heartbeat_interval` into a delay that is safe to schedule.
+ * Anything non-finite or outside [MIN, MAX] falls back to the default so a
+ * malformed gateway frame cannot busy-loop or overflow the heartbeat timer.
+ */
+export function resolveHeartbeatIntervalMs(raw: unknown): number {
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    raw < MIN_HEARTBEAT_INTERVAL_MS ||
+    raw > MAX_HEARTBEAT_INTERVAL_MS
+  ) {
+    return DEFAULT_HEARTBEAT_INTERVAL_MS;
+  }
+  return raw;
+}
+
 interface GatewayConnectionContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
@@ -494,7 +520,15 @@ export class GatewayConnection {
       );
     }
 
-    const interval = (d as { heartbeat_interval: number }).heartbeat_interval;
+    const rawInterval = (d as { heartbeat_interval?: unknown }).heartbeat_interval;
+    const interval = resolveHeartbeatIntervalMs(rawInterval);
+    if (interval !== rawInterval) {
+      // Log the raw value so a misbehaving gateway stays diagnosable; the
+      // socket keeps heartbeating on the default instead of churning.
+      this.ctx.log?.error(
+        `Invalid heartbeat_interval ${String(rawInterval)} in HELLO; using default ${interval}ms`,
+      );
+    }
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
     }

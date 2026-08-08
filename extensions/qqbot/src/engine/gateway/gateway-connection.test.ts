@@ -7,7 +7,7 @@ import { stopBackgroundTokenRefresh } from "../messaging/sender.js";
 import { flushRefIndex } from "../ref/store.js";
 import { flushKnownUsers } from "../session/known-users.js";
 import { GatewayEvent, GatewayOp, MAX_RECONNECT_ATTEMPTS } from "./constants.js";
-import { GatewayConnection } from "./gateway-connection.js";
+import { GatewayConnection, resolveHeartbeatIntervalMs } from "./gateway-connection.js";
 import { QQBotIngressAdmissionError, type QQBotIngressMonitor } from "./ingress.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
@@ -527,5 +527,59 @@ describe("GatewayConnection heartbeat liveness", () => {
     expect(ws.terminate).not.toHaveBeenCalled();
     controller.abort();
     await started;
+  });
+
+  it("falls back to the default interval when HELLO carries a malformed heartbeat_interval", async () => {
+    // heartbeat_interval: 0 would schedule a ~1ms heartbeat that trips the
+    // missed-ACK terminate almost immediately; the handler must substitute the
+    // 45s default instead of scheduling the raw value.
+    const { ws, controller, started } = await startConnection({});
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: { heartbeat_interval: 0 } }));
+
+    // Under the raw value this window would span thousands of ~1ms ticks and
+    // terminate on the third; with the fallback not even one tick has fired.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    expect(ws.terminate).not.toHaveBeenCalled();
+
+    // The missed-ACK liveness rule still applies at the default cadence.
+    await vi.advanceTimersByTimeAsync(45_000); // tick 1: send (outstanding=1)
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    await vi.advanceTimersByTimeAsync(45_000); // tick 2: send (outstanding=2)
+    await vi.advanceTimersByTimeAsync(45_000); // tick 3: two unanswered → terminate
+    expect(ws.terminate).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await started;
+  });
+
+  it("falls back to the default interval when HELLO omits heartbeat_interval", async () => {
+    const { ws, controller, started } = await startConnection({});
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: {} }));
+
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    expect(ws.terminate).not.toHaveBeenCalled();
+    controller.abort();
+    await started;
+  });
+});
+
+describe("resolveHeartbeatIntervalMs", () => {
+  it("falls back to the default for missing, non-finite, or out-of-range intervals", () => {
+    for (const raw of [undefined, null, 0, -5, Number.NaN, 500, 3e9]) {
+      expect(resolveHeartbeatIntervalMs(raw)).toBe(45_000);
+    }
+  });
+
+  it("passes a valid interval through unchanged", () => {
+    expect(resolveHeartbeatIntervalMs(41_250)).toBe(41_250);
+    expect(resolveHeartbeatIntervalMs(1_000)).toBe(1_000);
+    expect(resolveHeartbeatIntervalMs(2_147_483_647)).toBe(2_147_483_647);
   });
 });

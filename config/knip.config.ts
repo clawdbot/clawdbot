@@ -399,6 +399,9 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
+    // Heartbeat interval clamping is asserted by the focused gateway connection
+    // tests; production resolves the HELLO interval in-module.
+    "extensions/qqbot/src/engine/gateway/gateway-connection.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
