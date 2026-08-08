@@ -365,7 +365,7 @@ function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
 
 type ParkedSteerReservation = {
   admit(): Promise<"steer" | "fallback" | "cancelled">;
-  accepted(accepted: boolean): void;
+  accepted: (accepted: boolean) => void;
   fallback(): void;
   consume(): void;
 };

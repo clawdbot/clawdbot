@@ -51,24 +51,6 @@ export function isDuplicateRestartRecoverySource(
   );
 }
 
-export function resolveReplyRestartRecoveryEntry(params: {
-  activeSessionEntry: SessionEntry | undefined;
-  sessionKey?: string;
-  storePath?: string;
-}): SessionEntry | undefined {
-  if (!params.sessionKey || !params.storePath) {
-    return params.activeSessionEntry;
-  }
-  return (
-    loadSessionEntry({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      clone: false,
-      hydrateSkillPromptRefs: false,
-    }) ?? params.activeSessionEntry
-  );
-}
-
 export async function retireTerminalRestartRecoverySourceClaim(params: {
   sessionId: string;
   sessionKey: string;

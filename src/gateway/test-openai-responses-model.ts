@@ -4,6 +4,9 @@
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 
 const MOCK_OPENAI_RESPONSES_PROVIDER_ID = "mock-openai";
+type MockOpenAiResponsesProviderConfig = Omit<ModelProviderConfig, "models"> & {
+  models: [ModelDefinitionConfig];
+};
 
 function buildOpenAiResponsesTestModel(id = "gpt-5.4"): ModelDefinitionConfig {
   return {
@@ -21,7 +24,7 @@ function buildOpenAiResponsesTestModel(id = "gpt-5.4"): ModelDefinitionConfig {
 function buildOpenAiResponsesProviderConfig(
   baseUrl: string,
   modelId = "gpt-5.4",
-): ModelProviderConfig {
+): MockOpenAiResponsesProviderConfig {
   return {
     baseUrl,
     apiKey: "test",

@@ -82,6 +82,7 @@ vi.mock("../../agents/live-model-switch.js", async (importOriginal) => {
 
 vi.mock("../../agents/embedded-agent.js", () => {
   return {
+    runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     compactEmbeddedAgentSession: (params: unknown) =>
       compactState.compactEmbeddedAgentSessionMock(params),
     queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
@@ -92,10 +93,6 @@ vi.mock("../../agents/embedded-agent.js", () => {
     isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActive(sessionId),
   };
 });
-
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: (params: unknown) => runEmbeddedAgentMock(params),
-}));
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
@@ -375,7 +372,6 @@ async function runWorkTurn(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: run.typing,
     sessionCtx: run.sessionCtx,
     sessionEntry: run.sessionEntry,

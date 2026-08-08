@@ -9,7 +9,7 @@ import { withTempHome } from "../config/home-env.test-harness.js";
 import { createDeferred } from "../shared/deferred.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { registerMcpCli } from "./mcp-cli.js";
-import { createMcpOAuthBrowserFixture } from "./mcp-oauth-loopback.test-support.js";
+import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 
 type CreateSessionMcpRuntime =
   typeof import("../agents/agent-bundle-mcp-runtime.js").createSessionMcpRuntime;
@@ -73,64 +73,6 @@ async function createWorkspace(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   tempDirs.push(dir);
   return dir;
-}
-
-async function writeProbeMcpServer(filePath: string): Promise<void> {
-  await fs.writeFile(
-    filePath,
-    `let buffer = "";
-const mode = process.env.MCP_MODE ?? "normal";
-if (mode === "crash") {
-  process.exit(1);
-}
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (message.method === "initialize") {
-    if (mode === "hang-start") {
-      return;
-    }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: {} },
-        serverInfo: { name: "cli-probe-test", version: "1.0.0" },
-      },
-    });
-    return;
-  }
-  if (message.method === "tools/list") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { tools: [{ name: "ping", inputSchema: { type: "object" } }] },
-    });
-  }
-}
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
-  }
-});
-process.stdin.on("end", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
-`,
-    "utf8",
-  );
 }
 
 let sharedProgram: Command;
@@ -678,20 +620,33 @@ describe("mcp cli", () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       const port = await getFreePort();
-      const { authorizationUrl, redirectUrl, serverConfig } = createMcpOAuthBrowserFixture(port);
+      const redirectUrl = `http://127.0.0.1:${port}/oauth/callback`;
+      const authUrl = new URL("https://auth.example.com/authorize");
+      authUrl.searchParams.set("state", "state-1");
+      authUrl.searchParams.set("redirect_uri", redirectUrl);
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
-      await runMcpCommand(["mcp", "set", "docs", JSON.stringify(serverConfig)]);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          url: "https://mcp.example.com",
+          transport: "streamable-http",
+          auth: "oauth",
+          oauth: { redirectUrl },
+        }),
+      ]);
       mockLog.mockClear();
       let capturedCode: string | undefined;
       runMcpOAuthLogin.mockImplementationOnce(async (params: Parameters<RunMcpOAuthLogin>[0]) => {
-        const code = await params.onAuthorizationUrl?.(authorizationUrl);
+        const code = await params.onAuthorizationUrl?.(authUrl);
         capturedCode = typeof code === "string" ? code : undefined;
         return "authorized";
       });
 
       const login = runMcpCommand(["mcp", "login", "docs"]);
-      await vi.waitFor(() => expect(mockLog).toHaveBeenCalledWith(authorizationUrl.toString()));
+      await vi.waitFor(() => expect(mockLog).toHaveBeenCalledWith(authUrl.toString()));
       const response = await fetch(`${redirectUrl}?code=browser-code&state=state-1`);
       expect(response.status).toBe(200);
       await expect(response.text()).resolves.toContain("MCP OAuth complete");

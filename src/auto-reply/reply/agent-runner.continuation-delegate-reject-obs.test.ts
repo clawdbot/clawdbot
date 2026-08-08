@@ -55,6 +55,7 @@ vi.mock("../../agents/model-auth.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent.js", () => ({
+  runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
   compactEmbeddedAgentSession: (params: unknown) =>
     compactState.compactEmbeddedAgentSessionMock(params),
   queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
@@ -63,10 +64,6 @@ vi.mock("../../agents/embedded-agent.js", () => ({
     return abortEmbeddedAgentRun(sessionId);
   },
   isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActive(sessionId),
-}));
-
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: (params: unknown) => runEmbeddedAgentMock(params),
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -305,7 +302,6 @@ async function runDelegateTurn(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: run.typing,
     sessionCtx: run.sessionCtx,
     sessionEntry: run.sessionEntry,
