@@ -17,7 +17,8 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import * as titleReader from "./session-transcript-title-reader.js";
+import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -260,6 +261,68 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(acpSelects).toBe(1);
       } finally {
         prepareSpy.mockRestore();
+      }
+    });
+  });
+
+  test("batches transcript title hydration once instead of O(rows)", async () => {
+    await withStateDirEnv("openclaw-perf-title-batch-", async () => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg = {
+        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+      } as OpenClawConfig;
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const storePath = "/tmp/sessions.json";
+      const store: Record<string, SessionEntry> = {};
+      for (let index = 0; index < 30; index += 1) {
+        const sessionId = `title-batch-${index}`;
+        const sessionKey = `agent:main:${sessionId}`;
+        const entry = { sessionId, updatedAt: 1_000 - index } satisfies SessionEntry;
+        store[sessionKey] = entry;
+      }
+
+      const titleBatchSpy = vi
+        .spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch")
+        .mockImplementation((scopes) =>
+          scopes.map((scope) => ({
+            firstUserMessage: `title ${scope.sessionId.slice("title-batch-".length)}`,
+            lastMessagePreview: `last ${scope.sessionId.slice("title-batch-".length)}`,
+          })),
+        );
+      try {
+        const result = await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 30 },
+        });
+
+        expect(result.sessions).toHaveLength(30);
+        expect(titleBatchSpy).toHaveBeenCalledOnce();
+        expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(30);
+        const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
+        expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
+          derivedTitle: "title 0",
+          lastMessagePreview: "last 0",
+        });
+        expect(sessionsByKey.get("agent:main:title-batch-29")).toMatchObject({
+          derivedTitle: "title 29",
+          lastMessagePreview: "last 29",
+        });
+
+        titleBatchSpy.mockClear();
+        await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          opts: { includeDerivedTitles: false, includeLastMessage: false, limit: 30 },
+        });
+        expect(titleBatchSpy).toHaveBeenCalledOnce();
+        expect(titleBatchSpy).toHaveBeenCalledWith([]);
+      } finally {
+        titleBatchSpy.mockRestore();
       }
     });
   });

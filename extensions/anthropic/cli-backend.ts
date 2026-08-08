@@ -29,6 +29,7 @@ type ClaudeCliAuthCredential =
   | { type: string };
 
 type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
   secretInput: {
     fd: 3;
     fingerprint: string;
@@ -134,6 +135,14 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     },
+    // Claude Code 2.1.206 first shipped per-input lifecycle correlation. The
+    // runtime checks the advertised capability so backports and wrappers work.
+    liveSessionRequirement: {
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
+    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
@@ -207,15 +216,21 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     prepareExecution: (context) => {
       const credentialContext = context as typeof context & {
         authCredential?: ClaudeCliAuthCredential;
+        isolatedCompletionPrompt?: string;
+        isolatedCompletionSystemPrompt?: string;
       };
       const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+      const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
       const env = {
         ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
         ...authInput?.env,
       };
-      return Object.keys(env).length > 0
+      return Object.keys(env).length > 0 || isolatedCompletion
         ? {
             env,
+            // The paired side-question argv projection disables settings, memory,
+            // hooks, session persistence, and tools before process launch.
+            ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
             ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
             ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
             ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),

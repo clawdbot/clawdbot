@@ -5,12 +5,12 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
   it("accepts the current global and agent schemas", () => {

@@ -54,7 +54,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyFlatAuthProfileStores, maybeRepairCanonicalApiKeyFieldAlias } =
+  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
@@ -66,17 +66,14 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await loadNoteModule();
-  await maybeRepairLegacyFlatAuthProfileStores({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
-  await maybeRepairCanonicalApiKeyFieldAlias({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
   await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
+  });
+  await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    ...(ctx.env ? { env: ctx.env } : {}),
   });
   await maybeMigrateLegacyPluginModelCatalogs({
     cfg: ctx.cfg,
@@ -309,12 +306,20 @@ async function detectSystemdLingerFindings(
   if (!loaded) {
     return [];
   }
-  const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
-    await import("../daemon/systemd.js");
+  const {
+    isSystemdUserServiceAvailable,
+    readSystemdUserLingerStatus,
+    resolveSystemdUserServiceAccount,
+  } = await import("../daemon/systemd.js");
   if (!(await isSystemdUserServiceAvailable(process.env))) {
     return [];
   }
-  const status = await readSystemdUserLingerStatus(process.env);
+  // Doctor must inspect the same user manager as the Gateway service operation.
+  const user = resolveSystemdUserServiceAccount(process.env);
+  if (!user) {
+    return [];
+  }
+  const status = await readSystemdUserLingerStatus({ env: process.env, user });
   if (!status || status.linger === "yes") {
     return [];
   }
@@ -410,8 +415,25 @@ export async function resolveDoctorContributionHealthChecks(): Promise<readonly 
 }
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+  const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
+  if (!runWithPluginMetadataSnapshot) {
+    for (const contribution of resolveDoctorHealthContributions()) {
+      await contribution.run(ctx);
+    }
+    return;
+  }
+
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
   for (const contribution of resolveDoctorHealthContributions()) {
-    await contribution.run(ctx);
+    const workspaceDir = resolveAgentWorkspaceDir(
+      ctx.cfg,
+      resolveDefaultAgentId(ctx.cfg),
+      ctx.env ?? process.env,
+    );
+    await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
+      contribution.run(ctx),
+    );
   }
 }
 

@@ -19,6 +19,8 @@ type ToolProfilePolicy = {
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
+  // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
+  cron: "automations",
 };
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");

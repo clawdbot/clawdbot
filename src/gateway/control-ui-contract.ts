@@ -3,6 +3,11 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
+export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
+export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
+export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
+
 /** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
 export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
 
@@ -166,8 +171,6 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   seamColor?: string;
-  /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
-  timeFormat?: "auto" | "12" | "24";
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill

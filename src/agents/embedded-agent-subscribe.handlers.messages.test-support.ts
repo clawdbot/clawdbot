@@ -28,10 +28,17 @@ type EmbeddedSubscribeMessagesTestApi = {
     state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
     parsed: ReplyDirectiveParseResult | null | undefined,
   ): void;
-  resolveSilentReplyFallbackText(params: {
-    text: unknown;
-    messagingToolSentTexts: string[];
-  }): string;
+  resolveCurrentSourceMessagingToolPartial(
+    state: Pick<
+      EmbeddedAgentSubscribeState,
+      "currentSourceMessagingToolHeldPartial" | "currentSourceMessagingToolSentTextsNormalized"
+    >,
+    params: {
+      evtType: "text_delta" | "text_start" | "text_end";
+      text: string;
+      visibleDelta: string;
+    },
+  ): { hold: boolean; text: string };
 };
 
 function getTestApi(): EmbeddedSubscribeMessagesTestApi {
@@ -55,9 +62,16 @@ export function recordPendingAssistantReplyDirectives(
   getTestApi().recordPendingAssistantReplyDirectives(state, parsed);
 }
 
-export function resolveSilentReplyFallbackText(params: {
-  text: unknown;
-  messagingToolSentTexts: string[];
-}): string {
-  return getTestApi().resolveSilentReplyFallbackText(params);
+export function resolveCurrentSourceMessagingToolPartial(
+  state: Pick<
+    EmbeddedAgentSubscribeState,
+    "currentSourceMessagingToolHeldPartial" | "currentSourceMessagingToolSentTextsNormalized"
+  >,
+  params: {
+    evtType: "text_delta" | "text_start" | "text_end";
+    text: string;
+    visibleDelta: string;
+  },
+): { hold: boolean; text: string } {
+  return getTestApi().resolveCurrentSourceMessagingToolPartial(state, params);
 }

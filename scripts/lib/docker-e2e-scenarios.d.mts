@@ -11,17 +11,20 @@ export type DockerE2eLane = {
   name: string;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
+  prepublishPluginPackages?: string[];
   resources: string[];
   retries: number;
   retryPatterns: RegExp[];
   stateScenario?: string;
   timeoutMs?: number;
+  upgradeSurvivorScenario?: string;
   weight: number;
 };
 
 export const DEFAULT_LIVE_RETRIES: number;
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS: number;
 export const mainLanes: DockerE2eLane[];
+export const publicInstallerLanes: DockerE2eLane[];
 export const tailLanes: DockerE2eLane[];
 export function normalizeReleaseProfile(
   raw: DockerE2eReleaseProfileInput | null | undefined,

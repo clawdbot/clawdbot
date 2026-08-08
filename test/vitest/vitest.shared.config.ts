@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mjs";
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
@@ -21,6 +22,7 @@ import {
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 
 export type OpenClawVitestPool = "forks" | "threads";
 
@@ -158,6 +160,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
+  plugins: [createStateSchemaInlinePlugin(repoRoot)],
   resolve: {
     alias: [
       {
@@ -199,6 +202,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/matrix/test-api.js",
         replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
+      },
+      {
+        find: "@openclaw/memory-core/api.js",
+        replacement: path.join(repoRoot, "extensions", "memory-core", "api.ts"),
       },
       {
         find: "@openclaw/slack/api.js",
@@ -449,6 +456,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/json-schema",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "json-schema.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,
@@ -549,7 +560,7 @@ export const sharedVitestConfig = {
   },
   test: {
     dir: repoRoot,
-    testTimeout: 120_000,
+    testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,

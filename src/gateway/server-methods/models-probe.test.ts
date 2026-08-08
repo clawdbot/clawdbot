@@ -207,6 +207,21 @@ describe("models.probe", () => {
     );
   });
 
+  it("does not require a configured default before probing provider credentials", async () => {
+    const cfg: OpenClawConfig = {};
+    const { options } = createOptions({ provider: "openai" }, cfg);
+
+    await handler(options);
+
+    expect(mocks.runAuthProbes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        providers: ["openai"],
+        modelCandidates: [],
+      }),
+    );
+  });
+
   it("maps target results and reports provider success when one credential works", async () => {
     mocks.runAuthProbes.mockResolvedValue(
       summary([

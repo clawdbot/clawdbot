@@ -1,4 +1,3 @@
-// Control UI module implements gateway behavior.
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
@@ -31,6 +30,16 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+// Control UI module implements gateway behavior.
+import {
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
+  type ControlUiBootstrapProfileHint,
+} from "../../../src/gateway/control-ui-contract.js";
+import {
+  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+} from "../../../src/shared/device-bootstrap-profile.js";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -45,8 +54,6 @@ import {
   storedDeviceTokenScopesAllowRead,
 } from "./gateway-browser-auth.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
-
-export { hasStoredGatewayAuth } from "./gateway-browser-auth.ts";
 
 export type GatewayEventFrame = EventFrame;
 
@@ -144,14 +151,6 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
-  "operator.approvals",
-  "operator.questions",
-  "operator.read",
-  "operator.talk.secrets",
-  "operator.write",
-] as const;
-
 type GatewayConnectDevice = NonNullable<ConnectParams["device"]>;
 type GatewayConnectClientInfo = ConnectParams["client"];
 
@@ -168,6 +167,7 @@ export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
   bootstrapToken?: string;
+  bootstrapProfile?: ControlUiBootstrapProfileHint;
   password?: string;
   clientName?: GatewayClientName;
   clientVersion?: string;
@@ -209,10 +209,6 @@ const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_
 const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 const DEFAULT_GATEWAY_TICK_INTERVAL_MS = 30_000;
 const MIN_GATEWAY_TICK_WATCH_INTERVAL_MS = 1_000;
-function getErrorMessage(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : String(err);
-}
-
 function toGatewayErrorInfo(error: GatewayRequestError): GatewayErrorInfo {
   const { gatewayCode: code, message, details, retryable, retryAfterMs } = error;
   return { code, message, details, retryable, retryAfterMs };
@@ -226,7 +222,7 @@ function getErrorName(err: unknown): string | undefined {
 
 function isBrowserWebSocketSecurityError(err: unknown): boolean {
   const name = getErrorName(err)?.toLowerCase();
-  const message = getErrorMessage(err).toLowerCase();
+  const message = formatUiError(err).toLowerCase();
   return (
     name === "securityerror" ||
     message.includes("security error") ||
@@ -237,7 +233,7 @@ function isBrowserWebSocketSecurityError(err: unknown): boolean {
 
 function formatBrowserWebSocketConstructorError(err: unknown, url: string): GatewayErrorInfo {
   const securityError = isBrowserWebSocketSecurityError(err);
-  const browserMessage = getErrorMessage(err);
+  const browserMessage = formatUiError(err);
   const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
   const details = {
     code: securityError
@@ -271,12 +267,17 @@ async function buildGatewayConnectDevice(params: {
   scopes: string[];
   authToken?: string;
   connectNonce: string | null;
+  connectChallengeTs: number | null | undefined;
 }): Promise<GatewayConnectDevice | undefined> {
   const { deviceIdentity } = params;
   if (!deviceIdentity) {
     return undefined;
   }
-  const signedAtMs = Date.now();
+  if (params.connectChallengeTs === null) {
+    throw new Error("gateway connect challenge timestamp invalid");
+  }
+  // The Control UI alone supports pre-challenge Gateways; that timeout fallback has no server time.
+  const signedAtMs = params.connectChallengeTs ?? Date.now();
   const nonce = params.connectNonce ?? "";
   const payload = buildDeviceAuthPayload({
     deviceId: deviceIdentity.deviceId,
@@ -319,7 +320,8 @@ export class GatewayBrowserClient {
           retryable: error.retryable,
           retryAfterMs: error.retryAfterMs,
         }),
-      buildConnectPlan: ({ nonce, generation }) => this.buildConnectPlan(nonce, generation),
+      buildConnectPlan: ({ nonce, challengeTs, generation }) =>
+        this.buildConnectPlan(nonce, challengeTs, generation),
       buildConnectParams: (plan) => plan.params,
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
@@ -416,6 +418,7 @@ export class GatewayBrowserClient {
 
   private async buildConnectPlan(
     connectNonce: string | null,
+    connectChallengeTs: number | null | undefined,
     generation: number,
   ): Promise<ConnectPlan> {
     this.recoveryScopeTracker.begin(generation);
@@ -431,8 +434,7 @@ export class GatewayBrowserClient {
     const explicitPassword = this.opts.password?.trim() || undefined;
 
     // crypto.subtle is only available in secure contexts (HTTPS, localhost).
-    // Over plain HTTP, we skip device identity and fall back to token-only auth.
-    // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
+    // Token/password auth cannot replace browser device identity over plain HTTP.
     const isSecureContext = typeof crypto !== "undefined" && Boolean(crypto.subtle);
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: GatewayConnectAuthSelection = {
@@ -453,7 +455,9 @@ export class GatewayBrowserClient {
     }
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
-        ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
+        ? this.opts.bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
+          ? [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]
+          : [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]
         : undefined,
       usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
@@ -466,6 +470,7 @@ export class GatewayBrowserClient {
       scopes,
       authToken: selectedAuth.authBootstrapToken ?? selectedAuth.authToken,
       connectNonce,
+      connectChallengeTs,
     });
     const plan: ConnectPlan = {
       generation,
@@ -505,6 +510,7 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
+    this.opts.bootstrapProfile = undefined;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,

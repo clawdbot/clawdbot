@@ -28,8 +28,8 @@ import { getImageMetadata } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
-import { readInputFiles, writeOutputAsset } from "./media-output.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import {

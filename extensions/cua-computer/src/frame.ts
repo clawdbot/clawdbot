@@ -26,7 +26,7 @@ export type CuaLastFrame = {
 };
 
 export type CuaFrameState = {
-  generation: number;
+  generation: string;
   lastFrame?: CuaLastFrame;
 };
 
@@ -35,7 +35,7 @@ function staleFrame(message: string): Error {
 }
 
 /**
- * cua-driver exposes only the primary-display label, not a stable display ID.
+ * CUA Driver exposes only the primary-display label, not a stable display ID.
  * Bind authorization to connection generation plus the complete live geometry.
  */
 export function issueFrame(
@@ -73,13 +73,10 @@ export function issueFrame(
   return id;
 }
 
-// Accepted limitation: cua-driver 0.10 exposes no stable display identity, only
-// "display":"primary" (see get_desktop_state). Verification therefore binds to
-// connection generation plus full live geometry. The generation counter
-// invalidates every frame on any daemon/session reconnect, which covers RDP
-// drops and topology changes that break the MCP transport. The only uncaught
-// case is a same-geometry primary-display substitution that leaves the
-// connection intact — a corner case upstream gives us no signal to detect.
+// CUA Driver exposes no stable display identity, only "display":"primary".
+// Verification therefore binds to this trusted-session generation plus full
+// live geometry. A new session invalidates every frame; upstream has no signal
+// for a same-geometry primary-display substitution inside one session.
 export function verifyFrame(
   state: CuaFrameState,
   echoedId: string | undefined,

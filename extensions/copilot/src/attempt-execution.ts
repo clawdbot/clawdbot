@@ -108,12 +108,13 @@ export async function runCopilotExecution(context: {
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
+  let initialSdkUserValidated = false;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
     scope: input.agentHarnessTaskRuntimeScope,
   });
-  let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
+  let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
@@ -403,6 +404,15 @@ export async function runCopilotExecution(context: {
         });
       } catch {}
     }
+    transcriptJournal = createAttemptTranscriptJournal({
+      abortSession: () => session?.abort() ?? Promise.resolve(),
+      attempt: input,
+      messages,
+      onInitialSdkUserValidated: () => {
+        initialSdkUserValidated = true;
+      },
+      sdkSessionId,
+    });
     bridge = attachEventBridge(session, {
       onAssistantDelta: settledToolFinalization ? undefined : input.onAssistantDelta,
       onAgentEvent: settledToolFinalization ? undefined : input.onAgentEvent,
@@ -442,12 +452,7 @@ export async function runCopilotExecution(context: {
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted || transcriptJournal?.hasFailed() === true,
       transcriptProjection: {
-        journal: (transcriptJournal = createAttemptTranscriptJournal({
-          abortSession: () => session?.abort() ?? Promise.resolve(),
-          attempt: input,
-          messages,
-          sdkSessionId,
-        })),
+        journal: transcriptJournal,
         modelRef,
         now,
         resultContentSourceByToolName,
@@ -456,9 +461,12 @@ export async function runCopilotExecution(context: {
     activeRunHandleRef = registerCopilotActiveRun({
       abortActiveSession,
       bridge,
+      canAcceptSteering: () => initialSdkUserValidated,
       input,
       isAborted: () => aborted,
       isSettled: () => settled,
+      session,
+      transcriptJournal,
       userInputBridge,
     });
     const messageOptions = await createMessageOptions(attemptInput, {
@@ -531,6 +539,7 @@ export async function runCopilotExecution(context: {
     }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
+      input.replyOperation?.detachBackend(activeRunHandleRef);
       clearActiveEmbeddedRun(
         input.sessionId,
         activeRunHandleRef,

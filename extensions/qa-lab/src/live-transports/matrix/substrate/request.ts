@@ -23,6 +23,7 @@ export async function requestMatrixJson<T>(params: {
   method: "DELETE" | "GET" | "POST" | "PUT";
   okStatuses?: number[];
   query?: Record<string, string | number | undefined>;
+  signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<MatrixQaRequestResult<T>> {
   const url = new URL(params.endpoint, params.baseUrl);
@@ -39,7 +40,7 @@ export async function requestMatrixJson<T>(params: {
       ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
     },
     ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
-    signal: AbortSignal.timeout(resolveTimerTimeoutMs(params.timeoutMs, 20_000)),
+    signal: params.signal ?? AbortSignal.timeout(resolveTimerTimeoutMs(params.timeoutMs, 20_000)),
   });
   // Read under a byte cap *before* the parse try/catch. The overflow error must
   // escape uncaught (fail-closed): swallowing it into `body = {}` would defeat

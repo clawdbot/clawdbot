@@ -172,6 +172,7 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    chatType: targetSessionEntry?.chatType,
     agentId: sessionAgentId,
   });
   const toolPolicySessionKey = resolveRuntimePolicySessionKey({

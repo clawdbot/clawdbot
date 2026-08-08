@@ -2,6 +2,7 @@
 // delivery metadata, pairing state, and outbound payload lifecycle events.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -99,7 +100,7 @@ const runtimeMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  canonicalizeSessionEntryAliases: vi.fn(),
+  upsertSessionEntry: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -167,7 +168,7 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const canonicalizeSessionEntryAliasesMock = runtimeMocks.canonicalizeSessionEntryAliases;
+const upsertSessionEntryMock = runtimeMocks.upsertSessionEntry;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
@@ -266,6 +267,7 @@ function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): Ga
     connId,
     usesSharedGatewayAuth: false,
     socket: {
+      readyState: WebSocket.OPEN,
       send(frame: unknown) {
         if (typeof frame === "string") {
           sent.push(frame);
@@ -918,14 +920,11 @@ describe("node exec events", () => {
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
-    canonicalizeSessionEntryAliasesMock.mockClear();
+    upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
-      const entry = update ? await update(undefined) : undefined;
-      return { canonicalKey: target.canonicalKey, entry };
-    });
+    upsertSessionEntryMock.mockImplementation(async (_scope, patch) => patch);
   });
 
   it("dedupes repeated transcript agent dispatches for the same session", async () => {
@@ -949,7 +948,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(1);
   });
 
   it("persists only the accepted replay session ID when identical new-session events race", async () => {
@@ -961,10 +960,9 @@ describe("voice transcript events", () => {
       entry: undefined,
     }));
     let persistedEntry: { sessionId?: string } | undefined;
-    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
-      const entry = update ? await update(undefined) : undefined;
-      persistedEntry = entry;
-      return { canonicalKey: target.canonicalKey, entry };
+    upsertSessionEntryMock.mockImplementation(async (_scope, patch) => {
+      persistedEntry = patch;
+      return patch;
     });
     const detachedChecksStarted = createDeferred();
     const detachedAdmission = createDeferred<boolean>();
@@ -1007,7 +1005,7 @@ describe("voice transcript events", () => {
     detachedAdmission.resolve(true);
     await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
 
-    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
     const dispatched = mockCallArg(agentCommandMock) as { sessionId?: unknown };
     expect(persistedEntry?.sessionId).toBe(dispatched.sessionId);
@@ -1063,7 +1061,7 @@ describe("voice transcript events", () => {
       await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(2));
 
       expect(addChatRun).toHaveBeenCalledTimes(2);
-      expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(2);
+      expect(upsertSessionEntryMock).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
     }
@@ -1119,7 +1117,7 @@ describe("voice transcript events", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(1);
   });
 
   it("rechecks a queued replay after an earlier stale reservation is released", async () => {
@@ -1172,7 +1170,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(addChatRun).not.toHaveBeenCalled();
-    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("skips the detached session-store touch after voice admission loses ownership", async () => {
@@ -1202,7 +1200,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("rejects a missing harness-owned session before touching the store", async () => {
@@ -1221,7 +1219,7 @@ describe("voice transcript events", () => {
     });
     await Promise.resolve();
 
-    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
     expect(addChatRun).not.toHaveBeenCalled();
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
@@ -1241,7 +1239,7 @@ describe("voice transcript events", () => {
     });
     await Promise.resolve();
 
-    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(1);
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expectFields(mockCallArg(agentCommandMock), { sessionKey });
   });
@@ -1264,7 +1262,7 @@ describe("voice transcript events", () => {
       });
       await Promise.resolve();
 
-      expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+      expect(upsertSessionEntryMock).not.toHaveBeenCalled();
       expect(addChatRun).not.toHaveBeenCalled();
       expect(agentCommandMock).not.toHaveBeenCalled();
     },
@@ -1291,7 +1289,7 @@ describe("voice transcript events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(2);
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(2);
   });
 
   it("forwards transcript with voice provenance", async () => {
@@ -1334,7 +1332,7 @@ describe("voice transcript events", () => {
     const warn = vi.fn();
     const ctx = buildCtx();
     ctx.logGateway = { warn };
-    canonicalizeSessionEntryAliasesMock.mockRejectedValueOnce(new Error("disk down"));
+    upsertSessionEntryMock.mockRejectedValueOnce(new Error("disk down"));
 
     await handleNodeEvent(ctx, "node-v3", {
       event: "voice.transcript",
@@ -1352,7 +1350,7 @@ describe("voice transcript events", () => {
 
   it("keeps an accepted detached session-store touch visible to suspension", async () => {
     const touch = createDeferred();
-    canonicalizeSessionEntryAliasesMock.mockImplementationOnce(() => touch.promise);
+    upsertSessionEntryMock.mockImplementationOnce(() => touch.promise);
 
     await runAdmittedNodeEvent(buildCtx(), "node-v-suspend", {
       event: "voice.transcript",
@@ -1386,7 +1384,7 @@ describe("voice transcript events", () => {
     );
 
     let updatedEntry: Record<string, unknown> | undefined;
-    canonicalizeSessionEntryAliasesMock.mockImplementationOnce(async ({ target, update }) => {
+    upsertSessionEntryMock.mockImplementationOnce(async (_scope, patch) => {
       const existing = {
         sessionId: "sess-preserve",
         updatedAt: 10,
@@ -1400,9 +1398,9 @@ describe("voice transcript events", () => {
       };
       updatedEntry = {
         ...existing,
-        ...(update ? await update(existing) : {}),
+        ...patch,
       };
-      return { canonicalKey: target.canonicalKey, entry: updatedEntry };
+      return updatedEntry;
     });
 
     await handleNodeEvent(ctx, "node-v4", {
@@ -1641,7 +1639,7 @@ describe("agent request events", () => {
     persistInboundImagesForTranscriptMock.mockReset();
     persistInboundImagesForTranscriptMock.mockResolvedValue([]);
     runtimeMocks.deleteMediaBuffer.mockClear();
-    canonicalizeSessionEntryAliasesMock.mockClear();
+    upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -1654,10 +1652,7 @@ describe("agent request events", () => {
       offloadedRefs: [],
     });
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
-      const entry = update ? await update(undefined) : undefined;
-      return { canonicalKey: target.canonicalKey, entry };
-    });
+    upsertSessionEntryMock.mockImplementation(async (_scope, patch) => patch);
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
 
@@ -1673,7 +1668,7 @@ describe("agent request events", () => {
       payloadJSON: JSON.stringify({ message: "do not create this", sessionKey }),
     });
 
-    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
@@ -1691,7 +1686,7 @@ describe("agent request events", () => {
       payloadJSON: JSON.stringify({ message: "continue supervised work", sessionKey }),
     });
 
-    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(1);
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expectFields(mockCallArg(agentCommandMock), { sessionKey });
   });
@@ -1775,7 +1770,7 @@ describe("agent request events", () => {
       reason: "pairing_changed",
     });
     expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
-    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
     expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
     expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
     expect(agentCommandMock).not.toHaveBeenCalled();
@@ -1837,7 +1832,7 @@ describe("agent request events", () => {
       expect(runtimeMocks.resolveSessionModelRef).not.toHaveBeenCalled();
       expect(runtimeMocks.resolveGatewayModelSupportsImages).not.toHaveBeenCalled();
       expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
-      expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+      expect(upsertSessionEntryMock).not.toHaveBeenCalled();
       expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
       expect(agentCommandMock).not.toHaveBeenCalled();
     },
@@ -1901,6 +1896,25 @@ describe("agent request events", () => {
     });
     const optsRecord = opts as Record<string, unknown>;
     expect(optsRecord.runId).toBe(optsRecord.sessionId);
+  });
+
+  it("preserves session-scoped routing across two distinct agent.request turns", async () => {
+    loadSessionEntryMock.mockReturnValue(
+      buildSessionLookup("agent:main:node-repeat", { sessionId: "node-session-1" }),
+    );
+
+    for (const message of ["first turn", "second turn"]) {
+      await handleNodeEvent(buildCtx(), "node-repeat", {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({ message, sessionKey: "agent:main:node-repeat" }),
+      });
+    }
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    const calls = agentCommandMock.mock.calls.map(([opts]) => opts as Record<string, unknown>);
+    expect(calls.map((opts) => opts.message)).toEqual(["first turn", "second turn"]);
+    expect(calls.map((opts) => opts.runId)).toEqual(["node-session-1", "node-session-1"]);
+    expect(calls.map((opts) => opts.sessionId)).toEqual(["node-session-1", "node-session-1"]);
   });
 
   it("passes supportsInlineImages false for text-only node-session models", async () => {

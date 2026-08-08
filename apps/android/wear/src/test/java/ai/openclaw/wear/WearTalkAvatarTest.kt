@@ -5,6 +5,7 @@ import ai.openclaw.wear.shared.WearRpcMethod
 import android.animation.ValueAnimator
 import android.content.Intent
 import android.os.Looper
+import android.os.Parcel
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -17,9 +18,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import com.google.android.gms.wearable.ChannelClient
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +35,8 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowValueAnimator
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
@@ -73,13 +80,19 @@ class WearTalkAvatarTest {
       )
     val client = realtimeTalkClient()
     val queuedLevels = Channel<Float>(Channel.UNLIMITED)
-    client.setPrivateField("activeNodeId", "watch-a")
+    val attempt = realtimeAttempt(generation = 1L)
+    client.setPrivateField("activeAttempt", attempt)
     client.setPrivateField("mouthFrames", queuedLevels)
 
     try {
-      val writeOutput = WearRealtimeTalkClient::class.java.getDeclaredMethod("writeOutput", ByteArray::class.java)
+      val writeOutput =
+        WearRealtimeTalkClient::class.java.getDeclaredMethod(
+          "writeOutput",
+          WearRealtimeTalkClient.ActiveAttempt::class.java,
+          ByteArray::class.java,
+        )
       writeOutput.isAccessible = true
-      chunks.forEach { chunk -> writeOutput.invoke(client, chunk) }
+      chunks.forEach { chunk -> writeOutput.invoke(client, attempt, chunk) }
       awaitPlaybackTeardown(client)
 
       val actualLevels =
@@ -90,6 +103,47 @@ class WearTalkAvatarTest {
     } finally {
       client.shutdown()
     }
+  }
+
+  @Test
+  fun staleAttemptCallbacksCannotMutateReplacement() {
+    val client = realtimeTalkClient()
+    val stale = realtimeAttempt(generation = 1L)
+    val replacement = realtimeAttempt(generation = 2L)
+
+    try {
+      client.invokePrivate("activate", stale)
+      client.invokePrivate("handleChannelFailure", stale)
+      assertTrue(client.channelFailed.value)
+      assertEquals(null, client.privateField("activeAttempt"))
+
+      client.invokePrivate("activate", replacement)
+      val replacementReader = Job()
+      client.setPrivateField("readJob", replacementReader)
+      assertFalse(client.channelFailed.value)
+      client.invokePrivate("writeOutput", stale, pcm16Le(samplesForFrames(1), sample = 20_000))
+      client.invokePrivate("handleChannelFailure", stale)
+      client.invokePrivate("closeLocal", stale, false)
+
+      assertFalse(client.isPlaying.value)
+      assertFalse(client.channelFailed.value)
+      assertTrue(replacementReader.isActive)
+      assertSame(replacement, client.privateField("activeAttempt"))
+    } finally {
+      client.shutdown()
+    }
+  }
+
+  @Test
+  fun realtimeAudioPathUsesNegotiatedAttemptScope() {
+    assertEquals(
+      WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+      wearRealtimeAudioChannelPath("attempt-7", attemptScopedAudio = false),
+    )
+    assertEquals(
+      WearProtocol.realtimeAudioChannelPath("attempt-7"),
+      wearRealtimeAudioChannelPath("attempt-7", attemptScopedAudio = true),
+    )
   }
 
   @Test
@@ -360,6 +414,19 @@ class WearTalkAvatarTest {
     return WearRealtimeTalkClient(RuntimeEnvironment.getApplication(), WearGatewayRepository(requester))
   }
 
+  private fun realtimeAttempt(generation: Long): WearRealtimeTalkClient.ActiveAttempt =
+    WearRealtimeTalkClient.ActiveAttempt(
+      nodeId = "watch-a",
+      attemptId = "attempt-$generation",
+      generation = generation,
+      resources =
+        WearRealtimeTalkClient.ChannelResources(
+          channel = FakeRealtimeChannel("watch-a", "channel-$generation"),
+          input = ByteArrayInputStream(byteArrayOf()),
+          output = ByteArrayOutputStream(),
+        ),
+    )
+
   private fun awaitPlaybackTeardown(client: WearRealtimeTalkClient) {
     ShadowSystemClock.advanceBy(Duration.ofSeconds(1L))
     val deadlineNanos = System.nanoTime() + 2_000_000_000L
@@ -386,6 +453,28 @@ class WearTalkAvatarTest {
       isAccessible = true
       set(this@setPrivateField, value)
     }
+  }
+
+  private fun Any.privateField(name: String): Any? =
+    javaClass.getDeclaredField(name).run {
+      isAccessible = true
+      get(this@privateField)
+    }
+
+  private fun WearRealtimeTalkClient.invokePrivate(
+    name: String,
+    vararg args: Any,
+  ) {
+    javaClass.declaredMethods
+      .single { method ->
+        method.name == name &&
+          method.parameterTypes.size == args.size &&
+          method.parameterTypes.zip(args).all { (type, arg) ->
+            type.isAssignableFrom(arg.javaClass) ||
+              (type == Boolean::class.javaPrimitiveType && arg is Boolean)
+          }
+      }.apply { isAccessible = true }
+      .invoke(this, *args)
   }
 
   private companion object {
@@ -445,5 +534,23 @@ class WearTalkAvatarTest {
   private class TestLifecycleOwner : LifecycleOwner {
     val registry = LifecycleRegistry(this)
     override val lifecycle: Lifecycle = registry
+  }
+}
+
+private data class FakeRealtimeChannel(
+  private val nodeId: String,
+  private val label: String,
+) : ChannelClient.Channel {
+  override fun getNodeId(): String = nodeId
+
+  override fun getPath(): String = WearProtocol.realtimeAudioChannelPath("attempt-$label")
+
+  override fun describeContents(): Int = 0
+
+  override fun writeToParcel(
+    dest: Parcel,
+    flags: Int,
+  ) {
+    dest.writeString(label)
   }
 }

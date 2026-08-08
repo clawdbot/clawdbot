@@ -1,10 +1,10 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   listAgentEntries,
   listAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope-config.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import {
   applyClawAddPlan,
   CLAW_ADD_RESULT_SCHEMA_VERSION,
@@ -265,6 +265,7 @@ export async function runClawsAddCommand(
   let plan = await buildClawAddPlan({
     manifest: result.manifest,
     clawMarkdownBody: result.clawMarkdownBody,
+    packageBootstrap: result.packageBootstrap,
     openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
@@ -283,6 +284,7 @@ export async function runClawsAddCommand(
     plan = await buildClawAddPlan({
       manifest: result.manifest,
       clawMarkdownBody: result.clawMarkdownBody,
+      packageBootstrap: result.packageBootstrap,
       openClawProfile: result.openClawProfile,
       source: result.source,
       diagnostics: result.diagnostics,
@@ -400,7 +402,7 @@ export async function runClawsStatusCommand(
         `${record.install.agentId}: ${record.install.claw.name}@${record.install.claw.version} (${record.install.status})`,
       );
       runtime.log(
-        `  Agent: ${record.agentState}; files: ${record.workspaceFiles.length}; packages: ${record.packages.length}`,
+        `  Agent: ${record.agentState}; bootstrap: ${record.bootstrapState}; files: ${record.workspaceFiles.length}; packages: ${record.packages.length}`,
       );
     }
   }

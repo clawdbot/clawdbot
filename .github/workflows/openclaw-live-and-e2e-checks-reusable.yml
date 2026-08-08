@@ -161,6 +161,24 @@ on:
       package_version:
         description: Package version
         value: ${{ jobs.prepare_docker_e2e_image.outputs.package_version }}
+      prepublish_plugin_registry_artifact_name:
+        description: Immutable prerelease plugin registry artifact name
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_name }}
+      prepublish_plugin_registry_artifact_id:
+        description: Immutable prerelease plugin registry artifact id
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id }}
+      prepublish_plugin_registry_artifact_digest:
+        description: Prerelease plugin registry artifact service digest
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_digest }}
+      prepublish_plugin_registry_artifact_run_id:
+        description: Prerelease plugin registry artifact producer run id
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_id }}
+      prepublish_plugin_registry_artifact_run_attempt:
+        description: Prerelease plugin registry artifact producer run attempt
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_attempt }}
+      prepublish_plugin_registry_manifest_sha256:
+        description: Prerelease plugin registry manifest SHA-256
+        value: ${{ jobs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       shared_image_artifact_name:
         description: Immutable Docker image artifact name
         value: ${{ jobs.prepare_docker_e2e_image.outputs.image_artifact_name }}
@@ -291,6 +309,41 @@ on:
         type: string
       package_version:
         description: Exact OpenClaw package version for no-push image artifacts
+        required: false
+        default: ""
+        type: string
+      enable_prepublish_plugin_registry:
+        description: Build or reuse candidate-version official plugin packages for artifact/ref acceptance
+        required: false
+        default: false
+        type: boolean
+      prepublish_plugin_registry_artifact_name:
+        description: Existing immutable prerelease plugin registry artifact name
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_id:
+        description: Existing immutable prerelease plugin registry artifact id
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_digest:
+        description: Existing prerelease plugin registry artifact service SHA-256 digest
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_run_id:
+        description: Producer run id for the prerelease plugin registry artifact
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_run_attempt:
+        description: Producer run attempt for the prerelease plugin registry artifact
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_manifest_sha256:
+        description: SHA-256 of prepublish-plugin-registry.json
         required: false
         default: ""
         type: string
@@ -545,6 +598,13 @@ jobs:
           PACKAGE_SHA256: ${{ inputs.package_sha256 }}
           PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
           PACKAGE_VERSION: ${{ inputs.package_version }}
+          PREPUBLISH_PLUGIN_REGISTRY_ENABLED: ${{ inputs.enable_prepublish_plugin_registry }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: ${{ inputs.prepublish_plugin_registry_artifact_digest }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: ${{ inputs.prepublish_plugin_registry_artifact_id }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: ${{ inputs.prepublish_plugin_registry_artifact_name }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: ${{ inputs.prepublish_plugin_registry_artifact_run_attempt }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: ${{ inputs.prepublish_plugin_registry_artifact_run_id }}
+          PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ inputs.prepublish_plugin_registry_manifest_sha256 }}
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
           PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
           SHARED_IMAGE_ARTIFACT_NAMESPACE: ${{ inputs.shared_image_artifact_namespace }}
@@ -614,6 +674,36 @@ jobs:
               echo "Package source SHA differs from the selected release SHA." >&2
               exit 1
             }
+          fi
+
+          if [[ "$PREPUBLISH_PLUGIN_REGISTRY_ENABLED" == "true" ]]; then
+            prepublish_plugin_registry_tuple_present=0
+            for value in \
+              "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" \
+              "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" \
+              "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" \
+              "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" \
+              "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" \
+              "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"; do
+              if [[ -n "${value// }" ]]; then
+                prepublish_plugin_registry_tuple_present=1
+              fi
+            done
+            if [[ "$prepublish_plugin_registry_tuple_present" == "1" ]]; then
+              [[ "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
+                "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
+                -n "${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME// }" &&
+                "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
+                "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
+                "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+                echo "Prerelease plugin registry selection requires the complete immutable artifact tuple." >&2
+                exit 1
+              }
+              [[ "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" == *"-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}" ]] || {
+                echo "Prerelease plugin registry artifact name does not bind the producer run attempt." >&2
+                exit 1
+              }
+            fi
           fi
 
           image_tuple_present=0
@@ -886,6 +976,8 @@ jobs:
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
@@ -1136,6 +1228,8 @@ jobs:
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
@@ -1214,6 +1308,49 @@ jobs:
           path: .artifacts/docker-e2e-package
           run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
+
+      - name: Validate prerelease plugin registry artifact binding
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != ''
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download prerelease plugin registry artifact
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id }}
+          path: .artifacts/prepublish-plugin-registry
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate prerelease plugin registry contents
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != ''
+        env:
+          CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
+          REQUIRED_PACKAGES_JSON: ${{ steps.plan.outputs.required_prepublish_plugin_packages }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/prepublish-plugin-registry-artifact.mjs verify \
+            --artifact-dir .artifacts/prepublish-plugin-registry \
+            --source-sha "$SELECTED_SHA" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --required-packages-json "$REQUIRED_PACKAGES_JSON"
 
       - name: Validate Docker E2E image artifact binding
         if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
@@ -1337,6 +1474,11 @@ jobs:
           export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}"
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+          if [[ "${{ inputs.enable_prepublish_plugin_registry }}" == "true" &&
+            "${{ steps.plan.outputs.needs_prepublish_plugin_registry }}" == "1" &&
+            -n "${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id }}" ]]; then
+            export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=".artifacts/prepublish-plugin-registry"
+          fi
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
             OPENCLAW_SKIP_DOCKER_BUILD=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
@@ -1464,6 +1606,8 @@ jobs:
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
@@ -1541,6 +1685,49 @@ jobs:
           path: .artifacts/docker-e2e-package
           run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
+
+      - name: Validate targeted prerelease plugin registry artifact binding
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != ''
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download targeted prerelease plugin registry artifact
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id }}
+          path: .artifacts/prepublish-plugin-registry
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate targeted prerelease plugin registry contents
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != ''
+        env:
+          CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
+          REQUIRED_PACKAGES_JSON: ${{ steps.plan.outputs.required_prepublish_plugin_packages }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/prepublish-plugin-registry-artifact.mjs verify \
+            --artifact-dir .artifacts/prepublish-plugin-registry \
+            --source-sha "$SELECTED_SHA" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --required-packages-json "$REQUIRED_PACKAGES_JSON"
 
       - name: Validate Docker E2E image artifact binding
         if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
@@ -1653,6 +1840,7 @@ jobs:
         env:
           ARTIFACT_SUFFIX: ${{ steps.plan.outputs.artifact_suffix }}
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
+          PREPUBLISH_PLUGIN_REGISTRY_ENABLED: ${{ inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_artifact_id != '' && '1' || '0' }}
         run: |
           set -euo pipefail
           export OPENCLAW_DOCKER_ALL_LANES="${DOCKER_E2E_LANES}"
@@ -1665,6 +1853,9 @@ jobs:
           export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted-${ARTIFACT_SUFFIX}"
           export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${ARTIFACT_SUFFIX}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
+          if [[ "$PREPUBLISH_PLUGIN_REGISTRY_ENABLED" == "1" ]]; then
+            export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=".artifacts/prepublish-plugin-registry"
+          fi
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
             OPENCLAW_SKIP_DOCKER_BUILD=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
@@ -1903,6 +2094,8 @@ jobs:
       needs_functional_image: ${{ inputs.shared_image_artifact_id != '' && '1' || steps.plan.outputs.needs_functional_image }}
       needs_live_image: ${{ steps.plan.outputs.needs_live_image }}
       needs_package: ${{ steps.plan.outputs.needs_package }}
+      needs_prepublish_plugin_registry: ${{ steps.plan.outputs.needs_prepublish_plugin_registry }}
+      required_prepublish_plugin_packages: ${{ steps.plan.outputs.required_prepublish_plugin_packages }}
       bare_exists: ${{ steps.image_exists.outputs.bare_exists }}
       functional_exists: ${{ steps.image_exists.outputs.functional_exists }}
       needs_registry_build: ${{ steps.image_exists.outputs.needs_build }}
@@ -1915,6 +2108,12 @@ jobs:
       package_artifact_run_attempt: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || steps.input_package_artifact.outputs.run_attempt }}
       package_file_name: ${{ steps.package.outputs.file_name }}
       package_source_sha: ${{ steps.package.outputs.source_sha }}
+      prepublish_plugin_registry_artifact_name: ${{ inputs.enable_prepublish_plugin_registry && (steps.upload_prepublish_plugin_registry.outputs.artifact-id && format('docker-e2e-prepublish-plugin-registry-{0}-{1}', github.run_id, github.run_attempt) || inputs.prepublish_plugin_registry_artifact_name) || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ inputs.enable_prepublish_plugin_registry && (steps.upload_prepublish_plugin_registry.outputs.artifact-id || inputs.prepublish_plugin_registry_artifact_id) || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ inputs.enable_prepublish_plugin_registry && (steps.upload_prepublish_plugin_registry.outputs.artifact-digest || inputs.prepublish_plugin_registry_artifact_digest) || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ inputs.enable_prepublish_plugin_registry && (steps.upload_prepublish_plugin_registry.outputs.artifact-id && github.run_id || inputs.prepublish_plugin_registry_artifact_run_id) || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ inputs.enable_prepublish_plugin_registry && (steps.upload_prepublish_plugin_registry.outputs.artifact-id && github.run_attempt || inputs.prepublish_plugin_registry_artifact_run_attempt) || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ inputs.enable_prepublish_plugin_registry && steps.prepublish_plugin_registry.outputs.manifest_sha256 || '' }}
       image_artifact_name: ${{ steps.image_artifact.outputs.artifact_name || inputs.shared_image_artifact_name }}
       image_archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 || inputs.shared_image_archive_sha256 }}
       image_artifact_id: ${{ steps.upload_image_artifact.outputs.artifact-id || inputs.shared_image_artifact_id }}
@@ -1982,7 +2181,7 @@ jobs:
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        if: (steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2216,6 +2415,84 @@ jobs:
           path: .artifacts/docker-e2e-package/openclaw-current.tgz
           if-no-files-found: error
 
+      - name: Validate prerelease plugin registry artifact identity
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id != ''
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.prepublish_plugin_registry_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.prepublish_plugin_registry_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.prepublish_plugin_registry_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ inputs.prepublish_plugin_registry_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ inputs.prepublish_plugin_registry_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download prerelease plugin registry artifact
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.prepublish_plugin_registry_artifact_id }}
+          path: .artifacts/prepublish-plugin-registry
+          run-id: ${{ inputs.prepublish_plugin_registry_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Pack prerelease plugin registry artifact
+        id: create_prepublish_plugin_registry
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == ''
+        env:
+          CANDIDATE_VERSION: ${{ steps.package.outputs.version }}
+          REQUIRED_PACKAGES_JSON: ${{ steps.plan.outputs.required_prepublish_plugin_packages }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="$(
+            node .release-harness/scripts/prepublish-plugin-registry-artifact.mjs create \
+              --repo-root . \
+              --artifact-dir .artifacts/prepublish-plugin-registry \
+              --source-sha "$SELECTED_SHA" \
+              --candidate-version "$CANDIDATE_VERSION" \
+              --required-packages-json "$REQUIRED_PACKAGES_JSON"
+          )"
+          manifest_sha256="$(jq -er '.manifestSha256' <<< "$result")"
+          echo "manifest_sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Validate prerelease plugin registry artifact
+        id: prepublish_plugin_registry
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1'
+        env:
+          CANDIDATE_VERSION: ${{ steps.package.outputs.version }}
+          EXPECTED_MANIFEST_SHA256: ${{ steps.create_prepublish_plugin_registry.outputs.manifest_sha256 || inputs.prepublish_plugin_registry_manifest_sha256 }}
+          REQUIRED_PACKAGES_JSON: ${{ steps.plan.outputs.required_prepublish_plugin_packages }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="$(
+            node .release-harness/scripts/prepublish-plugin-registry-artifact.mjs verify \
+              --artifact-dir .artifacts/prepublish-plugin-registry \
+              --source-sha "$SELECTED_SHA" \
+              --candidate-version "$CANDIDATE_VERSION" \
+              --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+              --required-packages-json "$REQUIRED_PACKAGES_JSON"
+          )"
+          manifest_sha256="$(jq -er '.manifestSha256' <<< "$result")"
+          echo "manifest_sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload prerelease plugin registry artifact
+        id: upload_prepublish_plugin_registry
+        if: inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/prepublish-plugin-registry/
+          if-no-files-found: error
+
       - name: Resolve shared Docker E2E image tags
         id: image
         shell: bash
@@ -2416,6 +2693,13 @@ jobs:
           PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
           PACKAGE_SOURCE_SHA: ${{ steps.package.outputs.source_sha }}
           PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-digest || inputs.prepublish_plugin_registry_artifact_digest }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id || inputs.prepublish_plugin_registry_artifact_id }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id && format('docker-e2e-prepublish-plugin-registry-{0}-{1}', github.run_id, github.run_attempt) || inputs.prepublish_plugin_registry_artifact_name }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id && github.run_attempt || inputs.prepublish_plugin_registry_artifact_run_attempt }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id && github.run_id || inputs.prepublish_plugin_registry_artifact_run_id }}
+          PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ steps.prepublish_plugin_registry.outputs.manifest_sha256 }}
+          NEEDS_PREPUBLISH_PLUGIN_REGISTRY: ${{ inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && '1' || '0' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2437,6 +2721,18 @@ jobs:
             --arg imageArchiveSha256 "$IMAGE_ARCHIVE_SHA256" \
             '$ARGS.named')"
           jq -e 'all(.[]; type == "string" and length > 0)' <<< "$json" >/dev/null
+          if [[ "$NEEDS_PREPUBLISH_PLUGIN_REGISTRY" == "1" ]]; then
+            registry_json="$(jq -cn \
+              --arg prepublishPluginRegistryArtifactName "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" \
+              --arg prepublishPluginRegistryArtifactId "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" \
+              --arg prepublishPluginRegistryArtifactDigest "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" \
+              --arg prepublishPluginRegistryArtifactRunId "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" \
+              --arg prepublishPluginRegistryArtifactRunAttempt "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" \
+              --arg prepublishPluginRegistryManifestSha256 "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256" \
+              '$ARGS.named')"
+            jq -e 'all(.[]; type == "string" and length > 0)' <<< "$registry_json" >/dev/null
+            json="$(jq -cn --argjson base "$json" --argjson registry "$registry_json" '$base + $registry')"
+          fi
           echo "json=$json" >> "$GITHUB_OUTPUT"
 
   docker_e2e_image_ready:
@@ -3082,13 +3378,13 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -3415,7 +3711,7 @@ jobs:
             profiles: stable full
           - suite_id: live-gateway-minimax-docker
             label: Docker live gateway MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false
             profiles: stable full

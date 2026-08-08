@@ -88,6 +88,16 @@ export const SecretRefSchema = z.discriminatedUnion("source", [
 /** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
+/** Canonical operator-configurable SSRF policy shared by network-capable surfaces. */
+export const SsrFPolicyConfigSchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowRfc2544BenchmarkRange: z.boolean().optional(),
+    allowIpv6UniqueLocalRange: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const SecretsEnvProviderSchema = z
   .object({
     source: z.literal("env"),

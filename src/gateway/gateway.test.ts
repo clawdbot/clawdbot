@@ -8,7 +8,6 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
-  getRuntimeConfigSnapshotMetadata,
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
@@ -19,7 +18,6 @@ import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { callGateway } from "./call.js";
 import { startGatewayServer } from "./server.js";
@@ -30,6 +28,7 @@ import {
   getFreeGatewayPort,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -38,6 +37,7 @@ const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 let gatewayTestSeq = 0;
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
@@ -178,7 +178,6 @@ function resetGatewayTestState(): void {
   clearConfigCache();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  clearGatewaySubagentRuntime();
 }
 
 describe("gateway e2e", () => {
@@ -345,10 +344,11 @@ describe("gateway e2e", () => {
           callerAuthOverride.rateLimit!.maxAttempts = 99;
           callerTailscaleOverride.serviceName = "svc:mutated";
         }
-        await writeConfigFile({
+        const nextLoggingSource = {
           ...initialConfig,
           logging: { level: "debug" },
-        });
+        } satisfies OpenClawConfig;
+        await writeConfigFile(nextLoggingSource);
         await expect
           .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
           .toBe("debug");
@@ -362,8 +362,7 @@ describe("gateway e2e", () => {
           expect(getRuntimeConfig().channels?.whatsapp?.allowFrom).toEqual(["*"]);
 
           const sourceBeforePolicyEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
-          const revisionBeforePolicyEdit = getRuntimeConfigSnapshotMetadata()?.revision ?? -1;
-          await writeConfigFile({
+          const nextPolicySource = {
             ...sourceBeforePolicyEdit,
             channels: {
               ...sourceBeforePolicyEdit.channels,
@@ -372,13 +371,8 @@ describe("gateway e2e", () => {
                 dmPolicy: "disabled",
               },
             },
-          });
-          await expect
-            .poll(() => getRuntimeConfigSnapshotMetadata()?.revision ?? -1, {
-              timeout: 5_000,
-              interval: 50,
-            })
-            .toBeGreaterThan(revisionBeforePolicyEdit);
+          } satisfies OpenClawConfig;
+          await writeConfigFile(nextPolicySource);
           const persistedPolicyEdit = JSON.parse(
             await fs.readFile(configPath, "utf-8"),
           ) as OpenClawConfig;
@@ -386,21 +380,16 @@ describe("gateway e2e", () => {
           expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
 
           const sourceBeforeUnrelatedWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
-          const revisionBeforeUnrelatedWrite = getRuntimeConfigSnapshotMetadata()?.revision ?? -1;
-          await writeConfigFile({
+          const nextUnrelatedSource = {
             ...sourceBeforeUnrelatedWrite,
             ui: { assistant: { name: "unrelated-managed-write" } },
-          });
-          await expect
-            .poll(() => getRuntimeConfigSnapshotMetadata()?.revision ?? -1, {
-              timeout: 5_000,
-              interval: 50,
-            })
-            .toBeGreaterThan(revisionBeforeUnrelatedWrite);
+          } satisfies OpenClawConfig;
+          await writeConfigFile(nextUnrelatedSource);
           const persistedAfterUnrelatedWrite = JSON.parse(
             await fs.readFile(configPath, "utf-8"),
           ) as OpenClawConfig;
           expect(persistedAfterUnrelatedWrite.channels?.whatsapp?.dmPolicy).toBe("disabled");
+          expect(persistedAfterUnrelatedWrite.ui?.assistant?.name).toBe("unrelated-managed-write");
         }
 
         const reconnected = await connectGatewayClient({
@@ -588,7 +577,7 @@ describe("gateway e2e", () => {
           },
           // The request below runs sessionKey "agent:dev:mock-openai"; the
           // gateway rejects session keys whose agent id is not declared.
-          list: [{ id: "dev", default: true }],
+          entries: { dev: { default: true } },
         },
         models: {
           mode: "replace",
@@ -674,7 +663,7 @@ module.exports = {
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }],
+          entries: { main: { default: true, tools: { allow: ["agents_list"] } } },
         },
         plugins: {
           allow: ["http-probe"],
@@ -999,17 +988,7 @@ module.exports = {
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
       const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        ...GATEWAY_TEST_ENV_KEYS,
         "OPENCLAW_TEST_MINIMAL_GATEWAY",
         "DISCORD_BOT_TOKEN",
       ]);

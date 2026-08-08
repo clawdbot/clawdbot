@@ -12,6 +12,7 @@ import { buildSecretInputSchema } from "./secret-input.js";
 const zaloAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   markdown: MarkdownConfigSchema,
   botToken: buildSecretInputSchema().optional(),
   tokenFile: z.string().optional(),

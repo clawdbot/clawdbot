@@ -26,7 +26,6 @@ import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-n
 import {
   currentClaudeSessionCatalogConfig,
   listBoundClaudeSessions,
-  resolveClaudeCatalogCreateSession,
   resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
 import {
@@ -1497,6 +1496,7 @@ async function listClaudeSessionCatalog(params: {
   const eligible = nodes
     .filter(
       (node) =>
+        node.gatewayLocal !== true &&
         node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
@@ -1903,11 +1903,17 @@ function toGenericClaudeHost(
   };
 }
 
-export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
-  const provider: SessionCatalogProvider = {
-    id: "claude",
-    label: "Claude Code",
-    resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
+type ClaudeSessionCatalogRuntime = Required<
+  Pick<
+    SessionCatalogProvider,
+    "list" | "read" | "continueSession" | "openTerminal" | "checkUpstreamActivity"
+  >
+>;
+
+export function createClaudeSessionCatalogRuntime(
+  api: OpenClawPluginApi,
+): ClaudeSessionCatalogRuntime {
+  return {
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api, query.sessionEntries);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
@@ -1953,6 +1959,5 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
         ).items;
       }),
   };
-  api.registerSessionCatalog(provider);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

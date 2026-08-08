@@ -128,6 +128,7 @@ function createSandboxBackendTestConfig(
     scope: "session",
     workspaceAccess: "rw",
     workspaceRoot: "/workspace-root",
+    dockerTmpfsSource: "configured",
     docker: {
       binds: [],
       capDrop: [],

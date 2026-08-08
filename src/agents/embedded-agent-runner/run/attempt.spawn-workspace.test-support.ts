@@ -466,6 +466,8 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
+  resolveModelOverridePolicy: () => undefined,
+  setTtsMachinePrefsPathResolver: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -744,7 +746,8 @@ vi.mock("../../model-auth.js", () => ({
   resolveModelAuthMode: () => undefined,
 }));
 
-vi.mock("../../model-tool-support.js", () => ({
+vi.mock("../../model-tool-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-tool-support.js")>()),
   supportsModelTools: (...args: unknown[]) => hoisted.supportsModelToolsMock(...args),
 }));
 
@@ -966,6 +969,9 @@ type MutableSession = {
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
+    subscribe?: (
+      listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
+    ) => () => void;
     reset: () => void;
     state: {
       messages: unknown[];
@@ -1192,6 +1198,9 @@ export function createDefaultEmbeddedSession(params?: {
       reset: () => {
         session.messages = [];
       },
+      // Production cleanup hooks subscribe for lifecycle events; the default
+      // session double never emits them.
+      subscribe: () => () => {},
       state: {
         get messages() {
           return session.messages;

@@ -45,10 +45,12 @@ import {
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  projectGatewayConnectionDetailsForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
+  isGatewaySecretRefUnavailableError,
   trimToUndefined,
   type ExplicitGatewayAuth,
   type GatewayCredentialMode,
@@ -64,6 +66,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 export type { GatewayConnectionDetails };
 
 export type GatewayRequestFunction = <T = Record<string, unknown>>(
@@ -224,6 +227,14 @@ export type GatewayClientRequestErrorJson = {
   };
 };
 
+export type GatewayAuthErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_credentials_required";
+    message: string;
+  };
+};
+
 export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
@@ -237,24 +248,25 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
   if (!isGatewayTransportError(value)) {
     return null;
   }
+  const connectionDetails = projectGatewayConnectionDetailsForDiagnostics(value.connectionDetails);
   return {
     ok: false,
     error: {
       type: "gateway_transport_error",
       kind: value.kind,
-      message: firstGatewayErrorLine(value.message),
+      // The message embeds the remote-controlled close reason, which can echo a
+      // credential-bearing URL; redact both before they reach CLI JSON output.
+      message: redactSensitiveUrlLikeString(firstGatewayErrorLine(value.message)),
       ...(value.code !== undefined ? { code: value.code } : {}),
-      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.reason !== undefined ? { reason: redactSensitiveUrlLikeString(value.reason) } : {}),
       ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
     },
     gateway: {
-      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
-      urlSource: value.connectionDetails.urlSource,
-      ...(value.connectionDetails.bindDetail
-        ? { bindDetail: value.connectionDetails.bindDetail }
-        : {}),
-      ...(value.connectionDetails.remoteFallbackNote
-        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+      url: connectionDetails.url,
+      urlSource: connectionDetails.urlSource,
+      ...(connectionDetails.bindDetail ? { bindDetail: connectionDetails.bindDetail } : {}),
+      ...(connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: connectionDetails.remoteFallbackNote }
         : {}),
     },
   };
@@ -295,6 +307,24 @@ export function formatGatewayClientRequestErrorJson(
       ...(requestError.retryAfterMs !== undefined
         ? { retryAfterMs: requestError.retryAfterMs }
         : {}),
+    },
+  };
+}
+
+/** Preserve machine-readable output for auth failures raised before transport startup. */
+export function formatGatewayAuthErrorJson(value: unknown): GatewayAuthErrorJson | null {
+  if (
+    !isGatewayCredentialsRequiredError(value) &&
+    !isGatewayExplicitAuthRequiredError(value) &&
+    !isGatewaySecretRefUnavailableError(value)
+  ) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_credentials_required",
+      message: value.message,
     },
   };
 }
@@ -779,29 +809,15 @@ async function resolveGatewayTlsFingerprint(params: {
   opts: CallGatewayBaseOptions;
   context: ResolvedGatewayCallContext;
   url: string;
+  urlSource: string;
 }): Promise<string | undefined> {
-  const { opts, context, url } = params;
-  const useLocalTls =
-    context.config.gateway?.tls?.enabled === true &&
-    !context.urlOverrideSource &&
-    !context.remoteUrl &&
-    url.startsWith("wss://");
-  const tlsRuntime = useLocalTls
-    ? await gatewayCallDeps.loadGatewayTlsRuntime(context.config.gateway?.tls)
-    : undefined;
-  const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
-  const remoteTlsFingerprint =
-    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
-    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
-    // accidentally pinning against caller-supplied target URLs.
-    context.isRemoteMode && context.urlOverrideSource !== "cli"
-      ? trimToUndefined(context.remote?.tlsFingerprint)
-      : undefined;
-  return (
-    overrideTlsFingerprint ||
-    remoteTlsFingerprint ||
-    (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined)
-  );
+  return await resolveGatewayConnectionTlsFingerprint({
+    config: params.context.config,
+    url: params.url,
+    urlSource: params.urlSource,
+    explicitTlsFingerprint: params.opts.tlsFingerprint,
+    loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+  });
 }
 
 function formatGatewayCloseError(
@@ -1169,7 +1185,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
+  const tlsFingerprint = await resolveGatewayTlsFingerprint({
+    opts,
+    context,
+    url,
+    urlSource: connectionDetails.urlSource,
+  });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
   const authMode = resolveGatewayCallAuth(context.config).mode;
@@ -1272,6 +1293,7 @@ export async function buildGatewayProbeConnectionDetails(
     opts: callOpts,
     context,
     url: connectionDetails.url,
+    urlSource: connectionDetails.urlSource,
   });
   return {
     ...connectionDetails,

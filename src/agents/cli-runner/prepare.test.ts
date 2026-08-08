@@ -10,16 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -66,6 +68,21 @@ function registerTestContextEngine(
   });
 }
 
+function installTestPluginRegistry() {
+  const builder = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  setActivePluginRegistry(builder.registry);
+  return builder;
+}
+
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
   vi.fn<() => Promise<SandboxWorkspaceInfo | null>>(async () => null),
@@ -84,6 +101,8 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 vi.mock("../video-generation-task-status.js", () => ({
@@ -126,6 +145,32 @@ let defaultTestCliBackend = buildDefaultTestCliBackend();
 function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConfig {
   defaultTestCliBackend = buildDefaultTestCliBackend(params);
   return {};
+}
+
+const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
+  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.";
+
+function createBundledMessageToolConfig(): OpenClawConfig {
+  setCliRunnerPrepareTestDeps({
+    getActiveMcpLoopbackRuntime: vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    })),
+    resolveMcpLoopbackScopedTools: vi.fn(() => ({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          label: "Message",
+          description: "Send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+      ],
+    })),
+  });
+  return createCliBackendConfig({ bundleMcp: true });
 }
 
 function setCliBackendForPrepareTest(
@@ -413,20 +458,16 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("passes raw refreshed OAuth profile fields to profile-owned CLI preparation", async () => {
+  it("passes expired Gemini CLI OAuth fields to CLI-owned refresh", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "google-gemini-cli:user@example.test";
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-    }));
+    const resolveApiKeyForProfile = vi.fn(async () => {
+      throw new Error("Gemini CLI OAuth must not enter core refresh");
+    });
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -437,7 +478,7 @@ describe("prepareCliRunContext", () => {
             provider: "google-gemini-cli",
             access: "raw-access-token",
             refresh: "raw-refresh-token",
-            expires: 1_800_000_000_000,
+            expires: 1,
             projectId: "project-1",
             email: "user@example.test",
           },
@@ -472,7 +513,7 @@ describe("prepareCliRunContext", () => {
       config: {},
     });
 
-    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId,
@@ -481,7 +522,7 @@ describe("prepareCliRunContext", () => {
           provider: "google-gemini-cli",
           access: "raw-access-token",
           refresh: "raw-refresh-token",
-          expires: 1_800_000_000_000,
+          expires: 1,
         }),
       }),
     );
@@ -489,42 +530,28 @@ describe("prepareCliRunContext", () => {
     expect(context.authBindingSkipsLocalCredential).toBe(true);
   });
 
-  it("stages the resolved OAuth fallback profile for Gemini CLI preparation", async () => {
+  it("still materializes selected API keys for Gemini CLI preparation", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
-    const legacyProfileId = "google-gemini-cli:default";
-    const resolvedProfileId = "google-gemini-cli:user@example.test";
+    const authProfileId = "google:api-key";
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
     const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: resolvedProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
+      apiKey: "resolved-api-key",
+      profileId: authProfileId,
+      profileType: "api_key" as const,
+      provider: "google",
     }));
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
         version: 1,
         profiles: {
-          [legacyProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "stale-access-token",
-            refresh: "stale-refresh-token",
-            expires: 1_700_000_000_000,
-            email: "legacy@example.test",
-          },
-          [resolvedProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "resolved-access-token",
-            refresh: "resolved-refresh-token",
-            expires: 1_800_000_000_000,
-            projectId: "project-1",
-            email: "user@example.test",
+          [authProfileId]: {
+            type: "api_key",
+            provider: "google",
+            key: "stored-api-key",
           },
         },
       },
@@ -552,23 +579,79 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
-      authProfileId: legacyProfileId,
+      authProfileId,
       config: {},
     });
 
     expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        authProfileId: resolvedProfileId,
+        authProfileId,
         authCredential: expect.objectContaining({
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "resolved-access-token",
-          refresh: "resolved-refresh-token",
-          expires: 1_800_000_000_000,
+          type: "api_key",
+          provider: "google",
+          key: "resolved-api-key",
         }),
       }),
     );
+  });
+
+  it("preserves a selected Gemini profile when backend auth preparation fails", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:legacy";
+    const backendError = new CliBackendAuthProfilePreparationError(
+      "Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw.",
+    );
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "expired-access-token",
+            refresh: "",
+            expires: 0,
+          },
+        },
+      },
+      agentDir,
+    );
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution: vi.fn(async () => {
+        throw backendError;
+      }),
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "google-gemini-cli",
+      agentDir,
+      cause: backendError,
+    });
   });
 
   it("selects the configured Gemini CLI OAuth profile when no explicit profile is passed", async () => {
@@ -578,13 +661,9 @@ describe("prepareCliRunContext", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-    }));
+    const resolveApiKeyForProfile = vi.fn(async () => {
+      throw new Error("Gemini CLI OAuth must not enter core refresh");
+    });
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -638,12 +717,7 @@ describe("prepareCliRunContext", () => {
       } as OpenClawConfig,
     });
 
-    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: authProfileId,
-        agentDir,
-      }),
-    );
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId,
@@ -653,88 +727,6 @@ describe("prepareCliRunContext", () => {
           access: "raw-access-token",
           refresh: "raw-refresh-token",
           expires: 1_800_000_000_000,
-        }),
-      }),
-    );
-  });
-
-  it("stages adopted OAuth credentials for Gemini CLI preparation", async () => {
-    const { dir } = fixture.session;
-    const agentDir = path.join(dir, "agents", "main", "agent");
-    const authProfileId = "google-gemini-cli:user@example.test";
-    const prepareExecution = vi.fn(async () => ({
-      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
-    }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
-      profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-      credential: {
-        type: "oauth" as const,
-        provider: "google-gemini-cli",
-        access: "adopted-access-token",
-        refresh: "adopted-refresh-token",
-        expires: 1_900_000_000_000,
-        projectId: "project-1",
-        email: "user@example.test",
-      },
-    }));
-    fs.mkdirSync(agentDir, { recursive: true });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [authProfileId]: {
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "stale-access-token",
-            refresh: "stale-refresh-token",
-            expires: 1_700_000_000_000,
-            projectId: "project-1",
-            email: "user@example.test",
-          },
-        },
-      },
-      agentDir,
-    );
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
-      bundleMcp: false,
-      authEpochMode: "profile-only",
-      prepareExecution,
-      config: {
-        command: "gemini",
-        args: ["--prompt", "{prompt}"],
-        output: "json",
-        input: "arg",
-        sessionMode: "existing",
-      },
-    });
-    setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile,
-    });
-
-    await fixture.prepare({
-      sessionKey: "agent:main:main",
-      provider: "google-gemini-cli",
-      model: "gemini-3.1-pro-preview",
-      authProfileId,
-      config: {},
-    });
-
-    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId,
-        authCredential: expect.objectContaining({
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "adopted-access-token",
-          refresh: "adopted-refresh-token",
-          expires: 1_900_000_000_000,
         }),
       }),
     );
@@ -1051,6 +1043,13 @@ describe("prepareCliRunContext", () => {
     await expect(preparation).rejects.toThrow(
       `could not materialize selected auth profile "${authProfileId}"`,
     );
+    await expect(preparation).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "anthropic",
+      agentDir,
+    });
     await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
     expect(prepareExecution).not.toHaveBeenCalled();
   });
@@ -2056,16 +2055,28 @@ describe("prepareCliRunContext", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("cleans up prepared CLI backend when context-engine resolution fails", async () => {
+  it("cleans up prepared CLI backend when context-engine host validation fails", async () => {
+    installTestPluginRegistry();
+    const engineId = `cli-cleanup-engine-${Date.now().toString(36)}`;
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ cleanup }));
-    registerContextEngineForOwner(
-      "legacy",
-      () => {
-        throw new Error("context engine failed");
-      },
-      "core",
-      { allowSameOwnerRefresh: true },
+    registerTestContextEngine(
+      engineId,
+      (): ContextEngine => ({
+        info: {
+          id: engineId,
+          name: "CLI cleanup engine",
+          hostRequirements: {
+            "agent-run": {
+              requiredCapabilities: ["assemble-before-prompt"],
+              unsupportedMessage: "context engine failed",
+            },
+          },
+        },
+        ingest: vi.fn(async () => ({ ingested: true })),
+        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+        compact: vi.fn(async () => ({ ok: true, compacted: false })),
+      }),
     );
     setRawCliBackendForPrepareTest({
       id: "test-cli",
@@ -2083,14 +2094,14 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    try {
-      await expect(fixture.prepare({})).rejects.toThrow("context engine failed");
+    await expect(
+      fixture.prepare({
+        config: { plugins: { slots: { contextEngine: engineId } } },
+      }),
+    ).rejects.toThrow("context engine failed");
 
-      expect(prepareExecution).toHaveBeenCalledOnce();
-      expect(cleanup).toHaveBeenCalledOnce();
-    } finally {
-      registerLegacyContextEngine();
-    }
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
@@ -2270,6 +2281,58 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPrompt).toContain("channel=telegram");
     expect(context.systemPrompt).not.toContain("Telegram rich ON");
     expect(context.systemPrompt).not.toContain("Telegram rich OFF");
+  });
+
+  it.each(["group", "channel"] as const)(
+    "uses explicit %s chat type for bundled message-tool etiquette with an opaque session key",
+    async (chatType) => {
+      const context = await fixture.prepare({
+        config: createBundledMessageToolConfig(),
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+      expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
+    },
+  );
+
+  it.each([
+    {
+      name: "prefers current-turn metadata",
+      chatType: "group" as const,
+      sessionEntryChatType: "direct" as const,
+      expectedChatType: "group" as const,
+    },
+    {
+      name: "falls back to stored session metadata",
+      chatType: undefined,
+      sessionEntryChatType: "channel" as const,
+      expectedChatType: "channel" as const,
+    },
+  ])("$name for bootstrap and prompt preparation", async (testCase) => {
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun });
+
+    const context = await fixture.prepare({
+      config: createBundledMessageToolConfig(),
+      sessionKey: "agent:main:opaque:binding",
+      chatType: testCase.chatType,
+      sessionEntry: {
+        sessionId: "stored-session",
+        updatedAt: 0,
+        chatType: testCase.sessionEntryChatType,
+      },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ chatType: testCase.expectedChatType }),
+    );
+    expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
   });
 
   it("ignores volatile prompt text when static prompt text matches", async () => {
@@ -2814,8 +2877,15 @@ describe("prepareCliRunContext", () => {
     const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
     expect(projected).toBeDefined();
     expect(grantContext).toBeDefined();
-    const { cfg: projectedConfig, ...projectedContext } = projected ?? {};
+    const {
+      cfg: projectedConfig,
+      authProfileStore,
+      authProfileStoreAgentDir,
+      ...projectedContext
+    } = projected ?? {};
     expect(projectedConfig).toEqual(expect.any(Object));
+    expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+    expect(authProfileStoreAgentDir).toEqual(expect.any(String));
     expect(projectedContext).toEqual(grantContext);
     expect(projectedContext).toMatchObject({
       sessionKey: "agent:worker:main",
@@ -3062,6 +3132,10 @@ describe("prepareCliRunContext", () => {
         spawnedBy: "agent:main:telegram:group:parent",
       },
       runtimeOwnerToken: "loopback-owner-token",
+      toolAuth: {
+        agentDir: expect.any(String),
+        store: expect.objectContaining({ version: 1, profiles: {} }),
+      },
     });
     context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
     context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
@@ -3363,6 +3437,83 @@ describe("prepareCliRunContext", () => {
     await context.preparedBackend.cleanup?.();
   });
 
+  it("privately forwards isolated-completion system prompts to bundled preparation", async () => {
+    const { dir } = fixture.session;
+    const prepareExecution = vi.fn(async () => ({
+      isolatedCompletionEnforced: true as const,
+      toolAvailabilityEnforced: true as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "jsonl",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await fixture.prepare({
+      provider: "google-gemini-cli",
+      executionMode: "side-question",
+      isolatedCompletion: true,
+      extraSystemPrompt: "Return only valid JSON.",
+      cliToolAvailability: { native: [], openClaw: [] },
+    });
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolatedCompletionCwd: dir,
+        isolatedCompletionModelId: "test-model",
+        isolatedCompletionPrompt: "latest ask",
+        isolatedCompletionSystemPrompt: "Return only valid JSON.",
+      }),
+    );
+  });
+
+  it("rejects a CLI backend that does not adopt isolated completion", async () => {
+    const cleanup = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({
+      cleanup,
+      toolAvailabilityEnforced: true as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "external-cli",
+      pluginId: "external",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "external-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "none",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "external-cli",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        cliToolAvailability: { native: [], openClaw: [] },
+      }),
+    ).rejects.toMatchObject({
+      code: "unsupported",
+      message:
+        'CLI backend "external-cli" does not support isolated completion; OpenClaw did not start the run.',
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("projects node-placed Claude availability before prepared-execution enforcement", async () => {
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
     setRawCliBackendForPrepareTest({
@@ -3394,6 +3545,156 @@ describe("prepareCliRunContext", () => {
     );
     expect(context.params.cliToolAvailability).toEqual({ native: ["Read"], openClaw: [] });
     await context.preparedBackend.cleanup?.();
+  });
+
+  it("finalizes prompt guidance after backend message-tool projection", async () => {
+    const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    const finalizePromptForResolvedTools = vi.fn(
+      ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
+        `${prompt}\nmessage-tool-available:${messageToolAvailable}`,
+    );
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
+      finalizePromptForResolvedTools,
+    });
+
+    expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
+      prompt: "latest ask",
+      messageToolAvailable: false,
+    });
+    expect(context.params.prompt).toContain("message-tool-available:false");
+    expect(context.params.transcriptPrompt).toBe("latest ask");
+    await context.preparedBackend.cleanup?.();
+  });
+
+  it.each([
+    {
+      name: "materializes exact availability when the caller did not provide it",
+      cliToolAvailability: undefined,
+      hookToolsAllow: ["read"],
+      projectedToolNames: ["read", "message"],
+    },
+    {
+      name: "keeps existing CLI availability as the upper bound",
+      cliToolAvailability: { native: [], openClaw: ["read", "message"] },
+      hookToolsAllow: ["read", "write"],
+      projectedToolNames: ["read", "message", "write"],
+    },
+  ])(
+    "applies before_prompt_build tool filtering before CLI guidance and submission: $name",
+    async ({ cliToolAvailability, hookToolsAllow, projectedToolNames }) => {
+      const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: hookToolsAllow })),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+        mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
+      });
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
+          `${prompt}\nmessage-tool-available:${messageToolAvailable}`,
+      );
+
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        ...(cliToolAvailability ? { cliToolAvailability } : {}),
+        finalizePromptForResolvedTools,
+      });
+
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+      expect(hookRunner.runBeforePromptBuild.mock.invocationCallOrder[0]).toBeLessThan(
+        prepareExecution.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(context.params.cliToolAvailability).toEqual({
+        native: [],
+        openClaw: ["read"],
+      });
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAvailability: { native: [], openClaw: ["read"], mcp: ["mcp__openclaw__read"] },
+        }),
+      );
+      expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["read"]);
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual(["read"]);
+      expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
+        prompt: "latest ask",
+        messageToolAvailable: false,
+      });
+      expect(context.params.prompt).toContain("message-tool-available:false");
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      await context.preparedBackend.cleanup?.();
+    },
+  );
+
+  it("fails closed when a prompt hook restricts an always-on CLI backend", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: ["read"] })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      nativeToolMode: "always-on",
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(fixture.prepare({ provider: "test-cli" })).rejects.toThrow(
+      'CLI backend "test-cli" cannot enforce before_prompt_build tool restrictions',
+    );
   });
 
   it("keeps runtime toolsAllow canonical and bounds the backend-independent MCP grant", async () => {
@@ -3480,10 +3781,14 @@ describe("prepareCliRunContext", () => {
       const {
         cfg: _projectedConfig,
         toolsAllow: projectedPolicy,
+        authProfileStore,
+        authProfileStoreAgentDir,
         ...projectedTrustedContext
       } = projected ?? {};
       const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
       expect(projectedPolicy).toEqual(["write"]);
+      expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
+      expect(authProfileStoreAgentDir).toEqual(expect.any(String));
       expect(grantedTools).toEqual(["write", "apply_patch"]);
       expect(projectedTrustedContext).toEqual(grantTrustedContext);
     } finally {

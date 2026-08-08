@@ -8,10 +8,15 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import {
+  DEFAULT_RESET_TRIGGERS,
+  type SessionEntry,
+  type SessionScope,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -26,15 +31,15 @@ import type {
   FinalizedTemplateContext as TemplateContext,
 } from "../templating.js";
 import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
-import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 import {
   isCompleteReplyConfig,
   markReplyConfigRuntimeMode,
   usesFullReplyRuntime,
 } from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import { resolveSessionResetCommand } from "./session-reset-command.js";
 import type { SessionInitResult } from "./session.js";
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -192,30 +197,35 @@ export function initFastReplySessionState(params: {
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.commandText ?? "";
-  const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
-    ? commandSource.trim()
-    : stripStructuralPrefixes(commandSource).trim();
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
-  const strippedForReset = isGroup
-    ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
-    : triggerBodyNormalized;
-  const normalizedResetBody = normalizeCommandBody(strippedForReset, {
-    botUsername: ctx.BotUsername,
+  const resetCommand = resolveSessionResetCommand({
+    commandText: commandSource,
+    rawText: ctx.rawText,
+    resetTriggers: cfg.session?.resetTriggers?.length
+      ? cfg.session.resetTriggers
+      : DEFAULT_RESET_TRIGGERS,
+    ctx,
+    cfg,
+    agentId,
+    isGroup,
+    resetAuthorized: commandAuthorized,
   });
-  const softReset = parseSoftResetCommand(normalizedResetBody);
-  const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
-  const resetTriggered = Boolean(resetMatch) && !softReset.matched;
+  const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
+    ? commandSource.trim()
+    : resetCommand.triggerBodyNormalized;
+  const resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
   if (resetTriggered && isModelSelectionLocked(existingEntry)) {
     throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
-  const bodyStripped = resetTriggered
-    ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
-    : (ctx.agentText ?? "");
+  const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
   const now = Date.now();
+  const resetPreservedSelection = resetTriggered
+    ? resolveResetPreservedSelection({ entry: existingEntry })
+    : {};
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -239,28 +249,16 @@ export function initFastReplySessionState(params: {
           subagentControlScope: existingEntry.subagentControlScope,
         }
       : {}),
+    ...resetPreservedSelection,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
     agentStatus: undefined,
-    thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
-    verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
-    reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
-    ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
+    thinkingLevel: existingEntry?.thinkingLevel,
+    verboseLevel: existingEntry?.verboseLevel,
+    reasoningLevel: existingEntry?.reasoningLevel,
+    ttsAuto: existingEntry?.ttsAuto,
     responseUsage: existingEntry?.responseUsage,
-    modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
-    providerOverride: resetTriggered
-      ? existingEntry?.providerOverride
-      : existingEntry?.providerOverride,
-    authProfileOverride: resetTriggered
-      ? existingEntry?.authProfileOverride
-      : existingEntry?.authProfileOverride,
-    authProfileOverrideSource: resetTriggered
-      ? existingEntry?.authProfileOverrideSource
-      : existingEntry?.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: resetTriggered
-      ? existingEntry?.authProfileOverrideCompactionCount
-      : existingEntry?.authProfileOverrideCompactionCount,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
     ...(normalizeOptionalString(ctx.Provider)
       ? { channel: normalizeOptionalString(ctx.Provider) }

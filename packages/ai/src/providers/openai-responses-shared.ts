@@ -450,6 +450,29 @@ export function createResponsesAssistantOutput<TApi extends Api>(
   };
 }
 
+export function applyResponsesServiceTierPricing(
+  usage: Usage,
+  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+  model: Pick<Model, "id">,
+): void {
+  let multiplier = 1;
+  if (serviceTier === "flex") {
+    multiplier = 0.5;
+  } else if (serviceTier === "priority") {
+    multiplier = model.id === "gpt-5.5" ? 2.5 : 2;
+  }
+  if (multiplier === 1) {
+    return;
+  }
+
+  usage.cost.input *= multiplier;
+  usage.cost.output *= multiplier;
+  usage.cost.cacheRead *= multiplier;
+  usage.cost.cacheWrite *= multiplier;
+  usage.cost.total =
+    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+}
+
 export function resolveResponsesReasoningEffort<TApi extends Api>(
   model: Model<TApi>,
   reasoning: SimpleStreamOptions["reasoning"] | undefined,

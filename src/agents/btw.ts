@@ -9,6 +9,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
@@ -129,10 +130,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return (
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number" ? "auto" : "user")
-  );
+  return resolveSessionAuthProfileOverrideSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -591,6 +589,12 @@ type RunBtwSideQuestionParams = {
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
   sandboxSessionKey?: string;
+  /**
+   * Set by gateway-hosted callers so the prepared runtime resolves the owner the
+   * gateway published. Left unset by local callers such as the embedded TUI,
+   * which must not borrow the active registry's subagent and node capabilities.
+   */
+  allowGatewaySubagentBinding?: boolean;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -715,6 +719,9 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     workspaceDir: requestedWorkspaceDir,
+    // Gateway-published owners are keyed with this flag, so a gateway-hosted
+    // request that omits it can never match one.
+    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
   });
   const sessionAgentId =
     preparedModelRuntime.agentId ??
@@ -775,6 +782,7 @@ export async function runBtwSideQuestion(
       workspaceDir,
       ...(agentHarnessId ? { agentHarnessId } : {}),
       ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+      pluginRegistry: preparedModelRuntime.pluginRegistry!,
     });
     const selectionParams = {
       provider,
@@ -835,6 +843,7 @@ export async function runBtwSideQuestion(
   ): Promise<BtwHarnessSideQuestionDispatch> => {
     const toolsAllow = resolvePluginHarnessPolicyToolsAllow({
       config: params.cfg,
+      sessionId,
       sessionKey: params.sessionKey,
       sandboxSessionKey: params.sandboxSessionKey,
       agentId: sessionAgentId,

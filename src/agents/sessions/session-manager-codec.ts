@@ -24,46 +24,43 @@ export function isSessionContextMetadataEntry(entry: SessionEntry): boolean {
   );
 }
 
-function migrateV1ToV2(
-  entries: FileEntry[],
-  entriesByOriginalIndex?: readonly (FileEntry | undefined)[],
-): void {
-  const ids = new Set<string>();
-  let previousId: string | null = null;
+export type SessionFileEntryMigrationState = {
+  createEntryId: (originalIndex: number) => string;
+  previousId: string | null;
+  resolveOriginalEntryId?: (originalIndex: number) => string | undefined;
+  sourceVersion: number;
+};
 
-  for (const entry of entries) {
+export function migrateSessionFileEntryToCurrentVersion(
+  entry: FileEntry,
+  originalIndex: number,
+  state: SessionFileEntryMigrationState,
+): void {
+  if (state.sourceVersion < 2) {
     if (entry.type === "session") {
       entry.version = 2;
-      continue;
-    }
+    } else {
+      entry.id = state.createEntryId(originalIndex);
+      entry.parentId = state.previousId;
+      state.previousId = entry.id;
 
-    entry.id = generateSessionEntryId(ids);
-    ids.add(entry.id);
-    entry.parentId = previousId;
-    previousId = entry.id;
-
-    if (entry.type === "compaction") {
-      const compaction = entry as CompactionEntry & { firstKeptEntryIndex?: number };
-      if (typeof compaction.firstKeptEntryIndex === "number") {
-        const targetEntry = entriesByOriginalIndex
-          ? entriesByOriginalIndex[compaction.firstKeptEntryIndex]
-          : entries[compaction.firstKeptEntryIndex];
-        if (targetEntry && targetEntry.type !== "session") {
-          compaction.firstKeptEntryId = targetEntry.id;
+      if (entry.type === "compaction") {
+        const compaction = entry as CompactionEntry & { firstKeptEntryIndex?: number };
+        if (typeof compaction.firstKeptEntryIndex === "number") {
+          const firstKeptEntryId = state.resolveOriginalEntryId?.(compaction.firstKeptEntryIndex);
+          if (firstKeptEntryId) {
+            compaction.firstKeptEntryId = firstKeptEntryId;
+          }
+          delete compaction.firstKeptEntryIndex;
         }
-        delete compaction.firstKeptEntryIndex;
       }
     }
   }
-}
 
-function migrateV2ToV3(entries: FileEntry[]): void {
-  for (const entry of entries) {
+  if (state.sourceVersion < 3) {
     if (entry.type === "session") {
       entry.version = 3;
-      continue;
-    }
-    if (entry.type === "message" && entry.message) {
+    } else if (entry.type === "message" && entry.message) {
       const message = entry.message as { role: string; customType?: string };
       if (message.role === "hookMessage") {
         message.role = "custom";
@@ -82,11 +79,24 @@ export function migrateToCurrentVersion(
   if (version >= CURRENT_SESSION_VERSION) {
     return false;
   }
-  if (version < 2) {
-    migrateV1ToV2(entries, entriesByOriginalIndex);
-  }
-  if (version < 3) {
-    migrateV2ToV3(entries);
+  const ids = new Set<string>();
+  const state: SessionFileEntryMigrationState = {
+    createEntryId: () => {
+      const id = generateSessionEntryId(ids);
+      ids.add(id);
+      return id;
+    },
+    previousId: null,
+    resolveOriginalEntryId: (originalIndex) => {
+      const targetEntry = entriesByOriginalIndex
+        ? entriesByOriginalIndex[originalIndex]
+        : entries[originalIndex];
+      return targetEntry && targetEntry.type !== "session" ? targetEntry.id : undefined;
+    },
+    sourceVersion: version,
+  };
+  for (const [index, entry] of entries.entries()) {
+    migrateSessionFileEntryToCurrentVersion(entry, index, state);
   }
   return true;
 }

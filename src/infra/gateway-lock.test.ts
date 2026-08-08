@@ -21,11 +21,10 @@ type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
-let fixtureRoot = "";
 const realNow = Date.now.bind(Date);
 
-function resolveTestLockDir() {
-  return path.join(fixtureRoot, "__locks");
+function resolveTestLockDir(env: NodeJS.ProcessEnv) {
+  return path.join(resolveStateDir(env), "__locks");
 }
 
 async function makeEnv() {
@@ -52,7 +51,7 @@ async function acquireForTest(
     sleep: async (ms) => {
       await nativeSleep(ms);
     },
-    lockDir: resolveTestLockDir(),
+    lockDir: resolveTestLockDir(env),
     ...opts,
   });
 }
@@ -69,13 +68,12 @@ function resolveLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const configHash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
-  const canonicalStateDir = fsSync.realpathSync.native(path.resolve(stateDir));
-  const stateHash = createHash("sha256").update(canonicalStateDir).digest("hex").slice(0, 8);
-  const lockDir = resolveTestLockDir();
+  const lockDir = resolveTestLockDir(env);
+  fsSync.mkdirSync(lockDir, { recursive: true });
   return {
     lockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    stateLockPath: path.join(lockDir, "gateway.state.lock"),
   };
 }
 
@@ -152,7 +150,7 @@ async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
 
 describe("gateway lock", () => {
   beforeAll(async () => {
-    fixtureRoot = await fixtureRootTracker.setup();
+    await fixtureRootTracker.setup();
   });
 
   beforeEach(() => {
@@ -165,7 +163,6 @@ describe("gateway lock", () => {
 
   afterAll(async () => {
     await fixtureRootTracker.cleanup();
-    fixtureRoot = "";
   });
 
   afterEach(() => {
@@ -278,7 +275,7 @@ describe("gateway lock", () => {
       await expect(
         readActiveGatewayLockPort({
           env,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(env),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
@@ -304,7 +301,7 @@ describe("gateway lock", () => {
     };
     const firstIdentity = await readActiveGatewayLockIdentity({
       env,
-      lockDir: resolveTestLockDir(),
+      lockDir: resolveTestLockDir(env),
       platform: "darwin",
       readProcessCmdline: options.readProcessCmdline,
     });
@@ -315,7 +312,7 @@ describe("gateway lock", () => {
     try {
       const secondIdentity = await readActiveGatewayLockIdentity({
         env,
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
         platform: "darwin",
         readProcessCmdline: options.readProcessCmdline,
       });
@@ -355,7 +352,7 @@ describe("gateway lock", () => {
       await expect(
         readActiveGatewayLockPort({
           env,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(env),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
@@ -384,7 +381,7 @@ describe("gateway lock", () => {
       await expect(
         readActiveGatewayLockPort({
           env: envB,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(envB),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
         }),
@@ -475,7 +472,7 @@ describe("gateway lock", () => {
     await expect(
       readActiveGatewayLockPort({
         env,
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
         platform: "darwin",
         readProcessCmdline: () => null,
       }),
@@ -872,7 +869,7 @@ describe("gateway lock", () => {
           sleepDelays.push(ms);
           now = 10;
         },
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
         readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
         readProcessStartTime: () => 111,
       }),
@@ -888,7 +885,7 @@ describe("gateway lock", () => {
       await acquireGatewayLock({
         allowInTests: true,
         env: { ...env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
       }),
     );
 
@@ -900,7 +897,7 @@ describe("gateway lock", () => {
         acquireGatewayLock({
           allowInTests: true,
           env,
-          lockDir: resolveTestLockDir(),
+          lockDir: resolveTestLockDir(env),
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
           timeoutMs: 15,
@@ -915,7 +912,7 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
       env: { ...env, VITEST: "1" },
-      lockDir: resolveTestLockDir(),
+      lockDir: resolveTestLockDir(env),
     });
     expect(lock).toBeNull();
   });
@@ -931,7 +928,7 @@ describe("gateway lock", () => {
         pollIntervalMs: 2,
         now: () => 8_640_000_000_000_001,
         sleep: async () => {},
-        lockDir: resolveTestLockDir(),
+        lockDir: resolveTestLockDir(env),
       }),
     );
 
@@ -958,7 +955,7 @@ describe("gateway lock", () => {
     openSpy.mockRestore();
   });
 
-  it("closes handle and removes lock file when writeFile fails after open succeeds", async () => {
+  it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { stateLockPath } = resolveLockPath(env);
@@ -983,7 +980,9 @@ describe("gateway lock", () => {
     });
 
     expect(close).toHaveBeenCalledTimes(1);
-    await expect(fs.access(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    // fs-safe 0.5.2 failure cleanup removes the lock file only when it matches
+    // the snapshot fs-safe wrote itself; this out-of-band file is preserved.
+    await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
 
     openSpy.mockRestore();
   });

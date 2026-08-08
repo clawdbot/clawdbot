@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -532,6 +533,11 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
     new Set(["${normalized.takeUtf16Safe(87)}..."]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarShell.kt",
+    // Compose animation labels are tooling identifiers, not rendered copy.
+    new Set(["sidebar-content-translation"]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",
@@ -1607,7 +1613,7 @@ export async function checkAndroidAppI18n(options: { tolerateManagedPending?: bo
   );
 }
 
-if (process.argv[1] && import.meta.url === `file://${path.resolve(process.argv[1])}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const [command] = process.argv.slice(2);
   if (command === "sync") {
     await syncAndroidAppI18n();

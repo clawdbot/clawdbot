@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { agentHandlers } from "./agent.js";
@@ -30,6 +31,19 @@ function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
       payload: { runId, status: "ok", startedAt: 100, endedAt: 200 },
     },
   });
+}
+
+function terminalReceipt(runId: string) {
+  return {
+    runId,
+    sessionId: "session-1",
+    turnId: "turn-1",
+    requested: { provider: "openai", model: "gpt-primary" },
+    effective: { provider: "openai", model: "gpt-alternate", responseModel: "gpt-alternate" },
+    successfulToolNames: ["read"],
+    rerouted: true,
+    terminalDisposition: "visible",
+  };
 }
 
 afterEach(() => {
@@ -141,4 +155,70 @@ describe("agent.wait gateway dedupe observations", () => {
       );
     }
   });
+
+  it.each(["lifecycle-first", "dedupe-first"] as const)(
+    "keeps terminal evidence when sticky status arrives $0",
+    async (order) => {
+      const runId = `run-reply-merge-${order}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      const lifecycleEnd = () =>
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            startedAt: 100,
+            endedAt: 300,
+            terminalDelivery: {
+              status: "sent",
+              resultCount: 1,
+              target: "private-target",
+            },
+            terminalReceipt: terminalReceipt(runId),
+            terminalReply: { disposition: "visible", text: "canonical reply" },
+          },
+        });
+      const dedupeTimeout = () =>
+        setGatewayDedupeEntry({
+          dedupe,
+          key: `agent:${runId}`,
+          entry: {
+            ts: 200,
+            ok: false,
+            payload: {
+              runId,
+              status: "timeout",
+              startedAt: 100,
+              endedAt: 200,
+              timeoutPhase: "provider",
+            },
+          },
+        });
+
+      for (const observe of order === "lifecycle-first"
+        ? [lifecycleEnd, dedupeTimeout]
+        : [dedupeTimeout, lifecycleEnd]) {
+        observe();
+      }
+
+      const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+      await waiter.promise;
+      expect(waiter.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          terminalDelivery: { status: "sent", resultCount: 1 },
+          terminalReceipt: terminalReceipt(runId),
+          terminalReply: { disposition: "visible", text: "canonical reply" },
+        }),
+      );
+      expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
+    },
+  );
 });

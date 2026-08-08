@@ -231,10 +231,18 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     if (resolveTelegramPreviewStreamMode(account) === "off") {
       return [];
     }
-    const blockStreamingEnabled =
-      resolveChannelStreamingBlockEnabled(account) ??
-      cfg.agents?.defaults?.blockStreamingDefault === "on";
-    if (blockStreamingEnabled || !resolveChannelStreamingPreviewToolProgress(account)) {
+    const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account, {
+      previewAvailable: true,
+      blockStreamingDefault: cfg.agents?.defaults?.blockStreamingDefault,
+    });
+    if (
+      blockStreamingEnabled ||
+      !resolveChannelStreamingPreviewToolProgress(
+        account,
+        true,
+        resolveTelegramPreviewStreamMode(account),
+      )
+    ) {
       return [];
     }
     return [

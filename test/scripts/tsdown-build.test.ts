@@ -18,6 +18,7 @@ import {
   parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
+  pruneStaleRuntimeSymlinks,
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
@@ -325,64 +326,57 @@ describe("resolveTsdownBuildInvocation", () => {
     });
   });
 
-  it("keeps inherited Windows tsdown heap settings at the Windows build cap", () => {
-    const result = resolveTsdownBuildInvocation({
+  it.each([
+    {
+      title: "keeps inherited Windows tsdown heap settings at the Windows build cap",
       platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:\\repo\\pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
-  });
-
-  it("clamps explicit Windows tsdown heap settings to the Windows build cap", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      pnpmPath: "C:\\repo\\pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=8192",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
+    },
+    {
+      title: "clamps explicit Windows tsdown heap settings to the Windows build cap",
       platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:\\repo\\pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
-  });
-
-  it("preserves explicit tsdown heap settings", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      pnpmPath: "C:\\repo\\pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=12288",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
+    },
+    {
+      title: "preserves explicit tsdown heap settings",
       platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
-  });
-
-  it("raises inherited lower tsdown heap settings to the build default", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "/usr/bin/node",
+      pnpmPath: "/tmp/pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=12288",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
+    },
+    {
+      title: "raises inherited lower tsdown heap settings to the build default",
       platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
-  });
-
-  it("raises split inherited lower tsdown heap settings to the build default", () => {
-    const result = resolveTsdownBuildInvocation({
+      execPath: "/usr/bin/node",
+      pnpmPath: "/tmp/pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size=4096",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
+    },
+    {
+      title: "raises split inherited lower tsdown heap settings to the build default",
       platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+      execPath: "/usr/bin/node",
+      pnpmPath: "/tmp/pnpm.cjs",
+      nodeOptions: "--trace-warnings --max-old-space-size 4096",
+      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
+    },
+  ])("$title", ({ platform, execPath, pnpmPath, nodeOptions, expectedNodeOptions }) => {
+    const result = resolveTsdownBuildInvocation({
+      platform,
+      nodeExecPath: execPath,
+      npmExecPath: pnpmPath,
+      env: { NODE_OPTIONS: nodeOptions },
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
+    expect(result.options.env.NODE_OPTIONS).toBe(expectedNodeOptions);
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
@@ -696,6 +690,132 @@ describe("resolveTsdownBuildInvocation", () => {
     );
     await expectPathMissing(staleFile);
     await expectPathMissing(nestedStaleFile);
+  });
+
+  it("refuses a symlinked output root with preserved children and leaves the target unchanged", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-symlink-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    const targetFile = path.join(targetDir, "chunk-abc123.js");
+    const metadataFile = path.join(targetDir, "cli-startup-metadata.json");
+    await fsPromises.mkdir(targetDir, { recursive: true });
+    await fsPromises.writeFile(targetFile, "generated\n");
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+    const distLink = path.join(rootDir, "dist");
+    await fsPromises.symlink(targetDir, distLink, "dir");
+
+    expect(() =>
+      cleanTsdownOutputRoots({
+        cwd: rootDir,
+        roots: ["dist"],
+        env: { OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1" },
+      }),
+    ).toThrow(/symbolic link/u);
+
+    expect(fs.readlinkSync(distLink)).toBe(targetDir);
+    await expect(fsPromises.readFile(targetFile, "utf8")).resolves.toBe("generated\n");
+    await expect(fsPromises.readFile(metadataFile, "utf8")).resolves.toBe(
+      '{"generatedBy":"test"}\n',
+    );
+  });
+
+  it("rejects a symlink before traversing protected output children", () => {
+    const readdirSync = vi.fn(fs.readdirSync);
+    const fsImpl = {
+      ...fs,
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readdirSync,
+    } as unknown as typeof fs;
+
+    expect(() =>
+      cleanTsdownOutputRoots({
+        cwd: "/workspace",
+        roots: ["dist"],
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+        fs: fsImpl,
+      }),
+    ).toThrow(/symbolic link/u);
+    expect(readdirSync).not.toHaveBeenCalled();
+  });
+
+  it("validates every clean root before mutating any output", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-roots-");
+    const firstRootFile = path.join(rootDir, "dist", "keep.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fsPromises.mkdir(path.dirname(firstRootFile), { recursive: true });
+    await fsPromises.mkdir(targetDir);
+    await fsPromises.writeFile(firstRootFile, "keep\n");
+    await fsPromises.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() =>
+      cleanTsdownOutputRoots({
+        cwd: rootDir,
+        roots: ["dist", "dist-runtime"],
+      }),
+    ).toThrow(/symbolic link/u);
+
+    await expect(fsPromises.readFile(firstRootFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("refuses a symlinked output root even without protected children", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-symlink-plain-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    const targetFile = path.join(targetDir, "stale.js");
+    await fsPromises.mkdir(targetDir, { recursive: true });
+    await fsPromises.writeFile(targetFile, "stale\n");
+    const distLink = path.join(rootDir, "dist");
+    await fsPromises.symlink(targetDir, distLink, "dir");
+
+    expect(() => cleanTsdownOutputRoots({ cwd: rootDir, roots: ["dist"] })).toThrow(
+      /symbolic link/u,
+    );
+
+    expect(fs.readlinkSync(distLink)).toBe(targetDir);
+    await expect(fsPromises.readFile(targetFile, "utf8")).resolves.toBe("stale\n");
+  });
+
+  it("refuses to prune stale root chunks through a symlinked output root", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-prune-symlink-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    const hashedFile = path.join(targetDir, "delegate-BPjCe4gC.js");
+    await fsPromises.mkdir(targetDir, { recursive: true });
+    await fsPromises.writeFile(hashedFile, "old delegate\n");
+    const distLink = path.join(rootDir, "dist");
+    await fsPromises.symlink(targetDir, distLink, "dir");
+
+    expect(() => pruneStaleRootChunkFiles({ cwd: rootDir })).toThrow(/symbolic link/u);
+
+    expect(fs.readlinkSync(distLink)).toBe(targetDir);
+    await expect(fsPromises.readFile(hashedFile, "utf8")).resolves.toBe("old delegate\n");
+  });
+
+  it("validates every chunk root before pruning any output", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-prune-roots-");
+    const firstRootFile = path.join(rootDir, "dist", "delegate-OldHash.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fsPromises.mkdir(path.dirname(firstRootFile), { recursive: true });
+    await fsPromises.mkdir(targetDir);
+    await fsPromises.writeFile(firstRootFile, "keep\n");
+    await fsPromises.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() => pruneStaleRootChunkFiles({ cwd: rootDir })).toThrow(/symbolic link/u);
+
+    await expect(fsPromises.readFile(firstRootFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("refuses to prune runtime overlay symlinks through a symlinked output root", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-runtime-symlink-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    const pluginNodeModules = path.join(targetDir, "extensions", "telegram", "node_modules");
+    await fsPromises.mkdir(pluginNodeModules, { recursive: true });
+    const markerFile = path.join(pluginNodeModules, "keep.js");
+    await fsPromises.writeFile(markerFile, "keep\n");
+    const distLink = path.join(rootDir, "dist");
+    await fsPromises.symlink(targetDir, distLink, "dir");
+
+    expect(() => pruneStaleRuntimeSymlinks({ cwd: rootDir })).toThrow(/symbolic link/u);
+
+    expect(fs.readlinkSync(distLink)).toBe(targetDir);
+    await expect(fsPromises.readFile(markerFile, "utf8")).resolves.toBe("keep\n");
   });
 
   it("preserves existing package declarations when tsdown DTS output is skipped", async () => {

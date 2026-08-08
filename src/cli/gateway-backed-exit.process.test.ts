@@ -1,10 +1,11 @@
 // Process coverage for one-shot Gateway CLI output followed by clean exit.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,8 +16,10 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
+import { getFreePort } from "../test-utils/ports.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const execFileAsync = promisify(execFile);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const activeServers = new Set<WebSocketServer>();
 
@@ -73,6 +76,67 @@ async function startCronListGateway(token: string): Promise<{ url: string }> {
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
   return { url: `ws://127.0.0.1:${address.port}` };
+}
+
+async function runIsolatedGatewayCli(params: {
+  args: string[];
+  root: string;
+  stateDir: string;
+  configPath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}> {
+  try {
+    const result = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "src/entry.ts", ...params.args],
+      {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          HOME: params.root,
+          USERPROFILE: params.root,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_ENV: undefined,
+          NODE_OPTIONS: undefined,
+          OPENCLAW_CONFIG_PATH: params.configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_URL: undefined,
+          OPENCLAW_HOME: params.root,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_STATE_DIR: params.stateDir,
+          VITEST: undefined,
+          ...params.env,
+        },
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 20_000,
+      },
+    );
+    return { code: 0, signal: null, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as Error & {
+      code?: number | string;
+      signal?: NodeJS.Signals;
+      stdout?: string;
+      stderr?: string;
+    };
+    if (typeof failure.code !== "number") {
+      throw error;
+    }
+    return {
+      code: failure.code,
+      signal: failure.signal ?? null,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
+  }
 }
 
 describe("gateway-backed CLI process exit", () => {
@@ -162,4 +226,76 @@ describe("gateway-backed CLI process exit", () => {
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toMatchObject({ jobs: [], total: 0 });
   }, 20_000);
+
+  it("keeps gateway auth failures machine-readable across CLI entry points", async () => {
+    const root = tempDirs.make("openclaw-gateway-auth-json-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const port = await getFreePort();
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const cases: Array<{ label: string; args: string[]; env?: NodeJS.ProcessEnv }> = [
+      { label: "health", args: ["health", "--json", "--timeout", "250"] },
+      {
+        label: "health explicit URL",
+        args: ["health", "--json", "--timeout", "250"],
+        env: { OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${port}` },
+      },
+      {
+        label: "gateway health",
+        args: ["gateway", "health", "--json", "--port", String(port), "--timeout", "250"],
+      },
+      {
+        label: "gateway call",
+        args: ["gateway", "call", "health", "--json", "--timeout", "250"],
+      },
+    ];
+    for (const testCase of cases) {
+      const result = await runIsolatedGatewayCli({
+        args: testCase.args,
+        root,
+        stateDir,
+        configPath,
+        env: { OPENCLAW_GATEWAY_PORT: String(port), ...testCase.env },
+      });
+      expect(result, `${testCase.label}: ${result.stderr}`).toMatchObject({
+        code: 1,
+        signal: null,
+        stderr: "",
+      });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          type: "gateway_credentials_required",
+          message: expect.stringContaining("requires"),
+        },
+      });
+    }
+  }, 60_000);
+
+  it("preserves authenticated unreachable failures as transport errors", async () => {
+    const root = tempDirs.make("openclaw-gateway-transport-json-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const port = await getFreePort();
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const result = await runIsolatedGatewayCli({
+      args: ["health", "--json", "--timeout", "250"],
+      root,
+      stateDir,
+      configPath,
+      env: {
+        OPENCLAW_GATEWAY_PORT: String(port),
+        OPENCLAW_GATEWAY_TOKEN: "test-token",
+      },
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: { type: "gateway_transport_error" },
+      gateway: { url: `ws://127.0.0.1:${port}` },
+    });
+  }, 30_000);
 });

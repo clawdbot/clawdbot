@@ -10,6 +10,7 @@
  * returning so the timer correctly skips the system-event fallback.
  */
 
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
@@ -214,6 +215,7 @@ function makeBaseParams(overrides: {
   runStartedAt?: number;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
+  spawnOnlyHandoff?: boolean;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
 }): Parameters<typeof dispatchCronDelivery>[0] {
@@ -245,6 +247,7 @@ function makeBaseParams(overrides: {
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
     skipHeartbeatDelivery: false,
+    spawnOnlyHandoff: overrides.spawnOnlyHandoff ?? false,
     sourceDeliveryOutcome: {
       visibleDeliveries: [],
       verifiedMessageToolDelivery: false,
@@ -265,12 +268,7 @@ function makeBaseParams(overrides: {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function outboundDeliveryCall(callIndex = 0) {
   const call = vi.mocked(deliverOutboundPayloads).mock.calls[callIndex];
@@ -754,7 +752,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nThreaded cron update.",
+      "A scheduled automation delivered this message to this channel:\nThreaded cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456:thread:42",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
@@ -788,7 +786,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nMain-scoped cron update.",
+      "A scheduled automation delivered this message to this channel:\nMain-scoped cron update.",
       {
         sessionKey: "agent:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -849,14 +847,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       },
     );
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456:",
@@ -902,7 +900,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nSession-targeted off-plan update.",
+      "A scheduled automation delivered this message to this channel:\nSession-targeted off-plan update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -936,7 +934,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nweather-map.png",
+      "A scheduled automation delivered this message to this channel:\nweather-map.png",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -987,7 +985,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\n386502",
+      "A scheduled automation delivered this message to this channel:\n386502",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:user-123",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123:",
@@ -1099,6 +1097,169 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [{ text: "Detailed child result, everything finished successfully." }],
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
+  });
+
+  it.each([
+    {
+      name: "active direct",
+      activeDescendants: true,
+      threadId: undefined,
+      deliveryBestEffort: false,
+    },
+    {
+      name: "active threaded",
+      activeDescendants: true,
+      threadId: "42",
+      deliveryBestEffort: false,
+    },
+    {
+      name: "completed direct",
+      activeDescendants: false,
+      threadId: undefined,
+      deliveryBestEffort: false,
+    },
+    {
+      name: "completed threaded",
+      activeDescendants: false,
+      threadId: "42",
+      deliveryBestEffort: false,
+    },
+    {
+      name: "active best-effort direct",
+      activeDescendants: true,
+      threadId: undefined,
+      deliveryBestEffort: true,
+    },
+  ])(
+    "delivers $name accepted child results without parent text",
+    async ({ activeDescendants, deliveryBestEffort, threadId }) => {
+      const childReply = "Completed child result visible to the user.";
+      if (activeDescendants) {
+        vi.mocked(countActiveDescendantRuns).mockReturnValueOnce(1).mockReturnValueOnce(0);
+      } else {
+        vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+      }
+      vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
+
+      const params = makeBaseParams({
+        spawnOnlyHandoff: true,
+        deliveryBestEffort,
+        synthesizedText: "",
+      });
+      params.synthesizedText = undefined;
+      params.deliveryPayloads = [];
+      params.summary = undefined;
+      params.outputText = undefined;
+      params.resolvedDelivery = makeResolvedDelivery({ threadId });
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(activeDescendants ? 1 : 0);
+      expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+        sessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+      });
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+      expectDeliveryCall(0, {
+        channel: "telegram",
+        to: "123456",
+        ...(threadId === undefined ? {} : { threadId }),
+        payloads: [{ text: childReply }],
+      });
+      expect(state.delivered).toBe(true);
+      expect(state.deliveryAttempted).toBe(true);
+    },
+  );
+
+  it("preserves a substantive parent synthesis after an accepted child has completed", async () => {
+    const parentReply = "Combined parent summary already includes every child result.";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ spawnOnlyHandoff: false, synthesizedText: parentReply }),
+    );
+
+    expect(readDescendantSubagentFallbackReply).not.toHaveBeenCalled();
+    expectDeliveryCall(0, { payloads: [{ text: parentReply }] });
+    expect(state.delivered).toBe(true);
+  });
+
+  it("immediately delivers a substantive threaded parent while its accepted child runs", async () => {
+    const parentReply = "Parent summary is ready for the existing thread.";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    const params = makeBaseParams({ spawnOnlyHandoff: false, synthesizedText: parentReply });
+    params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, { threadId: "42", payloads: [{ text: parentReply }] });
+    expect(state.delivered).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "active child times out",
+      activeDescendants: 1,
+      error: "cron child-session handoff timed out before producing a final assistant payload",
+    },
+    {
+      name: "completed child has no output",
+      activeDescendants: 0,
+      error: "cron child-session handoff completed without a final assistant payload",
+    },
+  ])("fails an accepted spawn-only handoff when $name", async ({ activeDescendants, error }) => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(activeDescendants);
+    const params = makeBaseParams({ spawnOnlyHandoff: true, synthesizedText: "" });
+    params.synthesizedText = undefined;
+    params.deliveryPayloads = [];
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error,
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("preserves abort precedence when an accepted child handoff is interrupted", async () => {
+    const abortReason = "scheduled run aborted while waiting for its child";
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    const params = makeBaseParams({ spawnOnlyHandoff: true, synthesizedText: "" });
+    params.synthesizedText = undefined;
+    params.deliveryPayloads = [];
+    params.summary = undefined;
+    params.outputText = undefined;
+    params.isAborted = () => true;
+    params.abortReason = () => abortReason;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, { status: "error", error: abortReason });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("keeps an empty no-spawn parent silent", async () => {
+    const params = makeBaseParams({ synthesizedText: "" });
+    params.synthesizedText = undefined;
+    params.deliveryPayloads = [];
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(readDescendantSubagentFallbackReply).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(false);
   });
 
   it("uses the run-scoped session key for isolated cron descendant fallback delivery", async () => {
@@ -1265,7 +1426,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nRedacted cron update.",
+      "A scheduled automation delivered this message to this channel:\nRedacted cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1307,7 +1468,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nMorning briefing complete.",
+      "A scheduled automation delivered this message to this channel:\nMorning briefing complete.",
       {
         sessionKey: "agent:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1580,7 +1741,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nSession-bound cron update.",
+      "A scheduled automation delivered this message to this channel:\nSession-bound cron update.",
       {
         sessionKey: "agent:main",
         contextKey: expect.stringMatching(
@@ -2145,7 +2306,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
         "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
@@ -2520,7 +2681,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456 thread 42",
         "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
@@ -2567,7 +2728,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
         "Delivery error: second payload failed",

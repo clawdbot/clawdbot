@@ -1,11 +1,7 @@
 import { html } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import {
-  formatCompactTokenCount,
-  formatTimeAgo,
-  resolveUiHourCycleOptions,
-} from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
 
 type ChatTimestampDisplay = {
   label: string;
@@ -23,10 +19,8 @@ function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay 
     };
   }
 
-  const hourCycle = resolveUiHourCycleOptions();
   return {
     label: date.toLocaleString([], {
-      ...hourCycle,
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -35,7 +29,6 @@ function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay 
       timeZoneName: "short",
     }),
     title: date.toLocaleString([], {
-      ...hourCycle,
       weekday: "long",
       month: "long",
       day: "numeric",

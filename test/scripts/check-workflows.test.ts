@@ -243,7 +243,7 @@ describe("check-workflows", () => {
 
     expect(workflow).toContain("run_windows_ci:");
     expect(workflow).toContain(
-      'description: "Run the focused Windows-native CI test shard after probing"',
+      'description: "Run the focused Windows CI shard and native Scheduled Task proof"',
     );
     expect(workflow).toContain("default: false");
     expect(workflow).toContain("if: ${{ inputs.run_windows_ci }}");
@@ -251,6 +251,20 @@ describe("check-workflows", () => {
     expect(workflow).toContain("uses: ./.github/actions/setup-pnpm-store-cache");
     expect(workflow).toContain("pnpm install --frozen-lockfile --prefer-offline");
     expect(workflow).toContain("pnpm test:windows:ci");
+    expect(workflow).toContain("pnpm test:windows:schtasks:integration");
+    expect(workflow).toContain('CI_WINDOWS_SCHTASKS_HEAD="$(git rev-parse HEAD)"');
+    expect(workflow).toContain('if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then');
+    expect(workflow).toContain('$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"');
+    expect(workflow).toContain('$process.CommandLine -like "*$probePath*"');
+    expect(workflow).toContain('$process.CommandLine -like "*$eventsPath*"');
+    expect(workflow).toContain("schtasks.exe /Delete /F /TN $taskName");
+    expect(workflow).toContain('$service = New-Object -ComObject "Schedule.Service"');
+    expect(workflow).toContain("failure-diagnostics.json");
+    expect(workflow).toContain("cleanup-summary.txt");
+    expect(workflow).not.toContain("task-before-cleanup.xml");
+    expect(workflow).not.toContain("Copy-Item -LiteralPath $stateDir");
+    expect(workflow).toContain("          exit 0");
+    expect(workflow).toContain(".artifacts/windows-schtasks/");
     expect(workflow).toContain("if: ${{ always() && !cancelled() }}");
     expect(workflow).toContain("if: ${{ always() && !cancelled() && inputs.require_wsl2 }}");
   });

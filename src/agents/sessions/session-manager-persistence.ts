@@ -1,6 +1,8 @@
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
+  ensureSessionEntrySync,
+  type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
@@ -16,6 +18,27 @@ import type {
   PromptReleasedSessionMergeResult,
   SessionEntry,
 } from "./session-manager-types.js";
+
+type PersistRecordResult =
+  | string
+  | null
+  | undefined
+  | {
+      anchor?: TranscriptEntryAnchor;
+      adoptedMessageId?: string;
+      effectiveParentId: string | null;
+    };
+
+function requireTranscriptEventAppend(
+  result: ReturnType<typeof appendTranscriptEventSync>,
+  message: string,
+): void {
+  if (result.ok && result.value) {
+    return;
+  }
+  const cause = result.ok ? { code: "transcript-event-not-appended" as const } : result.error;
+  throw new Error(`${message}: ${cause.code}`, { cause });
+}
 
 export class SessionManagerPersistence extends SessionManagerCore {
   removeTrailingEntries(
@@ -128,49 +151,66 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return removedEntries.length;
   }
 
-  protected persistRecord(
-    entry: unknown,
-    options?: AppendPersistenceOptions,
-  ): string | null | undefined {
+  protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): PersistRecordResult {
     if (this.persistenceTarget) {
       return this.persistSqliteRecord(entry, options);
     }
     return undefined;
   }
 
-  persist(entry: SessionEntry, options?: AppendPersistenceOptions): string | null | undefined {
+  persist(entry: SessionEntry, options?: AppendPersistenceOptions): PersistRecordResult {
     return this.persistRecord(entry, options);
   }
 
   private persistSqliteRecord(
     entry: unknown,
     options?: AppendPersistenceOptions,
-  ): string | null | undefined {
+  ): PersistRecordResult {
     if (!this.persistenceTarget) {
       return undefined;
     }
     const scope = this.persistenceTarget;
     if (this.persistenceHeaderPending) {
-      const header = this.fileEntries[0];
-      if (!header || header.type !== "session" || !appendTranscriptEventSync(scope, header)) {
+      if (
+        !ensureSessionEntrySync(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+        })
+      ) {
         throw new Error("Session transcript header was not persisted");
       }
+      const header = this.fileEntries[0];
+      if (!header || header.type !== "session") {
+        throw new Error("Session transcript header was not persisted");
+      }
+      requireTranscriptEventAppend(
+        appendTranscriptEventSync(scope, header),
+        "Session transcript header was not persisted",
+      );
       this.persistenceHeaderPending = false;
     }
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
-      if (!appendTranscriptEventSync(scope, entry)) {
-        throw new Error(`Session transcript leaf control was not persisted: ${leafEntry.id}`);
-      }
+      requireTranscriptEventAppend(
+        appendTranscriptEventSync(scope, entry),
+        `Session transcript leaf control was not persisted: ${leafEntry.id}`,
+      );
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
       return undefined;
     }
     if (entry.type !== "message") {
-      if (!appendTranscriptEventSync(scope, entry)) {
-        throw new Error(`Session transcript entry was not persisted: ${entry.id}`);
-      }
+      requireTranscriptEventAppend(
+        appendTranscriptEventSync(
+          scope,
+          entry,
+          options?.appendIntent === "active-branch"
+            ? { appendIntent: options.appendIntent }
+            : undefined,
+        ),
+        `Session transcript entry was not persisted: ${entry.id}`,
+      );
       return undefined;
     }
     const appendOptions = {
@@ -188,6 +228,25 @@ export class SessionManagerPersistence extends SessionManagerCore {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
     if (result.messageId !== entry.id) {
+      const idempotencyKey =
+        entry.message.role === "user" &&
+        "idempotencyKey" in entry.message &&
+        typeof entry.message.idempotencyKey === "string" &&
+        entry.message.idempotencyKey.length > 0
+          ? entry.message.idempotencyKey
+          : undefined;
+      if (idempotencyKey && options?.idempotencyLookup !== "caller-checked") {
+        // Ingress can commit the keyed user after this manager loaded. The
+        // caller reloads and adopts only when that canonical row is still active.
+        if (!result.anchor) {
+          throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
+        }
+        return {
+          adoptedMessageId: result.messageId,
+          anchor: result.anchor,
+          effectiveParentId: result.effectiveParentId ?? null,
+        };
+      }
       throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
     }
     if (
@@ -199,7 +258,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
-    return result.effectiveParentId;
+    return {
+      ...(result.anchor ? { anchor: result.anchor } : {}),
+      effectiveParentId: result.effectiveParentId,
+    };
   }
 
   mergePromptReleasedSessionEntries(

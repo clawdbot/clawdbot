@@ -58,6 +58,7 @@ import {
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -83,7 +84,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.146.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.146.1";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -664,27 +665,7 @@ function resolveAuthoredOpenAIConfigRoute(params: {
 }):
   | { configuredModel?: ModelDefinitionConfig; configuredProvider: ModelProviderConfig }
   | undefined {
-  if (normalizeProviderId(params.provider) !== PROVIDER_ID) {
-    return undefined;
-  }
-  const providers = Object.entries(params.config?.models?.providers ?? {});
-  const requestedProvider = params.provider.trim();
-  const providerKey =
-    providers.find(([providerId]) => providerId.trim() === requestedProvider)?.[0].trim() ??
-    providers.find(([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID)?.[0].trim();
-  let providerConfig: ModelProviderConfig | undefined;
-  for (const [providerId, candidate] of providers) {
-    if (providerId.trim() !== providerKey || !candidate) {
-      continue;
-    }
-    providerConfig = providerConfig
-      ? {
-          ...providerConfig,
-          ...candidate,
-          models: candidate.models ?? providerConfig.models,
-        }
-      : candidate;
-  }
+  const providerConfig = resolveAuthoredOpenAIProviderConfig(params);
   if (!providerConfig) {
     return undefined;
   }

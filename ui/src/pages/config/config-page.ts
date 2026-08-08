@@ -17,15 +17,28 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  resetServerUiPref,
+  resolveServerUiPrefState,
+  type ServerUiPrefState,
+} from "../../app/server-prefs.ts";
+import {
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
+  UI_APPEARANCE_DEFAULTS,
+  type ChatFollowUpMode,
+  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+  storeHiddenSessionCatalogIds,
+} from "../../components/app-sidebar-session-types.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
@@ -47,6 +60,7 @@ import {
   SCOPED_CONFIG_SECTION_KEYS,
   type ConfigPageId,
 } from "./config-sections.ts";
+import * as themeImport from "./custom-theme-import-owner.ts";
 import { renderMcp } from "./mcp.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
@@ -152,7 +166,7 @@ function configPageTitle(pageId: ConfigPageId): string {
   return titleForRoute(pageId);
 }
 
-function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
+export function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
     asConfigRecord(config);
@@ -162,13 +176,15 @@ function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
       execPolicy: "unknown",
       deviceAuth: false,
       browserEnabled: true,
+      browserEnabledOverridden: false,
       toolProfile: "full",
+      toolProfileOverridden: false,
     };
   }
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
-  const tools = asConfigRecord(root.tools) ?? {};
-  const exec = asConfigRecord(tools.exec) ?? {};
+  const tools = asConfigRecord(root.tools);
+  const exec = asConfigRecord(tools?.exec) ?? {};
   const browser = asConfigRecord(root.browser);
   const controlUi = asConfigRecord(gateway?.controlUi);
   let gatewayAuth = "unknown";
@@ -184,14 +200,16 @@ function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
             ? "trusted-proxy"
             : "none";
   }
-  const profile = tools.profile;
+  const profile = tools?.profile;
   const security = exec.security;
   return {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
     deviceAuth: controlUi?.dangerouslyDisableDeviceAuth !== true,
     browserEnabled: browser?.enabled !== false,
+    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
     toolProfile: typeof profile === "string" && profile.trim() ? profile.trim() : "full",
+    toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
   };
 }
 
@@ -213,6 +231,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
@@ -258,13 +277,10 @@ export class ConfigPage extends OpenClawLightDomElement {
     "ai-agents": defaultConfigSelection("ai-agents"),
     advanced: defaultConfigSelection("advanced"),
   };
-  @state() private customThemeImportUrl = "";
-  @state() private customThemeImportBusy = false;
-  @state() private customThemeImportMessage: { kind: "success" | "error"; text: string } | null =
-    null;
-  @state() private customThemeImportExpanded = false;
-  @state() private customThemeImportFocusToken = 0;
-  private customThemeImportSelectOnSuccess = false;
+  @state() private customThemeImport = themeImport.INITIAL_CUSTOM_THEME_IMPORT_STATE;
+  private readonly customThemeImportOwner = new themeImport.CustomThemeImportOwner((next) => {
+    this.customThemeImport = next;
+  });
   private configViewState: ConfigViewState = createConfigViewState();
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
@@ -336,17 +352,38 @@ export class ConfigPage extends OpenClawLightDomElement {
       () => this.context?.theme,
       (theme, notify) => theme.subscribe(notify),
       () => {
-        this.settings = loadSettings();
+        this.settings = this.customThemeImportOwner.adoptSettings(
+          this.settings,
+          loadSettings(),
+          this.context.theme.serverSelection,
+        );
       },
     );
+  private readonly hiddenSessionCatalogsChanged = () => {
+    this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  };
 
   override connectedCallback() {
     super.connectedCallback();
+    this.hiddenSessionCatalogsChanged();
+    window.addEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
+    this.customThemeImportOwner.connect(
+      this.context.gateway.connection.gatewayUrl,
+      this.context.theme.serverSelection,
+    );
     this.settings = loadSettings();
     this.syncRouteData();
   }
 
   override disconnectedCallback() {
+    window.removeEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
+    this.customThemeImportOwner.retireImport();
     this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
     this.runtimeConfigSource = null;
@@ -358,6 +395,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   override willUpdate(changed: PropertyValues) {
+    if (changed.get("pageId") === "appearance" && this.pageId !== "appearance") {
+      this.customThemeImportOwner.retireImport();
+    }
     if (changed.has("pageId") || changed.has("routeData")) {
       this.syncRouteData();
     }
@@ -486,6 +526,9 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     if (runtimeConfig !== this.runtimeConfigSource) {
+      if (this.runtimeConfigSource) {
+        this.customThemeImportOwner.retireImport();
+      }
       this.runtimeConfigSource = runtimeConfig;
       this.resetConfigViewState();
     }
@@ -507,6 +550,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
+    this.customThemeImportOwner.synchronizeScope(
+      gateway.connection.gatewayUrl,
+      this.context.theme.serverSelection,
+    );
     if (gateway !== this.systemInfoGatewaySource) {
       this.systemInfoPolling.stop();
       this.invalidateSystemInfoRequest();
@@ -651,46 +698,139 @@ export class ConfigPage extends OpenClawLightDomElement {
     };
   }
 
-  private applySettings(next: UiSettings) {
-    this.settings = patchSettings({
-      theme: next.theme,
-      themeMode: next.themeMode,
-      customTheme: next.customTheme,
-      textScale: next.textScale,
-      sidebarLiveActivity: next.sidebarLiveActivity,
-      chatMessageMaxWidth: next.chatMessageMaxWidth,
-      showAdvancedSettings: next.showAdvancedSettings,
-      chatSendShortcut: next.chatSendShortcut,
-      chatFollowUpMode: next.chatFollowUpMode,
-      catalogOpenTarget: next.catalogOpenTarget,
-      realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
-      realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
-      composerHoldToRecord: next.composerHoldToRecord,
-      lobsterPetVisits: next.lobsterPetVisits,
-      lobsterPetSounds: next.lobsterPetSounds,
-    });
+  private applySettings(patch: Partial<UiSettings>) {
+    this.settings = patchSettings(patch);
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
   }
 
-  private setLocale(locale: Locale) {
+  private setLocale(locale: Locale | undefined) {
+    if (locale === undefined) {
+      this.resetLocale();
+      return;
+    }
     this.settings = patchSettings({ locale });
     void i18n.setLocale(locale);
+  }
+
+  private currentLocalePref(): ServerUiPrefState<string> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "locale",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
+  private currentThemePref(): ServerUiPrefState<ThemeName> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "theme",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
+  private currentThemeModePref(): ServerUiPrefState<ThemeMode> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "themeMode",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
+  private currentChatSendShortcutPref(): ServerUiPrefState<ChatSendShortcut> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "chatSendShortcut",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
+  private currentChatFollowUpModePref(): ServerUiPrefState<ChatFollowUpMode> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "chatFollowUpMode",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
+    );
+  }
+
+  private serverUiPrefsCanSync(): boolean | null {
+    const runtimeConfig = this.context.runtimeConfig;
+    return runtimeConfig.state.connected ? runtimeConfig.canPatch !== false : null;
+  }
+
+  private resetLocale() {
+    this.settings = resetServerUiPref(
+      "locale",
+      this.currentLocalePref(),
+      this.context.gateway.connection.gatewayUrl,
+    );
+    if (isSupportedLocale(this.settings.locale)) {
+      void i18n.setLocale(this.settings.locale);
+    } else {
+      void i18n.useSystemLocale();
+    }
+  }
+
+  private resetSyncedAppearancePref(
+    key: "theme" | "themeMode" | "chatSendShortcut" | "chatFollowUpMode",
+  ) {
+    switch (key) {
+      case "theme":
+        this.customThemeImportOwner.recordActivation(null);
+        this.settings = resetServerUiPref(
+          "theme",
+          this.currentThemePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
+      case "themeMode":
+        this.settings = resetServerUiPref(
+          "themeMode",
+          this.currentThemeModePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
+      case "chatSendShortcut":
+        this.settings = resetServerUiPref(
+          "chatSendShortcut",
+          this.currentChatSendShortcutPref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
+      case "chatFollowUpMode":
+        this.settings = resetServerUiPref(
+          "chatFollowUpMode",
+          this.currentChatFollowUpModePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
+    }
+    this.context.theme.refresh();
   }
 
   private setTheme(
     theme: ThemeName,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
+    this.customThemeImportOwner.recordActivation(theme);
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
-    const next = { ...this.settings, theme };
     startThemeTransition({
       currentTheme,
-      nextTheme: resolveTheme(next.theme, next.themeMode),
+      nextTheme: resolveTheme(theme, this.settings.themeMode),
       context,
-      applyTheme: () => this.applySettings(next),
+      applyTheme: () => this.applySettings({ theme }),
     });
   }
 
@@ -699,22 +839,20 @@ export class ConfigPage extends OpenClawLightDomElement {
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
-    const next = { ...this.settings, themeMode: mode };
     startThemeTransition({
       currentTheme,
-      nextTheme: resolveTheme(next.theme, next.themeMode),
+      nextTheme: resolveTheme(this.settings.theme, mode),
       context,
-      applyTheme: () => this.applySettings(next),
+      applyTheme: () => this.applySettings({ themeMode: mode }),
     });
   }
 
   private setSetting<K extends ConfigPageSetting>(key: K, value: UiSettings[K]) {
-    this.applySettings({ ...this.settings, [key]: value });
+    this.applySettings({ [key]: value });
   }
 
   private selectMicrophone(deviceId: string) {
     this.applySettings({
-      ...this.settings,
       realtimeTalkInputDeviceId: deviceId.trim() || undefined,
     });
   }
@@ -731,7 +869,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       // Persist only a camera the active Talk session accepted. A superseded
       // request must not overwrite the newer confirmed selection.
       this.applySettings({
-        ...this.settings,
         realtimeTalkVideoDeviceId: videoDeviceId,
       });
     } catch (error) {
@@ -741,57 +878,32 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
   }
 
-  private openCustomThemeImport() {
-    this.customThemeImportExpanded = true;
-    this.customThemeImportFocusToken += 1;
-    if (!this.settings.customTheme) {
-      this.customThemeImportSelectOnSuccess = true;
-    }
-  }
-
   private async importCustomTheme() {
-    if (this.customThemeImportBusy) {
-      return;
-    }
-    this.customThemeImportExpanded = true;
-    this.customThemeImportBusy = true;
-    this.customThemeImportMessage = null;
-    try {
-      const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
-      const selectTheme = !this.settings.customTheme || this.customThemeImportSelectOnSuccess;
-      this.applySettings({
-        ...this.settings,
-        customTheme,
-        theme: selectTheme ? "custom" : this.settings.theme,
-      });
-      this.customThemeImportUrl = "";
-      this.customThemeImportSelectOnSuccess = false;
-      this.customThemeImportMessage = {
-        kind: "success",
-        text: t("configPage.themeImported", { name: customTheme.label }),
-      };
-    } catch (error) {
-      this.customThemeImportMessage = {
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      this.customThemeImportBusy = false;
-    }
+    await this.customThemeImportOwner.import({
+      config: this.context.runtimeConfig.state,
+      hasCustomTheme: Boolean(this.settings.customTheme),
+      load: importCustomThemeFromUrl,
+      apply: (customTheme, activate) =>
+        this.applySettings({
+          customTheme,
+          theme: activate ? "custom" : this.settings.theme,
+        }),
+      messages: {
+        blocked: (reason) => t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
+        imported: (label) => t("configPage.themeImported", { name: label }),
+      },
+    });
   }
 
   private clearCustomTheme() {
-    this.customThemeImportExpanded = true;
-    this.customThemeImportSelectOnSuccess = false;
-    this.applySettings({
-      ...this.settings,
-      theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
-      customTheme: undefined,
+    this.customThemeImportOwner.clear({
+      apply: () =>
+        this.applySettings({
+          theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
+          customTheme: undefined,
+        }),
+      message: t("configPage.themeRemoved"),
     });
-    this.customThemeImportMessage = {
-      kind: "success",
-      text: t("configPage.themeRemoved"),
-    };
   }
 
   private includeSections(): readonly string[] | undefined {
@@ -811,6 +923,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       runtimeState.configSaving ||
       runtimeState.configApplying ||
       this.isUpdateBusy() ||
+      !this.context.runtimeConfig.canSet ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null)
     );
   }
@@ -832,6 +945,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const themePref = this.currentThemePref();
+    const themeModePref = this.currentThemeModePref();
+    const localePref = this.currentLocalePref();
+    const chatSendShortcutPref = this.currentChatSendShortcutPref();
+    const chatFollowUpModePref = this.currentChatFollowUpModePref();
     const sessionObserverBusy =
       !configState.connected ||
       configState.configSaving ||
@@ -848,6 +966,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
       connected: configState.connected,
+      mutationAllowed: runtimeConfig.canSet,
+      openFileAllowed: runtimeConfig.canOpenFile,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
@@ -862,10 +982,20 @@ export class ConfigPage extends OpenClawLightDomElement {
       originalValue: configState.configFormOriginal,
       activeSection,
       activeSubsection,
-      onRawChange: (next) => runtimeConfig.setRaw(next),
+      onRawChange: (next) => {
+        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
+        runtimeConfig.setRaw(next);
+      },
       onFormModeChange: (mode) => this.setFormMode(mode),
       onViewStateChange: () => this.requestUpdate(),
-      onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
+      onFormPatch: (path, value) => {
+        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
+        runtimeConfig.patchForm(path, value);
+      },
+      onFormRemove: (path) => {
+        this.customThemeImportOwner.retireForConfigMutation(t("common.unsavedChanges"));
+        runtimeConfig.removeFormValue(path);
+      },
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
       onSave: () => void runtimeConfig.save(),
@@ -876,32 +1006,55 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.gateway.snapshot.hello?.server?.version ??
         "",
       theme: this.settings.theme,
+      themeOverridden: themePref.overridden,
+      themeProvenance: themePref.provenance,
+      themeResetValue: themePref.resetValue ?? UI_APPEARANCE_DEFAULTS.theme,
       themeMode: this.settings.themeMode,
-      locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
+      themeModeOverridden: themeModePref.overridden,
+      themeModeProvenance: themeModePref.provenance,
+      themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
+      systemLocale: i18n.getSystemLocale(),
+      localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
+      localeOverridden: localePref.overridden,
+      localeProvenance: localePref.provenance,
+      localeResetValue: isSupportedLocale(localePref.resetValue)
+        ? localePref.resetValue
+        : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
+      resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
+      resetTheme: () => this.resetSyncedAppearancePref("theme"),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      resetThemeMode: () => this.resetSyncedAppearancePref("themeMode"),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
-      customThemeImportUrl: this.customThemeImportUrl,
-      customThemeImportBusy: this.customThemeImportBusy,
-      customThemeImportMessage: this.customThemeImportMessage,
-      customThemeImportExpanded: this.customThemeImportExpanded,
-      customThemeImportFocusToken: this.customThemeImportFocusToken,
-      onCustomThemeImportUrlChange: (next) => {
-        this.customThemeImportUrl = next;
-        if (this.customThemeImportMessage?.kind === "error") {
-          this.customThemeImportMessage = null;
-        }
-      },
+      customThemeImportUrl: this.customThemeImport.url,
+      customThemeImportBusy: this.customThemeImport.busy,
+      customThemeImportMessage: this.customThemeImport.message,
+      customThemeImportExpanded: this.customThemeImport.expanded,
+      customThemeImportFocusToken: this.customThemeImport.focusToken,
+      onCustomThemeImportUrlChange: (next) => this.customThemeImportOwner.setUrl(next),
       onImportCustomTheme: () => void this.importCustomTheme(),
       onClearCustomTheme: () => this.clearCustomTheme(),
-      onOpenCustomThemeImport: () => this.openCustomThemeImport(),
-      textScale: this.settings.textScale ?? 100,
+      onOpenCustomThemeImport: () => this.customThemeImportOwner.open(),
+      textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
+      textScaleOverridden: this.settings.textScale !== undefined,
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
-      sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
+      resetTextScale: () => this.setSetting("textScale", undefined),
+      sidebarLiveActivity:
+        this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
+      setSessionCatalogHidden: (catalogId, hidden) => {
+        const next = new Set(this.hiddenSessionCatalogIds);
+        if (hidden) {
+          next.add(catalogId);
+        } else {
+          next.delete(catalogId);
+        }
+        storeHiddenSessionCatalogIds(next);
+      },
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
@@ -933,23 +1086,29 @@ export class ConfigPage extends OpenClawLightDomElement {
             }
           });
       },
-      lobsterPetVisits: this.settings.lobsterPetVisits !== false,
-      setLobsterPetVisits: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
-      lobsterPetSounds: this.settings.lobsterPetSounds === true,
-      setLobsterPetSounds: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
+      lobsterPetVisits: this.settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
+      setLobsterPetVisits: (enabled) => this.applySettings({ lobsterPetVisits: enabled }),
+      lobsterPetSounds: this.settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
+      setLobsterPetSounds: (enabled) => this.applySettings({ lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
       onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
+      chatSendShortcutOverridden: chatSendShortcutPref.overridden,
+      chatSendShortcutProvenance: chatSendShortcutPref.provenance,
+      chatSendShortcutResetValue:
+        chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      resetChatSendShortcut: () => this.resetSyncedAppearancePref("chatSendShortcut"),
       chatFollowUpMode: this.settings.chatFollowUpMode,
+      chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
+      chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
       serverQueueMode: configState.configSnapshot
         ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
             configNeedsApply: configState.configNeedsApply,
           })
         : undefined,
       setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
+      resetChatFollowUpMode: () => this.resetSyncedAppearancePref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
@@ -1048,9 +1207,22 @@ export class ConfigPage extends OpenClawLightDomElement {
           runtimeState.connected &&
           hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
         onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
-        onBrowserEnabledToggle: (enabled) =>
-          runtimeConfig.patchForm(["browser", "enabled"], enabled),
-        onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+        onBrowserEnabledToggle: (enabled) => {
+          if (enabled) {
+            runtimeConfig.removeFormValue(["browser", "enabled"]);
+            return;
+          }
+          runtimeConfig.patchForm(["browser", "enabled"], false);
+        },
+        onBrowserEnabledReset: () => runtimeConfig.removeFormValue(["browser", "enabled"]),
+        onToolProfileChange: (profile) => {
+          if (profile === "full") {
+            runtimeConfig.removeFormValue(["tools", "profile"]);
+            return;
+          }
+          runtimeConfig.patchForm(["tools", "profile"], profile);
+        },
+        onToolProfileReset: () => runtimeConfig.removeFormValue(["tools", "profile"]),
         editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }

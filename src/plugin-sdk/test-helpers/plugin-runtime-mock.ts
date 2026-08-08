@@ -11,6 +11,7 @@ import {
 import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
+import { resolveSessionCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
   implicitMentionKindWhen,
@@ -527,6 +528,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveAgentIdentity: vi.fn(() => ({
         name: "test-agent",
       })) as unknown as PluginRuntime["agent"]["resolveAgentIdentity"],
+      resolveSessionCatalogCreateTarget: vi.fn(
+        resolveSessionCatalogCreateTarget,
+      ) as unknown as PluginRuntime["agent"]["resolveSessionCatalogCreateTarget"],
       resolveThinkingDefault: vi.fn(
         () => "off",
       ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
@@ -1009,7 +1013,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     llm: {
       acquireLocalService: vi.fn(),
-      complete: vi.fn(),
+      complete: vi.fn().mockResolvedValue({
+        text: "{}",
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        agentId: "main",
+        usage: {},
+        execution: {
+          mode: "direct-provider",
+          owner: { kind: "provider", id: DEFAULT_PROVIDER },
+        },
+        audit: { caller: { kind: "plugin", id: "test" } },
+      }),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

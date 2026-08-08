@@ -37,6 +37,7 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   input: Type.Optional(
@@ -477,6 +478,7 @@ export const SkillsSecurityVerdictsResultSchema = closedObject({
       decision: NonEmptyString,
       reasons: Type.Array(Type.String()),
       requestedSlug: NonEmptyString,
+      requestedOwnerHandle: Type.Optional(NonEmptyString),
       requestedVersion: NonEmptyString,
       slug: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
       version: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

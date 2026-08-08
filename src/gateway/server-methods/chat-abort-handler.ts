@@ -7,17 +7,14 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { abortChatRunById } from "../chat-abort.js";
-import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
+import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
   canRequesterAbortChatRun,
-  canRequesterAbortChatRunWithoutSessionMatch,
   canRequesterAbortPreRegisteredRun,
-  canRequesterAbortQueuedChatTurn,
-  canRequesterAbortQueuedChatTurnWithoutSessionMatch,
   readPreRegisteredAgentDedupePayloadForSession,
   resolveChatAbortRequester,
   resolveStoredGlobalRunAgentId,
@@ -28,7 +25,6 @@ import {
   abortChatRunsForSessionKeyWithPartials,
   cancelWorkerInferenceForSession,
   createChatAbortOps,
-  ensureChatQueuedTurns,
   persistAbortedPartials,
 } from "./chat-abort-runtime.js";
 import {
@@ -40,7 +36,13 @@ import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
+  excludeRunIds?: ReadonlySet<string>;
 };
+
+type ChatAbortTarget = Pick<
+  ChatAbortControllerEntry | QueuedChatTurnEntry,
+  "sessionKey" | "agentId" | "ownerConnId" | "ownerDeviceId"
+>;
 
 export async function handleChatAbortRequestWithLifecycle(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
@@ -118,6 +120,7 @@ export async function handleChatAbortRequestWithLifecycle(
       stopReason: "rpc",
       requester,
       preserveSideRuns,
+      excludeRunIds: lifecycle.excludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
     });
     if (res.unauthorized) {
@@ -128,45 +131,60 @@ export async function handleChatAbortRequestWithLifecycle(
     return;
   }
   const normalizedAgentIdOverride = abortAgentId?.toLowerCase();
+  const authorizeRunTarget = (target: ChatAbortTarget): boolean => {
+    if (
+      target.sessionKey !== rawSessionKey &&
+      target.sessionKey !== canonicalAbortSessionKey &&
+      !canRequesterAbortChatRun(target, requester, { requireOwnerMatch: true })
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
+      );
+      return false;
+    }
+    if (
+      normalizedAgentIdOverride &&
+      target.sessionKey === "global" &&
+      resolveStoredGlobalRunAgentId(target.agentId, defaultAgentId) !== normalizedAgentIdOverride
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match agentId"),
+      );
+      return false;
+    }
+    if (!canRequesterAbortChatRun(target, requester)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      return false;
+    }
+    return true;
+  };
 
   const active = context.chatAbortControllers.get(runId);
   if (!active) {
     const readPendingRunForAbort = (
       entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never,
     ) => {
-      const canonicalMatch = readPreRegisteredAgentDedupePayloadForSession({
-        entry,
-        runId,
-        sessionKey: canonicalAbortSessionKey,
-        agentId: abortAgentId,
-        defaultAgentId,
-        includeHidden: true,
-      });
-      if (canonicalMatch) {
-        return {
-          sessionKey: normalizeUnknownText(canonicalMatch.sessionKey)
-            ? canonicalAbortSessionKey
-            : undefined,
-          payload: canonicalMatch,
-        };
+      for (const sessionKey of new Set([canonicalAbortSessionKey, rawSessionKey])) {
+        const payload = readPreRegisteredAgentDedupePayloadForSession({
+          entry,
+          runId,
+          sessionKey,
+          agentId: abortAgentId,
+          defaultAgentId,
+          includeHidden: true,
+        });
+        if (payload) {
+          return {
+            sessionKey: normalizeUnknownText(payload.sessionKey) ? sessionKey : undefined,
+            payload,
+          };
+        }
       }
-      if (rawSessionKey === canonicalAbortSessionKey) {
-        return undefined;
-      }
-      const aliasMatch = readPreRegisteredAgentDedupePayloadForSession({
-        entry,
-        runId,
-        sessionKey: rawSessionKey,
-        agentId: abortAgentId,
-        defaultAgentId,
-        includeHidden: true,
-      });
-      return aliasMatch
-        ? {
-            sessionKey: normalizeUnknownText(aliasMatch.sessionKey) ? rawSessionKey : undefined,
-            payload: aliasMatch,
-          }
-        : undefined;
+      return undefined;
     };
     const pendingChatMatch = readPendingRunForAbort(
       context.dedupe.get(pendingChatSendDedupeKey(runId)),
@@ -205,35 +223,10 @@ export async function handleChatAbortRequestWithLifecycle(
     }
     // Queued followup/collect turns keep a cancel identity after chat.send
     // terminalizes; abort them here so Esc cannot report done while they run.
-    const chatQueuedTurns = ensureChatQueuedTurns(context);
+    const chatQueuedTurns = context.chatQueuedTurns;
     const queued = chatQueuedTurns.get(runId);
     if (queued) {
-      const abortSessionKeysForQueued = new Set([rawSessionKey, canonicalAbortSessionKey]);
-      if (
-        !abortSessionKeysForQueued.has(queued.sessionKey) &&
-        !canRequesterAbortQueuedChatTurnWithoutSessionMatch(queued, requester)
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
-        );
-        return;
-      }
-      if (
-        normalizedAgentIdOverride &&
-        queued.sessionKey === "global" &&
-        resolveStoredGlobalRunAgentId(queued.agentId, defaultAgentId) !== normalizedAgentIdOverride
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match agentId"),
-        );
-        return;
-      }
-      if (!canRequesterAbortQueuedChatTurn(queued, requester)) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      if (!authorizeRunTarget(queued)) {
         return;
       }
       const queuedRes = abortQueuedChatTurnById(chatQueuedTurns, {
@@ -263,36 +256,11 @@ export async function handleChatAbortRequestWithLifecycle(
     respondWithWorkerRuns([]);
     return;
   }
-  const abortSessionKeysForRun = new Set([rawSessionKey, canonicalAbortSessionKey]);
-  if (
-    !abortSessionKeysForRun.has(active.sessionKey) &&
-    !canRequesterAbortChatRunWithoutSessionMatch(active, requester)
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
-    );
-    return;
-  }
-  if (
-    normalizedAgentIdOverride &&
-    active.sessionKey === "global" &&
-    resolveStoredGlobalRunAgentId(active.agentId, defaultAgentId) !== normalizedAgentIdOverride
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match agentId"),
-    );
-    return;
-  }
-  if (!canRequesterAbortChatRun(active, requester)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+  if (!authorizeRunTarget(active)) {
     return;
   }
 
-  const partialText = context.chatRunState.runs.get(runId)?.buffer;
+  const partialText = context.chatRunState.resolveBuffer(runId).text;
   const res = abortChatRunById(ops, {
     runId,
     sessionKey: active.sessionKey,

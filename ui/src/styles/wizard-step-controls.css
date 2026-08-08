@@ -48,3 +48,37 @@
   display: flex;
   gap: 8px;
 }
+
+.wizard-step__progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.wizard-step__spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: wizard-step-spin 800ms linear infinite;
+}
+
+@keyframes wizard-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wizard-step__spinner {
+    animation: none;
+    border-color: var(--accent);
+  }
+}

@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSync,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
+  recordInboundSessionMeta,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -28,7 +29,6 @@ import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { capArrayByJsonBytes } from "./session-transcript-readers.js";
 import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
-  canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   deriveSessionTitle,
   getSessionDefaults,
@@ -37,7 +37,7 @@ import {
   listSessionsFromStoreAsync,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
@@ -1305,6 +1305,123 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("Engineering");
   });
 
+  test("refreshes a legacy Buzz UUID title from inbound room metadata", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-buzz-session-title-"));
+    const storePath = path.join(dir, "sessions.json");
+    const roomId = "b25b8e40-eb1a-43a4-b56b-30a4e16df586";
+    const key = `agent:main:buzz:group:${roomId}`;
+    try {
+      await replaceSessionEntry(
+        { sessionKey: key, storePath },
+        {
+          sessionId: "legacy-buzz-room",
+          updatedAt: 1,
+          chatType: "group",
+          groupId: roomId,
+          groupChannel: roomId,
+          displayName: "buzz:g-b25b8e40-eb1a-43a4-b56b-30a4e16df586",
+        },
+      );
+
+      const entry = await recordInboundSessionMeta({
+        storePath,
+        sessionKey: key,
+        ctx: {
+          Provider: "buzz",
+          Surface: "buzz",
+          ChatType: "group",
+          From: `buzz:group:${roomId}`,
+          To: `buzz:${roomId}`,
+          OriginatingTo: `buzz:${roomId}`,
+          NativeChannelId: roomId,
+          GroupSubject: "Engineering",
+        },
+      });
+
+      expect(entry).toMatchObject({
+        groupId: roomId,
+        subject: "Engineering",
+      });
+      expect(entry?.groupChannel).toBeUndefined();
+      const row = buildGatewaySessionRow({
+        cfg: { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
+        storePath,
+        store: { [key]: entry as SessionEntry },
+        key,
+        entry: entry as SessionEntry,
+      });
+      expect(row.displayName).toBe("Engineering");
+      expect(row.origin?.nativeChannelId).toBe(roomId);
+    } finally {
+      closeSessionSqliteDatabasesForTest();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      name: "resolved human names",
+      subject: "Local Claw #channel-name",
+    },
+    {
+      name: "explicit stable-id fallback",
+      subject: "Slack Channel (Workspace ID: T0BDK6HMPS7, Channel ID: C0BDN50FL2Z)",
+    },
+  ])("refreshes a legacy Slack id title with $name", async ({ subject }) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-session-title-"));
+    const storePath = path.join(dir, "sessions.json");
+    const channelId = "C0BDN50FL2Z";
+    const key = `agent:main:slack:channel:${channelId.toLowerCase()}`;
+    try {
+      await replaceSessionEntry(
+        { sessionKey: key, storePath },
+        {
+          sessionId: "legacy-slack-channel",
+          updatedAt: 1,
+          chatType: "channel",
+          groupId: channelId.toLowerCase(),
+          groupChannel: `#${channelId}`,
+          space: "T0BDK6HMPS7",
+          displayName: `slack:#${channelId}`,
+        },
+      );
+
+      const entry = await recordInboundSessionMeta({
+        storePath,
+        sessionKey: key,
+        ctx: {
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "channel",
+          From: `slack:channel:${channelId}`,
+          To: `channel:${channelId}`,
+          OriginatingTo: `channel:${channelId}`,
+          NativeChannelId: channelId,
+          GroupSubject: subject,
+          GroupSpace: "T0BDK6HMPS7",
+        },
+      });
+
+      expect(entry).toMatchObject({
+        groupId: channelId.toLowerCase(),
+        subject,
+      });
+      expect(entry?.groupChannel).toBeUndefined();
+      const row = buildGatewaySessionRow({
+        cfg: { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
+        storePath,
+        store: { [key]: entry as SessionEntry },
+        key,
+        entry: entry as SessionEntry,
+      });
+      expect(row.displayName).toBe(subject);
+      expect(row.origin?.nativeChannelId).toBe(channelId);
+    } finally {
+      closeSessionSqliteDatabasesForTest();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const channelEntry: SessionEntry = {
@@ -1348,6 +1465,51 @@ describe("gateway session utils", () => {
       entry: opaque,
     });
     expect(opaqueRow.displayName).toMatch(/^telegram:/);
+  });
+
+  test("buildGatewaySessionRow projects flat classification facts without group tokens", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const subagentEntry = {
+      displayName: "Research",
+    } as SessionEntry;
+    const subagentRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:subagent:one": subagentEntry },
+      key: "agent:main:subagent:one",
+      entry: subagentEntry,
+    });
+    expect(subagentRow).toMatchObject({
+      classification: "subagent",
+      agentId: "main",
+      isBackground: true,
+    });
+
+    const groupEntry = {
+      chatType: "group",
+      displayName: "telegram:g-private-token",
+    } as SessionEntry;
+    const groupRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": groupEntry },
+      key: "agent:main:telegram:group:99",
+      entry: groupEntry,
+    });
+    expect(groupRow).toMatchObject({
+      classification: "group",
+      peerKind: "group",
+    });
+    expect(
+      JSON.stringify({
+        classification: groupRow.classification,
+        agentId: groupRow.agentId,
+        accountId: groupRow.accountId,
+        peerKind: groupRow.peerKind,
+        isMain: groupRow.isMain,
+        isBackground: groupRow.isBackground,
+      }),
+    ).not.toContain("private-token");
   });
 
   test("buildGatewaySessionRow projects worktree and execNode bindings", () => {
@@ -1720,20 +1882,6 @@ describe("gateway session utils", () => {
     ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
   });
 
-  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-    } as OpenClawConfig;
-    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
-
-    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
-      `agent:ops:signal:group:${mixedGroupId}`,
-    );
-    expect(
-      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
-    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
-  });
-
   test("resolveSessionStoreKey honors global scope", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },
@@ -2068,7 +2216,7 @@ describe("gateway session utils", () => {
     expect(spawnedByReads).toBe(1);
   });
 
-  test("loadSessionEntryReadOnly keeps children linked through a main alias", async () => {
+  test("loadSessionEntryReadOnly rejects a persisted main alias", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-exact-alias-children-", async ({ stateDir }) => {
@@ -2090,14 +2238,12 @@ describe("gateway session utils", () => {
         });
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntryReadOnly("main", {
-          clone: false,
-          includeStoreChildEntries: true,
-        });
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.entry?.sessionId).toBe("parent");
-        expect(loaded.store[childKey]?.spawnedBy).toBe(legacyParentKey);
+        expect(() =>
+          loadSessionEntryReadOnly("main", {
+            clone: false,
+            includeStoreChildEntries: true,
+          }),
+        ).toThrow("openclaw doctor --fix");
       });
     } finally {
       resetConfigRuntimeState();
@@ -2177,7 +2323,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
+  test("loadSessionEntry rejects deleted main aliases when mainKey is customized", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
@@ -2205,18 +2351,14 @@ describe("gateway session utils", () => {
         } as OpenClawConfig;
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntry("agent:main:work");
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+        expect(() => loadSessionEntry("agent:main:work")).toThrow("openclaw doctor --fix");
       });
     } finally {
       resetConfigRuntimeState();
     }
   });
 
-  test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
+  test("loadSessionEntry keeps the configured canonical store authoritative", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
@@ -2250,7 +2392,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("migrateAndPruneGatewaySessionStoreKey promotes the freshest alias row to canonical", () => {
+  test("resolveCanonicalGatewaySessionStoreKey rejects legacy aliases", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
@@ -2266,16 +2408,13 @@ describe("gateway session utils", () => {
       } as SessionEntry,
     };
 
-    const result = migrateAndPruneGatewaySessionStoreKey({
-      cfg,
-      key: "agent:ops:main",
-      store,
-    });
-
-    expect(result.primaryKey).toBe("agent:ops:work");
-    expect(result.entry?.sessionId).toBe("sess-fresh");
-    expect(store["agent:ops:work"]?.sessionId).toBe("sess-fresh");
-    expect(store["agent:ops:main"]).toBeUndefined();
+    expect(() =>
+      resolveCanonicalGatewaySessionStoreKey({
+        cfg,
+        key: "agent:ops:main",
+        store,
+      }),
+    ).toThrow("openclaw doctor --fix");
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
@@ -3278,22 +3417,15 @@ describe("deriveSessionTitle", () => {
     expect(result.includes("  ")).toBe(false);
   });
 
-  test("falls back to sessionId prefix with date", () => {
+  test("leaves a failed dashboard thread untitled so the UI can render New thread", () => {
     const entry = {
       sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
       updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
     } as SessionEntry;
-    const result = deriveSessionTitle(entry);
-    expect(result).toBe("abcd1234 (2024-03-15)");
-  });
 
-  test("falls back to sessionId prefix without date when updatedAt missing", () => {
-    const entry = {
-      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
-      updatedAt: 0,
-    } as SessionEntry;
-    const result = deriveSessionTitle(entry);
-    expect(result).toBe("abcd1234");
+    expect(deriveSessionTitle(entry)).toBeUndefined();
+    expect(deriveSessionTitle(entry, "")).toBeUndefined();
+    expect(deriveSessionTitle(entry, "   ")).toBeUndefined();
   });
 
   test("trims whitespace from displayName", () => {

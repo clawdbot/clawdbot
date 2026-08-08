@@ -501,6 +501,11 @@ img.chat-avatar {
   object-position: center;
 }
 
+img.chat-avatar.chat-avatar--logo {
+  object-fit: contain;
+  padding: 2px;
+}
+
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
@@ -674,11 +679,9 @@ img.chat-avatar {
   }
 
   .chat-group-footer-actions .chat-copy-btn,
-  .chat-group-footer-actions .chat-expand-btn,
   .chat-group-footer-actions .chat-reply-btn,
   .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
-  .chat-message-actions-row .chat-expand-btn,
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
     min-height: 44px;
@@ -689,7 +692,6 @@ img.chat-avatar {
    above own their look; the muted color also covers .btn hosts like the file
    preview header. */
 .chat-copy-btn,
-.chat-expand-btn,
 .chat-reply-btn {
   color: var(--muted);
 }
@@ -739,16 +741,9 @@ img.chat-avatar {
 }
 
 .chat-copy-btn:focus-visible,
-.chat-expand-btn:focus-visible,
 .chat-reply-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.chat-expand-btn__icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
 }
 
 .chat-bubble:hover {

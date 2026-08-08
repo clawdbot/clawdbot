@@ -19,6 +19,7 @@ Related:
 ## Common commands
 
 ```bash
+openclaw models --json
 openclaw models status
 openclaw models list
 openclaw models refresh
@@ -31,7 +32,10 @@ openclaw models scan
 
 ### Status
 
-`openclaw models status` shows the resolved default/fallbacks plus an auth overview. For plugin-owned agent runtimes such as Codex, it also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
+Bare `openclaw models` is equivalent to `openclaw models status`.
+`openclaw models --json` returns the same object as `openclaw models status --json`.
+
+`openclaw models status` shows the resolved default/fallbacks plus an auth overview. Active profile cooldowns appear under **Unavailable auth profiles** with the stored reason and recovery action; JSON output exposes the same data in `auth.unusableProfiles`. For plugin-owned agent runtimes such as Codex, status also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
 In `--json` output, `auth.providers` is the env/config/store-aware provider overview, while `auth.oauth` is auth-store profile health only.
 
@@ -160,7 +164,7 @@ openclaw models auth order clear --provider <id>
 
 `models auth add` is the interactive auth helper. It can launch a provider auth flow (OAuth/API key) or guide you into manual token paste, depending on the provider you choose.
 
-`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
+`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 

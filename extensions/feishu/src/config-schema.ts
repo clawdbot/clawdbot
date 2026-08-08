@@ -10,6 +10,7 @@ import {
 import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 const ChannelActionsSchema = z
   .object({
@@ -28,6 +29,12 @@ const FeishuDomainSchema = z.union([
   z.string().url().startsWith("https://"),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
+const FeishuWebhookPathSchema = z
+  .string()
+  .refine((value) => normalizeFeishuWebhookPath(value) === value, {
+    message:
+      'webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix" to repair it',
+  });
 const TtsOverrideSchema = z
   .object({
     auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
@@ -238,7 +245,7 @@ export const FeishuAccountConfigSchema = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
-    webhookPath: z.string().optional(),
+    webhookPath: FeishuWebhookPathSchema.optional(),
     ...FeishuSharedConfigShape,
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
@@ -256,7 +263,7 @@ const FeishuConfigSchemaBase = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
-    webhookPath: z.string().optional().default("/feishu/events"),
+    webhookPath: FeishuWebhookPathSchema.optional().default(DEFAULT_FEISHU_WEBHOOK_PATH),
     ...FeishuSharedConfigShape,
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),

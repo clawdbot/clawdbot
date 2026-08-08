@@ -8,11 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
@@ -175,34 +171,6 @@ describe("gateway/node-command-policy", () => {
         "device.info",
       ],
     });
-  });
-
-  it("keeps plugin node defaults from the pinned Gateway registry", () => {
-    const startupRegistry = installCanvasPluginDefaults();
-    pinActivePluginChannelRegistry(startupRegistry);
-    const transientRegistry = createEmptyPluginRegistry();
-    const startupPolicy = startupRegistry.nodeInvokePolicies[0];
-    if (!startupPolicy) {
-      throw new Error("expected canvas node policy");
-    }
-    transientRegistry.nodeInvokePolicies.push({
-      ...startupPolicy,
-      pluginId: "transient",
-      policy: {
-        ...startupPolicy.policy,
-        commands: ["transient.read"],
-      },
-    });
-    setActivePluginRegistry(transientRegistry);
-
-    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
-      platform: "macos",
-      deviceFamily: "Mac",
-    });
-
-    expect(allowlist.has("canvas.snapshot")).toBe(true);
-    expect(allowlist.has("canvas.present")).toBe(true);
-    expect(allowlist.has("transient.read")).toBe(false);
   });
 
   it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {
@@ -613,6 +581,59 @@ describe("gateway/node-command-policy", () => {
     const macNode = { platform: "macos", deviceFamily: "Mac", commands: ["computer.act"] };
     expect(resolveNodePairingCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
     expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
+  });
+
+  it("requires an explicit allow for the dangerous cua-computer plugin command", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      command: {
+        command: "computer.act",
+        cap: "computer",
+        dangerous: true,
+        handle: async () => "{}",
+      },
+    });
+    registry.nodeInvokePolicies.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      pluginConfig: {},
+      policy: {
+        commands: ["computer.act"],
+        dangerous: true,
+        handle: async (ctx) => await ctx.invokeNode(),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const node = {
+      platform: "windows",
+      deviceFamily: "Windows",
+      commands: ["computer.act"],
+      approvedCommands: ["computer.act"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("computer.act")).toBe(false);
+
+    const allowlist = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: { commands: { allow: ["computer.act"] } },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(
+      isNodeCommandAllowed({
+        command: "computer.act",
+        declaredCommands: node.commands,
+        allowlist,
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {

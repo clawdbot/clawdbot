@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "../../plugins/types.js";
@@ -154,6 +155,7 @@ function registerHostTrustedReservedCommandForTest(
     activateGlobalSideEffects: true,
   });
   pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+  setActivePluginRegistry(pluginRegistry.registry);
 }
 
 function registerCodexDiagnosticsCommandForTest(

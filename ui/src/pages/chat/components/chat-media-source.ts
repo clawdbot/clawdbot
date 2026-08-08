@@ -19,6 +19,10 @@ export class ChatMediaSourceController {
     return this.appliedSource;
   }
 
+  get currentIdentity(): string {
+    return this.appliedIdentity;
+  }
+
   get queuedSource(): string {
     return this.pendingSource;
   }
@@ -82,6 +86,17 @@ export class ChatMediaSourceController {
     return true;
   }
 
+  applyPendingSource(media: HTMLMediaElement): boolean {
+    if (!this.pendingSource) {
+      return false;
+    }
+    this.applySource(media, this.pendingSource, this.pendingIdentity, {
+      currentTime: finiteMediaTime(media.currentTime),
+      paused: media.paused,
+    });
+    return true;
+  }
+
   seek(media: HTMLMediaElement, nextTime: number): boolean {
     const targetTime = Math.max(0, finiteMediaTime(nextTime));
     try {
@@ -103,6 +118,16 @@ export class ChatMediaSourceController {
     if (this.restore && !this.restore.paused) {
       this.restore = { ...this.restore, paused: true };
     }
+  }
+
+  reset(media: HTMLMediaElement): void {
+    this.appliedSource = "";
+    this.appliedIdentity = "";
+    this.pendingSource = "";
+    this.pendingIdentity = "";
+    this.restore = null;
+    media.removeAttribute("src");
+    media.load();
   }
 
   handleLoadedMetadata(media: HTMLMediaElement, canResume = () => true): void {
@@ -131,15 +156,4 @@ export class ChatMediaSourceController {
     this.restore = restore;
     media.src = source;
   }
-}
-
-const sourceControllers = new WeakMap<HTMLMediaElement, ChatMediaSourceController>();
-
-export function getChatMediaSourceController(media: HTMLMediaElement): ChatMediaSourceController {
-  let controller = sourceControllers.get(media);
-  if (!controller) {
-    controller = new ChatMediaSourceController();
-    sourceControllers.set(media, controller);
-  }
-  return controller;
 }

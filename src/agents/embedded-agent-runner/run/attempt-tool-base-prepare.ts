@@ -90,6 +90,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     isRawModelRun,
     skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
     toolsAllow: attempt.toolsAllow,
+    forceCodeModeControls: attempt.forceCodeModeTools,
   });
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
@@ -253,6 +254,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           skillWorkshop: {
             env: attempt.skillWorkshopProposalEnv,
             proposalOnly: attempt.skillWorkshopProposalOnly,
+            ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
             ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
             origin: attempt.skillWorkshopOrigin,
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,

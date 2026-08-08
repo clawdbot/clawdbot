@@ -8,6 +8,7 @@ import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
+  PreparedModelRuntimeOwnerNotPublishedError,
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
@@ -135,7 +136,7 @@ export function resolveModel(
   if ((!options?.authStorage || !options?.modelRegistry) && !preparedSnapshot) {
     // Synchronous callers must enter through a lifecycle that already published discovery.
     // Falling back to an empty registry turns a stale/pending generation into a false model miss.
-    throw new Error(
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared model runtime is not published for synchronous model resolution (${resolvedAgentDir}); use resolveModelAsync before lifecycle publication`,
     );
   }

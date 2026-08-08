@@ -1,7 +1,11 @@
 // Diagnostic logger tests cover event emission, metrics, and support output.
 import fs from "node:fs";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -9,6 +13,7 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -89,12 +94,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
   return count;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -404,6 +404,73 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("includes the current app-agent SQLite assistant reply in heartbeat diagnostics", async () => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-heartbeat-app-agent-",
+    });
+    const sessionKey = "agent:oauth-agent:main";
+    const sessionId = "oauth-session";
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    try {
+      await replaceSessionEntry(
+        { agentId: "oauth-agent", sessionKey },
+        { sessionId, updatedAt: 1 },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "oauth-agent", sessionId, sessionKey },
+        { message: { role: "assistant", content: "the reimbursement was approved" } },
+      );
+
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        { recoverStuckSession: vi.fn() },
+      );
+      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+      vi.advanceTimersByTime(61_000);
+
+      expectLoggerMessageContaining(warnSpy, 'lastAssistant="the reimbursement was approved"');
+    } finally {
+      await openClawState.cleanup();
+    }
+  });
+
+  it("never copies an incognito assistant reply into durable heartbeat diagnostics", async () => {
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-heartbeat-incognito-",
+    });
+    const sessionKey = "agent:main:dashboard:incognito-private";
+    const sessionId = "incognito-private-session";
+    const privateReply = "memory-only personal reimbursement details";
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: 1, incognito: true },
+      );
+      appendTranscriptMessageSync(
+        { agentId: "main", sessionId, sessionKey },
+        { message: { role: "assistant", content: privateReply } },
+      );
+
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        { recoverStuckSession: vi.fn() },
+      );
+      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+      vi.advanceTimersByTime(61_000);
+
+      expectLoggerMessageContaining(warnSpy, `sessionKey=${sessionKey}`);
+      expectNoLoggerMessageContaining(warnSpy, privateReply);
+      expectNoLoggerMessageContaining(warnSpy, "lastAssistant=");
+    } finally {
+      await openClawState.cleanup();
+    }
   });
 
   it("threads session files from heartbeat state into stuck-session recovery", () => {
@@ -977,6 +1044,132 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("recovers repeated request attempts despite fresh mechanical activity", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 90_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
+        },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main", runId: "run-1" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+
+      for (let attempt = 2; attempt <= 6; attempt += 1) {
+        vi.advanceTimersByTime(30_000);
+        logSessionStateChange({
+          sessionId: "s1",
+          sessionKey: "main",
+          state: "processing",
+          reason: "run_started",
+        });
+        markDiagnosticModelStartedForTest({
+          sessionId: "s1",
+          sessionKey: "main",
+          runId: "run-1",
+          provider: "mock",
+          model: "retrying-model",
+          observationUnit: "request",
+        });
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.find((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "repeated_model_requests_without_progress",
+        repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
+      },
+    );
+    expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("does not recover repeated requests after semantic output resets the clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionAbortMs = 90_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs },
+        },
+      );
+      const ref = { sessionId: "s1", sessionKey: "main", runId: "run-1" };
+      logSessionStateChange({ ...ref, state: "processing" });
+      markDiagnosticEmbeddedRunStarted(ref);
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+      vi.advanceTimersByTime(30_000);
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+      markDiagnosticRunProgressForTest({
+        ...ref,
+        reason: "assistant:progress",
+        progressKind: "semantic",
+      });
+
+      for (let elapsedMs = 0; elapsedMs < stuckSessionAbortMs; elapsedMs += 30_000) {
+        vi.advanceTimersByTime(30_000);
+        markDiagnosticRunProgressForTest({
+          ...ref,
+          reason: "model_call:stream_progress",
+          progressKind: "liveness",
+        });
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.stalled" &&
+          event.reason === "repeated_model_requests_without_progress",
+      ),
+    ).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("reports silent model calls as long-running before the abort threshold", async () => {
@@ -2157,6 +2350,46 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("warns and records the full duration for persistent idle event-loop degradation", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            degradedSinceMs: 60_000,
+            eventLoopDelayP99Ms: 1_200,
+            eventLoopDelayMaxMs: 1_500,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expectLoggerMessageContaining(warnSpy, "degradedFor=60s");
+    expect(events.findLast((event) => event.type === "diagnostic.liveness.warning")).toMatchObject({
+      degradedSinceMs: 60_000,
+    });
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        durationMs: 60_000,
+      },
+      "persistent liveness stability event",
+    );
+  });
+
   it("suppresses liveness warnings during startupGraceMs while still sampling", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: string[] = [];
@@ -2294,6 +2527,52 @@ describe("stuck session diagnostics threshold", () => {
     expect(
       queuedWorkLabels.some((label) => typeof label === "string" && label.includes("main(")),
     ).toBe(true);
+  });
+
+  it("attributes only phases completed during the measured liveness interval", async () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+
+    await withDiagnosticPhase("stale.phase", () => undefined);
+    vi.advanceTimersByTime(60_000);
+    await withDiagnosticPhase("recent.phase", () => undefined);
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            eventLoopDelayP99Ms: 1_500,
+            eventLoopDelayMaxMs: 2_000,
+          }),
+        },
+      );
+
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expectLoggerMessageContaining(warnSpy, "recentPhases=recent.phase:");
+    expectNoLoggerMessageContaining(warnSpy, "stale.phase");
+    const warning = requireRecord(
+      events.findLast((event) => event.type === "diagnostic.liveness.warning"),
+      "liveness warning event",
+    );
+    expect(warning.recentPhases).toEqual([
+      expect.objectContaining({
+        name: "recent.phase",
+      }),
+    ]);
   });
 
   it("keeps transient event-loop max spikes debug-only when only background work is active", () => {
@@ -2458,6 +2737,7 @@ describe("stuck session diagnostics threshold", () => {
           sampleLiveness: () => ({
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
+            degradedSinceMs: 60_000,
             eventLoopDelayP99Ms: 1_500,
             eventLoopDelayMaxMs: 2_000,
           }),

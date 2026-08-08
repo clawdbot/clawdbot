@@ -86,6 +86,28 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("projects a current-turn model reroute onto the terminal assistant", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("model/rerouted", {
+        fromModel: "gpt-5.4-codex",
+        toModel: "gpt-5.4-codex-mini",
+        reason: "high_risk_cyber_activity",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-rerouted", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.currentAttemptAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result.lastAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result).toMatchObject({
+      terminalTurnId: "turn-1",
+    });
+  });
+
   it("keeps reopened final answers as Activity candidates until turn completion selects one", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({

@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
@@ -24,9 +25,9 @@ import type {
   TurnAdoptionLifecycle,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
+import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
-
-export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
+import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -53,6 +54,8 @@ type QueueInsertPosition = "tail" | "front";
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
 };
+
+export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
 
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
@@ -87,6 +90,8 @@ export type FollowupRun = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
+  onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -166,6 +171,8 @@ export type FollowupRun = {
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
+    /** Prepared model metadata reused when fallbacks revalidate the immutable thinking request. */
+    thinkingCatalog?: ThinkingCatalogEntry[];
     thinkLevel?: ThinkLevel;
     fastMode?: FastMode;
     fastModeAutoOnSeconds?: number;
@@ -285,6 +292,10 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+        // The queue is relinquishing an un-admitted message: free its dedupe
+        // identity so the abandonment-triggered ingress retry can re-enqueue
+        // instead of being rejected as a recent duplicate and falsely completed.
+        releaseRecentQueueMessageId(run);
         lifecycle.onAbandoned?.();
       }
     } finally {

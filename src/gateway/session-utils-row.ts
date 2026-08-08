@@ -8,6 +8,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
@@ -32,6 +33,7 @@ import { getUserProfileListItem } from "../state/user-profiles.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
+import { sessionClassificationForRow } from "./session-classification.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
@@ -47,7 +49,6 @@ import {
   resolvePositiveNumber,
   resolveProjectableCompactionCheckpoints,
   resolveRuntimeChildSessionKeys,
-  resolveSessionRuntimeMs,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
@@ -182,7 +183,7 @@ export function buildGatewaySessionRow(params: {
   const subagentRunState = subagentRun
     ? liveSubagentRunActive
       ? "active"
-      : typeof subagentRun.endedAt === "number" ||
+      : typeof subagentRun.execution.endedAt === "number" ||
           persistedSessionStatus === "done" ||
           persistedSessionStatus === "failed" ||
           persistedSessionStatus === "killed" ||
@@ -197,7 +198,7 @@ export function buildGatewaySessionRow(params: {
       : persistedSessionStatus === "running"
         ? undefined
         : (persistedSessionStatus ??
-          (typeof subagentRun.endedAt === "number"
+          (typeof subagentRun.execution.endedAt === "number"
             ? resolveSubagentSessionStatus(subagentRun)
             : undefined))
     : undefined;
@@ -208,15 +209,15 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const subagentEndedAt = subagentRun
     ? liveSubagentRunActive
-      ? subagentRun.endedAt
-      : (persistedSessionEndedAt ?? subagentRun.endedAt)
+      ? subagentRun.execution.endedAt
+      : (persistedSessionEndedAt ?? subagentRun.execution.endedAt)
     : undefined;
   const subagentRuntimeMs = subagentRun
     ? liveSubagentRunActive
-      ? resolveSessionRuntimeMs(subagentRun, now)
+      ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (persistedSessionRuntimeMs ??
-        (typeof subagentRun.endedAt === "number"
-          ? resolveSessionRuntimeMs(subagentRun, now)
+        (typeof subagentRun.execution.endedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
@@ -431,6 +432,7 @@ export function buildGatewaySessionRow(params: {
     label: entry?.label,
     category: entry?.category,
     boardFace: entry?.boardFace,
+    ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
     displayName,
     derivedTitle,
     lastMessagePreview,

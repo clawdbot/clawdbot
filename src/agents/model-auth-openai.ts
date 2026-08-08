@@ -1,6 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";

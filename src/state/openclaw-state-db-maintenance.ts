@@ -16,7 +16,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
@@ -125,7 +125,7 @@ export function assertOpenClawStateDatabaseOwner(
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
-  options: { pathname: string },
+  options: { pathname: string; allowedMissingColumns?: readonly string[] },
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -157,7 +157,12 @@ export function assertOpenClawStateDatabaseForMaintenance(
     database,
     options.pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
-    OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    options.allowedMissingColumns
+      ? {
+          ...OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+          allowedMissingColumns: options.allowedMissingColumns,
+        }
+      : OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   );
 }
 

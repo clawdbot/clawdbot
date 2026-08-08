@@ -21,9 +21,22 @@ import type {
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
 
+export type CapabilityMenuProps = Omit<
+  ChatComposerPlusMenuProps,
+  | "attachments"
+  | "disabled"
+  | "open"
+  | "view"
+  | "toolOverrides"
+  | "onOpenChange"
+  | "onViewChange"
+  | "showCapabilities"
+>;
+
 type ChatComposerDisabledBannerContent = {
   text: string;
   actionLabel: string;
+  disabledReason?: string;
   onAction: () => void;
 };
 
@@ -55,17 +68,7 @@ export type ChatComposerProps = {
   draft: string;
   sessions: SessionsListResult | null;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: Omit<
-    ChatComposerPlusMenuProps,
-    | "attachments"
-    | "disabled"
-    | "open"
-    | "view"
-    | "toolOverrides"
-    | "onOpenChange"
-    | "onViewChange"
-    | "showCapabilities"
-  >;
+  capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
@@ -133,6 +136,12 @@ type ComposingDraft = {
   value: string;
 };
 
+type SkillMenuTarget = {
+  start: number;
+  end: number;
+  query: string;
+};
+
 export type ChatComposerState = {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -142,6 +151,13 @@ export type ChatComposerState = {
   slashMenuArgItems: string[];
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
+  skillMenuOpen: boolean;
+  skillMenuItems: SlashCommandDef[];
+  skillMenuIndex: number;
+  skillMenuTarget: SkillMenuTarget | null;
+  skillCommandRefreshPending: boolean;
+  skillCommandRefreshGeneration: number;
+  skillCommandRefreshTargetStart: number | null;
   composerComposing: boolean;
   composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;

@@ -1,20 +1,12 @@
 // Discord plugin module implements inbound event delivery behavior.
+import { createInboundEventDeliveryCorrelation } from "openclaw/plugin-sdk/inbound-event-delivery";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type DiscordInboundEventDeliveryEnd = () => void;
-
-type ActiveEvent = {
-  outboundTo: string;
-  outboundAccountId?: string;
-  markInboundEventDelivered: () => void;
-};
-
 const DISCORD_INBOUND_EVENT_DELIVERY_KEY = "__openclawInboundEventDelivery";
-const registry = new Map<string, ActiveEvent>();
 
 function normalizeDiscordDeliveryTarget(value: string): string {
   return value
@@ -24,63 +16,10 @@ function normalizeDiscordDeliveryTarget(value: string): string {
     .toLowerCase();
 }
 
-function resolveDiscordInboundEventDeliveryCorrelationKey(
-  sessionKey: string | undefined,
-  inboundEventKind?: string,
-): string | undefined {
-  const key = sessionKey?.trim();
-  if (!key) {
-    return undefined;
-  }
-  return inboundEventKind === "room_event" ? `${key}:room_event` : key;
-}
-
-export function beginDiscordInboundEventDeliveryCorrelation(
-  sessionKey: string | undefined,
-  event: ActiveEvent,
-  options?: { inboundEventKind?: string },
-): DiscordInboundEventDeliveryEnd {
-  const key = resolveDiscordInboundEventDeliveryCorrelationKey(
-    sessionKey,
-    options?.inboundEventKind,
-  );
-  if (!key) {
-    return () => {};
-  }
-  registry.set(key, event);
-  return () => {
-    if (registry.get(key) === event) {
-      registry.delete(key);
-    }
-  };
-}
-
-export function notifyDiscordInboundEventOutboundSuccess(params: {
-  sessionKey: string | undefined;
-  to: string;
-  accountId?: string | null;
-  inboundEventKind?: string;
-}): void {
-  const key = resolveDiscordInboundEventDeliveryCorrelationKey(
-    params.sessionKey,
-    params.inboundEventKind,
-  );
-  if (!key) {
-    return;
-  }
-  const event = registry.get(key);
-  if (
-    !event ||
-    normalizeDiscordDeliveryTarget(event.outboundTo) !== normalizeDiscordDeliveryTarget(params.to)
-  ) {
-    return;
-  }
-  if (event.outboundAccountId && params.accountId && params.accountId !== event.outboundAccountId) {
-    return;
-  }
-  registry.delete(key);
-  event.markInboundEventDelivered();
-}
+export const discordInboundEventDelivery = createInboundEventDeliveryCorrelation({
+  targetsMatch: (expected, actual) =>
+    normalizeDiscordDeliveryTarget(expected) === normalizeDiscordDeliveryTarget(actual),
+});
 
 export function withDiscordInboundEventDeliveryMetadata(
   payload: ReplyPayload,
@@ -121,7 +60,7 @@ export function notifyDiscordInboundEventOutboundPayloadSuccess(params: {
   if (!metadata) {
     return;
   }
-  notifyDiscordInboundEventOutboundSuccess({
+  discordInboundEventDelivery.notify({
     sessionKey: readString(metadata.sessionKey),
     inboundEventKind: readString(metadata.inboundEventKind),
     to: params.to,

@@ -253,6 +253,16 @@ export function projectSafeChannelAccountSnapshotFields(
   for (const key of ["statusState", "healthState"] as const) {
     setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
   }
+  const lifecycle = record.lifecycle;
+  if (
+    lifecycle === "starting" ||
+    lifecycle === "ready" ||
+    lifecycle === "recovering" ||
+    lifecycle === "blocked" ||
+    lifecycle === "stopped"
+  ) {
+    snapshot.lifecycle = lifecycle;
+  }
   // False or absent ingress means unknown, never evidence that ingress is healthy.
   if (asBoolean(record.ingressUnavailable) === true) {
     snapshot.ingressUnavailable = true;

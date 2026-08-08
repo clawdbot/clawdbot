@@ -80,6 +80,22 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
         option.website !== undefined ? { website: option.website } : {},
       ),
     ),
+    ...(result.prepareOptions !== undefined
+      ? {
+          prepareOptions: result.prepareOptions.map((option) =>
+            Object.assign(
+              {
+                id: option.id,
+                label: option.label,
+              },
+              option.brandId !== undefined ? { brandId: option.brandId } : {},
+              option.hint !== undefined ? { hint: option.hint } : {},
+              option.icon !== undefined ? { icon: option.icon } : {},
+              option.website !== undefined ? { website: option.website } : {},
+            ),
+          ),
+        }
+      : {}),
     recommendedInstalls: result.recommendedInstalls ?? [],
     unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
       id: candidate.id,

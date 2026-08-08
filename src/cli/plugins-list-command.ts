@@ -44,7 +44,8 @@ export async function runPluginsListCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
-  const cfg = getRuntimeConfig();
+  // The inventory projector owns plugin metadata validation from the installed index.
+  const cfg = getRuntimeConfig({ skipPluginValidation: true });
   const report = buildPluginRegistrySnapshotReport({
     config: cfg,
     ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -76,11 +77,15 @@ export async function runPluginsListCommand(
   } = await loadHumanListModules();
 
   if (list.length === 0) {
-    runtime.log(
-      theme.muted(
-        `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`,
-      ),
-    );
+    const message =
+      opts.enabled && report.plugins.length > 0
+        ? `${
+            cfg.plugins?.enabled === false
+              ? "No enabled plugins found. Plugins are globally disabled."
+              : "No enabled plugins found."
+          } Run ${formatCliCommand("openclaw plugins list")} to inspect installed plugins.`
+        : `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`;
+    runtime.log(theme.muted(message));
     return;
   }
 

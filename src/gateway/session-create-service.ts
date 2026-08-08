@@ -12,11 +12,15 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
-  listAgentIds,
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -61,6 +65,7 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
+import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
   isSessionWorkAdmissionActive,
@@ -71,10 +76,10 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
-import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
@@ -88,11 +93,8 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
 
-type RequestedSessionAgentIdResolution =
-  | { ok: true; agentId?: string }
-  | { ok: false; error: ErrorShape };
-
 async function existingModelSelectionWouldChange(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
   defaultModel: string;
@@ -168,6 +170,7 @@ async function existingModelSelectionWouldChange(params: {
       : existingProfile !== undefined &&
         !shouldPreserveSessionAuthProfileOverride({
           cfg: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, params.agentId),
           currentProvider:
             params.existingEntry.providerOverride ??
             params.existingEntry.modelProvider ??
@@ -178,57 +181,6 @@ async function existingModelSelectionWouldChange(params: {
   return (
     resolved.provider !== existingProvider || resolved.model !== existingModel || profileWouldChange
   );
-}
-
-export function resolveRequestedSessionAgentId(
-  cfg: OpenClawConfig,
-  key: string,
-  explicitAgentId?: string,
-): RequestedSessionAgentIdResolution {
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
-  const parsed = parseAgentSessionKey(key);
-  const requestedAgentId = normalizeOptionalString(explicitAgentId);
-  if (requestedAgentId) {
-    const agentId = normalizeAgentId(requestedAgentId);
-    if (!listAgentIds(cfg).includes(agentId)) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
-      };
-    }
-    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
-    }
-    if (canonicalKey !== "global") {
-      const keyAgentId = parsed?.agentId
-        ? normalizeAgentId(parsed.agentId)
-        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
-      if (keyAgentId !== agentId) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-        };
-      }
-    }
-    return { ok: true, agentId };
-  }
-  if (!parsed?.agentId) {
-    return { ok: true };
-  }
-  const inferredAgentId = normalizeAgentId(parsed.agentId);
-  if (canonicalKey === "global" && !listAgentIds(cfg).includes(inferredAgentId)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
-    };
-  }
-  return {
-    ok: true,
-    agentId: canonicalKey === "global" ? inferredAgentId : undefined,
-  };
 }
 
 export function buildDashboardSessionKey(
@@ -289,6 +241,13 @@ export async function createGatewaySession(params: {
    * operator sessions and forks stay spawn-capable roots.
    */
   spawnDepth?: number;
+  /** Trusted effective policy captured by an in-process visible spawn. */
+  spawnToolPolicy?: {
+    version: 1;
+    completionOwnerSessionKey?: string;
+    allow: string[];
+    deny: string[];
+  };
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
   worktree?: { id: string; branch: string; repoRoot: string };
@@ -494,6 +453,12 @@ export async function createGatewaySession(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "spawnDepth requires parentSessionKey"),
       };
     }
+  }
+  if (params.spawnToolPolicy && params.spawnDepth === undefined) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "spawn tool policy requires spawnDepth"),
+    };
   }
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
@@ -705,6 +670,17 @@ export async function createGatewaySession(params: {
 
   let createdContext: CreatedGatewaySession | undefined;
   let createdNewEntry = false;
+  const spawnToolPolicy =
+    params.spawnToolPolicy && canonicalParentSessionKey
+      ? {
+          completionOwnerSessionKey: normalizeOptionalString(
+            params.spawnToolPolicy.completionOwnerSessionKey,
+          ),
+          allow: normalizeInheritedToolAllowlist(params.spawnToolPolicy.allow),
+          deny: normalizeInheritedToolDenylist(params.spawnToolPolicy.deny),
+          parentSessionKey: canonicalParentSessionKey,
+        }
+      : undefined;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
     let currentParentSessionEntry = parentSessionEntry;
     if (
@@ -857,6 +833,15 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        if (spawnToolPolicy && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawn tool policy requires a new session",
+            ),
+          };
+        }
         if (
           params.visibility &&
           existingEntry === undefined &&
@@ -895,6 +880,7 @@ export async function createGatewaySession(params: {
             agentId: target.agentId,
           });
           const modelSelectionWouldChange = await existingModelSelectionWouldChange({
+            agentId: target.agentId,
             cfg: params.cfg,
             catalogModel,
             defaultModel: gateDefaultModel.model,
@@ -1030,6 +1016,21 @@ export async function createGatewaySession(params: {
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          ...(existingEntry === undefined && spawnToolPolicy
+            ? {
+                spawnedBy: spawnToolPolicy.parentSessionKey,
+                ...(spawnToolPolicy.completionOwnerSessionKey
+                  ? { completionOwnerSessionKey: spawnToolPolicy.completionOwnerSessionKey }
+                  : {}),
+                inheritedToolPolicyVersion: 1 as const,
+                ...(spawnToolPolicy.allow.length > 0
+                  ? { inheritedToolAllow: spawnToolPolicy.allow }
+                  : {}),
+                ...(spawnToolPolicy.deny.length > 0
+                  ? { inheritedToolDeny: spawnToolPolicy.deny }
+                  : {}),
+              }
+            : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;

@@ -47,7 +47,7 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -105,6 +105,20 @@ function createFakeClient(options?: {
     }
     if (method === "thread/start") {
       return threadStartResult();
+    }
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => {
+        for (const notify of notifications) {
+          notify({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: turnStartResult("interrupted").turn,
+            },
+          });
+        }
+      });
+      return {};
     }
     if (method === "turn/start") {
       options?.onTurnStart?.();
@@ -181,6 +195,7 @@ function createFakeClient(options?: {
       requestHandlers.add(handler);
       return () => requestHandlers.delete(handler);
     },
+    addCloseHandler: () => () => undefined,
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 
@@ -300,12 +315,14 @@ describe("codex media understanding provider", () => {
       developerInstructions:
         "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
       config: {
+        "agents.enabled": false,
         "features.apps": false,
         "features.goals": false,
         "features.code_mode": false,
         "features.code_mode_only": false,
         "features.image_generation": false,
         "features.multi_agent": false,
+        "features.multi_agent_v2": false,
         "features.plugins": false,
         "features.standalone_web_search": false,
         web_search: "disabled",
@@ -321,7 +338,6 @@ describe("codex media understanding provider", () => {
         { type: "text", text: "Describe briefly.", text_elements: [] },
         { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
       ],
-      cwd: "/tmp/openclaw-agent",
       approvalPolicy: "on-request",
       model: "gpt-5.4",
       effort: "low",
@@ -353,7 +369,7 @@ describe("codex media understanding provider", () => {
       timeoutMs: 30_000,
     });
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
-    expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
+    expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
 
   it("preserves configured WebSocket transport for media turns", async () => {
@@ -391,7 +407,7 @@ describe("codex media understanding provider", () => {
       timeoutMs: 30_000,
     });
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
-    expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
+    expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
 
   it("interrupts a configured app-server turn when the media request aborts", async () => {
@@ -636,12 +652,14 @@ describe("codex media understanding provider", () => {
       developerInstructions:
         "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
       config: {
+        "agents.enabled": false,
         "features.apps": false,
         "features.goals": false,
         "features.code_mode": false,
         "features.code_mode_only": false,
         "features.image_generation": false,
         "features.multi_agent": false,
+        "features.multi_agent_v2": false,
         "features.plugins": false,
         "features.standalone_web_search": false,
         web_search: "disabled",
@@ -657,14 +675,13 @@ describe("codex media understanding provider", () => {
           approvalPolicy?: unknown;
           model?: unknown;
           input?: Array<{ type?: unknown; text?: unknown; text_elements?: unknown; url?: unknown }>;
-          cwd?: unknown;
           effort?: unknown;
         }
       | undefined;
     expect(turnParams?.threadId).toBe("thread-1");
     expect(turnParams?.approvalPolicy).toBe("on-request");
     expect(turnParams?.model).toBe("gpt-5.4");
-    expect(turnParams?.cwd).toBe("/tmp/openclaw-agent");
+    expect(turnParams).not.toHaveProperty("cwd");
     expect(turnParams?.effort).toBe("low");
     expect(turnParams?.input).toHaveLength(3);
     expect(turnParams?.input?.[0]?.type).toBe("text");

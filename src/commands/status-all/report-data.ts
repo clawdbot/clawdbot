@@ -4,6 +4,7 @@
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
+import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { inspectPortUsage } from "../../infra/ports.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
@@ -76,37 +77,49 @@ async function resolveStatusAllLocalDiagnosis(params: {
     gatewayReachable: boolean;
     health: StatusGatewayHealthSafe | undefined;
     deliveryDiagnostics: unknown;
+    exporterDiagnostics: unknown;
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   };
 }> {
   const { overview } = params;
   const snap = await readConfigFileSnapshot({ observe: false }).catch(() => null);
   const configPath = resolveStatusAllConfigPath(snap?.path);
+  const diagnosticsParams = {
+    config: overview.cfg,
+    timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
+    gatewayReachable: params.gatewayReachable,
+    ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+  };
 
-  const health = params.nodeOnlyGateway
-    ? undefined
-    : await resolveStatusGatewayHealthSafe({
-        config: overview.cfg,
-        timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
-        gatewayReachable: params.gatewayReachable,
-        gatewayProbeError: params.gatewayProbe?.error ?? null,
-        ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
-      });
-  const diagnostics = params.nodeOnlyGateway
-    ? null
-    : await resolveStatusGatewayDiagnosticsSafe({
-        config: overview.cfg,
-        timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
-        gatewayReachable: params.gatewayReachable,
-        ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
-      });
+  const [health, deliveryDiagnostics, exporterDiagnostics] = params.nodeOnlyGateway
+    ? [undefined, null, null]
+    : await Promise.all([
+        resolveStatusGatewayHealthSafe({
+          config: overview.cfg,
+          timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
+          gatewayReachable: params.gatewayReachable,
+          gatewayProbeError: params.gatewayProbe?.error ?? null,
+          ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+        }),
+        resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
+        resolveStatusGatewayDiagnosticsSafe({
+          ...diagnosticsParams,
+          type: "telemetry.exporter",
+        }),
+      ]);
 
   params.progress.setLabel("Checking local state…");
   // These probes are intentionally best-effort so status-all can still print a partial report.
   const sentinel = await readRestartSentinel().catch(() => null);
   const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
   const port = resolveGatewayPort(overview.cfg);
-  const portUsage = await inspectPortUsage(port).catch(() => null);
+  const bindHost = await resolveGatewayBindHost(
+    overview.cfg.gateway?.bind ?? "loopback",
+    overview.cfg.gateway?.customBindHost,
+  );
+  const portUsage = await inspectPortUsage(port, {
+    probeHosts: resolveGatewayRequiredListenHosts(bindHost),
+  }).catch(() => null);
   params.progress.tick();
 
   const defaultWorkspace =
@@ -165,7 +178,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
       agentStatus: overview.agentStatus,
       gatewayReachable: params.gatewayReachable,
       health,
-      deliveryDiagnostics: diagnostics,
+      deliveryDiagnostics,
+      exporterDiagnostics,
       nodeOnlyGateway: params.nodeOnlyGateway,
     },
   };

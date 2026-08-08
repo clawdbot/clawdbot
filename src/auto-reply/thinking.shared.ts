@@ -83,7 +83,8 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
   }
-  if (["off"].includes(key)) {
+  // `none` is a documented provider-native spelling for disabled reasoning; store canonical off.
+  if (["off", "none"].includes(key)) {
     return "off";
   }
   if (["on", "enable", "enabled"].includes(key)) {

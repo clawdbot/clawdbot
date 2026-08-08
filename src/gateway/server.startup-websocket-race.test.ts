@@ -1,6 +1,6 @@
 // Startup WebSocket race tests ensure upgrade handlers are attached before the
 // gateway reports its listen step as ready.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { tryListenOnPort } from "../infra/ports-probe.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
@@ -10,6 +10,17 @@ type StartGatewayServer = typeof import("./test-helpers.js").startGatewayServer;
 type GatewayServerForTest = Awaited<ReturnType<StartGatewayServer>>;
 
 installGatewayTestHooks({ scope: "suite" });
+
+let loopbackAliasBindable = false;
+
+beforeAll(async () => {
+  try {
+    await tryListenOnPort({ host: "127.0.0.2", port: 0, exclusive: true });
+    loopbackAliasBindable = true;
+  } catch {
+    loopbackAliasBindable = false;
+  }
+});
 
 async function connectWebSocket(url: string): Promise<WebSocket> {
   const ws = new WebSocket(url);
@@ -59,7 +70,6 @@ describe("gateway startup websocket readiness", () => {
       expect(runtimeState.httpBindHosts).toEqual([]);
       expect(runtimeState.httpServer.listenerCount("upgrade")).toBeGreaterThan(0);
     } finally {
-      runtimeState.releasePluginRouteRegistry();
       runtimeState.wss.close();
     }
   });
@@ -91,7 +101,11 @@ describe("gateway startup websocket readiness", () => {
     }
   });
 
-  it("serves a specific IPv4 bind and its required loopback alias", async () => {
+  it("serves a specific IPv4 bind and its required loopback alias", async ({ skip }) => {
+    if (!loopbackAliasBindable) {
+      skip("127.0.0.2 is not bindable on this host");
+      return;
+    }
     const previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     let server: GatewayServerForTest | undefined;

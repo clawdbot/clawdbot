@@ -15,10 +15,90 @@ const getUserProfileListItem = vi.hoisted(() =>
 );
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
+vi.mock("./session-utils-row.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-row.js")>();
+  return {
+    ...actual,
+    projectSessionActor: (
+      actor: Parameters<typeof actual.projectSessionActor>[0],
+      identities: Parameters<typeof actual.projectSessionActor>[1],
+    ) => {
+      if (actor?.id === "shared-id") {
+        return actor.type === "human"
+          ? { type: actor.type, id: actor.id, label: "Alpha" }
+          : { type: actor.type, id: actor.id, label: "Zulu", avatarUrl: "/avatar" };
+      }
+      if (actor?.id === "unicode-id") {
+        return {
+          type: actor.type,
+          id: actor.id,
+          label: actor.type === "human" ? "é" : "e\u0301",
+        };
+      }
+      return actual.projectSessionActor(actor, identities);
+    },
+  };
+});
 
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  getUserProfileListItem.mockClear();
+});
+
+it("keeps creator labels and avatars stable across actor order", () => {
+  const actorOrders = [
+    ["human", "agent"],
+    ["agent", "human"],
+  ] as const;
+  for (const actorOrder of actorOrders) {
+    const store = Object.fromEntries(
+      actorOrder.map((type, index) => [
+        `agent:main:${index}`,
+        {
+          createdActor: { type, id: "shared-id" },
+          sessionId: `session-${index}`,
+          updatedAt: 2 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+    const result = listSessionsFromStore({
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/openclaw-session-creator-order",
+      store,
+      opts: { archived: "all" },
+    });
+
+    expect(result.creators).toEqual([{ id: "shared-id", label: "Alpha", avatarUrl: "/avatar" }]);
+  }
+});
+
+it("breaks locale-equivalent creator label ties deterministically", () => {
+  for (const actorOrder of [
+    ["human", "agent"],
+    ["agent", "human"],
+  ] as const) {
+    const store = Object.fromEntries(
+      actorOrder.map((type, index) => [
+        `agent:main:unicode-${index}`,
+        {
+          createdActor: { type, id: "unicode-id" },
+          sessionId: `unicode-session-${index}`,
+          updatedAt: 2 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+    const result = listSessionsFromStore({
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/openclaw-session-creator-unicode-order",
+      store,
+      opts: { archived: "all" },
+    });
+
+    expect(result.creators).toEqual([{ id: "unicode-id", label: "e\u0301" }]);
+  }
+});
 
 it("returns the complete deterministic creator facet independently of pagination", () => {
   const store: Record<string, SessionEntry> = {
@@ -237,7 +317,7 @@ it("preserves legacy list output across visibility, scope, creator, and search f
   );
 });
 
-it("keeps the serialized list response byte-identical to the legacy filter path", () => {
+it("keeps the serialized list response deterministic for the current filter path", () => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   const result = listSessionsFromStore({
     cfg: {
@@ -263,11 +343,11 @@ it("keeps the serialized list response byte-identical to the legacy filter path"
     },
     storePath: "/tmp/openclaw-session-byte-parity",
   });
-  const legacySerializedResponse = [
+  const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"creators":[{"id":"creator-b"}]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
+    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b"},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","agentRuntime":{"id":"codex","source":"implicit"},"contextTokens":100}]}',
   ].join("");
 
-  expect(JSON.stringify(result)).toBe(legacySerializedResponse);
+  expect(JSON.stringify(result)).toBe(expectedSerializedResponse);
 });

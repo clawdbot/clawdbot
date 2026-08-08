@@ -101,7 +101,7 @@ describe("persistUserTurnTranscript", () => {
       content: "What is in this image?",
       timestamp: 123,
       __openclaw: {
-        senderIsOwner: true,
+        senderIsOwner: false,
         media: [{ path: "/tmp/image.png", contentType: "image/png" }],
       },
       provenance,
@@ -346,7 +346,7 @@ describe("persistUserTurnTranscript", () => {
         provenance,
         __openclaw: {
           hookOwned: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           transport: {
             channel: "reef",
             conversationRef: "conv_0123456789abcdef0123456789abcdef",

@@ -1,16 +1,27 @@
 // OpenClaw gateway tests cover activation serialization and chat sessions.
 
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "../../system-agent/system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  readLastSystemAgentAuditEntry,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "../../system-agent/system-agent.test-helpers.js";
 import type {
   SystemAgentVerifiedInferenceBinding,
   SystemAgentVerifiedInferenceDeps,
@@ -18,6 +29,7 @@ import type {
 import { createDeferred } from "../../test-utils/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import {
   systemAgentHandlers,
   runExclusiveSystemAgentSetupActivation,
@@ -28,6 +40,7 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 const setupInferenceMocks = vi.hoisted(() => ({
   activateSetupInference: vi.fn(),
   detectSetupInference: vi.fn(),
+  resolvePersistentApplyInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
 const setupInferenceDetectionMocks = vi.hoisted(() => ({
@@ -59,6 +72,7 @@ const onboardingWelcomeMocks = vi.hoisted(() => ({
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
   detectSetupInference: setupInferenceMocks.detectSetupInference,
+  resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
 }));
 vi.mock("../../system-agent/setup-inference-detection.js", () => ({
@@ -107,6 +121,31 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
   return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
 }
 
+function makeWizardContext() {
+  const wizardSessions = new Map();
+  return {
+    wizardSessions,
+    context: {
+      wizardSessions,
+      findRunningWizard: () => undefined,
+      purgeWizardSession: (id: string) => wizardSessions.delete(id),
+    } as unknown as GatewayRequestContext,
+  };
+}
+
+function systemAgentHandler(method: keyof typeof systemAgentHandlers) {
+  return expectDefined(systemAgentHandlers[method], `systemAgentHandlers["${method}"] invariant`);
+}
+
+function systemAgentLane() {
+  return getCommandLaneSnapshot(CommandLane.SystemAgent);
+}
+
+const waitOneTask = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
 const defaultClient = {
   connId: "conn-test",
   connect: { device: { id: "device-test" } },
@@ -114,28 +153,20 @@ const defaultClient = {
 
 const verifiedConfig: OpenClawConfig = {
   agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
-  auth: {
-    profiles: {
-      "openai:verified": { provider: "openai", mode: "api_key" },
-    },
-  },
+  auth: { profiles: { "openai:verified": { provider: "openai", mode: "api_key" } } },
 };
 let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireVerifiedInferenceFixture(): SystemAgentVerifiedInferenceBinding {
-  if (!verifiedInference) {
-    throw new Error("verified inference fixture was not initialized");
-  }
-  return verifiedInference;
+  return expectDefined(verifiedInference, "verified inference fixture was not initialized");
 }
 
 function requireVerifiedInferenceDeps(): SystemAgentVerifiedInferenceDeps {
-  if (!verifiedInferenceDeps) {
-    throw new Error("verified inference dependencies were not initialized");
-  }
   return {
-    ...verifiedInferenceDeps,
+    ...expectDefined(verifiedInferenceDeps, "verified inference dependencies were not initialized"),
     readConfigFileSnapshot: async () =>
       ({
         exists: true,
@@ -187,16 +218,29 @@ function seededSession(overrides?: Partial<SystemAgentChatSession>): SystemAgent
   };
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
   verifiedInference = fixture.binding;
   verifiedInferenceDeps = fixture.deps;
+});
+
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+  verifiedInference = undefined;
+  verifiedInferenceDeps = undefined;
+});
+
+beforeEach(() => {
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
     latencyMs: 10,
     binding: verifiedInference,
   });
+  setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
+    requireVerifiedInferenceFixture().configuredRoute,
+  );
   setupSharedMocks.readSetupConfigFileSnapshot.mockResolvedValue({
     exists: true,
     valid: true,
@@ -228,20 +272,11 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  setupInferenceMocks.activateSetupInference.mockReset();
-  setupInferenceMocks.detectSetupInference.mockReset();
-  setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockReset();
-  setupInferenceMocks.verifySetupInference.mockReset();
-  providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider.mockReset();
-  setupSharedMocks.readSetupConfigFileSnapshot.mockReset();
-  setupSharedMocks.writeWizardConfigFile.mockReset();
-  greetingMocks.loadSystemAgentGreetingFacts.mockReset();
-  greetingMocks.resolveSystemAgentGreeting.mockReset();
-  greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
-  onboardingWelcomeMocks.buildOnboardingWelcome.mockReset();
-  verifiedInference = undefined;
-  verifiedInferenceDeps = undefined;
+  vi.resetAllMocks();
+  resetPluginStateStoreForTests();
   resetCommandQueueStateForTest();
+  vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
 async function callChat(
@@ -250,10 +285,7 @@ async function callChat(
   client: GatewayClient | null = defaultClient,
 ): Promise<RespondCall> {
   const { calls, respond } = makeRespond();
-  await expectDefined(
-    systemAgentHandlers["openclaw.chat"],
-    'systemAgentHandlers["openclaw.chat"] test invariant',
-  )({
+  await systemAgentHandler("openclaw.chat")({
     params,
     respond,
     context,
@@ -266,7 +298,7 @@ async function callChat(
   return call;
 }
 
-describe("openclaw.setup.activate", () => {
+describe("openclaw.setup", () => {
   it("rejects a concurrent activation instead of queueing stale work", async () => {
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
@@ -280,22 +312,17 @@ describe("openclaw.setup.activate", () => {
     });
     await firstStarted.promise;
 
-    const secondTask = vi.fn(async () => {
-      events.push("second:start");
-      events.push("second:end");
-    });
-    const second = runExclusiveSystemAgentSetupActivation(secondTask);
-
+    const secondTask = vi.fn(async () => events.push("second:start", "second:end"));
     expect(events).toEqual(["first:start"]);
-    await expect(second).rejects.toThrow("setup is already in progress");
+    await expect(runExclusiveSystemAgentSetupActivation(secondTask)).rejects.toThrow(
+      "setup is already in progress",
+    );
     expect(secondTask).not.toHaveBeenCalled();
     releaseFirst.resolve();
     await first;
     expect(events).toEqual(["first:start", "first:end"]);
 
-    await runExclusiveSystemAgentSetupActivation(async () => {
-      events.push("third:start");
-    });
+    await runExclusiveSystemAgentSetupActivation(async () => events.push("third:start"));
     expect(events).toEqual(["first:start", "first:end", "third:start"]);
   });
 
@@ -310,10 +337,7 @@ describe("openclaw.setup.activate", () => {
 
     try {
       const { calls, respond } = makeRespond();
-      await expectDefined(
-        systemAgentHandlers["openclaw.setup.activate"],
-        'systemAgentHandlers["openclaw.setup.activate"] test invariant',
-      )({
+      await systemAgentHandler("openclaw.setup.activate")({
         params: { kind: "claude-cli" },
         respond,
       } as never);
@@ -346,26 +370,15 @@ describe("openclaw.setup.activate", () => {
     await expect(runExclusiveSystemAgentSetupActivation(nextTask)).resolves.toBe("ok");
     expect(nextTask).toHaveBeenCalledOnce();
   });
-});
-
-describe("openclaw.setup.auth.start", () => {
   it("starts provider auth as an interactive wizard session", async () => {
-    const wizardSessions = new Map();
-    const context = {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext;
+    const { wizardSessions, context } = makeWizardContext();
     setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
       await params.prompter.note("Open the browser and enter ABCD", "Pair GitHub");
       return { ok: true, modelRef: "github-copilot/test", latencyMs: 10, lines: ["ready"] };
     });
     const { calls, respond } = makeRespond();
 
-    await expectDefined(
-      systemAgentHandlers["openclaw.setup.auth.start"],
-      'systemAgentHandlers["openclaw.setup.auth.start"] test invariant',
-    )({
+    await systemAgentHandler("openclaw.setup.auth.start")({
       params: { sessionId: "auth-session-1", authChoice: "github-copilot" },
       respond,
       context,
@@ -391,9 +404,6 @@ describe("openclaw.setup.auth.start", () => {
     await session.answer(first.step.id, null);
     await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
   });
-});
-
-describe("openclaw.setup.prepare.start", () => {
   it("runs the selected provider method in a shared wizard session and commits its config", async () => {
     const preparedConfig: OpenClawConfig = {
       ...verifiedConfig,
@@ -403,21 +413,13 @@ describe("openclaw.setup.prepare.start", () => {
       async (params) => {
         await params.prompter.note("Model ready", "Ollama");
         await params.beforePersistentEffect();
-        return { config: preparedConfig };
+        return { config: preparedConfig, agentModelOverride: "ollama/qwen3:0.6b" };
       },
     );
-    const wizardSessions = new Map();
-    const context = {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext;
+    const { wizardSessions, context } = makeWizardContext();
     const { calls, respond } = makeRespond();
 
-    await expectDefined(
-      systemAgentHandlers["openclaw.setup.prepare.start"],
-      'systemAgentHandlers["openclaw.setup.prepare.start"] test invariant',
-    )({
+    await systemAgentHandler("openclaw.setup.prepare.start")({
       params: {
         sessionId: "prepare-session-1",
         authChoice: "ollama",
@@ -449,7 +451,11 @@ describe("openclaw.setup.prepare.start", () => {
       }),
     );
     await session.answer(note.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "done",
+      preparedModelRef: "ollama/qwen3:0.6b",
+    });
     expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
       allowConfigSizeDrop: false,
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
@@ -503,16 +509,13 @@ describe("openclaw.chat", () => {
     const first = callChat(context, { sessionId: "shared" });
     await started.promise;
     const second = callChat(context, { sessionId: "shared" });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitOneTask();
     release.resolve();
     const [firstCall, secondCall] = await Promise.all([first, second]);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(1);
-    expect(firstCall.ok).toBe(true);
-    expect(secondCall.ok).toBe(true);
+    expect([firstCall.ok, secondCall.ok]).toEqual([true, true]);
   });
 
   it("keeps read-only setup detection outside the serialized system-agent lane", async () => {
@@ -526,6 +529,7 @@ describe("openclaw.chat", () => {
         unavailableCandidates: [],
         manualProviders: [],
         authOptions: [],
+        prepareOptions: [],
         recommendedInstalls: [],
         workspace: "/tmp/work",
         setupComplete: false,
@@ -533,23 +537,20 @@ describe("openclaw.chat", () => {
     });
     const activeAtResponse: number[] = [];
 
-    const pending = expectDefined(
-      systemAgentHandlers["openclaw.setup.detect"],
-      'systemAgentHandlers["openclaw.setup.detect"] test invariant',
-    )({
+    const pending = systemAgentHandler("openclaw.setup.detect")({
       params: {},
       respond: () => {
-        activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
+        activeAtResponse.push(systemAgentLane().activeCount);
       },
     } as never);
 
     await started.promise;
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
+    expect(systemAgentLane().activeCount).toBe(0);
     release.resolve();
     await pending;
 
     expect(activeAtResponse).toEqual([0]);
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
+    expect(systemAgentLane().activeCount).toBe(0);
   });
 
   it.each([
@@ -569,10 +570,7 @@ describe("openclaw.chat", () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
     const { calls, respond } = makeRespond();
 
-    await expectDefined(
-      systemAgentHandlers["openclaw.setup.verify"],
-      'systemAgentHandlers["openclaw.setup.verify"] test invariant',
-    )({ params: {}, respond } as never);
+    await systemAgentHandler("openclaw.setup.verify")({ params: {}, respond } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       runtime: defaultRuntime,
@@ -583,10 +581,7 @@ describe("openclaw.chat", () => {
   it("rejects unknown setup verification params without running inference", async () => {
     const { calls, respond } = makeRespond();
 
-    await expectDefined(
-      systemAgentHandlers["openclaw.setup.verify"],
-      'systemAgentHandlers["openclaw.setup.verify"] test invariant',
-    )({
+    await systemAgentHandler("openclaw.setup.verify")({
       params: { modelRef: "openai/gpt-5.5" },
       respond,
     } as never);
@@ -612,10 +607,7 @@ describe("openclaw.chat", () => {
     const { calls, respond } = makeRespond();
     const activeAtResponse: number[] = [];
 
-    const pending = expectDefined(
-      systemAgentHandlers["openclaw.setup.activate"],
-      'systemAgentHandlers["openclaw.setup.activate"] test invariant',
-    )({
+    const pending = systemAgentHandler("openclaw.setup.activate")({
       params: {
         kind: "api-key",
         modelRef: "openai/gpt-5.5",
@@ -624,13 +616,13 @@ describe("openclaw.chat", () => {
         workspace: "/tmp/work",
       },
       respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-        activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
+        activeAtResponse.push(systemAgentLane().activeCount);
         respond(ok, payload, error);
       },
     } as never);
 
     await started.promise;
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(1);
+    expect(systemAgentLane().activeCount).toBe(1);
     release.resolve();
     await pending;
 
@@ -645,7 +637,7 @@ describe("openclaw.chat", () => {
     });
     expect(calls).toEqual([{ ok: true, payload: activationResult, error: undefined }]);
     expect(activeAtResponse).toEqual([1]);
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
+    expect(systemAgentLane().activeCount).toBe(0);
   });
 
   it("rejects invalid params", async () => {
@@ -797,10 +789,7 @@ describe("openclaw.chat", () => {
     );
     const invoke = async (params: Record<string, unknown>) => {
       const { calls, respond } = makeRespond();
-      await expectDefined(
-        systemAgentHandlers["openclaw.chat.history"],
-        'systemAgentHandlers["openclaw.chat.history"] test invariant',
-      )({ params, respond } as never);
+      await systemAgentHandler("openclaw.chat.history")({ params, respond } as never);
       return calls[0];
     };
 
@@ -814,29 +803,38 @@ describe("openclaw.chat", () => {
     expect((await invoke({ limit: 501 }))?.ok).toBe(false);
   });
 
-  it("surfaces delegated proposals without letting the agent arm them", async () => {
-    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
-    const proposalHash = "a".repeat(64);
-    const engine = makeVerifiedEngine();
+  it("tracks approved delegated Gateway restarts until their completion drains", async () => {
+    const approvalStarted = createDeferred();
+    const releaseApproval = createDeferred();
+    const stateDir = systemAgentTempDirs.make("openclaw-approved-gateway-restart-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(verifiedConfig));
+    const runGatewayRestart = vi.fn(async () => {
+      approvalStarted.resolve();
+      await releaseApproval.promise;
+      return true;
+    });
+    const engine = new SystemAgentChatEngine({
+      operatorApprovalOnly: true,
+      surface: "gateway",
+      verifiedInference: requireVerifiedInferenceFixture(),
+      deps: { ...requireVerifiedInferenceDeps(), runGatewayRestart },
+    });
+    engine.propose({ kind: "gateway-restart" });
+    const proposalHash = expectDefined(
+      engine.getPendingOperatorProposal(),
+      "restart proposal",
+    ).hash;
     const handle = vi
       .spyOn(engine, "handle")
       .mockResolvedValue({ text: "Approval pending.", action: "none" });
-    vi.spyOn(engine, "getPendingOperatorProposal").mockReturnValue({
-      operation,
-      hash: proposalHash,
+    const resolveOperatorApproval = vi.spyOn(engine, "resolveOperatorApproval");
+    const delegatedSession = seededSession({
+      engine,
+      ownerKey: JSON.stringify(["main", "agent:main:main"]),
     });
-    const resolveOperatorApproval = vi
-      .spyOn(engine, "resolveOperatorApproval")
-      .mockResolvedValue(null);
-    const sessions = new Map<string, SystemAgentChatSession>([
-      [
-        "delegate-1",
-        seededSession({
-          engine,
-          ownerKey: JSON.stringify(["main", "agent:main:main"]),
-        }),
-      ],
-    ]);
+    const sessions = new Map<string, SystemAgentChatSession>([["delegate-1", delegatedSession]]);
     const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
@@ -850,12 +848,30 @@ describe("openclaw.chat", () => {
       hasExecApprovalClients: () => true,
     } as unknown as GatewayRequestContext;
 
-    const first = await callChat(context, {
-      sessionId: "delegate-1",
-      message: "Change port.",
-      context: { page: "channels" },
-      delegation: { agentId: "main", sessionKey: "agent:main:main" },
+    const requestResponses = makeRespond();
+    await handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "delegated-gateway-restart",
+        method: "openclaw.chat",
+        params: {
+          sessionId: "delegate-1",
+          message: "Restart Gateway.",
+          context: { page: "channels" },
+          delegation: { agentId: "main", sessionKey: "agent:main:main" },
+        },
+      },
+      respond: requestResponses.respond,
+      client: {
+        ...defaultClient,
+        connect: { ...defaultClient.connect, role: "operator", scopes: ["operator.admin"] },
+      } as GatewayClient,
+      isWebchatConnect: () => false,
+      context,
+      extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
     });
+    const first = expectDefined(requestResponses.calls[0], "delegated Gateway response invariant");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     const proposalId = (first.payload as { proposalId?: string }).proposalId;
 
     expect(first.payload).toMatchObject({
@@ -874,7 +890,7 @@ describe("openclaw.chat", () => {
       { dropIfSlow: true },
     );
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
-    expect(handle).toHaveBeenNthCalledWith(1, "Change port.");
+    expect(handle).toHaveBeenNthCalledWith(1, "Restart Gateway.");
 
     await callChat(context, {
       sessionId: "delegate-1",
@@ -884,9 +900,32 @@ describe("openclaw.chat", () => {
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
 
     manager.resolve(proposalId!, "allow-once", "operator-ui");
+    await approvalStarted.promise;
+    try {
+      expect(systemAgentLane()).toMatchObject({ activeCount: 1, queuedCount: 0 });
+      const restartPreflight = createSafeGatewayRestartPreflight();
+      expect(restartPreflight.safe).toBe(false);
+      expect(restartPreflight.counts.queueSize).toBe(1);
+      expect(restartPreflight.blockers).toContainEqual(
+        expect.objectContaining({ kind: "queue", count: 1 }),
+      );
+    } finally {
+      releaseApproval.resolve();
+    }
     await vi.waitFor(() => {
       expect(resolveOperatorApproval).toHaveBeenCalledWith("allow-once", proposalHash);
+      expect(runGatewayRestart).toHaveBeenCalledOnce();
+      expect(systemAgentLane().activeCount).toBe(0);
     });
+    await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
+      text: expect.stringContaining("[openclaw] done: gateway.restart"),
+    });
+    expect(readLastSystemAgentAuditEntry()).toMatchObject({
+      operation: "gateway.restart",
+      summary: "Scheduled Gateway restart",
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(createSafeGatewayRestartPreflight().counts.queueSize).toBe(0);
   });
 
   it("drops a failed session and requires fresh inference on retry", async () => {
@@ -954,47 +993,29 @@ describe("openclaw.chat", () => {
     ]);
     const activeAtResponse: number[] = [];
 
-    const first = expectDefined(
-      systemAgentHandlers["openclaw.chat"],
-      'systemAgentHandlers["openclaw.chat"] test invariant',
-    )({
-      params: { sessionId: "s1", message: "yes" },
-      client: defaultClient,
-      context: makeContext(sessions),
-      respond: () => {
-        activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
-      },
-    } as never);
-    const second = expectDefined(
-      systemAgentHandlers["openclaw.chat"],
-      'systemAgentHandlers["openclaw.chat"] test invariant',
-    )({
-      params: { sessionId: "s2", message: "yes" },
-      client: defaultClient,
-      context: makeContext(sessions),
-      respond: () => {
-        activeAtResponse.push(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount);
-      },
-    } as never);
+    const trackChat = (sessionId: string) =>
+      systemAgentHandler("openclaw.chat")({
+        params: { sessionId, message: "yes" },
+        client: defaultClient,
+        context: makeContext(sessions),
+        respond: () => activeAtResponse.push(systemAgentLane().activeCount),
+      } as never);
+    const first = trackChat("s1");
+    const second = trackChat("s2");
 
     await firstStarted.promise;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent)).toMatchObject({
-      activeCount: 2,
-      queuedCount: 0,
-    });
+    await waitOneTask();
+    expect(systemAgentLane()).toMatchObject({ activeCount: 2, queuedCount: 0 });
     expect(secondHandle).not.toHaveBeenCalled();
     releaseFirst.resolve();
     await first;
     await secondStarted.promise;
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(1);
+    expect(systemAgentLane().activeCount).toBe(1);
     releaseSecond.resolve();
     await second;
 
     expect(activeAtResponse).toEqual([2, 1]);
-    expect(getCommandLaneSnapshot(CommandLane.SystemAgent).activeCount).toBe(0);
+    expect(systemAgentLane().activeCount).toBe(0);
   });
 
   it("keeps the session map bounded during concurrent unique initialization", async () => {
@@ -1015,16 +1036,13 @@ describe("openclaw.chat", () => {
     const first = callChat(context, { sessionId: "new-1" });
     const second = callChat(context, { sessionId: "new-2" });
     await evictionStarted.promise;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitOneTask();
     releaseEviction.resolve();
     await Promise.all([first, second]);
 
     expect(disposeOldest).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(8);
-    expect(sessions.has("new-1")).toBe(true);
-    expect(sessions.has("new-2")).toBe(true);
+    expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
   });
 
   it("resets a session on request", async () => {
@@ -1040,10 +1058,7 @@ describe("openclaw.chat", () => {
     // asserting the old engine is gone instead.
     const { calls, respond } = makeRespond();
     const context = makeContext(sessions);
-    const pending = expectDefined(
-      systemAgentHandlers["openclaw.chat"],
-      'systemAgentHandlers["openclaw.chat"] test invariant',
-    )({
+    const pending = systemAgentHandler("openclaw.chat")({
       params: { sessionId: "s1", reset: true },
       client: defaultClient,
       respond,

@@ -50,7 +50,7 @@ async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Prom
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
-  deliver?: (text: string) => Promise<void>;
+  deliver?: (text: string) => Promise<boolean | void>;
   startOrder?: AgentEventDeliveryStartOrder;
 }) {
   let lastText: string | undefined;
@@ -431,7 +431,7 @@ type RunCliAgentWithLifecycleParams = {
    */
   onActivity?: () => void;
   preserveProgressCallbackStartOrder?: boolean;
-  onAssistantText?: (text: string) => Promise<void>;
+  onAssistantText?: (text: string) => Promise<boolean | void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;

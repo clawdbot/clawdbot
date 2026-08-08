@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -167,11 +168,37 @@ describe("scripts/test-docker-all scheduler", () => {
     const root = tempDirs.make("openclaw-docker-plan-isolated-harness-");
     const scriptsDir = path.join(root, "scripts");
     const libDir = path.join(scriptsDir, "lib");
+    const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
     mkdirSync(libDir, { recursive: true });
+    mkdirSync(upgradeSurvivorDir, { recursive: true });
+    copyFileSync("package.json", path.join(root, "package.json"));
     copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
-    for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
+    copyFileSync(
+      "scripts/prepublish-plugin-registry-artifact.mjs",
+      path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),
+    );
+    copyFileSync(
+      "scripts/windows-cmd-helpers.mjs",
+      path.join(scriptsDir, "windows-cmd-helpers.mjs"),
+    );
+    for (const fileName of [
+      "docker-e2e-plan.mjs",
+      "docker-e2e-scenarios.mjs",
+      "official-external-channel-catalog.json",
+      "release-version.mjs",
+      "sleep.mjs",
+    ]) {
       copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
     }
+    copyFileSync(
+      "scripts/e2e/lib/upgrade-survivor/config-recipe.mjs",
+      path.join(upgradeSurvivorDir, "config-recipe.mjs"),
+    );
+    cpSync(
+      "scripts/e2e/lib/upgrade-survivor/config-recipe",
+      path.join(upgradeSurvivorDir, "config-recipe"),
+      { recursive: true },
+    );
 
     const result = spawnSync(
       process.execPath,
@@ -206,6 +233,28 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("selects the CLI installer distribution lane through the scheduler catalog", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_BUILD: "0",
+        OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+        OPENCLAW_DOCKER_ALL_LANES: "cli-installer-distribution",
+        OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+        OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Selected lanes: cli-installer-distribution");
+    expect(result.stdout).toContain(
+      "cli-installer-distribution(w=3 r=docker,npm timeout=1800s image=bare state=empty)",
+    );
+    expect(result.stdout).toContain("Dry run complete");
   });
 
   it("reuses only registry-backed images in generated workflow reruns", () => {

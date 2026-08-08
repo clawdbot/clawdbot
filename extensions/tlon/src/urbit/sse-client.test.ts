@@ -172,13 +172,16 @@ describe("UrbitSSEClient", () => {
         const cancel = vi.fn(() => {
           throw new Error(`${label} cancel failed`);
         });
-        const release = vi.fn().mockResolvedValue(undefined);
+        const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+        const release = vi.fn(async () => {
+          void response.body?.cancel().catch(() => undefined);
+        });
         return {
           method,
           cancel,
           release,
           result: {
-            response: new Response(new ReadableStream<Uint8Array>({ cancel })),
+            response,
             finalUrl: "https://example.com",
             release,
           },

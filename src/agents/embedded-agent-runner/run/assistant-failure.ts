@@ -148,7 +148,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     assistantFailoverReason === "unclassified" ||
     assistantFailoverReason === "unknown" ||
     assistantFailoverReason === "server_error";
-  if (
+  const replaySafeSilentErrorFailure =
     !authFailure &&
     !rateLimitFailure &&
     !billingFailure &&
@@ -160,9 +160,8 @@ export async function handleEmbeddedAssistantFailure(input: {
     shouldRetrySilentErrorAssistantTurn({
       attempt: input.attempt,
       assistant: input.attemptAssistant,
-    }) &&
-    input.emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
-  ) {
+    });
+  if (replaySafeSilentErrorFailure && input.emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES) {
     const emptyErrorRetries = input.emptyErrorRetries + 1;
     log.warn(
       `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
@@ -179,12 +178,24 @@ export async function handleEmbeddedAssistantFailure(input: {
     });
   }
 
+  // The bounded same-model retry already proved this attempt had no visible output
+  // or replay-unsafe effects. Once those retries are exhausted, skip profile
+  // rotation and let the configured model fallback recover the invisible failure.
+  const exhaustedUnclassifiedSilentError =
+    input.fallbackConfigured &&
+    assistantFailoverReason === null &&
+    replaySafeSilentErrorFailure &&
+    input.emptyErrorRetries >= MAX_EMPTY_ERROR_RETRIES;
+  const effectiveFailoverReason = exhaustedUnclassifiedSilentError
+    ? ("unknown" as const)
+    : assistantFailoverReason;
+
   const failedProfileId = input.authProfileId;
   const logFailoverDecision = createFailoverDecisionLogger({
     stage: "assistant",
     runId: input.runParams.runId,
     rawError: input.attemptAssistant?.errorMessage?.trim(),
-    failoverReason: assistantFailoverReason,
+    failoverReason: effectiveFailoverReason,
     profileFailureReason: assistantProfileFailureReason,
     provider: input.activeErrorContext.provider,
     model: input.activeErrorContext.model,
@@ -229,17 +240,19 @@ export async function handleEmbeddedAssistantFailure(input: {
     );
   }
 
-  const initialDecision = resolveRunFailoverDecision({
-    stage: "assistant",
-    allowFormatRetry: cloudCodeAssistFormatError,
-    terminal: input.attempt.terminal,
-    signalOwnedInterruption,
-    fallbackConfigured: input.fallbackConfigured,
-    failoverFailure,
-    failoverReason: assistantFailoverReason,
-    harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    profileRotated: false,
-  });
+  const initialDecision = exhaustedUnclassifiedSilentError
+    ? ({ action: "fallback_model", reason: "unknown" } as const)
+    : resolveRunFailoverDecision({
+        stage: "assistant",
+        allowFormatRetry: cloudCodeAssistFormatError,
+        terminal: input.attempt.terminal,
+        signalOwnedInterruption,
+        fallbackConfigured: input.fallbackConfigured,
+        failoverFailure,
+        failoverReason: assistantFailoverReason,
+        harnessOwnsTransport: input.pluginHarnessOwnsTransport,
+        profileRotated: false,
+      });
   const outcome = await handleAssistantFailover({
     initialDecision,
     terminal: input.attempt.terminal,
@@ -288,14 +301,14 @@ export async function handleEmbeddedAssistantFailure(input: {
     const retryTraceResult =
       outcome.retryKind === "same_model_rate_limit"
         ? "same_model_rate_limit"
-        : outcome.retryKind === "same_model_idle_timeout" || assistantFailoverReason === "timeout"
+        : outcome.retryKind === "same_model_idle_timeout" || effectiveFailoverReason === "timeout"
           ? "timeout"
           : "rotate_profile";
     input.traceAttempts.push({
       provider: input.activeErrorContext.provider,
       model: input.activeErrorContext.model,
       result: retryTraceResult,
-      ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+      ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
     });
     return buildOutcome(input, {
@@ -316,12 +329,12 @@ export async function handleEmbeddedAssistantFailure(input: {
       provider: input.activeErrorContext.provider,
       model: input.activeErrorContext.model,
       result:
-        assistantFailoverReason === "timeout"
+        effectiveFailoverReason === "timeout"
           ? "timeout"
           : initialDecision.action === "fallback_model"
             ? "fallback_model"
             : "error",
-      ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+      ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
       ...(typeof outcome.error.status === "number" ? { status: outcome.error.status } : {}),
     });

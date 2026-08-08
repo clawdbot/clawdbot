@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -35,6 +36,7 @@ import {
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
@@ -46,6 +48,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
@@ -62,6 +65,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -87,7 +91,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  "Default heartbeat prompt:\n`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -156,13 +160,7 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
 
   const value = build();
   stablePromptPrefixCache.set(key, { value });
-  while (stablePromptPrefixCache.size > SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT) {
-    const oldestKey = stablePromptPrefixCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    stablePromptPrefixCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 
@@ -413,20 +411,59 @@ function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   return digest.slice(0, 12);
 }
 
+const MAX_OWNER_PROMPT_LINE_BYTES = 1_024;
+const OWNER_PROMPT_PREFIX = "Allowlisted senders: ";
+const OWNER_PROMPT_SUFFIX = ". Allowlisted != owner.";
+
+function formatRawOwnerDisplayId(ownerId: string, maxBytes: number): string {
+  const sanitized = sanitizeForPromptLiteral(ownerId);
+  if (Buffer.byteLength(sanitized, "utf8") <= maxBytes) {
+    return sanitized;
+  }
+  if (maxBytes <= 3) {
+    return "";
+  }
+  return `${truncateUtf8Prefix(sanitized, maxBytes - 3)}...`;
+}
+
 function buildOwnerIdentityLine(
   ownerNumbers: string[],
   ownerDisplay: OwnerIdDisplay,
   ownerDisplaySecret?: string,
 ) {
-  const normalized = normalizeStringEntries(ownerNumbers);
+  const normalized = normalizeStringEntries(resolveOwnerPromptNumbers({ ownerNumbers }));
   if (normalized.length === 0) {
     return undefined;
   }
-  const displayOwnerNumbers =
-    ownerDisplay === "hash"
-      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
-      : normalized;
-  return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
+  const displayOwnerNumbers: string[] = [];
+  let remainingBytes = Math.min(
+    MAX_OWNER_PROMPT_CONTENT_BYTES,
+    MAX_OWNER_PROMPT_LINE_BYTES - Buffer.byteLength(OWNER_PROMPT_PREFIX + OWNER_PROMPT_SUFFIX),
+  );
+  for (const ownerId of normalized) {
+    const separatorBytes = displayOwnerNumbers.length > 0 ? 2 : 0;
+    const availableBytes = remainingBytes - separatorBytes;
+    if (availableBytes <= 0) {
+      break;
+    }
+    const displayOwnerId =
+      ownerDisplay === "hash"
+        ? formatOwnerDisplayId(ownerId, ownerDisplaySecret)
+        : formatRawOwnerDisplayId(ownerId, availableBytes);
+    if (!displayOwnerId) {
+      continue;
+    }
+    const nextBytes = Buffer.byteLength(displayOwnerId, "utf8") + separatorBytes;
+    if (nextBytes > remainingBytes) {
+      break;
+    }
+    displayOwnerNumbers.push(displayOwnerId);
+    remainingBytes -= nextBytes;
+  }
+  if (displayOwnerNumbers.length === 0) {
+    return undefined;
+  }
+  return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
 }
 
 function buildTemporalContextSection(params: {
@@ -561,10 +598,20 @@ function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
-  if (params.isMinimal) {
-    return [];
-  }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const visibleReplyInstruction = messageToolOnly
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
+  const messageToolTargetInstruction = params.requireExplicitMessageTarget
+    ? "- `send`: `target` + `message`; target required this turn."
+    : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
+  if (params.isMinimal) {
+    // Restricted delivery turns still need their sole visible-reply contract;
+    // omitting it makes a private final silently disappear for the requester.
+    return messageToolOnly && params.availableTools.has("message")
+      ? ["## Messaging", visibleReplyInstruction, messageToolTargetInstruction, ""]
+      : [];
+  }
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
@@ -584,9 +631,7 @@ function buildMessagingSection(params: {
       : "";
   return [
     "## Messaging",
-    messageToolOnly
-      ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
-      : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
+    visibleReplyInstruction,
     "- Cross-session: `sessions_send(sessionKey, message)`.",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -599,11 +644,7 @@ function buildMessagingSection(params: {
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private."
             : "",
-          messageToolOnly
-            ? params.requireExplicitMessageTarget
-              ? "- `send`: `target` + `message`; target required this turn."
-              : "- `send`: `message`; current source is default target. Set `target` only elsewhere."
-            : "- `send`: `target` + `message`.",
+          messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
@@ -614,7 +655,7 @@ function buildMessagingSection(params: {
               : `- After visible \`message(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? "- Inline buttons: `send` with `buttons=[[{text,callback_data,style?}]]`; style primary|success|danger."
+              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""
@@ -863,12 +904,13 @@ export function buildAgentSystemPrompt(params: {
       "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
-    cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
+    [AUTOMATIONS_TOOL_NAME]:
+      "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context. This feature is called automations; never call it cron.",
     message: "Message/channel actions",
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
-    openclaw: "System setup/config expert; writes need human approval",
+    openclaw: "Gateway restart/system setup/config; changes need human approval",
     gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
@@ -905,7 +947,7 @@ export function buildAgentSystemPrompt(params: {
     "terminal",
     "canvas",
     "nodes",
-    "cron",
+    AUTOMATIONS_TOOL_NAME,
     "message",
     "conversations_list",
     "conversations_send",
@@ -996,12 +1038,12 @@ export function buildAgentSystemPrompt(params: {
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
+  const promptMode = params.promptMode ?? "full";
+  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
-  const ownerLine = buildOwnerIdentityLine(
-    params.ownerNumbers ?? [],
-    ownerDisplay,
-    params.ownerDisplaySecret,
-  );
+  const ownerLine = isMinimal
+    ? undefined
+    : buildOwnerIdentityLine(params.ownerNumbers ?? [], ownerDisplay, params.ownerDisplaySecret);
   const reasoningHint = params.reasoningTagHint
     ? [
         "Internal reasoning ONLY inside <think>...</think>.",
@@ -1026,8 +1068,6 @@ export function buildAgentSystemPrompt(params: {
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
-  const promptMode = params.promptMode ?? "full";
-  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
@@ -1068,11 +1108,18 @@ export function buildAgentSystemPrompt(params: {
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
     "",
   ];
-  const skillsSection = buildSkillsSection({
-    skillsPrompt,
-    readToolName,
-    codeModeActive: params.codeModeActive,
-  });
+  // CLI backends own native file tools outside OpenClaw's projected tool list.
+  // Keep their skill catalog visible while embedded runs require a real read tool.
+  const canAccessSkills = params.codeModeActive
+    ? visibleTools.has("exec")
+    : visibleTools.has("read") || promptSurface === "cli_backend";
+  const skillsSection = canAccessSkills
+    ? buildSkillsSection({
+        skillsPrompt,
+        readToolName,
+        codeModeActive: params.codeModeActive,
+      })
+    : [];
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
@@ -1262,7 +1309,7 @@ export function buildAgentSystemPrompt(params: {
       "Do not invent commands.",
       ...(hasOpenClaw
         ? [
-            "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
+            "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`. Never restart the Gateway through shell commands or write your own config.",
           ]
         : [
             "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
@@ -1275,7 +1322,7 @@ export function buildAgentSystemPrompt(params: {
         ? "## Model Aliases"
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: prefer alias; provider/model also accepted."
+        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")

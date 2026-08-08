@@ -156,6 +156,44 @@ describe("prepareGoogleSimpleCompletionModel", () => {
     ).not.toHaveProperty("thinkingBudget");
   });
 
+  it("removes disabled thinking budget for Gemma 4 when reasoning is omitted", async () => {
+    const actual = await vi.importActual<
+      typeof import("../llm/providers/stream-wrappers/google-thinking-payload.js")
+    >("../llm/providers/stream-wrappers/google-thinking-payload.js");
+    sanitizeGoogleThinkingPayload.mockImplementationOnce(actual.sanitizeGoogleThinkingPayload);
+    streamSimple.mockImplementationOnce((_model, _context, options) => {
+      const payload = {
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      return { content: [{ type: "text", text: "ok" }], payload };
+    });
+    const model = makeGoogleModel("gemma-4-26b-a4b-it");
+    const wrapped = prepareGoogleSimpleCompletionModel(apiRegistry, model);
+    const streamFn = ensureCustomApiRegistered.mock.calls[0]?.[2] as (
+      ...args: unknown[]
+    ) => unknown;
+
+    const result = await streamFn(wrapped, { messages: [] }, { apiKey: "key" });
+
+    expect(sanitizeGoogleThinkingPayload).toHaveBeenCalledWith({
+      payload: {
+        generationConfig: {},
+      },
+      modelId: "gemma-4-26b-a4b-it",
+      thinkingLevel: undefined,
+    });
+    expect(
+      (
+        result as {
+          payload: { generationConfig: Record<string, unknown> };
+        }
+      ).payload.generationConfig,
+    ).not.toHaveProperty("thinkingConfig");
+  });
+
   it.each(["xhigh", "max"] as const)(
     "preserves clamped-off intent in the final Gemini 3 payload for reasoning=%s",
     async (reasoning) => {

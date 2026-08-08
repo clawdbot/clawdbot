@@ -41,19 +41,27 @@ vi.mock("../../channels/plugins/read-only.js", () => ({
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
-    mocks.missingOfficialExternalChannels.has(channelId)
-      ? {
-          pluginId: channelId,
-          channelId,
-          label: "Feishu",
-          installSpec: "@openclaw/feishu",
-          installCommand: "openclaw plugins install @openclaw/feishu",
-          doctorFixCommand: "openclaw doctor --fix",
-          repairHint:
-            "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-        }
-      : null,
+  resolveMissingOfficialExternalChannelPluginRepairHints: ({
+    channelIds,
+  }: {
+    channelIds: string[];
+  }) =>
+    channelIds.flatMap((channelId) =>
+      mocks.missingOfficialExternalChannels.has(channelId)
+        ? [
+            {
+              pluginId: channelId,
+              channelId,
+              label: "Feishu",
+              installSpec: "@openclaw/feishu",
+              installCommand: "openclaw plugins install @openclaw/feishu",
+              doctorFixCommand: "openclaw doctor --fix",
+              repairHint:
+                "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+            },
+          ]
+        : [],
+    ),
 }));
 
 describe("buildChannelsTable", () => {

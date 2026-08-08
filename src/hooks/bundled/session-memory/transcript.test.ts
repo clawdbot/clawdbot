@@ -9,6 +9,34 @@ function message(role: "user" | "assistant", content: unknown) {
   };
 }
 
+function createSessionContent(
+  entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
+): string {
+  return entries
+    .map((entry) =>
+      JSON.stringify(
+        "role" in entry
+          ? { type: "message", message: { role: entry.role, content: entry.content } }
+          : entry,
+      ),
+    )
+    .join("\n");
+}
+
+function extractSessionContent(sessionContent: string, messageCount?: number): string | null {
+  const events = sessionContent
+    .trim()
+    .split("\n")
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as unknown];
+      } catch {
+        return [];
+      }
+    });
+  return getRecentSessionContentFromEvents(events, messageCount);
+}
+
 describe("session-memory transcript extraction", () => {
   it("returns no content for a zero recent-message limit", () => {
     expect(getRecentSessionContentFromEvents([message("user", "do not include")], 0)).toBeNull();
@@ -60,5 +88,224 @@ describe("session-memory transcript extraction", () => {
         ]),
       ]),
     ).toBe("assistant: Answer [REMOVED_SPECIAL_TOKEN]");
+  });
+
+  it("filters non-message entries", () => {
+    const memoryContent = extractSessionContent(
+      createSessionContent([
+        { role: "user", content: "Hello" },
+        { type: "tool_use", tool: "search", input: "test" },
+        { role: "assistant", content: "World" },
+        { type: "tool_result", result: "found it" },
+        { role: "user", content: "Thanks" },
+      ]),
+    );
+
+    expect(memoryContent).toContain("user: Hello");
+    expect(memoryContent).toContain("assistant: World");
+    expect(memoryContent).toContain("user: Thanks");
+    expect(memoryContent).not.toContain("tool_use");
+    expect(memoryContent).not.toContain("tool_result");
+    expect(memoryContent).not.toContain("search");
+  });
+
+  it("filters inter-session user messages", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Forwarded internal instruction",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      },
+      message("assistant", "Acknowledged"),
+      message("user", "External follow-up"),
+    ]);
+
+    expect(memoryContent).not.toContain("Forwarded internal instruction");
+    expect(memoryContent).toContain("assistant: Acknowledged");
+    expect(memoryContent).toContain("user: External follow-up");
+  });
+
+  it("filters command messages starting with /", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      message("user", "/help"),
+      message("assistant", "Here is help info"),
+      message("user", "Normal message"),
+      message("user", "/new"),
+    ]);
+
+    expect(memoryContent).not.toContain("/help");
+    expect(memoryContent).not.toContain("/new");
+    expect(memoryContent).toContain("assistant: Here is help info");
+    expect(memoryContent).toContain("user: Normal message");
+  });
+
+  it("limits output to the configured recent-message count", () => {
+    const events = Array.from({ length: 10 }, (_, index) =>
+      message("user", `Message ${index + 1}`),
+    );
+    const memoryContent = getRecentSessionContentFromEvents(events, 3);
+
+    expect(memoryContent).not.toContain("user: Message 1\n");
+    expect(memoryContent).not.toContain("user: Message 7\n");
+    expect(memoryContent).toContain("user: Message 8");
+    expect(memoryContent).toContain("user: Message 9");
+    expect(memoryContent).toContain("user: Message 10");
+  });
+
+  it("filters messages before slicing (fix for #2681)", () => {
+    const memoryContent = extractSessionContent(
+      createSessionContent([
+        { role: "user", content: "First message" },
+        { type: "tool_use", tool: "test1" },
+        { type: "tool_result", result: "result1" },
+        { role: "assistant", content: "Second message" },
+        { type: "tool_use", tool: "test2" },
+        { type: "tool_result", result: "result2" },
+        { role: "user", content: "Third message" },
+        { type: "tool_use", tool: "test3" },
+        { type: "tool_result", result: "result3" },
+        { role: "assistant", content: "Fourth message" },
+      ]),
+      3,
+    );
+
+    expect(memoryContent).not.toContain("First message");
+    expect(memoryContent).toContain("user: Third message");
+    expect(memoryContent).toContain("assistant: Second message");
+    expect(memoryContent).toContain("assistant: Fourth message");
+  });
+
+  it("handles fewer messages than requested", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      message("user", "Only message 1"),
+      message("assistant", "Only message 2"),
+    ]);
+
+    expect(memoryContent).toContain("user: Only message 1");
+    expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  it("preserves a unique delivery mirror", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      message("user", "Turn on the lights"),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Lights turned on" }],
+        },
+      },
+    ]);
+
+    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
+      "assistant: Lights turned on",
+    ]);
+  });
+
+  it("filters delivery-mirror duplicates but preserves standalone gateway rows (#92563)", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      message("user", "What is 2+2?"),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "claude",
+          content: [
+            { type: "thinking", text: "..." },
+            { type: "text", text: "2+2 = 4" },
+          ],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "2+2 = 4" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [{ type: "text", text: "standalone gateway reply" }],
+        },
+      },
+    ]);
+
+    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
+      "assistant: 2+2 = 4",
+      "assistant: standalone gateway reply",
+    ]);
+  });
+
+  it("preserves a delivery mirror after a later user turn", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      message("assistant", "Your number is 123-4567"),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Your number is 123-4567" }],
+        },
+      },
+      message("user", "I changed it to 987-6543"),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Your number is 123-4567" }],
+        },
+      },
+    ]);
+
+    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
+      "assistant: Your number is 123-4567",
+      "assistant: Your number is 123-4567",
+    ]);
+  });
+
+  it("preserves a delivery mirror after an omitted slash-command turn", () => {
+    const memoryContent = getRecentSessionContentFromEvents([
+      message("assistant", "Done"),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+      message("user", "/new"),
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    ]);
+
+    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
+      "assistant: Done",
+      "assistant: Done",
+    ]);
+    expect(memoryContent).not.toContain("user: /new");
   });
 });

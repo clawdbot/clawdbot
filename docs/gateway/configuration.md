@@ -414,7 +414,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` to disable).
+    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` or a zero duration such as `"0h"` to disable).
     - Run history automatically keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
@@ -535,20 +535,20 @@ for the checklist.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                                |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.           |
-| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed - you handle it. |
-| **`restart`**          | Restarts the Gateway on any config change, safe or not.                                 |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart.                 |
+| Mode                   | Behavior                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones. |
+| **`off`**              | Disables file watching. Changes take effect on the next manual restart.       |
 
 ```json5
 {
   gateway: {
-    reload: { mode: "hybrid", debounceMs: 300 },
+    reload: { mode: "hybrid" },
   },
 }
 ```
+
+The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`. Reload debounce is no longer configurable and runs behind a built-in default.
 
 ### What hot-applies vs what needs a restart
 

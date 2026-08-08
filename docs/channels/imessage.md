@@ -20,6 +20,14 @@ Status: native external CLI integration. The Gateway spawns `imsg rpc` and speak
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
+## Install the plugin
+
+Install the official iMessage plugin on the Gateway host, then restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/imessage
+```
+
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
     Replies, tapbacks, effects, polls, attachments, and group management.
@@ -200,7 +208,7 @@ The helper-injection technique uses `imsg`'s own dylib to reach Messages private
 <Warning>
 **Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
 
-Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
+Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, the iMessage plugin is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
 </Warning>
 
 ### Setup

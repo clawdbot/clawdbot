@@ -17,7 +17,6 @@ import {
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveSessionKey } from "../config/sessions.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
@@ -285,6 +284,7 @@ function mockSuccessfulCompaction() {
       summary: "summary",
       firstKeptEntryId: "x",
       tokensBefore: 12000,
+      tokensAfter: 1000,
     },
   });
 }
@@ -562,14 +562,14 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request);
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
 
-  it("compacts worker sessions via the agent session file", async () => {
+  it("compacts worker sessions via the explicit session target", async () => {
     await withTempHome(async (home) => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
@@ -588,19 +588,18 @@ describe("trigger handling", () => {
       );
 
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionFile = firstMockCallArg(
+      const call = firstMockCallArg(
         getCompactEmbeddedAgentSessionMock(),
         "embedded OpenClaw compaction",
-      ).sessionFile;
-      if (typeof sessionFile !== "string") {
-        throw new Error("expected embedded OpenClaw compaction sessionFile");
-      }
-      expect(parseSqliteSessionFileMarker(sessionFile)).toMatchObject({
+      );
+      expect(call.sessionTarget).toMatchObject({
         agentId: "worker1",
+        sessionKey: "agent:worker1:telegram:12345",
         storePath: cfg.session.store,
       });
+      expect(call.sessionFile).toBe("agent:worker1:telegram:12345");
     });
   });
 

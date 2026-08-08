@@ -201,7 +201,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(result.status).toBe("error");
     expect(result.error).toContain("Model not allowed");
     expect(result.diagnostics?.summary).toBe(
-      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected: Model not allowed: anthropic/claude-sonnet-4-6",
+      "automation model override 'anthropic/claude-sonnet-4-6' rejected: Model not allowed: anthropic/claude-sonnet-4-6",
     );
     expect(result.diagnostics?.entries).toHaveLength(1);
     expect(result.diagnostics?.entries[0]?.ts).toBeTypeOf("number");
@@ -210,7 +210,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       source: "cron-preflight",
       severity: "error",
       message:
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected: Model not allowed: anthropic/claude-sonnet-4-6",
+        "automation model override 'anthropic/claude-sonnet-4-6' rejected: Model not allowed: anthropic/claude-sonnet-4-6",
     });
     // Model should remain undefined — the early return happens before the
     // pre-run persist block, so neither the session entry nor the store

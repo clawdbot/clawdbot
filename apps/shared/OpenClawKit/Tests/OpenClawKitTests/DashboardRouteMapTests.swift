@@ -36,4 +36,27 @@ struct DashboardRouteMapTests {
 
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/settings/channels#token=test-token")
     }
+
+    @Test func `Dashboard URL carries a same-app search alongside the token fragment`() throws {
+        let baseURL = try #require(URL(string: "http://127.0.0.1:18789/control/#token=test-token"))
+        let url = try #require(DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: DashboardRouteMap.custodianPagePath,
+            search: DashboardRouteMap.custodianOnboardingSearch,
+            to: baseURL))
+
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/custodian?onboarding=1#token=test-token")
+    }
+
+    @Test(arguments: ["", "onboarding=1", "?onboarding=1#x", "?a=b#frag"])
+    func `same-app search validation rejects non-query input`(_ search: String) throws {
+        #expect(!DashboardRouteMap.isValidSameAppSearch(search))
+        #expect(try DashboardRouteMap.dashboardURL(
+            byAppendingSameAppPath: DashboardRouteMap.custodianPagePath,
+            search: search,
+            to: #require(URL(string: "http://127.0.0.1:18789/control/"))) == nil)
+    }
+
+    @Test func `same-app search validation accepts a plain query`() {
+        #expect(DashboardRouteMap.isValidSameAppSearch("?onboarding=1"))
+    }
 }

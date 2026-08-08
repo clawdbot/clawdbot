@@ -1,5 +1,6 @@
 // Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
@@ -22,10 +23,9 @@ import {
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
-  resolveLocalAuthCliInvocation,
-  resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
+  resolveTuiLocalAuthCliInvocation,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
@@ -64,6 +64,44 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
       }),
     ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+});
+
+describe("resolveTuiLocalAuthCliInvocation", () => {
+  it("filters inspector flags while preserving the current CLI runtime context", () => {
+    const originalArgv = [...process.argv];
+    try {
+      const cliEntry = path.resolve("openclaw.mjs");
+      process.argv[1] = cliEntry;
+
+      expect(
+        resolveTuiLocalAuthCliInvocation({
+          provider: "test-provider",
+          execArgv: [
+            "--import",
+            "/repo/node_modules/tsx/dist/loader.mjs",
+            "--inspect-brk=0",
+            "--trace-warnings",
+          ],
+        }),
+      ).toStrictEqual({
+        command: process.execPath,
+        args: [
+          "--import",
+          "/repo/node_modules/tsx/dist/loader.mjs",
+          "--trace-warnings",
+          cliEntry,
+          "models",
+          "auth",
+          "login",
+          "--provider",
+          "test-provider",
+        ],
+        cwd: path.resolve("."),
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
   });
 });
 
@@ -338,6 +376,18 @@ describe("resolveGatewayDisconnectState", () => {
 });
 
 describe("createBackspaceDeduper", () => {
+  function withLegacyBackspaceEnv<T>(fn: () => T): T {
+    return withEnv(
+      {
+        WT_SESSION: undefined,
+        SSH_CONNECTION: undefined,
+        SSH_CLIENT: undefined,
+        SSH_TTY: undefined,
+      },
+      fn,
+    );
+  }
+
   function createTimedDedupe(start = 1000) {
     let now = start;
     const dedupe = createBackspaceDeduper({
@@ -353,27 +403,114 @@ describe("createBackspaceDeduper", () => {
   }
 
   it("suppresses duplicate backspace events within the dedupe window", () => {
-    const { dedupe, advance } = createTimedDedupe();
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
-    advance(1);
-    expect(dedupe("\x08")).toBe("");
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(1);
+      expect(dedupe("\x08")).toBe("");
+    });
   });
 
   it("preserves backspace events outside the dedupe window", () => {
-    const { dedupe, advance } = createTimedDedupe();
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x7f")).toBe("\x7f");
-    advance(10);
-    expect(dedupe("\x7f")).toBe("\x7f");
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(10);
+      expect(dedupe("\x7f")).toBe("\x7f");
+    });
   });
 
   it("treats ASCII BS as backspace when it is the first event", () => {
-    const { dedupe, advance } = createTimedDedupe();
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
 
-    expect(dedupe("\x08")).toBe("\x08");
-    advance(1);
-    expect(dedupe("\x7f")).toBe("");
+      expect(dedupe("\x08")).toBe("\x08");
+      advance(1);
+      expect(dedupe("\x7f")).toBe("");
+    });
+  });
+
+  it.each([
+    {
+      name: "consecutive DEL events",
+      input: ["\x7f", "\x7f"],
+      expected: ["\x7f", "\x7f"],
+    },
+    {
+      name: "consecutive ASCII BS events",
+      input: ["\x08", "\x08"],
+      expected: ["\x08", "\x08"],
+    },
+    {
+      name: "an intervening printable key",
+      input: ["\x7f", "a", "\x08"],
+      expected: ["\x7f", "a", "\x08"],
+    },
+    {
+      name: "Kitty backspace press, repeat, and release events",
+      input: ["\x1b[127;1u", "\x1b[127;1:2u", "\x1b[127;1:3u"],
+      expected: ["\x1b[127;1u", "\x1b[127;1:2u", "\x1b[127;1:3u"],
+    },
+    {
+      name: "bracketed paste between legacy backspaces",
+      input: ["\x7f", "\x1b[200~\x08\x1b[201~", "\x08"],
+      expected: ["\x7f", "\x1b[200~\x08\x1b[201~", "\x08"],
+    },
+    {
+      name: "independently repeated complementary legacy pairs",
+      input: ["\x7f", "\x08", "\x7f", "\x08"],
+      expected: ["\x7f", "", "\x7f", ""],
+    },
+  ])("handles $name", ({ input, expected }) => {
+    withLegacyBackspaceEnv(() => {
+      const { dedupe } = createTimedDedupe();
+
+      expect(input.map(dedupe)).toEqual(expected);
+    });
+  });
+
+  it("preserves complementary legacy events outside the dedupe window", () => {
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
+
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(10);
+      expect(dedupe("\x08")).toBe("\x08");
+    });
+  });
+
+  it("preserves Ctrl+Backspace in Windows Terminal", () => {
+    withEnv(
+      {
+        WT_SESSION: "openclaw-tui-test",
+        SSH_CONNECTION: undefined,
+        SSH_CLIENT: undefined,
+        SSH_TTY: undefined,
+      },
+      () => {
+        const { dedupe } = createTimedDedupe();
+
+        expect(["\x7f", "\x08", "\x7f"].map(dedupe)).toEqual(["\x7f", "\x08", "\x7f"]);
+      },
+    );
+  });
+
+  it("still deduplicates legacy backspace through an SSH session in Windows Terminal", () => {
+    withEnv(
+      {
+        WT_SESSION: "openclaw-tui-test",
+        SSH_CONNECTION: "192.0.2.10 12345 192.0.2.20 22",
+        SSH_CLIENT: undefined,
+        SSH_TTY: undefined,
+      },
+      () => {
+        const { dedupe } = createTimedDedupe();
+
+        expect(["\x7f", "\x08"].map(dedupe)).toEqual(["\x7f", ""]);
+      },
+    );
   });
 
   it("never suppresses non-backspace keys", () => {
@@ -410,7 +547,7 @@ describe("resolveTuiCtrlCAction", () => {
   it("exits immediately after a gateway disconnect", () => {
     expect(
       resolveTuiCtrlCAction({
-        hasInput: true,
+        hasInput: false,
         now: 2000,
         lastCtrlCAt: 0,
         wasDisconnected: true,
@@ -421,10 +558,24 @@ describe("resolveTuiCtrlCAction", () => {
     });
   });
 
+  it("clears a nonempty draft before exiting after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "clear",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
   it("forces exit when shutdown is already in progress", () => {
     expect(
       resolveTuiCtrlCAction({
-        hasInput: false,
+        hasInput: true,
         now: 2000,
         lastCtrlCAt: 1000,
         exitRequested: true,
@@ -682,6 +833,77 @@ describe("TUI shutdown safety", () => {
     expect(forceExit).not.toHaveBeenCalled();
   });
 
+  it("attempts terminal shutdown after transport teardown rejects", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const transportError = new Error("transport stop failed");
+    let finishTuiStop: (() => void) | undefined;
+    const stopTui = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          calls.push("tui");
+          finishTuiStop = resolve;
+        }),
+    );
+    const clearTimeoutFn = vi.fn();
+    const requestFinish = vi.fn(() => calls.push("finish"));
+    const onError = vi.fn((error: unknown) => {
+      calls.push("error");
+      expect(error).toBe(transportError);
+    });
+
+    beginTestShutdown({
+      stopClient: async () => {
+        calls.push("client");
+        throw transportError;
+      },
+      stopTui,
+      requestFinish,
+      onError,
+      keepHardExitArmed: false,
+      clearTimeoutFn,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["client", "tui"]);
+    expect(clearTimeoutFn).not.toHaveBeenCalled();
+    expect(requestFinish).not.toHaveBeenCalled();
+
+    finishTuiStop?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["client", "tui", "error", "finish"]);
+    expect(stopTui).toHaveBeenCalledOnce();
+    expect(clearTimeoutFn).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(requestFinish).toHaveBeenCalledOnce();
+  });
+
+  it("reports transport and terminal shutdown errors in phase order", async () => {
+    vi.useFakeTimers();
+    const transportError = new Error("transport stop failed");
+    const terminalError = new Error("terminal stop failed");
+    const onError = vi.fn();
+    const requestFinish = vi.fn();
+
+    beginTestShutdown({
+      stopClient: async () => {
+        throw transportError;
+      },
+      stopTui: async () => {
+        throw terminalError;
+      },
+      onError,
+      requestFinish,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onError).toHaveBeenCalledOnce();
+    const error = onError.mock.calls[0]?.[0];
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([transportError, terminalError]);
+    expect(requestFinish).toHaveBeenCalledOnce();
+  });
+
   it("cancels the hard-exit deadline for embedded TUI callers after clean shutdown", async () => {
     vi.useFakeTimers();
     const forceExit = vi.fn();
@@ -751,38 +973,6 @@ describe("resolveCodexCliBin", () => {
   });
 });
 
-describe("resolveLocalAuthCliInvocation", () => {
-  it("uses the source runner when dist is unavailable", () => {
-    expect(
-      resolveLocalAuthCliInvocation({
-        execPath: "/usr/bin/node",
-        wrapperPath: "/repo/openclaw.mjs",
-        runNodePath: "/repo/scripts/run-node.mjs",
-        hasDistEntry: false,
-        hasRunNodeScript: true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
-    });
-  });
-
-  it("uses the packaged wrapper when dist is available", () => {
-    expect(
-      resolveLocalAuthCliInvocation({
-        execPath: "/usr/bin/node",
-        wrapperPath: "/repo/openclaw.mjs",
-        runNodePath: "/repo/scripts/run-node.mjs",
-        hasDistEntry: true,
-        hasRunNodeScript: true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["/repo/openclaw.mjs", "models", "auth", "login"],
-    });
-  });
-});
-
 describe("resolveLocalAuthSpawnInvocation", () => {
   it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
@@ -827,34 +1017,5 @@ describe("resolveLocalAuthSpawnInvocation", () => {
         platform: "win32",
       }),
     ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
-  });
-});
-
-describe("resolveLocalAuthSpawnCwd", () => {
-  it("runs the packaged wrapper from the repo root", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["/repo/openclaw.mjs", "models", "auth", "login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/repo");
-  });
-
-  it("runs the source fallback helper from the repo root", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/repo");
-  });
-
-  it("keeps the caller cwd for direct codex exec", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/worktree/subdir");
   });
 });

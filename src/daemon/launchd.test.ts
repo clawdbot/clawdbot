@@ -1,4 +1,5 @@
 // Launchd tests cover macOS service plist generation and command handling.
+import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,7 @@ import {
   stageLaunchAgent,
   startLaunchAgent,
   stopLaunchAgent,
+  uninstallLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -38,6 +40,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   bootstrapLoadsServiceOnFailure: false,
+  bootstrapTransient: false,
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
@@ -103,6 +106,9 @@ const probePortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(async () => "free"),
 );
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
+const resolveGatewayServiceProbeHosts = vi.hoisted(() =>
+  vi.fn<(_params?: unknown) => Promise<readonly string[]>>(async () => ["127.0.0.1"]),
+);
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -213,6 +219,23 @@ async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaun
     if (!result.ok) {
       throw result.error;
     }
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function runRestartLaunchAgentWithFakeTimers(args: Parameters<typeof restartLaunchAgent>[0]) {
+  vi.useFakeTimers();
+  try {
+    const restartPromise = restartLaunchAgent(args)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+    await vi.runAllTimersAsync();
+    const result = await restartPromise;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
   } finally {
     vi.useRealTimers();
   }
@@ -338,11 +361,18 @@ function executeLaunchctlMock(file: string, args: string[]) {
   }
   if (call[0] === "bootstrap") {
     if (state.bootstrapError) {
+      const detail = state.bootstrapError;
+      // Transient failures clear after one attempt so recovery paths that retry
+      // a bootstrap can be exercised the way launchd behaves once a booted-out
+      // job finishes tearing down.
+      if (state.bootstrapTransient) {
+        state.bootstrapError = "";
+      }
       if (state.bootstrapLoadsServiceOnFailure) {
         state.serviceLoaded = true;
         state.serviceRunning = true;
       }
-      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+      return { stdout: "", stderr: detail, code: state.bootstrapCode };
     }
     state.serviceLoaded = true;
     state.serviceRunning = true;
@@ -405,7 +435,12 @@ vi.mock("../infra/ports.js", () => ({
 }));
 
 vi.mock("../infra/ports-probe.js", () => ({
+  LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
   probePortUsage,
+}));
+
+vi.mock("./gateway-service-probe-hosts.js", () => ({
+  resolveGatewayServiceProbeHosts: (params: unknown) => resolveGatewayServiceProbeHosts(params),
 }));
 
 vi.mock("node:fs/promises", async () => {
@@ -414,10 +449,26 @@ vi.mock("node:fs/promises", async () => {
     ...actual,
     access: vi.fn(async (p: string) => {
       const key = p;
-      if (state.files.has(key) || state.dirs.has(key)) {
+      if (
+        (state.files.has(key) && state.files.get(key) !== "dangling-launchagent-symlink") ||
+        state.dirs.has(key)
+      ) {
         return;
       }
-      throw new Error(`ENOENT: no such file or directory, access '${key}'`);
+      throw Object.assign(new Error(`ENOENT: no such file or directory, access '${key}'`), {
+        code: "ENOENT",
+      });
+    }),
+    lstat: vi.fn(async (p: string) => {
+      const key = p;
+      if (state.files.has(key) || state.dirs.has(key)) {
+        return {
+          isSymbolicLink: () => state.files.get(key) === "dangling-launchagent-symlink",
+        };
+      }
+      throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${key}'`), {
+        code: "ENOENT",
+      });
     }),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
       const key = p;
@@ -497,6 +548,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.bootstrapLoadsServiceOnFailure = false;
+  state.bootstrapTransient = false;
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
@@ -531,6 +583,8 @@ beforeEach(() => {
   probePortUsage.mockResolvedValue("free");
   formatPortDiagnostics.mockReset();
   formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
+  resolveGatewayServiceProbeHosts.mockReset();
+  resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
@@ -1348,6 +1402,87 @@ describe("launchd bootstrap repair", () => {
   });
 });
 
+describe("launchd uninstall", () => {
+  it("reports a surviving LaunchAgent when moving its plist to Trash is denied", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    vi.mocked(fs.rename).mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, rename '${plistPath}'`), {
+        code: "EACCES",
+      }),
+    );
+
+    const uninstall = uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
+    await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.files.has(plistPath)).toBe(true);
+  });
+
+  it("reports inaccessible LaunchAgents instead of claiming they are missing", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    vi.mocked(fs.lstat).mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, lstat '${plistPath}'`), {
+        code: "EACCES",
+      }),
+    );
+
+    const uninstall = uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
+    await expect(uninstall).rejects.not.toThrow(plistPath);
+  });
+
+  it("keeps missing LaunchAgent removal idempotent", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+  });
+
+  it("removes dangling LaunchAgent symlinks instead of treating their targets as missing", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "dangling-launchagent-symlink");
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+    expect(state.files.has(plistPath)).toBe(false);
+  });
+
+  it("keeps concurrently removed LaunchAgent removal idempotent", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    vi.mocked(fs.rename).mockImplementationOnce(async () => {
+      state.files.delete(plistPath);
+      throw Object.assign(new Error(`ENOENT: no such file, rename '${plistPath}'`), {
+        code: "ENOENT",
+      });
+    });
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).resolves.toBeUndefined();
+    expect(state.files.has(plistPath)).toBe(false);
+  });
+
+  it("reports a missing Trash destination while the LaunchAgent still exists", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    vi.mocked(fs.rename).mockRejectedValueOnce(
+      Object.assign(new Error(`ENOENT: missing destination for '${plistPath}'`), {
+        code: "ENOENT",
+      }),
+    );
+
+    const uninstall = uninstallLaunchAgent({ env, stdout: new PassThrough() });
+
+    await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (ENOENT)");
+    await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.files.has(plistPath)).toBe(true);
+  });
+});
+
 describe("launchd install", () => {
   it("refuses install and stage before any user LaunchAgent mutation", async () => {
     const env = createDefaultLaunchdEnv();
@@ -1460,6 +1595,44 @@ describe("launchd install", () => {
     expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
     expect(command?.environmentValueSources?.TMPDIR).toBe("file");
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+  });
+
+  it("retains custom Node CA trust when reinstalling a generated owner-only LaunchAgent", async () => {
+    const env = createDefaultLaunchdEnv();
+    const extraCaCerts = "/Users/test/certs/corporate-ca.pem";
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { NODE_EXTRA_CA_CERTS: extraCaCerts },
+    });
+
+    const installedCommand = await readLaunchAgentProgramArguments(env);
+    expect(installedCommand?.environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(installedCommand?.environmentValueSources?.NODE_EXTRA_CA_CERTS).toBe("file");
+    const initialEnvWrites = countMatching(state.fileWrites, ({ path }) => path === envFilePath);
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: installedCommand?.environment,
+    });
+
+    const refreshedCommand = await readLaunchAgentProgramArguments(env);
+    expect(refreshedCommand?.environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(refreshedCommand?.environmentValueSources?.NODE_EXTRA_CA_CERTS).toBe("file");
+    expect(countMatching(state.fileWrites, ({ path }) => path === envFilePath)).toBeGreaterThan(
+      initialEnvWrites,
+    );
+    expect(state.files.get(envFilePath)).toContain(`export NODE_EXTRA_CA_CERTS='${extraCaCerts}'`);
+    expect(state.files.get(resolveLaunchAgentPlistPath(env))).not.toContain(extraCaCerts);
+    expect(state.fileModes.get(envFilePath)).toBe(0o600);
+    expect(state.fileModes.get(wrapperPath)).toBe(0o700);
+    expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
   });
 
   it("warns before overwriting a customized generated LaunchAgent env wrapper", async () => {
@@ -1921,7 +2094,9 @@ describe("launchd install", () => {
     await stopLaunchAgent({ env, stdout });
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19003);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19003);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19003, {
+      probeHosts: ["127.0.0.1"],
+    });
     expect(output).toContain("Stopped LaunchAgent");
   });
 
@@ -1940,7 +2115,28 @@ describe("launchd install", () => {
     await runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() });
 
     expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-    expect(probePortUsage).toHaveBeenCalledWith(19009);
+    expect(probePortUsage).toHaveBeenCalledWith(19009, ["127.0.0.1"]);
+  });
+
+  it("waits on the configured non-loopback host before reporting the port released", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19011",
+    };
+    resolveGatewayServiceProbeHosts.mockResolvedValue(["192.0.2.40"]);
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19011,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+
+    await runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() });
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(19011, {
+      probeHosts: ["192.0.2.40"],
+    });
+    expect(probePortUsage).toHaveBeenCalledWith(19011, ["192.0.2.40"]);
   });
 
   it("keeps waiting until a bind probe explicitly confirms port release", async () => {
@@ -1974,7 +2170,9 @@ describe("launchd install", () => {
     await stopLaunchAgent({ env, stdout: new PassThrough() });
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19006);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19006);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19006, {
+      probeHosts: ["127.0.0.1"],
+    });
   });
 
   it("fails stop when the verified gateway port remains busy after cleanup", async () => {
@@ -2003,7 +2201,9 @@ describe("launchd install", () => {
 
     expect(onMutation).toHaveBeenCalledWith({ mode: "bootout" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19004);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19004);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19004, {
+      probeHosts: ["127.0.0.1"],
+    });
     expect(output).not.toContain("Stopped LaunchAgent");
   });
 
@@ -2041,7 +2241,9 @@ describe("launchd install", () => {
     await stopLaunchAgent({ env, stdout, disable: true });
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19005);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19005);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19005, {
+      probeHosts: ["127.0.0.1"],
+    });
     expect(output).toContain("Stopped LaunchAgent");
   });
 
@@ -2376,6 +2578,28 @@ describe("launchd install", () => {
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "bootstrap" }]]);
   });
 
+  it("fails an already-loaded bootstrap immediately instead of waiting out the teardown deadline", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+    // launchd answers EIO for a label that is still registered. `startLaunchAgent`
+    // never booted the job out, so there is no teardown to wait for: retrying
+    // until the teardown deadline would stall the start for no gain. Real timers
+    // here so a reintroduced retry loop blows the test timeout rather than
+    // passing under vi.runAllTimersAsync().
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 5;
+
+    await expect(startLaunchAgent({ env, stdout: new PassThrough(), onMutation })).rejects.toThrow(
+      "launchctl bootstrap failed: Could not bootstrap service: 5: Input/output error",
+    );
+
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "bootstrap")).toBe(1);
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
   it("audits enable but not kickstart when the later launch fails", async () => {
     const env = createDefaultLaunchdEnv();
     const onMutation = vi.fn();
@@ -2471,12 +2695,111 @@ describe("launchd install", () => {
       restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
 
+    // The trailing enable comes from the post-failure recovery attempt, which
+    // cannot report a bootstrap mutation because this bootstrap keeps failing.
     expect(onMutation.mock.calls).toEqual([
       [{ mode: "enable" }],
       [{ mode: "bootout" }],
       [{ mode: "enable" }],
+      [{ mode: "enable" }],
     ]);
     expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("reloads the LaunchAgent through a transient reload bootstrap failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // launchd answers EIO while the just-booted-out job is still tearing down.
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapCode = 5;
+    state.bootstrapTransient = true;
+    const onMutation = vi.fn();
+
+    const result = await runRestartLaunchAgentWithFakeTimers({
+      env,
+      stdout: new PassThrough(),
+      onMutation,
+    });
+
+    // Teardown is transient, so the retry must land a real bootstrap rather than
+    // surfacing an error the operator has to recover from by hand.
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.serviceLoaded).toBe(true);
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("reports the LaunchAgent as unloaded when bootstrap teardown never clears", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // EIO that never clears must stay bounded instead of retrying forever, and
+    // the restore attempt fails with it, so the label really does stay absent.
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapCode = 5;
+
+    const error = await runRestartLaunchAgentWithFakeTimers({
+      env,
+      stdout: new PassThrough(),
+    }).catch((caught: unknown) => caught);
+
+    // bootout already removed the job, so the operator has to learn both why the
+    // bootstrap failed and that nothing is left for KeepAlive to respawn.
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    expect(state.serviceLoaded).toBe(false);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(
+      "launchctl bootstrap failed: Bootstrap failed: 5: Input/output error",
+    );
+    expect(message).toContain(`LaunchAgent ${domain}/ai.openclaw.gateway is not loaded`);
+    expect(message).toContain("The gateway is down and launchd has no job left to respawn it.");
+    expect(message).toContain("openclaw gateway start");
+  });
+
+  it("does not wait out the teardown deadline when the reload bootstrap reports already-loaded", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // Same EIO code as a pending teardown, but the label is still registered
+    // rather than draining, so there is nothing to wait for. Real timers here:
+    // a retry loop would blow the test timeout instead of quietly passing.
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 5;
+    state.bootstrapLoadsServiceOnFailure = true;
+
+    const error = await restartLaunchAgent({ env, stdout: new PassThrough() }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "bootstrap")).toBe(1);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(
+      "launchctl bootstrap failed: Could not bootstrap service: 5: Input/output error",
+    );
+    // The label is still registered, so the recovery probe finds it and the
+    // failure must not claim the gateway was left unloaded.
+    expect(message).not.toContain("is not loaded");
   });
 
   it("completes reload when the mutation observer fails after bootout", async () => {
@@ -2605,7 +2928,9 @@ describe("launchd install", () => {
         resolveProtectedPid: expect.any(Function),
       }),
     );
-    expect(inspectPortUsage).toHaveBeenCalledWith(19007);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19007, {
+      probeHosts: ["127.0.0.1"],
+    });
   });
 
   it("uses the final repeated LaunchAgent port flag for restart stale cleanup", async () => {
@@ -2629,7 +2954,9 @@ describe("launchd install", () => {
         resolveProtectedPid: expect.any(Function),
       }),
     );
-    expect(inspectPortUsage).toHaveBeenCalledWith(19008);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19008, {
+      probeHosts: ["127.0.0.1"],
+    });
   });
 
   it("ignores invalid stored LaunchAgent environment ports for stale cleanup", async () => {
@@ -2696,7 +3023,9 @@ describe("launchd install", () => {
         expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
       );
       expect(state.cleanupProtectedPids).toEqual([managedPidAfterCleanup]);
-      expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+      expect(inspectPortUsage).toHaveBeenCalledWith(19002, {
+        probeHosts: ["127.0.0.1"],
+      });
       expect(state.launchctlCalls).toEqual([
         ["print", serviceId],
         ["print", serviceId],
@@ -2764,7 +3093,9 @@ describe("launchd install", () => {
         expect.objectContaining({ resolveProtectedPid: expect.any(Function) }),
       );
       expect(state.cleanupProtectedPids).toEqual([4242]);
-      expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+      expect(inspectPortUsage).toHaveBeenCalledWith(19002, {
+        probeHosts: ["127.0.0.1"],
+      });
       expect(state.launchctlCalls).toEqual([
         ["print", serviceId],
         ["print", serviceId],
@@ -2813,7 +3144,7 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).not.toContain("bootout");
   });
 
-  it("surfaces the original kickstart failure when the service is still loaded", async () => {
+  it("surfaces kickstart failure without re-bootstrap when the service stays loaded (#52208)", async () => {
     const env = createDefaultLaunchdEnv();
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
@@ -2834,17 +3165,6 @@ describe("launchd install", () => {
 
     expect(launchctlCommandNames()).toContain("enable");
     expect(launchctlCommandNames()).toContain("bootstrap");
-  });
-
-  it("skips re-bootstrap when kickstart fails but service is still loaded (#52208)", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.kickstartError = "Input/output error";
-    state.kickstartFailuresRemaining = 1;
-
-    await expectRestartLaunchAgentKickstartFailure(env);
-
-    expect(launchctlCommandNames()).toContain("enable");
-    expect(launchctlCommandNames()).not.toContain("bootstrap");
   });
 
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {

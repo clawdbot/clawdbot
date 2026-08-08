@@ -14,6 +14,7 @@ import {
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
@@ -27,6 +28,51 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("createSkillWorkshopRevisionHandoff", () => {
+  it("survives session selection but not a same-client reconnect", () => {
+    const owner = {};
+    const replacementConnection = {};
+    const handoff = {
+      sessionKey: "agent:main:revision",
+      instructions: "Revise the skill.",
+      owner,
+      proposalId: "proposal-1",
+      proposalAgentId: "main",
+    };
+    const revisions = createSkillWorkshopRevisionHandoff();
+
+    revisions.prepare(handoff);
+
+    expect(revisions.consume(handoff.sessionKey, owner)).toEqual(handoff);
+    revisions.prepare(handoff);
+    expect(revisions.consume(handoff.sessionKey, replacementConnection)).toBeNull();
+  });
+
+  it("clears only the handoff that became stale", () => {
+    const owner = {};
+    const stale = {
+      sessionKey: "agent:main:stale",
+      instructions: "Stale revision.",
+      owner,
+      proposalId: "proposal-stale",
+      proposalAgentId: "main",
+    };
+    const current = {
+      ...stale,
+      sessionKey: "agent:main:current",
+      instructions: "Current revision.",
+      proposalId: "proposal-current",
+    };
+    const revisions = createSkillWorkshopRevisionHandoff();
+
+    revisions.prepare(stale);
+    revisions.prepare(current);
+    revisions.clear(stale);
+
+    expect(revisions.consume(current.sessionKey, owner)).toEqual(current);
+  });
+});
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {
@@ -338,11 +384,16 @@ describe("normalizeInitialApplicationLocation", () => {
       return () => undefined;
     });
     const replaceRoute = vi.fn();
+    const gateway = {
+      snapshot: {
+        phase: "connecting",
+        client: null,
+        hello: null,
+      } as Parameters<GatewayListener>[0],
+      subscribe,
+    };
     const context = {
-      gateway: {
-        snapshot: { phase: "connecting", client: null, hello: null },
-        subscribe,
-      },
+      gateway,
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -363,14 +414,15 @@ describe("normalizeInitialApplicationLocation", () => {
     if (!connectedListener) {
       throw new Error("expected first-run gateway listener");
     }
-    connectedListener({
+    gateway.snapshot = {
       phase: "connected",
       client,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
-    } as Parameters<GatewayListener>[0]);
+    } as Parameters<GatewayListener>[0];
+    connectedListener(gateway.snapshot);
     await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
@@ -389,6 +441,112 @@ describe("normalizeInitialApplicationLocation", () => {
     });
 
     expect(installLocation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "bootstrap token on the deferred default landing",
+      initialUrl: "/?keep=yes#bootstrapToken=boot-default&bootstrapProfile=owner&tab=keep",
+      expectedUrl: "/?keep=yes#tab=keep",
+      expectedBootstrapToken: "boot-default",
+      expectedBootstrapProfile: "owner",
+      expectedToken: "",
+      expectedDocumentMode: null,
+    },
+    {
+      name: "bootstrap token on a custom-base explicit route",
+      initialUrl: "/operator/settings/appearance?keep=yes#tab=keep&bootstrapToken=boot-route",
+      expectedUrl: "/operator/settings/appearance?keep=yes#tab=keep",
+      expectedBootstrapToken: "boot-route",
+      expectedBootstrapProfile: undefined,
+      expectedToken: "",
+      expectedDocumentMode: null,
+    },
+    {
+      name: "bootstrap token on a standalone approval document",
+      initialUrl: "/approve/exec%3A1?keep=yes#bootstrapToken=boot-approval&tab=keep",
+      expectedUrl: "/approve/exec%3A1?keep=yes#tab=keep",
+      expectedBootstrapToken: "boot-approval",
+      expectedBootstrapProfile: undefined,
+      expectedToken: "",
+      expectedDocumentMode: { kind: "approval", approvalId: "exec:1" },
+    },
+    {
+      name: "legacy fragment token and discarded query password",
+      initialUrl: "/settings/appearance?keep=yes&password=discard#token=shared-fragment&tab=keep",
+      expectedUrl: "/settings/appearance?keep=yes#tab=keep",
+      expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
+      expectedToken: "shared-fragment",
+      expectedDocumentMode: null,
+    },
+    {
+      name: "legacy query token and discarded fragment password",
+      initialUrl: "/settings/appearance?keep=yes&token=shared-query#password=discard&tab=keep",
+      expectedUrl: "/settings/appearance?keep=yes#tab=keep",
+      expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
+      expectedToken: "shared-query",
+      expectedDocumentMode: null,
+    },
+  ])("synchronously removes $name while preserving Gateway authentication", (testCase) => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", testCase.initialUrl);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+
+    try {
+      runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+        testCase.expectedUrl,
+      );
+      expect(replaceState).toHaveBeenCalledExactlyOnceWith({}, "", testCase.expectedUrl);
+      expect(runtime.context.gateway.connection.bootstrapToken).toBe(
+        testCase.expectedBootstrapToken,
+      );
+      expect(runtime.context.gateway.connection.bootstrapProfile).toBe(
+        testCase.expectedBootstrapProfile,
+      );
+      expect(runtime.context.gateway.connection.token).toBe(testCase.expectedToken);
+      expect(runtime.documentMode).toEqual(testCase.expectedDocumentMode);
+      expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
+    } finally {
+      warn.mockRestore();
+      replaceState.mockRestore();
+      runtime?.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
+  it("does not rewrite browser history when startup contains no URL credentials", () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", "/settings/appearance?keep=yes#tab=keep");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+
+    try {
+      runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+      expect(replaceState).not.toHaveBeenCalled();
+      expect(window.location.search).toBe("?keep=yes");
+      expect(window.location.hash).toBe("#tab=keep");
+    } finally {
+      replaceState.mockRestore();
+      runtime?.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
   });
 
   it("keeps the latest navigation requested before router start", async () => {

@@ -1,14 +1,8 @@
 import {
-  buildHarnessContextEngineRuntimeContextFromUsage,
-  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
-  finalizeHarnessContextEngineTurn,
   formatErrorMessage,
-  resolveContextEngineOwnerPluginId,
   runAgentHarnessLlmOutputHook,
-  runHarnessContextEngineMaintenance,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -57,15 +51,10 @@ export async function finalizeCodexAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, systemPromptReport } = prompt;
-  const { runtime, attemptTools, activeTranscriptTarget, historyState, hookContext } = context;
-  const { hookContextWindowFields, hookRunner, promptState } = context;
-  const { connection, preparedAuthBinding, activeSessionId, activeSessionFile } = runtime;
-  const {
-    buildActiveRunAttemptParams,
-    effectiveContextTokenBudget,
-    effectiveRuntimeProviderId,
-    effectiveRuntimeModelId,
-  } = runtime;
+  const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
+  const { hookContextWindowFields, hookRunner } = context;
+  const { connection, preparedAuthBinding } = runtime;
+  const { effectiveRuntimeProviderId, effectiveRuntimeModelId } = runtime;
   const {
     params,
     terminalState,
@@ -78,8 +67,6 @@ export async function finalizeCodexAttempt(
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
-    effectiveWorkspace,
-    agentDir,
     attemptStartedAt,
     startupAuthProfileId,
   } = connection;
@@ -122,7 +109,6 @@ export async function finalizeCodexAttempt(
   const recoveredTurnWatchTimeout =
     state.turnCompletionIdleTimedOut &&
     !terminalState.explicitCancellationObserved &&
-    !state.terminalTurnNotificationQueued &&
     hasRecoverableCompletedAssistant &&
     activeProjector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout();
   if (recoveredTurnWatchTimeout) {
@@ -245,15 +231,18 @@ export async function finalizeCodexAttempt(
     turnWatchTimeoutKind: state.turnWatchTimeoutKind,
   });
   const failureDiagnostics =
-    codexAppServerFailureKind === "turn_completion_idle_timeout" &&
-    state.turnWatchTimeoutKind === "completion"
-      ? buildCodexAppServerTimeoutDiagnostics({
-          idleMs: state.turnWatchTimeoutIdleMs,
-          timeoutMs: state.turnWatchTimeoutMs,
-          lastActivityReason: state.turnWatchTimeoutLastActivityReason,
-          details: state.turnWatchTimeoutDetails,
-        })
-      : undefined;
+    codexAppServerFailureKind === "client_closed_before_turn_completed" &&
+    state.clientClosedDiagnostic
+      ? { transportError: state.clientClosedDiagnostic }
+      : codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+          state.turnWatchTimeoutKind === "completion"
+        ? buildCodexAppServerTimeoutDiagnostics({
+            idleMs: state.turnWatchTimeoutIdleMs,
+            timeoutMs: state.turnWatchTimeoutMs,
+            lastActivityReason: state.turnWatchTimeoutLastActivityReason,
+            details: state.turnWatchTimeoutDetails,
+          })
+        : undefined;
   const codexAppServerFailure = codexAppServerFailureKind
     ? ({
         kind: codexAppServerFailureKind,
@@ -271,18 +260,16 @@ export async function finalizeCodexAttempt(
     : undefined;
   const finalAborted = isFinalAborted();
   const completedTurnStatus = activeProjector.getCompletedTurnStatus();
-  const completedWithoutTerminalNotification =
+  const locallyCompletedTurn =
     state.completed &&
-    !state.terminalTurnNotificationQueued &&
+    (state.localCompletionRequested || !state.terminalTurnNotificationQueued) &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
   const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    (completedTurnStatus === "completed" ||
-      recoveredTurnWatchTimeout ||
-      completedWithoutTerminalNotification);
+    (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
   // buildResult retains the bridge's delivery records. Resolve omitted final
   // intent only after the authoritative turn outcome is known, before any
   // terminal observer consumes the result.
@@ -335,7 +322,8 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
-  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey } = mirrorOutcome;
+  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
+    mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
     turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
@@ -354,53 +342,6 @@ export async function finalizeCodexAttempt(
     embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
-    });
-  }
-  if (activeContextEngine) {
-    const contextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
-    const isHeartbeat =
-      params.bootstrapContextRunKind === "heartbeat" ||
-      params.bootstrapContextRunKind === "commitment-only";
-    const finalMessages =
-      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
-      historyState.messages.concat(result.messagesSnapshot);
-    await finalizeHarnessContextEngineTurn({
-      contextEngine: activeContextEngine,
-      promptError: Boolean(finalPromptError),
-      aborted: finalAborted,
-      yieldAborted: Boolean(result.yieldDetected),
-      sessionIdUsed: activeSessionId,
-      sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
-      sessionTarget: params.sessionTarget,
-      messagesSnapshot: finalMessages,
-      prePromptMessageCount: promptState.prePromptMessageCount,
-      tokenBudget: effectiveContextTokenBudget,
-      runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
-        attempt: buildActiveRunAttemptParams(),
-        workspaceDir: effectiveWorkspace,
-        cwd: effectiveCwd,
-        agentDir,
-        activeAgentId: sessionAgentId,
-        contextEnginePluginId,
-        tokenBudget: effectiveContextTokenBudget,
-        lastCallUsage: result.attemptUsage,
-        promptCache: result.promptCache,
-      }),
-      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-      providerId: usesSupervisionConnection
-        ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-        : params.provider,
-      requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
-      modelId: usesSupervisionConnection
-        ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-        : params.modelId,
-      fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
-      degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
-      runMaintenance: runHarnessContextEngineMaintenance,
-      config: params.config,
-      warn: (message) => embeddedAgentLog.warn(message),
-      isHeartbeat,
     });
   }
   runAgentHarnessLlmOutputHook({
@@ -552,6 +493,7 @@ export async function finalizeCodexAttempt(
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
     ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+    ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding

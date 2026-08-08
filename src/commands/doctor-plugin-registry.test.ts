@@ -278,7 +278,6 @@ function expectedPluginIndexRecord(params: {
       sidecar: false,
       memory: false,
       configPaths: [],
-      deferConfiguredChannelFullLoadUntilAfterListen: false,
       agentHarnesses: [],
     },
     contributions: {
@@ -451,16 +450,17 @@ describe("maybeRepairPluginRegistryState", () => {
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+    const candidate = createCandidate(pluginDir);
 
     const nextConfig = await maybeRepairPluginRegistryState({
       stateDir,
-      candidates: [createCandidate(pluginDir)],
+      candidates: [candidate],
       env: hermeticEnv(),
       config: {},
       prompter: { shouldRepair: true },
     });
 
-    expect(nextConfig).toStrictEqual({});
+    expect(nextConfig).toStrictEqual({ config: {}, pluginInventoryChanged: true });
     const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
     expect(persisted.refreshReason).toBe("migration");
     expect(persisted.plugins).toStrictEqual([
@@ -470,6 +470,15 @@ describe("maybeRepairPluginRegistryState", () => {
         origin: "global",
       }),
     ]);
+    await expect(
+      maybeRepairPluginRegistryState({
+        stateDir,
+        candidates: [candidate],
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair: true },
+      }),
+    ).resolves.toStrictEqual({ config: {} });
   });
 
   it("warns about stale managed npm packages that shadow bundled plugins", async () => {
@@ -932,7 +941,7 @@ describe("maybeRepairPluginRegistryState", () => {
         config: {},
         prompter: { shouldRepair: false },
       }),
-    ).resolves.toEqual({});
+    ).resolves.toEqual({ config: {} });
 
     const notes = vi.mocked(note).mock.calls.join("\n");
     expect(notes).toContain("Managed npm plugin packages could not be inspected");

@@ -8,6 +8,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   groupSidebarSessionRows,
   sidebarSectionHasHeader,
@@ -136,7 +137,8 @@ export function buildSidebarSessionNavigationState(input: {
       }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),
+      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
+      hasActiveRun: row.archived !== true && isSessionRunActive(row),
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
@@ -172,6 +174,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentStatusNote: input.resolveAgentStatusNote(row),
       observerDigest: row.observerDigest,
       spawnedBy: row.spawnedBy,
+      forkSource: row.forkSource,
       status: row.status,
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,

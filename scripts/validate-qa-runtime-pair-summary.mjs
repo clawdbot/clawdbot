@@ -27,6 +27,8 @@ const FROZEN_CORE_RUNTIME_PAIR_MANIFEST = {
     "thread-memory-isolation",
     "model-switch-tool-continuity",
     "approval-turn-tool-followthrough",
+    // Preserve the serialized reports from these fixed candidate SHAs. These
+    // are not live catalog entries or current plugin-compatibility evidence.
     "codex-plugin-pinned-new",
     "codex-plugin-pinned-old",
     "compaction-retry-mutating-tool",
@@ -97,6 +99,15 @@ function projectedReportCellStatus(cell) {
   return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
 }
 
+function hasPassingRuntimeCellStatus(cell) {
+  // Early frozen candidates did not serialize the derived cell status. Accept
+  // only that absent legacy field when the same runtime evidence projects pass.
+  return (
+    cell.status === "pass" ||
+    (!Object.hasOwn(cell, "status") && projectedReportCellStatus(cell) === "pass")
+  );
+}
+
 function requireRuntimePairScenario(scenario, index) {
   if (!isRecord(scenario)) {
     throw new Error(`scenario ${index + 1} is not an object`);
@@ -116,9 +127,12 @@ function requireRuntimePairScenario(scenario, index) {
   }
 
   if (scenario.status === "pass") {
-    const hasTwoPassingCells = openclaw.status === "pass" && codex.status === "pass";
+    const hasTwoPassingCells =
+      hasPassingRuntimeCellStatus(openclaw) && hasPassingRuntimeCellStatus(codex);
     const hasAdvisoryCodexGap =
-      parity.drift === "structural" && openclaw.status === "pass" && isExplicitCodexGap(codex);
+      parity.drift === "structural" &&
+      hasPassingRuntimeCellStatus(openclaw) &&
+      isExplicitCodexGap(codex);
     if (
       parity.drift === "failure-mode" ||
       (!hasTwoPassingCells && !hasAdvisoryCodexGap) ||
@@ -195,9 +209,13 @@ export function validateQaRuntimePairSummary(summary, options = {}) {
     failed: 0,
     skipped,
   };
+  const requiredCountKeys = ["total", "passed", "failed"];
+  const skippedCountMatches =
+    summary.counts?.skipped === skipped || (skipped === 0 && summary.counts?.skipped === undefined);
   if (
     !isRecord(summary.counts) ||
-    Object.entries(expectedCounts).some(([key, value]) => summary.counts[key] !== value)
+    requiredCountKeys.some((key) => summary.counts[key] !== expectedCounts[key]) ||
+    !skippedCountMatches
   ) {
     throw new Error("runtime-pair summary counts do not match validated scenario evidence");
   }

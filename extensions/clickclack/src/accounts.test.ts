@@ -34,6 +34,42 @@ describe("ClickClack account resolution", () => {
     expect(resolveClickClackAccount({ cfg }).token).toBe("test-token-placeholder");
   });
 
+  it("merges partial named-account group overrides with the root group policy", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: "test-token-placeholder",
+          groups: {
+            " chn_1 ": {
+              requireMention: true,
+              mentionPatterns: ["@root-bot"],
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                chn_1: {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const account = resolveClickClackAccount({ cfg, accountId: "work" });
+    expect(account.groups).toEqual({
+      chn_1: {
+        requireMention: false,
+        mentionPatterns: ["@root-bot"],
+      },
+    });
+    expect(account.config.groups).toEqual(account.groups);
+  });
+
   it("does not synthesize a partial top-level default account from inherited credentials", () => {
     const cfg = {
       channels: {
@@ -107,6 +143,7 @@ describe("ClickClack account resolution", () => {
         baseUrl: "https://app.clickclack.chat",
         enabled: true,
         token: { source: "env", provider: "default", id: "CLICKCLACK_SERVICE_TOKEN" },
+        tokenFile: undefined,
         workspace: "wsp_1",
       },
       configured: true,
@@ -121,10 +158,13 @@ describe("ClickClack account resolution", () => {
         workspace: "wsp_1",
         section: "Sessions",
       },
+      groups: {},
+      mentionPatterns: [],
       model: undefined,
       name: undefined,
       reconnectMs: 1_500,
       replyMode: "agent",
+      requireMention: false,
       systemPrompt: undefined,
       token: "test-token-placeholder",
       toolsAllow: undefined,
@@ -213,6 +253,7 @@ describe("ClickClack account resolution", () => {
         model: "openai/gpt-5.4-mini",
         replyMode: "model",
         token: "token-oversized",
+        tokenFile: undefined,
         toolsAllow: ["web_search"],
         workspace: "wsp_1",
       },
@@ -227,10 +268,13 @@ describe("ClickClack account resolution", () => {
         workspace: "wsp_1",
         section: "Sessions",
       },
+      groups: {},
+      mentionPatterns: [],
       model: "openai/gpt-5.4-mini",
       name: undefined,
       reconnectMs: 1_500,
       replyMode: "model",
+      requireMention: false,
       systemPrompt: undefined,
       token: "token-oversized",
       toolsAllow: ["web_search"],

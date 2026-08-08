@@ -1,13 +1,13 @@
 // Openai plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
+  readProviderBinaryResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -16,7 +16,12 @@ import {
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
-export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
+export const OPENAI_TTS_MODELS = [
+  "gpt-4o-mini-tts",
+  "gpt-4o-mini-tts-2025-12-15",
+  "tts-1",
+  "tts-1-hd",
+] as const;
 
 export const OPENAI_TTS_VOICES = [
   "alloy",
@@ -182,10 +187,13 @@ export async function openaiTTS(params: {
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
-    return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
-        new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
-    });
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "OpenAI TTS API error", "audio", {
+        maxBytes,
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+      }),
+    );
   } finally {
     await release();
   }

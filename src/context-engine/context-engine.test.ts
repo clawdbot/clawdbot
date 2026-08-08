@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createContextEngineLogicalTurnLease,
+  selectContextEngineForTranscriptHost,
+} from "../agents/harness/context-engine-logical-turn.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,6 +17,12 @@ import {
   registerMemoryPromptPreparation,
   registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  requireActivePluginRegistry,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
@@ -25,9 +36,11 @@ import {
 import { LegacyContextEngine } from "./legacy.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
-  registerContextEngineForOwner,
+  activateContextEngineRegistrations,
   getContextEngineRegistration,
   listContextEngineQuarantines,
+  registerContextEngineForOwner,
+  registerContextEngineInRegistry,
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
@@ -148,13 +161,7 @@ function requireFactoryContext(
 }
 
 function requireRegistryState() {
-  const registryState = (globalThis as Record<symbol, unknown>)[
-    Symbol.for("openclaw.contextEngineRegistryState")
-  ] as { engines: Map<string, unknown> } | undefined;
-  if (!registryState) {
-    throw new Error("expected context engine registry state");
-  }
-  return registryState;
+  return { engines: requireActivePluginRegistry().contextEngines };
 }
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
@@ -298,40 +305,47 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {
-    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      reason: undefined,
-      result: {
-        summary: "summary",
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 100,
-        tokensAfter: 40,
-        details: undefined,
-        sessionId: "s3-successor",
-        sessionFile: "sqlite:main:s3-successor:/tmp/openclaw-agent.sqlite",
-      },
-    });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-target-"));
+    const storePath = path.join(root, "openclaw-agent.sqlite");
+    try {
+      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        reason: undefined,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          tokensAfter: 40,
+          details: undefined,
+          sessionId: "s3-successor",
+          sessionFile: `sqlite:main:s3-successor:${storePath}`,
+        },
+      });
 
-    const result = await delegateCompactionToRuntime({
-      sessionId: "s3",
-      sessionKey: "agent:main:s3",
-      tokenBudget: 4096,
-      runtimeContext: {
-        workspaceDir: "/tmp/workspace",
-      },
-    });
-
-    expect(result.result).toMatchObject({
-      sessionId: "s3-successor",
-      sessionTarget: {
-        agentId: "main",
-        sessionId: "s3-successor",
+      const result = await delegateCompactionToRuntime({
+        sessionId: "s3",
         sessionKey: "agent:main:s3",
-        storePath: "/tmp/openclaw-agent.sqlite",
-      },
-    });
-    expect(result.result).not.toHaveProperty("sessionFile");
+        tokenBudget: 4096,
+        runtimeContext: {
+          workspaceDir: "/tmp/workspace",
+        },
+      });
+
+      expect(result.result).toMatchObject({
+        sessionId: "s3-successor",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "s3-successor",
+          sessionKey: "agent:main:s3",
+          storePath,
+        },
+      });
+      expect(result.result).not.toHaveProperty("sessionFile");
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("allows the caller key to rebind to a legacy successor session", async () => {
@@ -626,6 +640,20 @@ describe("Registry tests", () => {
     expect(getContextEngineRegistration("reg-owner-guard")?.factory).toBe(factory1);
   });
 
+  it("reserves the default engine id even in an empty builder registry", () => {
+    const building = createEmptyPluginRegistry();
+
+    expect(
+      registerContextEngineInRegistry(
+        building,
+        "legacy",
+        () => new MockContextEngine(),
+        "plugin:shadow",
+      ),
+    ).toEqual({ ok: false, existingOwner: "core" });
+    expect(building.contextEngines.size).toBe(0);
+  });
+
   it("exposes the trusted plugin owner for a resolved registered engine", async () => {
     const engineId = `owner-policy-${Date.now().toString(36)}`;
     registerContextEngineForOwner(engineId, () => new MockContextEngine(), "plugin:lossless-claw", {
@@ -678,6 +706,157 @@ describe("Default engine selection", () => {
   it("resolveContextEngine() with config contextEngine='test-engine' returns the custom engine", async () => {
     const engine = await resolveContextEngine(configWithSlot("test-engine"));
     expect(engine.info.id).toBe("test-engine");
+  });
+
+  it("does not replay a started engine operation and retries the configured engine next turn", async () => {
+    const engineId = uniqueEngineId("logical-turn-retry");
+    const assemble = vi
+      .fn<ContextEngine["assemble"]>()
+      .mockRejectedValueOnce(new Error("configured engine unavailable"))
+      .mockImplementation(async ({ messages }) => ({ messages, estimatedTokens: 0 }));
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Logical Turn Retry" },
+      async ingest() {
+        return { ingested: true };
+      },
+      assemble,
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+    const warn = vi.fn();
+    const first = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+    const messages = [makeMockMessage()];
+
+    first.begin();
+    await expect(first.engine.assemble({ sessionId: "first", messages })).rejects.toThrow(
+      "configured engine unavailable",
+    );
+    expect(first.degraded).toBe(false);
+    expect(first.engine.info.id).toBe(engineId);
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    await first.dispose();
+
+    const second = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+    await expect(second.engine.assemble({ sessionId: "second", messages })).resolves.toMatchObject({
+      messages,
+    });
+    expect(second.degraded).toBe(false);
+    expect(second.engine.info.id).toBe(engineId);
+    expect(assemble).toHaveBeenCalledTimes(2);
+    await second.dispose();
+  });
+
+  it("rejects an incompatible fallback host after the logical turn starts", async () => {
+    const engineId = uniqueEngineId("logical-turn-host-transition");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Host Transition",
+        hostRequirements: {
+          "agent-run": { requiredCapabilities: ["thread-bootstrap-projection"] },
+        },
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+    });
+
+    lease.selectForHost({
+      host: {
+        id: "agent-harness:first",
+        label: 'agent harness "first"',
+        capabilities: ["thread-bootstrap-projection"],
+      },
+      operation: "agent-run",
+      requiresDurableCommit: true,
+      hasAdmissionFence: true,
+    });
+    lease.begin();
+
+    expect(() =>
+      lease.selectForHost({
+        host: {
+          id: "agent-harness:fallback",
+          label: 'agent harness "fallback"',
+          capabilities: [],
+        },
+        operation: "agent-run",
+        requiresDurableCommit: true,
+        hasAdmissionFence: true,
+      }),
+    ).toThrow(
+      'context-engine logical turn cannot change to incompatible agent harness "fallback": host "agent-harness:fallback" is missing thread-bootstrap-projection',
+    );
+    expect(lease.engine.info.id).toBe(engineId);
+    await lease.dispose();
+  });
+
+  it("degrades before start when the current turn has no admission receipt", async () => {
+    const engineId = uniqueEngineId("logical-turn-admission");
+    registerTestContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Admission Fence",
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async commitTurn() {
+        return { status: "committed" };
+      },
+    }));
+    const warn = vi.fn();
+    const lease = await createContextEngineLogicalTurnLease({
+      config: configWithSlot(engineId),
+      warn,
+    });
+
+    const selected = selectContextEngineForTranscriptHost({
+      lease,
+      host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
+      operation: "agent-run",
+      recorder: { getAdmissionReceipt: () => undefined },
+    });
+    lease.begin();
+
+    expect(selected.engine.info.id).toBe("legacy");
+    expect(lease.degradedReason).toBe("current-turn transcript admission receipt is unavailable");
+    expect(warn).toHaveBeenCalledOnce();
+    await lease.dispose();
   });
 });
 
@@ -1013,6 +1192,45 @@ describe("Invalid engine fallback", () => {
     );
   });
 
+  it("coalesces fallback initialization across concurrent lifecycle failures", async () => {
+    const defaultFactory = vi.fn(async () => new LegacyContextEngine());
+    registerContextEngineForOwner("legacy", defaultFactory, "core", {
+      allowSameOwnerRefresh: true,
+    });
+    const engineId = uniqueEngineId("concurrent-runtime-fail");
+    const assemble = vi.fn(async () => {
+      await Promise.resolve();
+      throw new Error("plugin context unavailable");
+    });
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Concurrent Context Engine" },
+      async ingest() {
+        return { ingested: true };
+      },
+      assemble,
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const messages = [makeMockMessage("user", "first"), makeMockMessage("user", "second")];
+
+    const results = await Promise.all(
+      messages.map((message, index) =>
+        engine.assemble({ sessionId: `session-${index}`, messages: [message] }),
+      ),
+    );
+
+    expect(results.map(({ messages: assembled }) => assembled)).toEqual(
+      messages.map((message) => [message]),
+    );
+    expect(assemble).toHaveBeenCalledTimes(2);
+    expect(defaultFactory).toHaveBeenCalledTimes(1);
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({ engineId, operation: "assemble" }),
+    ]);
+  });
+
   it("exposes fallback metadata on the same engine after lifecycle quarantine", async () => {
     const engineId = uniqueEngineId("runtime-fail-metadata");
     const assemble = vi.fn(async () => {
@@ -1053,6 +1271,56 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
     expect(assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes legacy resolver fence failures through normal quarantine", async () => {
+    const engineId = uniqueEngineId("transcript-fence-fallback");
+    const ingest = vi.fn(async () => ({ ingested: true }));
+    const assemble = vi.fn(async () => {
+      throw new SessionTranscriptReadFenceError("admitted user row is unavailable");
+    });
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: {
+          id: "lcm",
+          name: "Lossless Context Manager",
+          ownsCompaction: true,
+        },
+        ingest,
+        assemble,
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      }),
+      "plugin:lossless-claw",
+      { allowSameOwnerRefresh: true },
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
+
+    const first = makeMockMessage("user", "first");
+    const second = makeMockMessage("user", "second");
+    await expect(engine.assemble({ sessionId: "s1", messages: [first] })).resolves.toMatchObject({
+      messages: [first],
+    });
+    await expect(engine.assemble({ sessionId: "s1", messages: [second] })).resolves.toMatchObject({
+      messages: [second],
+    });
+    await engine.ingest({ sessionId: "s1", message: second });
+
+    expect(engine.info.id).toBe("legacy");
+    expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({
+        engineId,
+        operation: "assemble",
+        reason: "admitted user row is unavailable",
+      }),
+    ]);
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(ingest).not.toHaveBeenCalled();
   });
 
   it("quarantines compact failures without same-call legacy fallback", async () => {
@@ -1125,6 +1393,31 @@ describe("Invalid engine fallback", () => {
 
     expect(listContextEngineQuarantines()).toEqual([]);
     expect(registeredEngine.info.id).toBe(engineId);
+  });
+
+  it("defers quarantine clearing for builder-context direct registrations", async () => {
+    const engineId = uniqueEngineId("builder-register");
+    await resolveContextEngine(configWithSlot(engineId));
+    const builder = createEmptyPluginRegistry();
+
+    withPluginRegistrationContext(builder, "context-builder", () => {
+      registerContextEngineForOwner(
+        engineId,
+        () => new MockContextEngine(),
+        "plugin:context-builder",
+        { allowSameOwnerRefresh: true },
+      );
+    });
+
+    expect(builder.contextEngines.has(engineId)).toBe(true);
+    expect(getContextEngineRegistration(engineId)).toBeUndefined();
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({ engineId, reason: "not registered" }),
+    ]);
+
+    setActivePluginRegistry(builder);
+    activateContextEngineRegistrations(builder);
+    expect(listContextEngineQuarantines()).toEqual([]);
   });
 
   it("does not quarantine abort rejections from lifecycle methods", async () => {

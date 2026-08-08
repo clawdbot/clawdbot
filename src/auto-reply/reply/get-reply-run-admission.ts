@@ -4,6 +4,8 @@ import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePath,
@@ -23,7 +25,6 @@ import {
 } from "../thinking.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
-  hasResolvedThinkingCatalogEntry,
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
@@ -37,7 +38,6 @@ import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
   isReplyRunActiveForSessionId,
-  isReplyRunStreamingForSessionId,
   resolveActiveReplyRunThreadId,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
@@ -382,7 +382,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+          preparedSessionState.sessionEntry,
+        ),
       };
     }
     const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
@@ -413,7 +415,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       authProfileId: resolvedAuthProfileId,
       authProfileIdSource:
         resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
-          ? authSessionEntry.authProfileOverrideSource
+          ? resolveSessionAuthProfileOverrideSource(authSessionEntry)
           : undefined,
     };
   };
@@ -446,10 +448,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+      return { activeSessionId: undefined, isActive: false };
     }
     if (isOwnPreDispatchOperationSession(activeSessionId)) {
-      return { activeSessionId, isActive: false, isStreaming: false };
+      return { activeSessionId, isActive: false };
     }
     const replyOperationActive =
       replyOperationActiveSessionId != null &&
@@ -460,11 +462,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
         replyOperationActive,
-      isStreaming:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||
-        (replyOperationActiveSessionId != null &&
-          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
@@ -496,7 +493,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       providedReplyOperation.updateSessionId(sessionId);
     }
   }
-  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  const { activeSessionId, isActive } = resolveQueueBusyState();
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
     !isRoomEvent &&
@@ -563,6 +560,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkingCatalog,
     sessionEntry,
     skillsSnapshot,
     prefixedCommandBody,
@@ -584,7 +582,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     shouldSteer,
     shouldFollowup,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } as const;

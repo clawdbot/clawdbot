@@ -17,12 +17,14 @@ import {
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
+import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -34,7 +36,7 @@ type SettingsSidebarProps = {
   offline: boolean;
   queuedOutboxCount?: number;
   lastError: string | null;
-  version: string;
+  gatewayVersion: string;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   onUpdate: () => void;
@@ -162,14 +164,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @touchstart=${(event: TouchEvent) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -200,14 +195,7 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
       class="settings-sidebar__subitem ${active ? "settings-sidebar__subitem--active" : ""}"
       aria-current=${active ? "location" : nothing}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -329,9 +317,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           : html`<openclaw-settings-save-indicator
               .props=${props.saveIndicator}
             ></openclaw-settings-save-indicator>`}
-        ${props.version
-          ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
-          : nothing}
+        <openclaw-sidebar-build-chip
+          .basePath=${props.basePath}
+          .gatewayVersion=${props.gatewayVersion || null}
+          .variant=${"settings"}
+          .onNavigate=${() => props.onNavigate("about")}
+        ></openclaw-sidebar-build-chip>
       </footer>
     </aside>
   `;

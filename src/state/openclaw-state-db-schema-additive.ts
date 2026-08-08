@@ -10,6 +10,8 @@ import {
   migrateLegacyCronDeliveryThreadIds,
   repairLegacyTaskAgentAttribution,
   repairLegacyTaskDeliveryStatuses,
+  repairLegacySubagentExecutionPayloads,
+  repairLegacySubagentRetainedResults,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 
@@ -92,6 +94,8 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureColumn(db, "claw_installs", "bootstrap_source_path TEXT");
+  ensureColumn(db, "claw_installs", "bootstrap_content_digest TEXT");
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
     db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
   }
@@ -341,6 +345,8 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
+  repairLegacySubagentExecutionPayloads(db);
+  repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");

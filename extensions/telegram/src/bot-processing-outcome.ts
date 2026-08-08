@@ -56,9 +56,21 @@ export class TelegramSpooledReplayProcessingError extends Error {
 export async function runWithTelegramUpdateProcessingFrame<T>(
   fn: () => Promise<T>,
 ): Promise<{ value: T; result?: TelegramMessageProcessingResult }> {
-  const frame: TelegramUpdateProcessingFrame = {};
-  const value = await telegramUpdateProcessingFrames.run(frame, fn);
+  const inheritedFrame = telegramUpdateProcessingFrames.getStore();
+  // Durable ingress owns the outer frame; bot middleware must update that same fact.
+  const frame = inheritedFrame ?? {};
+  const value = inheritedFrame ? await fn() : await telegramUpdateProcessingFrames.run(frame, fn);
   return frame.result ? { value, result: frame.result } : { value };
+}
+
+/** Records a default only when a handler has not already chosen its terminal disposition. */
+export function ensureTelegramMessageProcessingResult(
+  result: TelegramMessageProcessingResult,
+): void {
+  const frame = telegramUpdateProcessingFrames.getStore();
+  if (frame && !frame.result) {
+    frame.result = result;
+  }
 }
 
 export function recordTelegramMessageProcessingResult(

@@ -3,24 +3,16 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
-import { buildGatewaySessionRow } from "./session-utils.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -40,7 +32,6 @@ const {
 } = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
-  releasePinnedPluginSessionExtensionRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -155,7 +146,7 @@ async function invokeSessionsList({
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      loadGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => [],
       ...context,
     } as never,
   });
@@ -227,78 +218,6 @@ function expectMainPatchBroadcast(
     ...expected,
   });
 }
-
-test("sessions.pluginPatch over WebSocket keeps pinned startup extensions after active churn", async () => {
-  const { config, registry } = createPluginRegistryFixture();
-  registerTestPlugin({
-    registry,
-    config,
-    record: createPluginRecord({
-      id: "session-pin-ws-fixture",
-      name: "Session Pin WS Fixture",
-    }),
-    register(api) {
-      api.registerSessionExtension({
-        namespace: "workflow",
-        description: "Pinned workflow state",
-      });
-    },
-  });
-  setActivePluginRegistry(registry.registry);
-  pinActivePluginSessionExtensionRegistry(registry.registry);
-  setActivePluginRegistry(createEmptyPluginRegistry());
-
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-
-  const { ws } = await openClient();
-  const patched = await rpcReq<{ ok: boolean; key: string; value: { state: string } }>(
-    ws,
-    "sessions.pluginPatch",
-    {
-      key: "main",
-      pluginId: "session-pin-ws-fixture",
-      namespace: "workflow",
-      value: { state: "after-active-registry-churn" },
-    },
-  );
-  ws.close();
-
-  expect(patched.ok).toBe(true);
-  expect(patched.payload).toEqual({
-    ok: true,
-    key: "agent:main:main",
-    value: { state: "after-active-registry-churn" },
-  });
-
-  const entry = loadSessionEntry({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  expect(entry).toBeDefined();
-  if (!entry) {
-    throw new Error("expected persisted session entry");
-  }
-  const row = buildGatewaySessionRow({
-    cfg: { session: { store: storePath } },
-    entry,
-    key: "agent:main:main",
-    store: { "agent:main:main": entry },
-    storePath,
-  });
-  expect(row.pluginExtensions).toEqual([
-    {
-      pluginId: "session-pin-ws-fixture",
-      namespace: "workflow",
-      value: { state: "after-active-registry-churn" },
-    },
-  ]);
-});
 
 async function invokeSessionsCompact({
   getRuntimeConfig,
@@ -488,7 +407,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   const { respond } = await invokeSessionsList({
     requestId: "req-sessions-list-thinking-default",
     context: {
-      loadGatewayModelCatalog: async () => [
+      readPreparedGatewayModelCatalog: async () => [
         {
           provider: "test-provider",
           id: "reasoner",
@@ -696,6 +615,34 @@ test("sessions.changed mutation events refresh effective fast metadata", async (
   });
 });
 
+test("sessions.changed mutations reach plugin subscribers without websocket clients", async () => {
+  await writeMainSessionStore({ label: "Original title" });
+  const received = vi.fn();
+  const unsubscribe = subscribePluginSessionsChanged(received);
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+
+  try {
+    await invokeSessionMutation({
+      method: "sessions.patch",
+      params: { key: "main", label: "Renamed title" },
+      subscribedConnIds: new Set(),
+      context: { broadcastToConnIds },
+    });
+
+    await vi.waitFor(() => {
+      expect(received).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          label: "Renamed title",
+          reason: "patch",
+        }),
+      );
+    });
+  } finally {
+    unsubscribe();
+  }
+});
+
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
 });
@@ -732,6 +679,30 @@ test("sessions.list ignores hidden internal abortable runs", async () => {
     { controlUiVisible: false },
     false,
   );
+});
+
+test("sessions.list leaves failed-first-turn dashboard sessions untitled instead of an id-prefix title", async () => {
+  const sessionKey = "agent:main:dashboard:fade729d-1111-2222-3333-444455556666";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:fade729d-1111-2222-3333-444455556666": sessionStoreEntry("sess-dash-untitled"),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: "sess-dash-untitled",
+    sessionKey,
+    storePath,
+    messages: [{ role: "assistant", content: "The first turn failed before a user message." }],
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-untitled-dashboard",
+    params: { includeDerivedTitles: true },
+  });
+
+  const session = findSession(expectRespondPayload(respond), sessionKey);
+  expect(session.derivedTitle).toBeUndefined();
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {

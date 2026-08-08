@@ -139,7 +139,6 @@ Use `session_status` when the agent needs the exact current time and the tool is
 Configure with:
 
 - `agents.defaults.userTimezone`
-- `agents.defaults.timeFormat` (`auto` | `12` | `24`)
 
 See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behavior details.
 

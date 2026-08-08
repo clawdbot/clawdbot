@@ -105,7 +105,9 @@ const mocks = vi.hoisted(() => ({
   prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
+  isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
+  isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
 }));
 
@@ -131,7 +133,9 @@ vi.mock("./message.gateway.runtime.js", () => ({
 vi.mock("./source-reply-mirror.js", () => ({
   beginTerminalSourceReplyDelivery: mocks.beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery: mocks.cancelTerminalSourceReplyDelivery,
+  isCurrentSourceReplyActionName: mocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: mocks.isDeliveredCurrentSourceReply,
+  isDeliveredCurrentSourceReplyAction: mocks.isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery: mocks.reconcileTerminalSourceReplyDelivery,
 }));
 
@@ -376,17 +380,40 @@ describe("runMessageAction plugin dispatch", () => {
       },
       actions: {
         describeMessageTool: () => ({
-          actions: ["pin", "list-pins", "member-info", "channel-info", "edit"],
+          actions: [
+            "pin",
+            "unpin",
+            "list-pins",
+            "member-info",
+            "channel-info",
+            "edit",
+            "thread-create",
+            "thread-reply",
+          ],
         }),
         messageActionTargetAliases: {
-          edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
+          edit: {
+            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+          },
+          pin: {
+            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+          },
+          unpin: {
+            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+          },
         },
         supportsAction: ({ action }) =>
           action === "pin" ||
+          action === "unpin" ||
           action === "list-pins" ||
           action === "member-info" ||
           action === "channel-info" ||
-          action === "edit",
+          action === "edit" ||
+          action === "thread-create" ||
+          action === "thread-reply",
         handleAction,
       },
     };
@@ -462,6 +489,125 @@ describe("runMessageAction plugin dispatch", () => {
         "list pins call params",
       );
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { action: "unpin" as const, alias: "chatId", messageId: "om_unpin" },
+      { action: "edit" as const, alias: "chat_id", messageId: "om_edit" },
+      { action: "pin" as const, alias: "channel_id", messageId: "om_pin" },
+    ])("guards $alias delivery aliases for $action before plugin dispatch", async (testCase) => {
+      const cfg = {
+        channels: { actionhub: { enabled: true } },
+        tools: { message: { crossContext: { allowWithinProvider: false } } },
+      } as OpenClawConfig;
+      const toolContext = {
+        currentChannelProvider: "actionhub" as const,
+        currentChannelId: "oc_current",
+      };
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: testCase.action,
+          params: {
+            channel: "actionhub",
+            messageId: testCase.messageId,
+            [testCase.alias]: "oc_foreign",
+          },
+          toolContext,
+          conversationReadOrigin: "direct-operator",
+          dryRun: false,
+        }),
+      ).rejects.toThrow("Cross-context messaging denied");
+      expect(handleAction).not.toHaveBeenCalled();
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: testCase.action,
+          params: {
+            channel: "actionhub",
+            messageId: testCase.messageId,
+            [testCase.alias]: "oc_current",
+          },
+          toolContext,
+          conversationReadOrigin: "direct-operator",
+          dryRun: false,
+        }),
+      ).resolves.toMatchObject({ kind: "action", action: testCase.action });
+      expect(handleAction).toHaveBeenCalledOnce();
+    });
+
+    it("preserves canonical thread and edit fields through plugin dispatch", async () => {
+      const cfg = {
+        channels: {
+          actionhub: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      await runMessageAction({
+        cfg,
+        action: "thread-create",
+        params: {
+          channel: "actionhub",
+          target: "actionhub:room",
+          threadName: "Canonical thread",
+        },
+        dryRun: false,
+      });
+      await runMessageAction({
+        cfg,
+        action: "thread-reply",
+        params: {
+          channel: "actionhub",
+          target: "actionhub:room/thread-1",
+          message: "Canonical reply",
+        },
+        dryRun: false,
+      });
+      await runMessageAction({
+        cfg,
+        action: "edit",
+        params: {
+          channel: "actionhub",
+          target: "actionhub:room/thread-1",
+          messageId: "om_123",
+          message: "Canonical edit",
+        },
+        conversationReadOrigin: "direct-operator",
+        dryRun: false,
+      });
+
+      expectRecordFields(
+        readRecordField(readPluginCall(handleAction, 0), "params", "thread-create params"),
+        {
+          target: "actionhub:room",
+          to: "actionhub:room",
+          threadName: "Canonical thread",
+        },
+        "thread-create params",
+      );
+      expectRecordFields(
+        readRecordField(readPluginCall(handleAction, 1), "params", "thread-reply params"),
+        {
+          target: "actionhub:room/thread-1",
+          to: "actionhub:room/thread-1",
+          message: "Canonical reply",
+        },
+        "thread-reply params",
+      );
+      expectRecordFields(
+        readRecordField(readPluginCall(handleAction, 2), "params", "edit params"),
+        {
+          target: "actionhub:room/thread-1",
+          to: "actionhub:room/thread-1",
+          messageId: "om_123",
+          message: "Canonical edit",
+        },
+        "edit params",
+      );
     });
 
     it("infers the trusted current target for resource-referenced edits", async () => {

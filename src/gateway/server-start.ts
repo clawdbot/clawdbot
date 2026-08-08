@@ -11,6 +11,8 @@ import { finishGatewayStartup } from "./server-startup-finish.js";
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
+type ReadPreparedGatewayModelCatalog =
+  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -27,8 +29,6 @@ export async function resetPreparedModelCatalogForTest(): Promise<void> {
     await loadGatewayModelCatalogModule();
   await resetPreparedModelCatalogForTestLocal();
 }
-
-ensureOpenClawCliOnPath();
 
 const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
   () => import("./server-startup-early.js"),
@@ -64,6 +64,10 @@ const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalogSnapshot(...args);
 };
+const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (...args) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.readPreparedGatewayModelCatalog(...args);
+};
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
   () => import("./server-plugin-bootstrap.js"),
@@ -78,6 +82,7 @@ const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
+const POST_READY_WORK_START_DELAY_MS = 500;
 
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
@@ -101,6 +106,11 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  ensureOpenClawCliOnPath();
+  let releasePostReadyWork: () => void = () => {};
+  const postReadyWorkBarrier = new Promise<void>((resolve) => {
+    releasePostReadyWork = resolve;
+  });
   const bootstrap = await prepareGatewayServerBootstrap({
     port,
     opts,
@@ -154,6 +164,7 @@ export async function startGatewayServer(
       loadGatewayPluginBootstrapModule,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalog,
     });
     await finishGatewayStartup({
       coreRuntime,
@@ -168,11 +179,16 @@ export async function startGatewayServer(
       logReload,
       logTailscale,
       loadGatewayStartupPostAttachModule,
+      waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
   }
+  // The public server is fully initialized now. Leave a short I/O window before
+  // background prewarms and cleanup imports compete for the startup CPU.
+  const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
+  postReadyWorkTimer.unref?.();
 
   const close = createCloseHandler();
 

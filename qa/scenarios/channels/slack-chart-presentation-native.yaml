@@ -11,8 +11,9 @@ scenario:
     timeoutMs: 90000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-chart-presentation-native }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackChartPresentationNativeScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaChartPresentationNativeScenario }

@@ -414,6 +414,14 @@ const manifestSchema = z
     }
     manifest.workspace.files.forEach((file, index) => {
       const destinationKey = portableClawPathKey(file.path);
+      if (destinationKey === portableClawPathKey("BOOTSTRAP.md")) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["workspace", "files", index, "path"],
+          message:
+            "Package-root BOOTSTRAP.md uses the native seed-once lifecycle and cannot be a managed workspace destination.",
+        });
+      }
       if (conflictsWithClawPath(workspaceTargets, destinationKey)) {
         ctx.addIssue({
           code: "custom",

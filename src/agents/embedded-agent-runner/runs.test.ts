@@ -51,11 +51,9 @@ function createRunHandle(
     isCompacting?: boolean;
     isStreaming?: boolean;
     isStopped?: () => boolean;
+    messageInjection?: RunHandle["messageInjection"];
     runId?: string;
-    queueMessage?: (
-      text: string,
-      options?: Parameters<RunHandle["queueMessage"]>[1],
-    ) => Promise<void>;
+    queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
   } = {},
@@ -66,6 +64,7 @@ function createRunHandle(
   return {
     runId: overrides.runId,
     queueMessage: overrides.queueMessage ?? (async () => {}),
+    ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
     isStreaming: () => overrides.isStreaming ?? true,
     ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
     ...(overrides.isAbortable !== undefined
@@ -242,6 +241,7 @@ describe("embedded-agent runner run registry", () => {
       sessionId: "session-reply-stuck",
       resetTriggered: false,
     });
+    cancel.mockImplementation(() => operation.complete());
     operation.attachBackend({
       kind: "embedded",
       cancel,
@@ -711,21 +711,33 @@ describe("embedded-agent runner run registry", () => {
     );
   });
 
-  it("returns structured queue failures for inactive active-run states", () => {
-    setActiveEmbeddedRun("session-not-streaming", createRunHandle({ isStreaming: false }));
+  it("returns structured queue failures for legacy, unavailable, or compacting runs", () => {
+    const legacyQueue = vi.fn(async () => {});
+    const unavailableQueue = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-not-streaming",
+      createRunHandle({ isStreaming: false, queueMessage: legacyQueue }),
+    );
+    setActiveEmbeddedRun(
+      "session-unavailable",
+      createRunHandle({
+        messageInjection: { isAvailable: () => false, queueMessage: unavailableQueue },
+      }),
+    );
     setActiveEmbeddedRun("session-compacting", createRunHandle({ isCompacting: true }));
 
-    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toEqual({
+    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
+      { queued: false, reason: "not_streaming" },
+    );
+    expect(legacyQueue).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome("session-unavailable", "continue")).toMatchObject({
       queued: false,
-      sessionId: "session-not-streaming",
       reason: "not_streaming",
-      gatewayHealth: "live",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toEqual({
+    expect(unavailableQueue).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toMatchObject({
       queued: false,
-      sessionId: "session-compacting",
       reason: "compacting",
-      gatewayHealth: "live",
     });
   });
 
@@ -749,6 +761,31 @@ describe("embedded-agent runner run registry", () => {
     expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
       "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
     );
+  });
+
+  it("reports accepted steering without transcript confirmation as non-replayable", async () => {
+    setActiveEmbeddedRun("session-unconfirmed", {
+      ...createRunHandle(),
+      queueMessage: async () => ({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      }),
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-unconfirmed",
+      "continue",
+    );
+
+    expect(outcome).toEqual({
+      queued: true,
+      sessionId: "session-unconfirmed",
+      target: "embedded_run",
+      gatewayHealth: "live",
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt unavailable",
+      enqueuedAtMs: expect.any(Number),
+    });
   });
 
   it("rejects transcript-commit waits for active handles without support", async () => {

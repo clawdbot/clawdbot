@@ -119,7 +119,9 @@ also tries to register the bundled Codex marketplace from
 as a fallback for legacy standalone installs. If setup still cannot make the
 MCP server available, the turn fails before the thread starts.
 Strict readiness failures are harness preflight failures, so model fallback
-does not repeat the same local readiness sequence for every model candidate.
+does not repeat the same local readiness sequence for every Codex candidate.
+A candidate resolved to another harness remains eligible and enters that
+runtime through its normal policy checks.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
@@ -242,7 +244,7 @@ reconciliation so OpenClaw does not override that selection.
 
 ## Remote marketplaces
 
-Codex 0.146.0 can read and install Computer Use plugins from discovered remote
+Codex 0.146.1 can read and install Computer Use plugins from discovered remote
 marketplaces. OpenClaw passes the opaque remote plugin ID returned by Codex to
 `plugin/read` and `plugin/install`; a human-readable plugin name is not a valid
 substitute.

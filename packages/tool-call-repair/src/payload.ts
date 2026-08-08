@@ -1,3 +1,9 @@
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallParseOptions,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 // Tool Call Repair module implements payload behavior.
 import {
   consumeLineBreak,
@@ -27,14 +33,6 @@ export type PlainTextToolCallBlock = {
   raw: string;
   /** Inclusive start offset of the parsed block. */
   start: number;
-};
-
-/** Parser limits and allowlist options for plain-text tool-call repair. */
-export type PlainTextToolCallParseOptions = {
-  /** Optional allowlist of tool names that may be repaired. */
-  allowedToolNames?: Iterable<string>;
-  /** Maximum serialized payload size accepted for one repaired call. */
-  maxPayloadBytes?: number;
 };
 
 type NormalizedPlainTextToolCallParseOptions = Omit<
@@ -69,11 +67,6 @@ export type PlainTextJsonToolCallScan =
       nameComplete: true;
       payload: PlainTextJsonToolCallSpan;
     });
-
-export type PlainTextToolCallNameMatcher = {
-  hasExactName(name: string): boolean;
-  hasNamePrefix(prefix: string): boolean;
-};
 
 type PlainTextToolCallScanBranches = {
   json: PlainTextJsonToolCallScan;
@@ -681,7 +674,10 @@ export function parseStandalonePlainTextToolCallBlocks(
 }
 
 /** Removes full-line standalone plain-text tool-call blocks from user-visible text. */
-export function stripPlainTextToolCallBlocks(text: string): string {
+export function stripPlainTextToolCallBlocks(
+  text: string,
+  options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
+): string {
   if (
     !text ||
     (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
@@ -692,6 +688,7 @@ export function stripPlainTextToolCallBlocks(text: string): string {
   ) {
     return text;
   }
+  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
   let result = "";
   let cursor = 0;
   let index = 0;
@@ -702,6 +699,10 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       continue;
     }
     const blockStart = skipLineIndentation(text, index);
+    if (isOffsetInProtectedRanges(blockStart, protectedRanges)) {
+      index += 1;
+      continue;
+    }
     const scan = scanPlainTextToolCall(text, blockStart);
     if (scan.kind === "prefix" && scan.completeEnd === undefined) {
       return result + text.slice(cursor);
@@ -719,6 +720,9 @@ export function stripPlainTextToolCallBlocks(text: string): string {
     result += text.slice(cursor, index);
     while (true) {
       const adjacentStart = skipLineIndentation(text, blockEnd);
+      if (isOffsetInProtectedRanges(adjacentStart, protectedRanges)) {
+        break;
+      }
       const adjacent = scanPlainTextToolCall(text, adjacentStart);
       const adjacentEnd =
         adjacent.kind === "complete"

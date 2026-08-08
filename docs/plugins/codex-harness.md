@@ -66,10 +66,10 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.146.0`. The plugin ships and manages `@openai/codex`
-  `0.146.0` by default, so a `codex` command on `PATH` does not affect normal
+- Codex app-server `0.146.1`. The plugin ships and manages `@openai/codex`
+  `0.146.1` by default, so a `codex` command on `PATH` does not affect normal
   startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.146.0` version.
+  report the same exact stable `0.146.1` version.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -592,6 +592,17 @@ already running elsewhere:
   },
 }
 ```
+
+WebSocket transport proactively establishes the app-server connection at
+gateway startup and limits the opening handshake to 10 seconds. An idle
+connection sends a WebSocket ping every 20 seconds and allows 20 seconds for its
+matching pong. A healthy app-server message or pong resets the missed-heartbeat
+count; five consecutive missed pongs close the connection. Transient failures
+reconnect automatically with bounded, jittered exponential backoff. Authentication
+failures and unsupported app-server versions stop reconnecting and report that
+operator action is required. Ping and pong frames are transport-level health
+checks: they do not start a Codex turn or invoke a model. Local stdio and Unix
+transports do not perform these remote connection checks.
 
 Local stdio app-server sessions default to the trusted local operator
 posture: `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
@@ -1170,7 +1181,7 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.146.0`. Older or
+**The app-server is rejected:** use exactly stable Codex `0.146.1`. Older or
 newer versions, prereleases, build-suffixed versions, and unversioned servers
 are rejected because OpenClaw validates generated schemas and runtime contracts
 against the Codex version it ships. Update or remove custom, remote, or desktop

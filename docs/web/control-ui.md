@@ -43,11 +43,11 @@ Auth is supplied during the WebSocket handshake via:
 
 Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted. After pairing, the browser can use its stored per-device token on later connections.
 
-Onboarding usually configures a gateway token for shared-secret auth. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so `openclaw config get gateway.auth.token` cannot retrieve it and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then paste the configured token in Control UI settings. Password auth works instead when `gateway.auth.mode` is `"password"`.
+Onboarding usually configures a gateway token for shared-secret auth. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into Control UI settings. Password auth works instead when `gateway.auth.mode` is `"password"`.
 
 ## Device pairing (first connection)
 
-After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`.
+After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.
 
 <Warning>
 When upgrading directly from a release that used the retired
@@ -78,7 +78,7 @@ silently discarding the old key.
 
 If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created; re-run `openclaw devices list` before approving.
 
-Switching an already-paired remote browser from read access to write/admin access is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. A qualifying direct-loopback Control UI connection can silently approve the upgrade after it authenticates.
+Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.
 
 Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation, revocation, and the Paperclip / `openclaw_gateway` first-run approval flow.
 
@@ -88,6 +88,7 @@ Once approved, the device is remembered and won't require re-approval unless you
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity. Device-less browsers and node-role connections still follow the normal device checks.
 - Direct Tailnet binds and LAN browser connects still require explicit approval. Browser profiles without device identity cannot use loopback auto-approval.
 - Each browser profile generates a unique device ID, so switching browsers or clearing browser data requires re-pairing.
+- Private windows and browser profiles that discard site data on exit, including Firefox Never remember history, also discard the stored device identity and per-device token. They will appear as a new browser after each restart; use a persistent browser profile to stay paired, and remove stale entries with `openclaw devices remove <deviceId>` when the paired-device list grows.
 
 </Note>
 
@@ -117,7 +118,7 @@ The assistant avatar override follows the same browser-local pattern: uploaded o
 
 ## Runtime config endpoint
 
-The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
+The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by gateway HTTP auth: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password or trusted-proxy identity. Tailscale header auth applies to the Control UI WebSocket, not this HTTP endpoint.
 
 ## Gateway host status
 
@@ -142,7 +143,7 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
-Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
+Theme, theme mode, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot. Text size remains browser-local. An explicitly read-only connection applies preference changes only in that browser and does not attempt a config write. Changes made while offline remain queued until a later connection can write config; on a read-only reconnect, they continue to behave as browser-local preferences. See [Configuration reference](/gateway/configuration-reference#ui).
 
 ## OpenClaw system care
 
@@ -450,7 +451,7 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
-    - When a visible assistant message was truncated in `chat.history`, the side reader can fetch the full display-normalized transcript entry on demand through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. If the Gateway still cannot return more, the reader shows an explicit unavailable state instead of silently repeating the truncated preview.
+    - When a visible assistant message was truncated in `chat.history`, **Show more** fetches the full display-normalized transcript entry inline through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. **Show less** restores the preview without discarding the fetched content. If the Gateway cannot return more, the message shows an explicit retryable error instead of silently repeating the truncated preview.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
@@ -492,7 +493,7 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
     **Video Talk** is available for OpenAI Platform Realtime WebRTC and Google Live browser sessions; GPT-Live is audio-only. Click the camera button, allow camera and microphone access, and confirm the local preview. OpenAI sends one bounded JPEG frame over its browser data channel when `describe_view` requests visual context. Google Live sends bounded JPEG frames directly from the browser to the provider at the supported maximum of one frame per second and answers `describe_view` function calls with the camera-stream state. Camera frames never pass through the Gateway. Stopping Talk closes the preview and releases both media tracks. See Google's [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities#video) and [function-calling guide](https://ai.google.dev/gemini-api/docs/live-api/tools) for the provider wire contracts.
 
-    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser setup with a JPEG frame and `describe_view` function roundtrip, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
+    Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, a synthesized PCM24 speech-to-response audio roundtrip, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser setup with a JPEG frame and `describe_view` function roundtrip, and the Gateway relay browser adapter with fake microphone media. Pass `--openai-audio-cycles 3` for a short repeated OpenAI connect, talkback, and close soak. The command prints provider status only and does not log secrets.
 
   </Accordion>
   <Accordion title="Stop and abort">
@@ -523,11 +524,11 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
-When this browser already holds credentials (a configured token/password or an approved device
-token), first opens and reloads show a small animated OpenClaw mark while the connection is
-established instead of flashing the login gate. The login gate only appears when no credentials
-are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
-states that need your input rather than waiting.
+First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
+connection, including when authentication comes from a trusted proxy or Tailscale instead of a
+browser-stored credential. The login gate appears only after the initial connection fails or the
+Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
+pairing) — states that need your input rather than waiting.
 
 ## PWA install and web push
 
@@ -613,40 +614,25 @@ constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and
 
 ## Tailnet access (recommended)
 
-<Tabs>
-  <Tab title="Integrated Tailscale Serve (preferred)">
-    Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
+Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
 
-    ```bash
-    openclaw gateway --tailscale serve
-    ```
+```bash
+openclaw gateway --tailscale serve
+```
 
-    Open `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`).
+Open `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`).
 
-    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic, then use `gateway.auth.mode: "token"` or `"password"`.
+By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic, then use `gateway.auth.mode: "token"` or `"password"`.
 
-    For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
+For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
 
-    <Warning>
-    Tokenless Serve auth assumes the gateway host is trusted. If untrusted local code may run on that host, require token/password auth.
-    </Warning>
-
-  </Tab>
-  <Tab title="Bind to tailnet + token">
-    ```bash
-    openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
-    ```
-
-    Open `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`).
-
-    Paste the matching shared secret into the UI settings (sent as `connect.params.auth.token` or `connect.params.auth.password`).
-
-  </Tab>
-</Tabs>
+<Warning>
+Tokenless Serve auth assumes the gateway host is trusted. If untrusted local code may run on that host, require token/password auth.
+</Warning>
 
 ## Insecure HTTP
 
-If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. By default, OpenClaw **blocks** Control UI connections without device identity.
+If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. OpenClaw rejects token/password Control UI connections without device identity; a shared secret cannot replace browser identity.
 
 The supported device-less exception is successful operator Control UI auth
 through `gateway.auth.mode: "trusted-proxy"`. There is no persistent config
@@ -658,7 +644,7 @@ switch that disables device identity.
   <Accordion title="Trusted-proxy note">
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.
-    - Same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
+    - A same-host loopback reverse proxy requires both loopback in `gateway.trustedProxies` and `gateway.auth.trustedProxy.allowLoopback: true`; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
 
   </Accordion>
 </AccordionGroup>

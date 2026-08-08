@@ -127,6 +127,8 @@ const apiStub: ApiStub = {
   setMyCommands: vi.fn(async () => undefined),
 };
 
+export const telegramMediaHarnessSendMessageSpy = apiStub.sendMessage;
+
 const throttlerSpy = vi.fn(() => "throttler");
 const defaultRuntimeConfig = (() =>
   ({

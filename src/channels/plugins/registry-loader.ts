@@ -1,10 +1,11 @@
 /**
  * Lazy channel registry value loader.
  *
- * Resolves plugin sub-surfaces from active channel or full plugin registry state.
+ * Resolves plugin sub-surfaces from the process-root registry.
  */
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
-import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ChannelId } from "./channel-id.types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -25,19 +26,8 @@ export function createChannelRegistryLoader<TValue>(
       return pluginEntry ? resolveValue(pluginEntry) : undefined;
     };
 
-    const channelRegistry = getActivePluginChannelRegistry();
-    const channelValue = resolveFromRegistry(channelRegistry);
-    if (channelValue !== undefined) {
-      return channelValue;
-    }
-
-    const activeRegistry = getActivePluginRegistry();
-    if (activeRegistry && activeRegistry !== channelRegistry) {
-      // During startup some callers see a narrower channel registry first.
-      // Fall back to the full active registry when it is a distinct object.
-      return resolveFromRegistry(activeRegistry);
-    }
-
-    return undefined;
+    return resolveFromRegistry(
+      getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry(),
+    );
   };
 }

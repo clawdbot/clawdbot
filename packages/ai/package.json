@@ -98,7 +98,7 @@
     "@mistralai/mistralai": "2.5.0",
     "openai": "6.49.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.8"
+    "typebox": "1.3.6"
   },
   "engines": {
     "node": ">=22.19.0"

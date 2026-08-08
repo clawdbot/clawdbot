@@ -17,6 +17,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
+import { resolveAgentConfigEntryTarget } from "../config/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
 type AgentRosterEntry = {
@@ -225,25 +226,39 @@ export const PROFILE_OPTIONS = [
   { id: "full", labelKey: "agents.toolCatalog.profiles.full" },
 ] as const;
 
+// Gateway catalog labels are English-only strings. Translate the known core
+// group/profile enum labels locally so localized UIs don't render English
+// section names; plugin groups (`plugin:<id>` ids) never match and keep the
+// catalog-provided label.
+const CORE_GROUP_LABEL_KEYS = new Map<string, string>(
+  FALLBACK_TOOL_SECTIONS.map((section) => [section.id, section.labelKey]),
+);
+const PROFILE_LABEL_KEYS = new Map<string, string>(
+  PROFILE_OPTIONS.map((profile) => [profile.id, profile.labelKey]),
+);
+
 export function resolveToolSections(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): AgentToolSection[] {
   if (toolsCatalogResult?.groups?.length) {
-    return toolsCatalogResult.groups.map((group) => ({
-      id: group.id,
-      label: group.label,
-      source: group.source,
-      pluginId: group.pluginId,
-      tools: group.tools.map((tool) => ({
-        id: tool.id,
-        label: tool.label,
-        description: tool.description,
-        source: tool.source,
-        pluginId: tool.pluginId,
-        optional: tool.optional,
-        defaultProfiles: [...tool.defaultProfiles],
-      })),
-    }));
+    return toolsCatalogResult.groups.map((group) => {
+      const labelKey = CORE_GROUP_LABEL_KEYS.get(group.id);
+      return {
+        id: group.id,
+        label: labelKey ? t(labelKey) : group.label,
+        source: group.source,
+        pluginId: group.pluginId,
+        tools: group.tools.map((tool) => ({
+          id: tool.id,
+          label: tool.label,
+          description: tool.description,
+          source: tool.source,
+          pluginId: tool.pluginId,
+          optional: tool.optional,
+          defaultProfiles: [...tool.defaultProfiles],
+        })),
+      };
+    });
   }
   return FALLBACK_TOOL_SECTIONS.map((section) => ({
     id: section.id,
@@ -260,7 +275,10 @@ export function resolveToolProfileOptions(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): readonly ToolCatalogProfile[] | ReadonlyArray<{ id: string; label: string }> {
   if (toolsCatalogResult?.profiles?.length) {
-    return toolsCatalogResult.profiles;
+    return toolsCatalogResult.profiles.map((profile) => {
+      const labelKey = PROFILE_LABEL_KEYS.get(profile.id);
+      return labelKey ? { id: profile.id, label: t(labelKey) } : profile;
+    });
   }
   return PROFILE_OPTIONS.map((profile) => ({
     id: profile.id,
@@ -274,7 +292,6 @@ type ToolPolicy = {
 };
 
 type AgentConfigEntry = {
-  id: string;
   name?: string;
   workspace?: string;
   agentDir?: string;
@@ -292,7 +309,7 @@ type AgentConfigEntry = {
 type ConfigSnapshot = {
   agents?: {
     defaults?: { workspace?: string; model?: unknown; models?: Record<string, { alias?: string }> };
-    list?: AgentConfigEntry[];
+    entries?: Record<string, AgentConfigEntry>;
   };
   tools?: {
     profile?: string;
@@ -335,22 +352,30 @@ export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
-export function formatBytes(bytes?: number) {
+type FormatBytesOptions = {
+  fallback?: string;
+  maxUnit?: "kilo" | "mega" | "giga" | "tera";
+  fractionDigits?: Parameters<typeof formatByteSize>[1]["fractionDigits"];
+};
+
+export function formatBytes(bytes?: number, options: FormatBytesOptions = {}) {
   if (bytes == null || !Number.isFinite(bytes)) {
-    return "-";
+    return options.fallback ?? "-";
   }
   return formatByteSize(bytes, {
     style: "legacy-binary",
-    maxUnit: "tera",
+    maxUnit: options.maxUnit ?? "tera",
     separator: " ",
-    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
+    fractionDigits:
+      options.fractionDigits ?? ((value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0)),
   });
 }
 
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {
   const cfg = config as ConfigSnapshot | null;
-  const list = cfg?.agents?.list ?? [];
-  const entry = list.find((agent) => agent?.id === agentId);
+  const entry = resolveAgentConfigEntryTarget(config, agentId)?.entry as
+    | AgentConfigEntry
+    | undefined;
   return {
     entry,
     defaults: cfg?.agents?.defaults,

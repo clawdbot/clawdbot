@@ -15,3 +15,17 @@ export function matchUserProfileAvatarPath(pathname: string): string | undefined
     return undefined;
   }
 }
+
+export function canonicalizeUserProfileAvatarPath(
+  pathname: string,
+  controlUiBasePath: string,
+): string | undefined {
+  if (matchUserProfileAvatarPath(pathname) !== undefined) {
+    return pathname;
+  }
+  if (!controlUiBasePath || !pathname.startsWith(`${controlUiBasePath}/`)) {
+    return undefined;
+  }
+  const canonicalPath = pathname.slice(controlUiBasePath.length);
+  return matchUserProfileAvatarPath(canonicalPath) !== undefined ? canonicalPath : undefined;
+}

@@ -39,7 +39,7 @@ openclaw gateway install --force
 openclaw gateway start
 ```
 
-The `OPENCLAW_PROXY_URL` env fallback is best for foreground runs. To use it with an installed service, put it in the service's durable environment (`$OPENCLAW_STATE_DIR/.env`, default `~/.openclaw/.env`), then reinstall so launchd/systemd/Scheduled Tasks picks it up.
+The `OPENCLAW_PROXY_URL` env fallback is best for foreground runs. To use it with an installed service, put it in the service's durable environment (`$OPENCLAW_STATE_DIR/.env`, default `~/.openclaw/.env`), then reinstall so launchd/systemd/Scheduled Tasks picks it up. This variable is copied into the generated service environment rather than tracked as a managed dotenv key, so systemd's restart-only managed dotenv refresh does not apply.
 
 ### HTTPS proxy endpoint with a private CA
 

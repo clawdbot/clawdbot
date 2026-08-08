@@ -27,20 +27,28 @@ import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
-vi.mock("./embedded-agent-mcp.js", () => ({
-  loadEmbeddedAgentMcpConfig: (params: {
-    cfg?: { mcp?: { servers?: Record<string, unknown> } };
-    toolOverrides?: { mcpServers?: Record<string, boolean> };
-  }) => ({
-    diagnostics: [],
-    mcpServers: Object.fromEntries(
-      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
-        const overrides = params.toolOverrides?.mcpServers;
-        return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
-      }),
-    ),
-  }),
-}));
+vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
+  return {
+    loadEmbeddedAgentMcpConfig: (
+      params: Parameters<typeof actual.loadEmbeddedAgentMcpConfig>[0],
+    ) => {
+      if (params.cfg?.plugins?.entries?.["agent-bundle-probe"]?.enabled === true) {
+        return actual.loadEmbeddedAgentMcpConfig(params);
+      }
+      return {
+        diagnostics: [],
+        prepareDataDirsByServer: {},
+        mcpServers: Object.fromEntries(
+          Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
+            const overrides = params.toolOverrides?.mcpServers;
+            return !(overrides && Object.hasOwn(overrides, name) && overrides[name] === false);
+          }),
+        ),
+      };
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
@@ -75,18 +83,23 @@ async function writeListToolsMcpServer(params: {
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   listToolsJsonRpcErrorMessage?: string;
+  toolPageCursors?: Array<string | null>;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
+  resourcePageCursors?: Array<string | null>;
   resourceListJsonRpcError?: boolean;
   resourceReadJsonRpcError?: boolean;
+  promptPageDelayMs?: number;
+  promptPageCursors?: Array<string | null>;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
     `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
@@ -104,6 +117,7 @@ const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const listToolsJsonRpcErrorMessage = ${JSON.stringify(params.listToolsJsonRpcErrorMessage)};
+const toolPageCursors = ${JSON.stringify(params.toolPageCursors)};
 const tools = ${JSON.stringify(
       params.tools ?? [
         {
@@ -119,12 +133,16 @@ const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
 const callToolResult = ${JSON.stringify(params.callToolResult)};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
+const resourcePageCursors = ${JSON.stringify(params.resourcePageCursors)};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
 const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
+const promptPageDelayMs = ${params.promptPageDelayMs ?? 0};
+const promptPageCursors = ${JSON.stringify(params.promptPageCursors)};
 
 let buffer = "";
 let listCount = 0;
 let resourceListCount = 0;
+let promptListCount = 0;
 let pendingTimer;
 let keepAlive;
 let database;
@@ -147,7 +165,7 @@ if (hangToolCallsUntilRestartMarkerPath) {
   }
 }
 function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+  appendFileSync(logPath, line + "\\n", "utf8");
 }
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");
@@ -183,6 +201,7 @@ function handle(message) {
   }
   if (message.method === "tools/list") {
     listCount += 1;
+    log("tools/list cursor " + JSON.stringify(message.params?.cursor));
     if (listCount === exitOnListCall) {
       log("exit tools/list " + listCount);
       process.exit(1);
@@ -211,13 +230,19 @@ function handle(message) {
       return;
     }
     const currentListCount = listCount;
+    const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
     pendingTimer = setTimeout(() => {
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          tools,
+          tools: toolPageCursors
+            ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
+            : tools,
+          ...(toolPageCursor !== undefined && toolPageCursor !== null
+            ? { nextCursor: toolPageCursor }
+            : {}),
         },
       });
       if (notifyListChangedAfterFirstList && currentListCount === 1) {
@@ -253,6 +278,7 @@ function handle(message) {
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
+    log("resources/list cursor " + JSON.stringify(message.params?.cursor));
     if (resourceListJsonRpcError) {
       send({
         jsonrpc: "2.0",
@@ -262,17 +288,40 @@ function handle(message) {
       return;
     }
     setTimeout(() => {
+      const resourcePageCursor = resourcePageCursors?.[resourceListCount - 1];
       send({
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          resources: [],
-          ...(resourceListCount < resourcePageCount
-            ? { nextCursor: String(resourceListCount) }
-            : {}),
+          resources: resourcePageCursors
+            ? [{ uri: "memo://page-" + resourceListCount, name: "page-" + resourceListCount }]
+            : [],
+          ...(resourcePageCursor !== undefined && resourcePageCursor !== null
+            ? { nextCursor: resourcePageCursor }
+            : resourceListCount < resourcePageCount
+              ? { nextCursor: String(resourceListCount) }
+              : {}),
         },
       });
     }, resourcePageDelayMs);
+    return;
+  }
+  if (message.method === "prompts/list") {
+    promptListCount += 1;
+    log("prompts/list cursor " + JSON.stringify(message.params?.cursor));
+    setTimeout(() => {
+      const promptPageCursor = promptPageCursors?.[promptListCount - 1];
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          prompts: [{ name: "prompt-" + promptListCount }],
+          ...(promptPageCursor !== undefined && promptPageCursor !== null
+            ? { nextCursor: promptPageCursor }
+            : {}),
+        },
+      });
+    }, promptPageDelayMs);
     return;
   }
   if (message.method === "resources/read") {
@@ -2172,7 +2221,115 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("gives each paginated resource request its own timeout", async () => {
+  it("loads tool pages after an empty opaque cursor", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-tool-empty-cursor-");
+    const serverPath = path.join(tempDir, "tool-pages.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      toolPageCursors: ["", null],
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-tool-empty-cursor",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { paged: { command: process.execPath, args: [serverPath] } } },
+      },
+    });
+
+    try {
+      await expect(runtime.getCatalog()).resolves.toMatchObject({
+        tools: [{ toolName: "slow_tool-1" }, { toolName: "slow_tool-2" }],
+      });
+      await waitForFileText(logPath, 'tools/list cursor ""', LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("isolates a cyclic tool catalog while a healthy bundle MCP sibling survives", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-tool-cycle-");
+    const loopingPath = path.join(tempDir, "looping.mjs");
+    const loopingLogPath = path.join(tempDir, "looping.log");
+    const healthyPath = path.join(tempDir, "healthy.mjs");
+    const healthyLogPath = path.join(tempDir, "healthy.log");
+    await writeListToolsMcpServer({
+      filePath: loopingPath,
+      logPath: loopingLogPath,
+      toolPageCursors: ["same", "same"],
+    });
+    await writeListToolsMcpServer({ filePath: healthyPath, logPath: healthyLogPath });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-tool-cycle",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            looping: { command: process.execPath, args: [loopingPath] },
+            healthy: { command: process.execPath, args: [healthyPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual([
+        "healthy:slow_tool",
+      ]);
+      expect(
+        catalog.diagnostics?.find((entry) => entry.serverName === "looping")?.message,
+      ).toContain("repeated pagination cursor");
+      await waitForFileText(healthyLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("loads resource and prompt pages after empty opaque cursors", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-utility-empty-cursor-");
+    const serverPath = path.join(tempDir, "utility-pages.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { resources: {}, prompts: {} },
+      listToolsMethodNotFound: true,
+      resourcePageCursors: ["", null],
+      promptPageCursors: ["", null],
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-utility-empty-cursor",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { paged: { command: process.execPath, args: [serverPath] } } },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      const listResources = runtime.listResources;
+      const listPrompts = runtime.listPrompts;
+      if (!listResources || !listPrompts) {
+        throw new Error("Expected test runtime to expose resource and prompt utilities");
+      }
+      await expect(listResources("paged")).resolves.toMatchObject([
+        { uri: "memo://page-1" },
+        { uri: "memo://page-2" },
+      ]);
+      await expect(listPrompts("paged")).resolves.toMatchObject([
+        { name: "prompt-1" },
+        { name: "prompt-2" },
+      ]);
+      await waitForFileText(logPath, 'resources/list cursor ""', LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForFileText(logPath, 'prompts/list cursor ""', LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("bounds the complete paginated resource listing by one absolute timeout", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-resource-pages-");
     const serverPath = path.join(tempDir, "resource-pages.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -2206,7 +2363,9 @@ process.on("SIGINT", shutdown);`,
       if (!runtime.listResources) {
         throw new Error("Expected test runtime to expose resource utilities");
       }
-      await expect(runtime.listResources("paged")).resolves.toEqual([]);
+      await expect(runtime.listResources("paged")).rejects.toThrow(
+        "MCP resource listing timed out after 150ms",
+      );
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

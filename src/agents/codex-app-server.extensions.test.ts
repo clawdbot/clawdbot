@@ -494,7 +494,7 @@ export default { id: "tool-result-middleware", register(api) {
       },
     };
 
-    loadOpenClawPlugins({ config });
+    loadOpenClawPlugins({ config, channelPluginLoadIntent: "setup" });
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
     setRuntimeConfigSnapshot(config);
 

@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
-import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderNodes } from "./view.ts";
 import type { NodesProps } from "./view.types.ts";
 
@@ -41,11 +40,8 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     onDeviceRevoke: () => undefined,
     onNodeApprove: () => undefined,
     onNodeReject: () => undefined,
-    inventoryRemovalPrompt: null,
     onInventoryRemove: () => undefined,
     onInventoryCleanup: () => undefined,
-    onInventoryRemovalConfirm: () => undefined,
-    onInventoryRemovalCancel: () => undefined,
     onLoadConfig: () => undefined,
     onLoadExecApprovals: () => undefined,
     onBindDefault: () => undefined,
@@ -62,8 +58,6 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
 
 function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
   const container = document.createElement("div");
-  // Attach to the document: the removal-prompt dialog is a custom element and
-  // only upgrades (and renders its shadow DOM) once connected.
   document.body.append(container);
   render(renderNodes(baseProps(overrides)), container);
   return container;
@@ -242,6 +236,7 @@ describe("nodes inventory rendering", () => {
           platform: "linux",
           version: "2026.7.11",
           lastInputSeconds: 5,
+          ts: 1_000,
         },
       ],
       devicesList: {
@@ -275,7 +270,7 @@ describe("nodes inventory rendering", () => {
         ],
         paired: [],
       },
-      presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe" }],
+      presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe", ts: 1_000 }],
     });
 
     const section = getInventorySection(container);
@@ -341,53 +336,6 @@ describe("nodes inventory rendering", () => {
     expect(removed).toEqual([
       { id: "op-only", name: "Browser", removeNode: false, removeDevice: true },
     ]);
-  });
-
-  it("renders the removal prompt and wires confirm and cancel", async () => {
-    let confirmed = 0;
-    let cancelled = 0;
-    const container = renderNodesContainer({
-      inventoryRemovalPrompt: {
-        kind: "stale",
-        entries: [
-          { id: "old-1", name: "Browser", removeNode: false, removeDevice: true },
-          { id: "old-2", name: "Browser", removeNode: false, removeDevice: true },
-        ],
-      },
-      onInventoryRemovalConfirm: () => {
-        confirmed += 1;
-      },
-      onInventoryRemovalCancel: () => {
-        cancelled += 1;
-      },
-    });
-    const { modal } = await getRenderedModalDialog(container);
-    expect(modal.textContent).toContain("Remove 2 stale pairings?");
-    expect(modal.textContent).toContain(
-      "Affected clients re-pair silently on their next connection.",
-    );
-
-    findButton(modal, "Remove").click();
-    expect(confirmed).toBe(1);
-    findButton(modal, "Cancel").click();
-    expect(cancelled).toBe(1);
-  });
-
-  it("shows the device id when confirming a single removal", async () => {
-    const container = renderNodesContainer({
-      inventoryRemovalPrompt: {
-        kind: "entry",
-        entry: {
-          id: "device-ambiguous-id",
-          name: "Browser",
-          removeNode: false,
-          removeDevice: true,
-        },
-      },
-    });
-    const { modal } = await getRenderedModalDialog(container);
-    expect(modal.textContent).toContain("Remove Browser?");
-    expect(modal.textContent).toContain("Device ID: device-ambiguous-id");
   });
 
   it("renders approve and reject actions for pending node approvals", () => {
@@ -592,8 +540,15 @@ describe("nodes inventory rendering", () => {
           roles: ["operator"],
           platform: "macos 26.5.2",
           lastInputSeconds: 90,
+          ts: 1_000,
         },
-        { instanceId: "left-1", host: "gone", mode: "webchat", reason: "disconnect" },
+        {
+          instanceId: "left-1",
+          host: "gone",
+          mode: "webchat",
+          reason: "disconnect",
+          ts: 2_000,
+        },
       ],
     });
     const section = getSection(container, "Connected without pairing");
@@ -635,10 +590,10 @@ describe("nodes exec approvals rendering", () => {
     const container = renderNodesContainer({
       configForm: {
         agents: {
-          list: [
-            { id: "main", name: "Main", default: true },
-            { id: "research", name: "Research" },
-          ],
+          entries: {
+            main: { name: "Main", default: true },
+            research: { name: "Research" },
+          },
         },
       },
       execApprovalsForm: {
@@ -695,5 +650,36 @@ describe("nodes exec approvals rendering", () => {
     expect(section.textContent).toContain("hostname");
     expect(section.textContent).toContain("deny");
     expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("nodes agent bindings", () => {
+  it("reports the keyed agent id when a binding changes", () => {
+    const onBindAgent = vi.fn();
+    const container = renderNodesContainer({
+      nodes: [
+        {
+          nodeId: "worker-node",
+          displayName: "Worker node",
+          commands: ["system.run"],
+        },
+      ],
+      configForm: {
+        agents: {
+          entries: {
+            MAIN: { default: true },
+            research: {},
+          },
+        },
+      },
+      onBindAgent,
+    });
+    const bindingSection = getSection(container, "Exec node binding");
+    const selects = bindingSection.querySelectorAll<HTMLSelectElement>("select.settings-select");
+
+    selects[1]!.value = "worker-node";
+    selects[1]!.dispatchEvent(new Event("change"));
+
+    expect(onBindAgent).toHaveBeenCalledWith("MAIN", "worker-node");
   });
 });

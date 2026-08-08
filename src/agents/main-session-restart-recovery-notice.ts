@@ -1,5 +1,8 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
@@ -16,59 +19,25 @@ import {
   UNRESUMABLE_SESSION_NOTICE,
 } from "./main-session-restart-recovery-shared.js";
 
-async function markSessionFailed(params: {
-  observation: MainSessionRecoveryObservation;
-  storePath: string;
-  sessionKey: string;
-  reason: string;
-}): Promise<boolean> {
-  const marked = await commitMainSessionRecovery({
-    command: {
-      kind: "fail_recovery",
-      now: Date.now(),
-      observation: params.observation,
-    },
-    requireWriteSuccess: true,
-    target: { sessionKey: params.sessionKey, storePath: params.storePath },
-  });
-  if (marked.transition.kind === "failed") {
-    log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
-    return true;
-  }
-  return false;
-}
-
 export async function sendUnresumableSessionNotice(params: {
-  deliveryContext: DeliveryContext;
+  deliveryContext: DeliveryContext & { channel: string; to: string };
   entry: SessionEntry;
   gatewayRuntime: GatewayRecoveryRuntime;
   reason: string;
   sessionKey: string;
   text: string;
 }): Promise<void> {
-  const messageParams: Record<string, unknown> = {
-    to: params.deliveryContext.to,
-    message: params.text,
-    bestEffort: true,
-  };
-  if (params.deliveryContext.threadId != null) {
-    messageParams.threadId = params.deliveryContext.threadId;
-  }
-  const actionParams: Record<string, unknown> = {
+  const notice = {
     channel: params.deliveryContext.channel,
-    action: "send",
-    sessionKey: params.sessionKey,
-    sessionId: params.entry.sessionId,
+    to: params.deliveryContext.to,
+    accountId: params.deliveryContext.accountId,
+    threadId: params.deliveryContext.threadId,
+    text: params.text,
     idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
-    params: messageParams,
   };
-  const accountId = normalizeOptionalString(params.deliveryContext.accountId);
-  if (accountId) {
-    actionParams.accountId = accountId;
-  }
 
   try {
-    await params.gatewayRuntime.sendRecoveryNotice(actionParams, 10_000);
+    await params.gatewayRuntime.sendRecoveryNotice(notice);
     log.info(
       `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
     );
@@ -79,19 +48,24 @@ export async function sendUnresumableSessionNotice(params: {
   }
 }
 
-async function writeUnresumableSessionNotice(params: {
+export async function writeUnresumableSessionNotice(params: {
   agentId: string;
   entry: SessionEntry;
   sessionKey: string;
   storePath: string;
-}): Promise<boolean> {
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  text?: string;
+}): Promise<"failed" | "stale" | "written"> {
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     expectedSessionId: params.entry.sessionId,
-    expectedSessionState: buildRestartRecoveryExpectedState(params.entry),
+    expectedSessionState:
+      params.expectedSessionState ?? buildRestartRecoveryExpectedState(params.entry),
+    sessionLifecyclePatch: params.sessionLifecyclePatch,
     storePath: params.storePath,
-    text: UNRESUMABLE_SESSION_NOTICE,
+    text: params.text ?? UNRESUMABLE_SESSION_NOTICE,
     idempotencyKey: buildUnresumableSessionNoticeIdempotencyKey(params.entry),
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) {
@@ -99,7 +73,11 @@ async function writeUnresumableSessionNotice(params: {
       `failed to write interrupted main session notice ${params.sessionKey}: ${result.reason}`,
     );
   }
-  return result.ok;
+  return result.ok
+    ? "written"
+    : "code" in result && result.code === "session-rebound"
+      ? "stale"
+      : "failed";
 }
 
 export async function failUnresumableMainSession(params: {
@@ -119,7 +97,7 @@ export async function failUnresumableMainSession(params: {
   });
   if (
     !deliveryContext &&
-    !(await writeUnresumableSessionNotice({
+    (await writeUnresumableSessionNotice({
       agentId: resolveAgentIdFromSessionKey(
         params.sessionKey,
         params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
@@ -127,20 +105,20 @@ export async function failUnresumableMainSession(params: {
       entry: params.entry,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-    }))
+    })) !== "written"
   ) {
     // Keep ownership for another recovery attempt until its terminal notice is durable.
     return "failed";
   }
-  const marked = await markSessionFailed({
-    observation: params.observation,
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    reason: params.reason,
+  const marked = await commitMainSessionRecovery({
+    command: { kind: "fail_recovery", now: Date.now(), observation: params.observation },
+    requireWriteSuccess: true,
+    target: { sessionKey: params.sessionKey, storePath: params.storePath },
   });
-  if (!marked) {
+  if (marked.transition.kind !== "failed") {
     return "skipped";
   }
+  log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
   if (deliveryContext) {
     await sendUnresumableSessionNotice({
       deliveryContext,

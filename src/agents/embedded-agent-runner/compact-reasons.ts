@@ -48,6 +48,9 @@ export function classifyCompactionReason(reason?: string): string {
   if (text.includes("still exceeds target")) {
     return "live_context_still_exceeds_target";
   }
+  if (text.includes("session transcript") && text.includes("not persisted")) {
+    return "transcript_persistence_failed";
+  }
   if (text.includes("guard")) {
     return "guard_blocked";
   }
