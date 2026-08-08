@@ -258,7 +258,20 @@ export async function executeJobCoreWithTimeout(
           );
         }
       });
-      const first = await Promise.race([runPromise, operatorCancellationPromise]);
+      const first = await Promise.race([
+        runPromise.catch((err: unknown): CronCoreRunOutcome => {
+          const error = formatErrorMessage(err);
+          return {
+            status: "error",
+            error,
+            ...cronRunAttributionFromExecution(activeExecution),
+            diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+              nowMs: state.deps.nowMs,
+            }),
+          };
+        }),
+        operatorCancellationPromise,
+      ]);
       if (first !== operatorCancellationMarker) {
         return first;
       }
@@ -342,7 +355,21 @@ export async function executeJobCoreWithTimeout(
       }
     });
     try {
-      const first = await Promise.race([runPromise, timeoutPromise, operatorCancellationPromise]);
+      const first = await Promise.race([
+        runPromise.catch((err: unknown): CronCoreRunOutcome => {
+          const error = formatErrorMessage(err);
+          return {
+            status: "error",
+            error,
+            ...cronRunAttributionFromExecution(watchdog.activeExecution()),
+            diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+              nowMs: state.deps.nowMs,
+            }),
+          };
+        }),
+        timeoutPromise,
+        operatorCancellationPromise,
+      ]);
       if (first === operatorCancellationMarker) {
         const settled = resolveInterruptedRunProgress({
           progress,

@@ -481,32 +481,14 @@ async function onAdmittedTimer(state: CronServiceState) {
                 releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                 throw error;
               }
-              if (!result.isolatedAgentSetupTimeout) {
-                // Drain finished state independently: a slow sibling must not
-                // strand outcomes, and store I/O must not own execution slots.
-                completedOutcomeDrain.enqueue(result);
-                return pMapSkip;
-              }
-              let finalizedResults: TimedCronRunOutcome[];
-              try {
-                finalizedResults = await finalizeCompletedCronRunOutcomes(state, [result], {
-                  clearOnFailure: false,
-                });
-              } catch {
-                return result;
-              }
-              if (!hasSetupTimeoutRecoveryHandler || finalizedResults.length === 0) {
-                return pMapSkip;
-              }
-              if (!setupTimeoutNotified) {
-                setupTimeoutNotified = true;
+              completedOutcomeDrain.enqueue(result);
+              if (result.isolatedAgentSetupTimeout && hasSetupTimeoutRecoveryHandler) {
                 stopAdmittingDueJobs = true;
                 try {
                   await releaseUnclaimedDueJobReservationsWithRetry();
                 } catch (err) {
                   reservationReleaseError = err;
                 }
-                maybeNotifyIsolatedAgentSetupTimeout(state, result);
               }
               return pMapSkip;
             });
@@ -541,8 +523,9 @@ async function onAdmittedTimer(state: CronServiceState) {
       throw error instanceof AggregateError && error.errors.length > 0 ? error.errors[0] : error;
     }
     let postBatchError = reservationReleaseError;
+    let flushedOutcomes: TimedCronRunOutcome[] = [];
     try {
-      await completedOutcomeDrain.flush();
+      flushedOutcomes = await completedOutcomeDrain.flush();
     } catch (error) {
       // Finalization errors still need to release every unclaimed durable
       // reservation before the failed timer batch can exit.
@@ -557,9 +540,8 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     }
 
-    if (completedResults.length > 0) {
-      const finalizedResults = await finalizeCompletedCronRunOutcomes(state, completedResults);
-      for (const result of finalizedResults) {
+    if (flushedOutcomes.length > 0) {
+      for (const result of flushedOutcomes) {
         if (
           !setupTimeoutNotified &&
           result.isolatedAgentSetupTimeout &&
