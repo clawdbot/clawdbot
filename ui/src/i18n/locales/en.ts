@@ -4826,6 +4826,7 @@ export const en: TranslationMap = {
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
+      dontAskAgain: "Don't ask again",
       rewindToHere: "Rewind to here",
       rewindUnavailable: "Rewind is unavailable while the agent is working",
       forkUnavailable: "Fork is unavailable while the agent is working",
