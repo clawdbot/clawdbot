@@ -288,6 +288,7 @@ test.each([
       action: "log",
       sessionId,
     });
+    const runningPoll = await pollSession(processTool, "toolcall-running-aggregate-cap", sessionId);
     markExited(session, 0, null, "completed");
 
     const poll = await pollSession(processTool, "toolcall-aggregate-cap", sessionId);
@@ -297,6 +298,8 @@ test.each([
     });
     const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
     const runningLogText = runningLog.content[0]?.type === "text" ? runningLog.content[0].text : "";
+    const runningPollText =
+      runningPoll.content[0]?.type === "text" ? runningPoll.content[0].text : "";
     const finishedLogText =
       finishedLog.content[0]?.type === "text" ? finishedLog.content[0].text : "";
     const details = poll.details as { aggregated?: string };
@@ -306,6 +309,7 @@ test.each([
     expect(text).toContain(latestMarker);
     expect(text).toContain("discarded at the retention cap and cannot be recovered");
     expect(runningLogText).toContain("discarded at the retention cap and cannot be recovered");
+    expect(runningPollText).toContain("discarded at the retention cap and cannot be recovered");
     expect(finishedLogText).toContain("discarded at the retention cap and cannot be recovered");
     if (aggregateCap > 2_000) {
       expect(text).toContain("earlier retained output is omitted");
