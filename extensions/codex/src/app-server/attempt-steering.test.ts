@@ -117,7 +117,7 @@ describe("Codex app-server steering queue", () => {
     ).pending;
 
     const queued = queue.queue("steer me", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(pendingRequests.size).toBe(1);
 
@@ -362,7 +362,9 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request);
 
     const first = queue.queue("on the wire", { debounceMs: 0 });
-    const firstRejected = expect(first).rejects.toThrow("steering queue cancelled");
+    const firstRejected = expect(first).rejects.toBeInstanceOf(
+      CodexSteeringAcceptedUnconfirmedError,
+    );
     await vi.advanceTimersByTimeAsync(0);
     const second = queue.queue("waiting", { debounceMs: 0 });
     const secondRejected = expect(second).rejects.toThrow("steering queue cancelled");

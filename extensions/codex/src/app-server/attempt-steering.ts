@@ -136,7 +136,9 @@ export function createCodexSteeringQueue(params: {
     clearTimer();
     pendingBatch = undefined;
     for (const batch of batches) {
-      finish(batch, error);
+      // clientId is assigned immediately before the synchronous client write path.
+      // Closing after dispatch cannot prove that Codex did not admit the steer.
+      finish(batch, error, batch.accepted || batch.clientId !== undefined);
     }
   };
   const abort = () => close(new Error("codex app-server steering queue aborted"));
