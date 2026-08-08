@@ -131,6 +131,9 @@ export async function runGatewayStatusProbePass(params: {
         });
         const probe = await probeGateway({
           url: target.url,
+          // Explicit, configured-remote, and SSH targets must not inherit the
+          // local Gateway's device token, even when the transport is loopback.
+          ...(target.kind !== "localLoopback" ? { originScopedDeviceAuth: true } : {}),
           auth: {
             token: authResolution.token,
             password: authResolution.password,
