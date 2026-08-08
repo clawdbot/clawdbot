@@ -422,16 +422,12 @@ openclaw-chat-pane {
   font-size: 13px;
 }
 
-/* Narrow split panes shed controls by priority: close stays visible at the
-   320px pane minimum; secondary controls return as the pane widens. */
+/* Below 640px a full split header cannot be guaranteed to fit, so everything
+   except title, workspace chip, face switch, and close sheds. Close survives
+   at the 320px pane floor. */
 @container (max-width: 640px) {
   .chat-pane__split-down,
-  .chat-pane__split-right {
-    display: none;
-  }
-}
-
-@container (max-width: 520px) {
+  .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-session-diff-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-tasks-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-workspace-toggle,

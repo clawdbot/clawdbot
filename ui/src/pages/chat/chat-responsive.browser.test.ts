@@ -932,6 +932,24 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(await displayValues()).toEqual(selectors.map(() => "none"));
 
       await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "580px";
+      });
+      await waitForLayoutSettled(page);
+      const intermediateHeader = await getBoundingBox(page, ".chat-pane__header");
+      const intermediateClose = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(intermediateClose.x + intermediateClose.width).toBeLessThanOrEqual(
+        intermediateHeader.x + intermediateHeader.width,
+      );
+      expect(await displayValues()).toEqual(selectors.map(() => "none"));
+      const intermediateOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      expect(intermediateOverflow.scrollWidth).toBeLessThanOrEqual(
+        intermediateOverflow.clientWidth,
+      );
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
         (cell as HTMLElement).style.width = "1000px";
       });
       expect(await displayValues()).not.toContain("none");
