@@ -697,12 +697,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.lifecycle.phase() === "terminal" || !this.pendingToolCallIds.has(callId)) {
       return;
     }
+    const output = JSON.stringify(result);
+    if (typeof output !== "string") {
+      throw new Error("OpenAI realtime voice tool result is not JSON-serializable");
+    }
     this.sendEvent({
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
         call_id: callId,
-        output: JSON.stringify(result),
+        output,
       },
     });
     if (options?.willContinue === true) {
