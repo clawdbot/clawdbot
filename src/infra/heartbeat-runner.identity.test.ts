@@ -11,6 +11,7 @@ import {
   readSessionStoreForTest,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { withSystemEventOwner } from "./system-event-ownership.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -167,8 +168,11 @@ describe("runHeartbeatOnce identity", () => {
       await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "beta" }), "global", {});
       // Two hook agents complete before the coalesced wakes fire; both events
       // land in the shared `global` queue with per-agent ownership.
-      enqueueSystemEvent("Hook Alpha: done", { sessionKey: "global", ownerAgentId: "alpha" });
-      enqueueSystemEvent("Hook Beta: done", { sessionKey: "global", ownerAgentId: "beta" });
+      enqueueSystemEvent(
+        "Hook Alpha: done",
+        withSystemEventOwner({ sessionKey: "global" }, "alpha"),
+      );
+      enqueueSystemEvent("Hook Beta: done", withSystemEventOwner({ sessionKey: "global" }, "beta"));
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
       const alphaResult = await runHeartbeatOnce({

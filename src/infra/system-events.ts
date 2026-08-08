@@ -3,7 +3,6 @@
 // events ephemeral. Events are session-scoped and require an explicit key.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,18 +14,18 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import {
+  cloneSystemEventOwner,
+  recordSystemEventOwner,
+  resolveSystemEventOptionsOwnerAgentId,
+  resolveSystemEventOwnerAgentId,
+} from "./system-event-ownership.js";
 
 export type SystemEvent = {
   text: string;
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  /**
-   * Agent that owns this transient event. Events in a shared (global-scope)
-   * session queue carry their producer's agent so a targeted heartbeat wake
-   * cannot consume another agent's queued result or failure event.
-   */
-  ownerAgentId?: string | null;
 };
 
 const MAX_EVENTS = 20;
@@ -46,13 +45,6 @@ type SystemEventOptions = {
   deliveryContext?: DeliveryContext;
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
   replace?: boolean;
-  /**
-   * Agent that owns this event. In global session scope the transient queue
-   * key is the shared `global` sentinel; ownership metadata keeps concurrent
-   * hook completions from cross-consuming each other's events while the
-   * store's literal `global` session row stays shared.
-   */
-  ownerAgentId?: string | null;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -86,10 +78,12 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
 }
 
 function cloneSystemEvent(event: SystemEvent): SystemEvent {
-  return {
+  const clone = {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
   };
+  cloneSystemEventOwner(event, clone);
+  return clone;
 }
 
 export function isSystemEventContextChanged(
@@ -116,11 +110,14 @@ function findDuplicateInQueue(
   return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
-function normalizeOwnerAgentId(agentId: string | null | undefined): string | null {
-  return normalizeOptionalString(agentId) ? normalizeAgentId(agentId) : null;
+export function enqueueSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
+  return enqueueOwnedSystemEventEntry(text, options);
 }
 
-export function enqueueSystemEventEntry(
+function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
@@ -135,7 +132,7 @@ export function enqueueSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  const normalizedOwnerAgentId = normalizeOwnerAgentId(options.ownerAgentId);
+  const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
   if (
     findDuplicateInQueue(
       entry.queue,
@@ -155,8 +152,8 @@ export function enqueueSystemEventEntry(
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    ownerAgentId: normalizedOwnerAgentId,
   };
+  recordSystemEventOwner(event, normalizedOwnerAgentId);
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -203,11 +200,11 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     throw new Error("replaced system events require a contextKey");
   }
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  const normalizedOwnerAgentId = normalizeOwnerAgentId(options.ownerAgentId);
+  const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
   const matching = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) === normalizedContextKey &&
-      (event.ownerAgentId ?? null) === normalizedOwnerAgentId &&
+      resolveSystemEventOwnerAgentId(event) === normalizedOwnerAgentId &&
       areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   if (matching.length === 1 && matching[0]?.text === cleaned) {
@@ -219,7 +216,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
   entry.queue = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) !== normalizedContextKey ||
-      (event.ownerAgentId ?? null) !== normalizedOwnerAgentId ||
+      resolveSystemEventOwnerAgentId(event) !== normalizedOwnerAgentId ||
       !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   const event: SystemEvent = {
@@ -227,8 +224,8 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    ownerAgentId: normalizedOwnerAgentId,
   };
+  recordSystemEventOwner(event, normalizedOwnerAgentId);
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -239,12 +236,14 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext" | "ownerAgentId">,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext"> & {
+    ownerAgentId: string | null;
+  },
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
-    (existing.ownerAgentId ?? null) === (incoming.ownerAgentId ?? null) &&
+    resolveSystemEventOwnerAgentId(existing) === incoming.ownerAgentId &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -254,7 +253,7 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    (left.ownerAgentId ?? null) === (right.ownerAgentId ?? null) &&
+    resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

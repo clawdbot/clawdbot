@@ -741,6 +741,7 @@ async function initSessionStateAttemptLocked(
   if (previousSessionEntry) {
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
+      agentId,
     });
   }
 

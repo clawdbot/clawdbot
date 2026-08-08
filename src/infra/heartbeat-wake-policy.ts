@@ -49,12 +49,15 @@ export function resolveHeartbeatWakePayloadFlags(params: {
   };
 }
 
-export function isTargetedImmediateSystemEventWake(params: {
+type TargetedImmediateWakeParams = {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  agentId?: string;
   sessionKey?: string;
-}): boolean {
+};
+
+export function isTargetedImmediateSystemEventWake(params: TargetedImmediateWakeParams): boolean {
   return (
     params.source === "notifications-event" &&
     params.intent === "immediate" &&
@@ -69,13 +72,7 @@ export function isTargetedImmediateSystemEventWake(params: {
  * queued hook event sits unread. This is the hook counterpart of
  * `isTargetedImmediateSystemEventWake` — narrowly gated to targeted hook sources.
  */
-export function isTargetedImmediateHookWake(params: {
-  source?: HeartbeatWakeSource;
-  intent?: HeartbeatWakeIntent;
-  reason?: string;
-  agentId?: string;
-  sessionKey?: string;
-}): boolean {
+export function isTargetedImmediateHookWake(params: TargetedImmediateWakeParams): boolean {
   return (
     params.source === "hook" &&
     params.intent === "immediate" &&
@@ -83,6 +80,10 @@ export function isTargetedImmediateHookWake(params: {
     (normalizeOptionalString(params.agentId) !== undefined ||
       normalizeOptionalString(params.sessionKey) !== undefined)
   );
+}
+
+export function isTargetedImmediateUnscheduledWake(params: TargetedImmediateWakeParams): boolean {
+  return isTargetedImmediateSystemEventWake(params) || isTargetedImmediateHookWake(params);
 }
 
 export function isConfiguredHeartbeatAgent(cfg: OpenClawConfig, agentId: string): boolean {
