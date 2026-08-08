@@ -2298,6 +2298,18 @@ docker_e2e_docker_run_cmd run demo
     expect(
       publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    expect(runner.indexOf("\nconfigure_clawhub_fixture\n")).toBeLessThan(
+      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
+    );
+    expect(
+      publishedRunner.indexOf("phase configure-clawhub-fixture configure_clawhub_fixture"),
+    ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
+      publishedRunner.indexOf('CLAWHUB_EXPECTED_VERSION="$candidate_version"'),
+    );
+    expect(runner.indexOf("openclaw_e2e_maybe_timeout")).toBeLessThan(
+      runner.indexOf('CLAWHUB_EXPECTED_VERSION="$package_version"'),
+    );
     expect(runner).toContain(
       'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
     );
@@ -2311,8 +2323,21 @@ docker_e2e_docker_run_cmd run demo
       ].join("\n"),
     );
     for (const script of [runner, publishedRunner]) {
+      expectTextToIncludeAll(script, [
+        "prepublish-artifacts",
+        "prepublish-plugin-registry.json",
+        "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
+        'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
+        'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
+        "/__fixture__/requests",
+        "@openclaw/whatsapp",
+      ]);
+      expect(script).not.toContain("https://clawhub.ai");
       const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
-      const fixtureDirectoryIndex = script.indexOf('mkdir -p "$fixture_root"');
+      const fixtureDirectoryIndex = script.indexOf(
+        'mkdir -p "$fixture_root"',
+        emptyRegistryGuardIndex,
+      );
       const registryServerIndex = script.indexOf(
         "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
       );
@@ -2329,6 +2354,16 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).not.toContain(
       '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
     );
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/clawhub-fixture-server\.cjs:\/tmp\/openclaw-clawhub-fixture-server\.cjs:ro"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=\/tmp\/openclaw-clawhub-fixture-server\.cjs/gu,
+      ),
+    ).toHaveLength(2);
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {

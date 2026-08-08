@@ -176,8 +176,10 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON=/tmp/openclaw-upgrade-survivor-artifacts/summary.json \
     -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="$START_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
     "${PROBE_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
     "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
@@ -206,8 +208,10 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
   -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="$START_BUDGET_SECONDS" \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
+  -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
   "${PROBE_ENV_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+  -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${DOCKER_RUN_USER_ARGS[@]}" \
@@ -265,10 +269,8 @@ export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE
 
 gateway_pid=""
 plugin_registry_pid=""
+clawhub_fixture_pid=""
 cleanup() {
-  if [ -n "${plugin_registry_pid:-}" ]; then
-    kill "$plugin_registry_pid" >/dev/null 2>&1 || true
-  fi
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
   fi
@@ -276,8 +278,37 @@ cleanup() {
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     openclaw_e2e_terminate_gateways "$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
   fi
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+  openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
 }
 trap cleanup EXIT
+
+wait_for_fixture_port() {
+  local pid="$1" port_file="$2" log_file="$3" label="$4"
+  for _ in $(seq 1 100); do
+    [ -s "$port_file" ] && return 0
+    openclaw_e2e_process_alive "$pid" || break
+    sleep 0.1
+  done
+  openclaw_e2e_print_log "$log_file" >&2
+  echo "Timed out waiting for upgrade survivor $label." >&2
+  return 1
+}
+
+configure_clawhub_fixture() {
+  unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+  [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && return 0
+  local fixture_root="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/clawhub-fixture" port_file log_file
+  port_file="$fixture_root/port"
+  log_file="$fixture_root/server.log"
+  mkdir -p "$fixture_root"
+  node "$OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER" \
+    prepublish-artifacts "$port_file" \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
+  clawhub_fixture_pid="$!"
+  wait_for_fixture_port "$clawhub_fixture_pid" "$port_file" "$log_file" "ClawHub fixture"
+  export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
+}
 
 configure_plugin_registry() {
   local fixture_root="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/plugin-registry"
@@ -388,22 +419,9 @@ NODE
     >"$log_file" 2>&1 &
   plugin_registry_pid="$!"
 
-  for _ in $(seq 1 100); do
-    if [ -s "$port_file" ]; then
-      export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
-      export npm_config_registry="$NPM_CONFIG_REGISTRY"
-      return 0
-    fi
-    if ! kill -0 "$plugin_registry_pid" 2>/dev/null; then
-      openclaw_e2e_print_log "$log_file" >&2
-      return 1
-    fi
-    sleep 0.1
-  done
-
-  openclaw_e2e_print_log "$log_file" >&2
-  echo "Timed out waiting for upgrade survivor npm registry." >&2
-  return 1
+  wait_for_fixture_port "$plugin_registry_pid" "$port_file" "$log_file" "npm registry"
+  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
+  export npm_config_registry="$NPM_CONFIG_REGISTRY"
 }
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -426,6 +444,7 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
 fi
 
+configure_clawhub_fixture
 configure_plugin_registry
 echo "Running package update against the mounted tarball..."
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
@@ -442,6 +461,8 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
   exit "$update_status"
 fi
+[ -z "${OPENCLAW_CLAWHUB_URL:-}" ] || CLAWHUB_EXPECTED_VERSION="$package_version" \
+  node -e 'const n="@openclaw/whatsapp",v=encodeURIComponent(process.env.CLAWHUB_EXPECTED_VERSION),p=`/api/v1/packages/${encodeURIComponent(n)}`,expected=[`GET ${p}`,`GET ${p}/versions/${v}/artifact`,`GET ${p}/versions/${v}/security`,`GET ${p}/versions/${v}/artifact/download`];fetch(`${process.env.OPENCLAW_CLAWHUB_URL}/__fixture__/requests`).then((response)=>response.json()).then(({requests})=>{if(JSON.stringify(requests)!==JSON.stringify(expected))throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`)})'
 
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."
