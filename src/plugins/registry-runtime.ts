@@ -312,28 +312,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       if (sessionIds.size === 0 && sessionFiles.size === 0) {
         return;
       }
-      const soleSessionKey = sessionKeys.size === 1 ? sessionKeys.values().next().value : undefined;
-      const sessionKeyAgentId = parseAgentSessionKey(soleSessionKey)?.agentId;
-      const explicitScanAgentId = soleSessionKey && agentId ? normalizeAgentId(agentId) : agentId;
-      if (sessionKeyAgentId && explicitScanAgentId && explicitScanAgentId !== sessionKeyAgentId) {
-        throw new Error(
-          `Plugin session ownership agent "${explicitScanAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
-        );
-      }
-      const scanAgentId = sessionKeyAgentId ?? explicitScanAgentId;
-      // Keyed reads resolve agent and incognito-store ownership from the key itself,
-      // while ID/file scans need that same scope carried forward explicitly.
-      const scanStorePath =
-        soleSessionKey && sessionKeyAgentId
-          ? resolveSessionStorePathForScope({
-              agentId: scanAgentId,
-              sessionKey: soleSessionKey,
-              ...(storePath ? { storePath } : {}),
-            })
-          : storePath;
       const entries = registryParams.runtime.agent.session.listSessionEntries({
-        ...(scanAgentId ? { agentId: scanAgentId } : {}),
-        ...(scanStorePath ? { storePath: scanStorePath } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(storePath ? { storePath } : {}),
         readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {
@@ -402,6 +383,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const sessionKey = targetSessionKey ?? directSessionKey;
       const storePath = normalizeOptionalString(target?.storePath);
       const agentId = normalizeOptionalString(target?.agentId ?? params.agentId);
+      const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+      if (sessionKeyAgentId && normalizedAgentId && normalizedAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${normalizedAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
+      // Embedded runs accept one exact key. Carry its resolved store into the
+      // keyless ID/file scan so incognito ownership stays in the process-held DB.
+      const ownershipStorePath =
+        sessionKey && sessionKeyAgentId
+          ? resolveSessionStorePathForScope({
+              agentId: sessionKeyAgentId,
+              sessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       const entry = sessionKey
         ? registryParams.runtime.agent.session.getSessionEntry({
             sessionKey,
@@ -476,11 +475,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        agentId: ownershipAgentId,
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: target?.storePath,
+        storePath: ownershipStorePath,
       });
       return undefined;
     };
