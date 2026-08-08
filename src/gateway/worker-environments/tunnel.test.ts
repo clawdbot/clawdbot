@@ -14,6 +14,7 @@ import {
   type WorkerSshRunner,
 } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
 import type {
   WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -90,12 +91,13 @@ class FakeProcess implements WorkerSshProcess {
     this.readyDeferred.resolve();
   }
 
-  failReady(message = "connect failed") {
+  failReady(message = "connect failed", code = 1) {
     this.readyDeferred.reject(new Error(message));
+    this.exitDeferred.resolve({ code, signal: null });
   }
 
-  exit() {
-    this.exitDeferred.resolve({ code: 1, signal: null });
+  exit(code = 1) {
+    this.exitDeferred.resolve({ code, signal: null });
   }
 
   blockStopUntil(barrier: Promise<void>) {
@@ -376,7 +378,7 @@ describe("worker tunnel manager", () => {
     const starting = manager.start({
       environmentId: "worker:sync-failure",
       ownerEpoch: 2,
-      ssh: SSH,
+      ssh: { ...SSH, fallbackPorts: [22] },
       gateway: { host: "127.0.0.1", port: 18789 },
       resolveIdentity,
     });
@@ -394,8 +396,77 @@ describe("worker tunnel manager", () => {
     expect(
       fake.runs.some((entry) => entry.argv.at(-1)?.includes("worker workspace symlink escapes")),
     ).toBe(false);
+    const rsyncCalls = fake.runs.filter((entry) => entry.argv[0] === "rsync");
+    expect(rsyncCalls).toHaveLength(1);
+    expect(rsyncArgvPort(rsyncCalls[0]!.argv)).toBe(2202);
 
     await handle.stop();
+  });
+
+  it("moves a later fresh workspace transfer to an advertised fallback", async () => {
+    const endpoint = { ...SSH, port: 2222, fallbackPorts: [22] };
+    const remoteWorkspaceDir = "/home/worker/.openclaw-worker/workspaces/env/session/1";
+    const manifestRef = `sha256:${"c".repeat(64)}`;
+    const localPath = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-fallback-sync-"));
+    await fs.writeFile(path.join(localPath, "artifact.txt"), "transfer me\n");
+    const fake = fakeRunner((argv, options) => {
+      if (
+        typeof options.input === "string" &&
+        options.input.includes("unsafe worker workspace directory")
+      ) {
+        return success(`${remoteWorkspaceDir}\n`);
+      }
+      if (argv[0] === "rsync") {
+        return rsyncArgvPort(argv) === 2222
+          ? { ...success("", "primary transport unavailable"), code: 255 }
+          : success();
+      }
+      if (argv.at(-1)?.includes("worker workspace symlink escapes")) {
+        return success(`${manifestRef}\n`);
+      }
+      return undefined;
+    });
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.start({
+      environmentId: "worker:fallback-sync",
+      ownerEpoch: 1,
+      ssh: endpoint,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    expect(sshArgvPort(fake.starts[0]!.argv)).toBe(2222);
+    fake.starts[0]!.process.becomeReady();
+    const handle = await starting;
+
+    try {
+      await expect(
+        handle.syncWorkspace({ localPath, sessionId: "session:fallback", generation: 1 }),
+      ).resolves.toEqual({ mode: "plain", remoteWorkspaceDir, manifestRef });
+      await expect(handle.runWorkspaceCommand({ argv: ["pwd"] })).resolves.toEqual(success());
+
+      const freshConnections = fake.runs.filter(
+        (entry) => entry.argv[0] === "ssh" || entry.argv[0] === "rsync",
+      );
+      const ports = freshConnections.map((entry) =>
+        entry.argv[0] === "ssh" ? sshArgvPort(entry.argv) : rsyncArgvPort(entry.argv),
+      );
+      expect(ports).toEqual(expect.arrayContaining([2222, 22]));
+      expect(new Set(ports)).toEqual(new Set([2222, 22]));
+      expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
+
+      const identityPath = fake.runs[0]!.argv[fake.runs[0]!.argv.indexOf("-i") + 1]!;
+      const knownHostsOption = fake.runs[0]!.argv.find((value) =>
+        value.startsWith("UserKnownHostsFile="),
+      )!;
+      for (const connection of [...freshConnections, ...fake.starts]) {
+        expect(connection.argv.join(" ")).toContain(identityPath);
+        expect(connection.argv.join(" ")).toContain(knownHostsOption);
+      }
+    } finally {
+      await handle.stop();
+      await fs.rm(localPath, { recursive: true, force: true });
+    }
   });
 
   it("does not downgrade an operational HEAD probe failure to plain sync", async () => {
@@ -809,6 +880,32 @@ describe("worker tunnel manager", () => {
 
     expect(delays).toEqual([5, 10, 10]);
     expect(manager.status("worker:retry")).toBe("reconnecting");
+    await handle.stop();
+  });
+
+  it("reconnects on the next advertised port after SSH transport exit 255", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerTunnelManager({
+      runner: fake.runner,
+      sleep: async () => {},
+    });
+    const starting = manager.start({
+      environmentId: "worker:port-reconnect",
+      ownerEpoch: 1,
+      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    expect(sshArgvPort(fake.starts[0]!.argv)).toBe(2222);
+    fake.starts[0]!.process.becomeReady();
+    const handle = await starting;
+
+    fake.starts[0]!.process.exit(255);
+    await waitForStarts(fake.starts, 2);
+    expect(sshArgvPort(fake.starts[1]!.argv)).toBe(22);
+    expect(sshArgvPort(fake.runs.at(-1)!.argv)).toBe(22);
+    fake.starts[1]!.process.becomeReady();
     await handle.stop();
   });
 

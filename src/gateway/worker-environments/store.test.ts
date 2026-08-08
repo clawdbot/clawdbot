@@ -10,7 +10,11 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerEnvironmentStore,
+  normalizeWorkerSshEndpoint,
+  type WorkerEnvironmentStore,
+} from "./store.js";
 
 type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake;
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
@@ -19,7 +23,8 @@ type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
   host: "worker.example.test",
-  port: 22,
+  port: 2222,
+  fallbackPorts: [22, 2200],
   user: "openclaw",
   hostKey: HOST_KEY,
   keyRef: {
@@ -227,6 +232,30 @@ describe("worker environment store", () => {
       attachedSessionIds: [],
     });
     expect(store.listForReconcile()).toEqual([]);
+  });
+
+  it("normalizes provider-advertised SSH fallback ports at the durable boundary", () => {
+    expect(
+      normalizeWorkerSshEndpoint({
+        ...SSH_ENDPOINT,
+        fallbackPorts: [22, 2200, 22, 2222],
+      }),
+    ).toEqual(SSH_ENDPOINT);
+  });
+
+  it.each([
+    ["non-array", "22"],
+    ["non-integer", [22.5]],
+    ["below range", [0]],
+    ["above range", [65_536]],
+    ["more than ten", Array.from({ length: 11 }, (_, index) => 2300 + index)],
+  ])("rejects %s SSH fallback ports", (_name, fallbackPorts) => {
+    expect(() =>
+      normalizeWorkerSshEndpoint({
+        ...SSH_ENDPOINT,
+        fallbackPorts,
+      } as unknown as WorkerEnvironmentSshEndpoint),
+    ).toThrow("SSH fallback ports");
   });
 
   it("keeps renewal on one owner epoch and fences session replacement", () => {

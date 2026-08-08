@@ -1866,7 +1866,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   state_changed_at_ms INTEGER NOT NULL,
   idle_since_at_ms INTEGER,
   destroy_requested_at_ms INTEGER,
-  last_error TEXT
+  last_error TEXT,
+  ssh_fallback_ports_json TEXT
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease

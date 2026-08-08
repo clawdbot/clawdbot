@@ -29,4 +29,19 @@ describe("Crabbox worker inspect", () => {
       );
     },
   );
+
+  it("accepts at most ten normalized SSH fallback ports", () => {
+    const tenPorts = Array.from({ length: 10 }, (_, index) => 2300 + index);
+    expect(
+      parseInspectJson(inspectJson({ sshPort: 2222, sshFallbackPorts: tenPorts })).sshFallbackPorts,
+    ).toEqual(tenPorts);
+    expect(() =>
+      parseInspectJson(
+        inspectJson({
+          sshPort: 2222,
+          sshFallbackPorts: Array.from({ length: 11 }, (_, index) => 2400 + index),
+        }),
+      ),
+    ).toThrow("invalid sshFallbackPorts: maximum 10");
+  });
 });

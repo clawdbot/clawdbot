@@ -296,9 +296,12 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             `Migrated shared state session watch cursors → provenance column (${sessionWatchResult.migratedAmbientWatches} ambient, ${sessionWatchResult.removedLegacySentinels} sentinels removed)`,
           );
         }
-        assertCanonicalStateSchemaShape(db, pathname);
-        if (tableExists(db, "audit_events")) {
+        const hasAuditEventsTable = tableExists(db, "audit_events");
+        if (hasAuditEventsTable) {
           ensureAdditiveStateColumns(db);
+        }
+        assertCanonicalStateSchemaShape(db, pathname);
+        if (hasAuditEventsTable) {
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
           });

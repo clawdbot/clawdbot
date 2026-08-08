@@ -2,8 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import { workerSshCommandOptions } from "./ssh.js";
+import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
   serializeWorkerWorkspaceManifest,
@@ -19,8 +18,6 @@ import {
   REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
-
-const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
 
 export async function recoverAcceptedWorkspacePublication(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
@@ -43,9 +40,7 @@ export async function recoverAcceptedWorkspacePublication(params: {
 
 function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
-  runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
-  ownerSignal: AbortSignal;
-  rsyncSsh: string;
+  runRsync: (argv: (rsyncSsh: string) => string[]) => Promise<SpawnResult>;
   scpTarget: string;
   localPath: string;
   remoteWorkspaceDir: string;
@@ -158,25 +153,19 @@ function createAcceptedWorkspacePublisher(params: {
           const localSource = params.localPath.endsWith(path.sep)
             ? params.localPath
             : `${params.localPath}${path.sep}`;
-          const transferred = await params.runTask(
-            [
-              "rsync",
-              "--archive",
-              "--checksum",
-              "--no-recursive",
-              "--from0",
-              `--files-from=${transferListPath}`,
-              "-e",
-              params.rsyncSsh,
-              "--",
-              localSource,
-              `${params.scpTarget}:${remoteStagingRoot}/`,
-            ],
-            workerSshCommandOptions({
-              timeoutMs: WORKSPACE_TIMEOUT_MS,
-              signal: params.ownerSignal,
-            }),
-          );
+          const transferred = await params.runRsync((rsyncSsh) => [
+            "rsync",
+            "--archive",
+            "--checksum",
+            "--no-recursive",
+            "--from0",
+            `--files-from=${transferListPath}`,
+            "-e",
+            rsyncSsh,
+            "--",
+            localSource,
+            `${params.scpTarget}:${remoteStagingRoot}/`,
+          ]);
           if (!workerWorkspaceCommandSucceeded(transferred)) {
             throw workspaceSyncError(transferred);
           }

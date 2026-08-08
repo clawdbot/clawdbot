@@ -18,6 +18,7 @@ import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from 
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
+  runWorkerSshCandidates,
   workerSshCommandOptions,
   workerSshOptions,
   workerSshRemoteCommand,
@@ -594,6 +595,7 @@ async function runSshScript(params: {
   script: string;
   scriptArgs: readonly string[];
   timeoutMs: number;
+  port?: number;
   signal?: AbortSignal;
 }): Promise<SpawnResult> {
   return await params.runCommand(
@@ -604,7 +606,7 @@ async function runSshScript(params: {
       "-x",
       "-T",
       "-p",
-      String(params.prepared.port),
+      String(params.port ?? params.prepared.port),
       "--",
       params.prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),
@@ -703,17 +705,18 @@ export async function bootstrapWorker(
     temporaryDirectoryPrefix: "openclaw-worker-bootstrap-",
   });
   try {
-    const preflight = parsePreflight(
-      await runSshScript({
+    const preflightResult = await runWorkerSshCandidates(prepared, (port) =>
+      runSshScript({
         prepared,
         runCommand,
         script: PREFLIGHT_SCRIPT,
         scriptArgs: [receipt.bundleHash, JSON.stringify(receipt), request.artifact.install],
         timeoutMs,
+        port,
         signal: dependencies.signal,
       }),
-      receipt,
     );
+    const preflight = parsePreflight(preflightResult, receipt);
     if (preflight.action === "current") {
       return preflight.receipt;
     }

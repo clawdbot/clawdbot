@@ -1,5 +1,7 @@
 import { nonEmptyString } from "./crabbox-worker-profile.js";
 
+const MAX_SSH_FALLBACK_PORTS = 10;
+
 type CrabboxInspect = {
   host?: unknown;
   id?: unknown;
@@ -129,6 +131,9 @@ function inspectFallbackPorts(value: unknown, primaryPort: number | undefined): 
       seen.add(port);
       ports.push(port);
     }
+  }
+  if (ports.length > MAX_SSH_FALLBACK_PORTS) {
+    throw new Error("Crabbox inspect returned invalid sshFallbackPorts: maximum 10");
   }
   return ports;
 }

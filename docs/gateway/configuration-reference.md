@@ -827,7 +827,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
-Crabbox inspect may expose ordered `sshFallbackPorts` in addition to its primary `sshPort`. Once Crabbox reports authenticated readiness, OpenClaw selects the first candidate reachable from the Gateway and persists that one endpoint. Network policies must allow at least one configured candidate.
+Crabbox inspect may expose ordered `sshFallbackPorts` in addition to its primary `sshPort`. OpenClaw persists the advertised order across Gateway restarts. The shared pinned SSH transport uses the current candidate first and retries the remaining advertised ports only when a fresh authenticated SSH or workspace-transfer connection fails at the transport layer. Network policies must allow at least one advertised candidate.
 
 <Note>
   OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver and pins the authoritative `sshHostKey` returned by `crabbox inspect --json`. AWS admission also requires `providerMetadata.instanceProfileAttached`. Install Crabbox 0.38.1 or newer for this closed inspection contract.

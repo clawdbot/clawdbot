@@ -1416,6 +1416,7 @@ export interface WorkerEnvironments {
   profile_snapshot_json: string;
   provider_id: string;
   provision_operation_id: string;
+  ssh_fallback_ports_json: string | null;
   ssh_host: string | null;
   ssh_host_key: string | null;
   ssh_key_ref_json: string | null;

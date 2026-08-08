@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
-import { prepareWorkerSsh, workerSshOptions } from "./ssh.js";
+import { prepareWorkerSsh, runWorkerSshCandidates, workerSshOptions } from "./ssh.js";
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const SSH: WorkerSshEndpoint = {
   host: "worker.example.test",
   port: 2202,
+  fallbackPorts: [22, 2200],
   user: "worker",
   hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "workers", id: "/identity" },
@@ -14,15 +15,25 @@ const SSH: WorkerSshEndpoint = {
 
 describe("worker SSH preparation", () => {
   it("shares the pinned trust context while disabling only unrequested forwardings", async () => {
+    let identityResolutions = 0;
     const prepared = await prepareWorkerSsh({
       ssh: SSH,
       pinnedHostKey: SSH.hostKey,
-      resolveIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
+      resolveIdentity: async () => {
+        identityResolutions += 1;
+        return { kind: "path", path: "/keys/worker" };
+      },
     });
     try {
       expect(await fs.readFile(prepared.knownHostsPath, "utf8")).toBe(
-        `[worker.example.test]:2202 ${HOST_KEY}\n`,
+        [
+          `[worker.example.test]:2202 ${HOST_KEY}`,
+          `worker.example.test ${HOST_KEY}`,
+          `[worker.example.test]:2200 ${HOST_KEY}`,
+          "",
+        ].join("\n"),
       );
+      expect(identityResolutions).toBe(1);
       expect(workerSshOptions(prepared, { forwarding: "disabled" })).toContain(
         "ClearAllForwardings=yes",
       );
@@ -38,6 +49,47 @@ describe("worker SSH preparation", () => {
         expect(options).toContain("ControlMaster=no");
         expect(options).toContain("ControlPath=none");
       }
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it("rotates stable advertised order from the selected authenticated port", async () => {
+    const prepared = await prepareWorkerSsh({
+      ssh: SSH,
+      pinnedHostKey: SSH.hostKey,
+      resolveIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
+    });
+    try {
+      const attempted: number[] = [];
+      await runWorkerSshCandidates(prepared, async (port) => {
+        attempted.push(port);
+        return {
+          stdout: "",
+          stderr: "",
+          code: port === 2202 ? 255 : 0,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      });
+
+      expect(attempted).toEqual([2202, 22]);
+      expect(prepared.port).toBe(22);
+
+      const retryOrder: number[] = [];
+      await runWorkerSshCandidates(prepared, async (port) => {
+        retryOrder.push(port);
+        return {
+          stdout: "",
+          stderr: "",
+          code: 255,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      });
+      expect(retryOrder).toEqual([22, 2200, 2202]);
     } finally {
       await prepared.dispose();
     }

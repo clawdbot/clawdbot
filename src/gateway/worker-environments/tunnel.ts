@@ -3,8 +3,10 @@ import { sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
 import {
+  advanceWorkerSshAfterTransportExit,
   prepareWorkerSsh,
   type PreparedWorkerSsh,
+  runWorkerSshCandidates,
   type WorkerSshIdentityResolver,
   workerSshCommandOptions,
   workerSshOptions,
@@ -139,7 +141,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
   const sshCommand = (
     prepared: PreparedWorkerSsh,
-    params: { input: string; remoteArgs: readonly string[]; signal?: AbortSignal },
+    params: { input: string; port: number; remoteArgs: readonly string[]; signal?: AbortSignal },
   ) => ({
     argv: [
       "ssh",
@@ -148,7 +150,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       "-x",
       "-T",
       "-p",
-      String(prepared.port),
+      String(params.port),
       "--",
       prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.remoteArgs]),
@@ -165,26 +167,33 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     if (!prepared) {
       throw new Error("Worker tunnel SSH context is unavailable");
     }
-    const command = sshCommand(prepared, {
-      input: REMOTE_SOCKET_SETUP_SCRIPT,
-      remoteArgs: [entry.remoteDirectory, entry.remoteSocketPath],
-      signal: entry.abortController.signal,
+    const result = await runWorkerSshCandidates(prepared, async (port) => {
+      const command = sshCommand(prepared, {
+        input: REMOTE_SOCKET_SETUP_SCRIPT,
+        port,
+        remoteArgs: [entry.remoteDirectory, entry.remoteSocketPath],
+        signal: entry.abortController.signal,
+      });
+      return await runner.run(command.argv, command.options);
     });
-    const result = await runner.run(command.argv, command.options);
     if (!success(result)) {
       throw workerSshProcessError(result.stderr || result.stdout);
     }
   };
 
   const cleanupRemoteSocket = async (entry: TunnelEntry) => {
-    if (!entry.prepared) {
+    const prepared = entry.prepared;
+    if (!prepared) {
       return;
     }
-    const command = sshCommand(entry.prepared, {
-      input: REMOTE_SOCKET_CLEANUP_SCRIPT,
-      remoteArgs: [entry.remoteSocketPath, entry.remoteDirectory],
-    });
-    await runner.run(command.argv, command.options).catch(() => undefined);
+    await runWorkerSshCandidates(prepared, async (port) => {
+      const command = sshCommand(prepared, {
+        input: REMOTE_SOCKET_CLEANUP_SCRIPT,
+        port,
+        remoteArgs: [entry.remoteSocketPath, entry.remoteDirectory],
+      });
+      return await runner.run(command.argv, command.options);
+    }).catch(() => undefined);
   };
 
   const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => ({
@@ -202,7 +211,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     stop: () => stop(entry.environmentId, entry.ownerEpoch),
   });
 
-  const connect = async (entry: TunnelEntry): Promise<WorkerSshProcess> => {
+  const connect = async (
+    entry: TunnelEntry,
+  ): Promise<{ port: number; process: WorkerSshProcess }> => {
     const prepared = entry.prepared;
     if (!prepared) {
       throw new Error("Worker tunnel SSH context is unavailable");
@@ -212,7 +223,8 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       throw new Error("Worker tunnel owner changed during connection");
     }
     const target = `${remoteTargetHost(entry.gateway.host)}:${entry.gateway.port}`;
-    return runner.start(
+    const port = prepared.port;
+    const process = runner.start(
       [
         "ssh",
         ...workerSshOptions(prepared, { forwarding: "explicit" }),
@@ -230,7 +242,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         "-R",
         `${entry.remoteSocketPath}:${target}`,
         "-p",
-        String(prepared.port),
+        String(port),
         "--",
         prepared.sshTarget,
         workerSshRemoteCommand(["sh", "-s", "--", entry.remoteSocketPath]),
@@ -241,6 +253,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         signal: entry.abortController.signal,
       }),
     );
+    return { port, process };
   };
 
   const reconnectLoop = async (entry: TunnelEntry) => {
@@ -248,8 +261,11 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     while (isCurrent(entry)) {
       entry.status = reconnectSupervisor.attempts === 0 ? "connecting" : "reconnecting";
       let child: WorkerSshProcess | undefined;
+      let childPort: number | undefined;
       try {
-        child = await connect(entry);
+        const connection = await connect(entry);
+        child = connection.process;
+        childPort = connection.port;
         entry.process = child;
         await child.ready;
         if (!isCurrent(entry)) {
@@ -262,11 +278,20 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           entry.resolveReady(createHandle(entry));
         }
         const connectedAtMs = now();
-        await child.exited;
+        const exit = await child.exited;
+        if (entry.prepared) {
+          advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
+        }
         if (now() - connectedAtMs >= stableConnectionMs) {
           reconnectSupervisor.reset();
         }
       } catch {
+        if (child && childPort !== undefined) {
+          const exit = await child.exited.catch(() => undefined);
+          if (exit && entry.prepared) {
+            advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
+          }
+        }
         await child?.stop().catch(() => undefined);
       } finally {
         if (entry.process === child) {

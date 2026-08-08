@@ -57,12 +57,8 @@ function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
   return { leaseId, profile };
 }
 
-function providerWithRunner(
-  runCommand: CrabboxCommandRunner,
-  dependencies: Omit<CrabboxWorkerProviderDependencies, "runCommand"> = {},
-) {
+function providerWithRunner(runCommand: CrabboxCommandRunner) {
   return createCrabboxWorkerProvider({
-    ...dependencies,
     runCommand: async (argv, options) => {
       if (argv[1] === "config" && argv[2] === "show") {
         return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
@@ -72,7 +68,6 @@ function providerWithRunner(
     openclawRoot: OPENCLAW_ROOT,
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
-    probeTcpPort: dependencies.probeTcpPort ?? (async () => true),
     sleep: async () => {},
   });
 }
@@ -98,32 +93,29 @@ function hasLoneSurrogate(value: string): boolean {
 describe("Crabbox worker provider", () => {
   it("returns a pinned endpoint when inspect exposes provisioned host-key material", async () => {
     let warmed = false;
-    const probeTcpPort = vi.fn(async () => true);
-    const provider = providerWithRunner(
-      async (argv) => {
-        if (argv[1] === "warmup") {
-          warmed = true;
-          return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
-        }
-        if (argv.includes(LEASE_ID)) {
-          return commandResult({
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      if (argv.includes(LEASE_ID)) {
+        return commandResult({
+          stdout: inspectJson({ sshFallbackPorts: [22], sshHostKey: HOST_KEY }),
+        });
+      }
+      return warmed
+        ? commandResult({
             stdout: inspectJson({ sshFallbackPorts: [22], sshHostKey: HOST_KEY }),
-          });
-        }
-        return warmed
-          ? commandResult({
-              stdout: inspectJson({ sshFallbackPorts: [22], sshHostKey: HOST_KEY }),
-            })
-          : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
-      },
-      { probeTcpPort },
-    );
+          })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+    });
 
     await expect(provider.provision(PROFILE, "provision:host-pin")).resolves.toEqual({
       leaseId: LEASE_ID,
       ssh: {
         host: "worker.example.test",
         port: 2222,
+        fallbackPorts: [22],
         user: "openclaw",
         hostKey: HOST_KEY,
         keyRef: {
@@ -133,48 +125,18 @@ describe("Crabbox worker provider", () => {
         },
       },
     });
-    expect(probeTcpPort).toHaveBeenCalledOnce();
-    expect(probeTcpPort).toHaveBeenCalledWith("worker.example.test", 2222);
   });
 
-  it("selects the first TCP-reachable fallback port", async () => {
-    const probeTcpPort = vi.fn(async (_host: string, port: number) => port === 22);
-    const provider = providerWithRunner(
-      async () =>
-        commandResult({
-          stdout: inspectJson({ sshFallbackPorts: [22, 2200], sshHostKey: HOST_KEY }),
-        }),
-      { probeTcpPort },
+  it("preserves ordered SSH fallback ports advertised by Crabbox", async () => {
+    const provider = providerWithRunner(async () =>
+      commandResult({
+        stdout: inspectJson({ sshFallbackPorts: [22, 2200], sshHostKey: HOST_KEY }),
+      }),
     );
 
     await expect(provider.provision(PROFILE, "provision:fallback-port")).resolves.toMatchObject({
-      ssh: { port: 22 },
+      ssh: { port: 2222, fallbackPorts: [22, 2200] },
     });
-    expect(probeTcpPort.mock.calls).toEqual([
-      ["worker.example.test", 2222],
-      ["worker.example.test", 22],
-    ]);
-  });
-
-  it("stops a provisioned lease when no reported SSH port is TCP-reachable", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(
-      async (argv) => {
-        calls.push(argv);
-        if (argv[1] === "stop") {
-          return commandResult();
-        }
-        return commandResult({
-          stdout: inspectJson({ sshFallbackPorts: [22], sshHostKey: HOST_KEY }),
-        });
-      },
-      { probeTcpPort: async () => false },
-    );
-
-    await expect(provider.provision(PROFILE, "provision:no-reachable-port")).rejects.toThrow(
-      "no TCP-reachable SSH port",
-    );
-    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
   it("runs the profile setup command on the ready lease and keeps it", async () => {
@@ -448,6 +410,12 @@ describe("Crabbox worker provider", () => {
       overrides: { providerMetadata: { instanceProfileAttached: "no" } },
     },
     { field: "Tailscale state", overrides: { tailscale: null } },
+    {
+      field: "SSH fallback ports",
+      overrides: {
+        sshFallbackPorts: Array.from({ length: 11 }, (_, index) => 2300 + index),
+      },
+    },
   ])("stops a replay lease with malformed $field", async ({ overrides }) => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {

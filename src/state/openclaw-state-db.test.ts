@@ -965,6 +965,7 @@ function runConcurrentSchemaProbe(params: {
           ALTER TABLE worker_environments DROP COLUMN owner_epoch;
           ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
           ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
+          ALTER TABLE worker_environments DROP COLUMN ssh_fallback_ports_json;
           PRAGMA user_version = 1;
           UPDATE schema_meta
              SET schema_version = 1,
@@ -3081,6 +3082,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE worker_environments DROP COLUMN owner_epoch;
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
       ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
+      ALTER TABLE worker_environments DROP COLUMN ssh_fallback_ports_json;
     `);
     markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
@@ -3100,6 +3102,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         "owner_epoch",
         "teardown_terminal_state",
         "ssh_host_key",
+        "ssh_fallback_ports_json",
       ]),
     );
     const credentialTable = reopened.db

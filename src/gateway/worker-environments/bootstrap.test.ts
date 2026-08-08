@@ -177,6 +177,40 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.argv.at(-1)).toContain(VERSION);
   });
 
+  it("selects an authenticated fallback before transfer and install", async () => {
+    const runner = fakeRunner([
+      result({ code: 255, stderr: "primary transport unavailable" }),
+      result({ stdout: tagged("install", REMOTE_TARBALL) }),
+      result(),
+      result({ stdout: tagged("receipt", RECEIPT_JSON) }),
+    ]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: { ...SSH, fallbackPorts: [22] }, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).resolves.toEqual(JSON.parse(RECEIPT_JSON));
+
+    expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "scp", "ssh"]);
+    expect(
+      runner.calls.map((call) => {
+        const portFlag = call.argv[0] === "scp" ? "-P" : "-p";
+        return Number(call.argv[call.argv.indexOf(portFlag) + 1]);
+      }),
+    ).toEqual([2222, 22, 22, 22]);
+    expect(new Set(runner.calls.map((call) => call.argv[call.argv.indexOf("-i") + 1]))).toEqual(
+      new Set(["/keys/worker"]),
+    );
+    expect(
+      new Set(
+        runner.calls.map((call) =>
+          call.argv.find((value) => value.startsWith("UserKnownHostsFile=")),
+        ),
+      ).size,
+    ).toBe(1);
+  });
+
   it("fails with provider setup guidance when Node.js is missing", async () => {
     const runner = fakeRunner([
       result({

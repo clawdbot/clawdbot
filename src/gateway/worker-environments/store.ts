@@ -99,6 +99,7 @@ type TransitionInput = {
 const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
+const MAX_SSH_FALLBACK_PORTS = 10;
 const WORKER_CREDENTIAL_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const OPENSSH_HOST_KEY_TYPE_PATTERN =
   /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
@@ -223,12 +224,41 @@ export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
   if (!isValidSecretRef(value.keyRef)) {
     throw new Error("Worker environment SSH key must be a canonical SecretRef");
   }
-  return { host, port: value.port, user, hostKey, keyRef: { ...value.keyRef } };
+  if (value.fallbackPorts !== undefined && !Array.isArray(value.fallbackPorts)) {
+    throw new Error("Worker environment SSH fallback ports must be an array");
+  }
+  const seen = new Set([value.port]);
+  const fallbackPorts: number[] = [];
+  for (const port of value.fallbackPorts ?? []) {
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(
+        "Worker environment SSH fallback ports must be integers from 1 through 65535",
+      );
+    }
+    if (!seen.has(port)) {
+      seen.add(port);
+      fallbackPorts.push(port);
+    }
+  }
+  if (fallbackPorts.length > MAX_SSH_FALLBACK_PORTS) {
+    throw new Error(
+      `Worker environment SSH fallback ports cannot exceed ${MAX_SSH_FALLBACK_PORTS}`,
+    );
+  }
+  return {
+    host,
+    port: value.port,
+    ...(fallbackPorts.length > 0 ? { fallbackPorts } : {}),
+    user,
+    hostKey,
+    keyRef: { ...value.keyRef },
+  };
 }
 function endpointFrom(row: Row): Ssh | null {
   const {
     ssh_host: host,
     ssh_port: port,
+    ssh_fallback_ports_json: encodedFallbackPorts,
     ssh_user: user,
     ssh_host_key: hostKey,
     ssh_key_ref_json: encoded,
@@ -239,6 +269,9 @@ function endpointFrom(row: Row): Ssh | null {
   return normalizeWorkerSshEndpoint({
     host,
     port,
+    ...(encodedFallbackPorts === null
+      ? {}
+      : { fallbackPorts: JSON.parse(encodedFallbackPorts) as Ssh["fallbackPorts"] }),
     user,
     hostKey,
     keyRef: JSON.parse(encoded) as Ssh["keyRef"],
@@ -602,6 +635,7 @@ export function createWorkerEnvironmentStore(
               lease_id: null,
               ssh_host: null,
               ssh_port: null,
+              ssh_fallback_ports_json: null,
               ssh_user: null,
               ssh_host_key: null,
               ssh_key_ref_json: null,
@@ -789,6 +823,9 @@ export function createWorkerEnvironmentStore(
           lease_id: leaseId,
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,
+          ssh_fallback_ports_json: sshEndpoint?.fallbackPorts?.length
+            ? json(sshEndpoint.fallbackPorts)
+            : null,
           ssh_user: sshEndpoint?.user ?? null,
           ssh_host_key: sshEndpoint?.hostKey ?? null,
           ssh_key_ref_json: sshEndpoint ? json(sshEndpoint.keyRef) : null,
