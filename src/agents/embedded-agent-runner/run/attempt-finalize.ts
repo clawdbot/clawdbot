@@ -38,7 +38,10 @@ export function finalizeEmbeddedAttempt(
     attempt: result,
     assistant: terminalState.cleanupYieldAborted ? undefined : assistant,
   });
-  const stopReason = terminalState.cleanupYieldAborted ? "end_turn" : completionOutcome.stopReason;
+  const stopReason =
+    terminalState.cleanupYieldAborted && completionOutcome.status === "ok"
+      ? "end_turn"
+      : completionOutcome.stopReason;
   const terminal = resolveAttemptTrajectoryTerminal({
     failed: completionOutcome.status === "error",
     interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
@@ -129,6 +132,7 @@ export function finalizeEmbeddedAttempt(
     timedOutByRunBudget: terminalState.timedOutByRunBudget,
     promptError,
     terminalError: terminal.terminalError,
+    stopReason,
   });
 
   return result;

@@ -671,7 +671,7 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts).not.toHaveProperty("lastToolError");
   });
 
-  it("isolates a partial tail by the latest authoritative start time", async () => {
+  it("exports session.ended after earlier completion rows are trimmed", async () => {
     const artifacts = await exportRuntimeArtifacts(
       runtimeAttemptEvents([
         ["model.completed", "old-run", staleCompletion],

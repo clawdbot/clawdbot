@@ -75,8 +75,12 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     ],
     ["partial provider error", { kind: "ok" }, "error", "error", "error", { texts: ["x"] }],
     [
-      "yield plus prompt error",
-      { kind: "failed", source: "prompt", error: new Error("prompt failed") },
+      "yield cleanup plus prompt failure",
+      {
+        kind: "aborted",
+        source: "yield_cleanup",
+        failure: { source: "prompt", error: new Error("prompt failed") },
+      },
       "error",
       undefined,
       "error",
@@ -107,6 +111,7 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       expect(events["model.completed"]).toHaveProperty("stopReason", expectedStopReason);
       expect(events["trace.artifacts"]).toHaveProperty("stopReason", expectedStopReason);
       expect(events["trace.artifacts"]).toHaveProperty("finalStatus", expectedFinalStatus);
+      expect(events["session.ended"]).toHaveProperty("stopReason", expectedStopReason);
     },
   );
 
