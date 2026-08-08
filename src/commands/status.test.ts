@@ -231,6 +231,8 @@ function createSessionStatusRows() {
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const total = typeof entry.totalTokens === "number" ? entry.totalTokens : null;
+      const freshTotal =
+        total !== null && entry.totalTokensFresh && entry.totalTokensVersion === 1 ? total : null;
       return {
         agentId: agent.id,
         key,
@@ -243,13 +245,17 @@ function createSessionStatusRows() {
         inputTokens: entry.inputTokens,
         outputTokens: entry.outputTokens,
         totalTokens: total,
-        totalTokensFresh: typeof entry.totalTokens === "number" ? entry.totalTokensFresh : false,
+        totalTokensFresh: freshTotal !== null,
         cacheRead: entry.cacheRead,
         cacheWrite: entry.cacheWrite,
         remainingTokens:
-          total !== null && contextTokens !== null ? Math.max(0, contextTokens - total) : null,
+          freshTotal !== null && contextTokens !== null
+            ? Math.max(0, contextTokens - freshTotal)
+            : null,
         percentUsed:
-          total !== null && contextTokens ? Math.round((total / contextTokens) * 100) : null,
+          freshTotal !== null && contextTokens
+            ? Math.round((freshTotal / contextTokens) * 100)
+            : null,
         model: typeof entry.model === "string" ? entry.model : null,
         contextTokens,
         flags: [
@@ -1139,8 +1145,8 @@ describe("statusCommand", () => {
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
-    expect(payload.sessions.recent[0].percentUsed).toBe(50);
-    expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
+    expect(payload.sessions.recent[0].percentUsed).toBeNull();
+    expect(payload.sessions.recent[0].remainingTokens).toBeNull();
   });
 
   it("prints formatted lines with verbose cache details", async () => {

@@ -708,7 +708,7 @@ describe("chat pane catalog session lifecycle", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         undefined,
         true,
         undefined,

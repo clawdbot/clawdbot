@@ -9,6 +9,7 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -31,6 +32,7 @@ import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
@@ -243,11 +245,17 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     watchedSessions: [],
   };
   const gateway = host.offline ? null : readSidebarNativeGateway();
+  const buildSubtitle = formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
   // Health is visual-only here by budget decision; the header picker owns health accessibility.
   const gatewayPrimaryTag = gateway?.isPrimary
     ? t("chat.sessionHeader.gatewayPicker.primaryTag")
     : null;
   const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
+  const identityDetail = host.offline
+    ? t("connection.reconnecting")
+    : gateway
+      ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+      : buildSubtitle;
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -256,8 +264,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${gateway
-            ? `${identityMenuLabel}: ${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+          aria-label=${identityDetail
+            ? `${identityMenuLabel}: ${identityDetail}`
             : identityMenuLabel}
           @click=${(event: MouseEvent) =>
             host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
@@ -285,7 +293,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                         >`
                       : nothing}
                   </span>`
-                : nothing}
+                : buildSubtitle
+                  ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
+                      >${buildSubtitle}</span
+                    >`
+                  : nothing}
           </span>
           <span class="sidebar-identity-card__chevron" aria-hidden="true"
             >${icons.chevronDown}</span

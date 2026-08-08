@@ -40,6 +40,8 @@ type SettingsSidebarProps = {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
@@ -305,6 +307,8 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         .updateAvailable=${props.updateAvailable}
         .updateRunning=${props.updateRunning}
         .onUpdate=${props.onUpdate}
+        .refreshRequired=${props.refreshRequired}
+        .onRefresh=${props.onRefresh}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline

@@ -7,6 +7,17 @@
   --shell-gap: 16px;
   --shell-nav-expanded-width: 258px;
   --shell-nav-width: var(--shell-nav-expanded-width);
+  --shell-chrome-controls-inset: 10px;
+  --shell-chrome-control-size: 32px;
+  --shell-chrome-controls-gap: 4px;
+  --shell-chrome-controls-collapsed-width: calc(
+    var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
+      var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
+      var(--shell-chrome-controls-gap)
+  );
+  --shell-floating-update-card-left: calc(
+    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
+  );
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
   --shell-topbar-height: 0px;
@@ -74,19 +85,19 @@
 .shell-chrome-controls {
   position: fixed;
   top: 10px;
-  left: calc(var(--shell-nav-width) + 10px);
+  left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
   z-index: 45;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--shell-chrome-controls-gap);
 }
 
 .shell-chrome-controls__button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--shell-chrome-control-size);
+  height: var(--shell-chrome-control-size);
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: var(--radius-md);
@@ -1132,10 +1143,24 @@ openclaw-settings-save-indicator {
   margin: 12px 16px 0;
 }
 
-/* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+/* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
-  width: min(360px, calc(100% - 48px));
-  margin-left: 32px;
+  width: min(360px, calc(100% - var(--shell-floating-update-card-left) - 16px));
+  margin-left: var(--shell-floating-update-card-left);
+}
+
+/* Native hosts hide the web cluster; onboarding never mounts it. */
+html.openclaw-native-nav
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card,
+html.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card,
+.shell--onboarding:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin-left: 16px;
 }
 
 /* Native dashboard actions must also clear AppKit's drag strip. */
@@ -1205,6 +1230,25 @@ html.openclaw-native-macos
   font-size: 12px;
   font-weight: 600;
   line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__text--stacked {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-update-card__title {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.sidebar-update-card__subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

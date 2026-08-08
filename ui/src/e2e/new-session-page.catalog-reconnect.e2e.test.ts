@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
 import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -351,7 +355,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
       await page.getByRole("heading", { name: "Research" }).waitFor();
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=research&catalog=claude");
@@ -368,6 +372,7 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.catalog.list");
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await gateway.waitForRequest("sessions.catalog.list");
       await gateway.deferNext("sessions.catalog.list");
       await gateway.rejectDeferred("sessions.catalog.list", {
@@ -459,7 +464,7 @@ suite.define(() => {
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setMethodResponse("agents.list", {
         agents: [
           {
@@ -482,6 +487,7 @@ suite.define(() => {
         scope: "agent",
       });
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
 
       await expect
         .poll(async () => (await gateway.getRequests("agents.list")).length)
@@ -512,8 +518,9 @@ suite.define(() => {
       const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
         .length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
 
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
