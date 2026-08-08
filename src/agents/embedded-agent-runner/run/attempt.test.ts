@@ -782,37 +782,77 @@ describe("wrapStreamFnTrimToolCallNames", () => {
         label: "partial double-quote fragment",
         toolCall: { type: "toolCall", name: 'read" parameter="path" string="true' },
         expectedName: "read",
+        projection: "partial",
       },
       {
         label: "message single-quote fragment",
         toolCall: { type: "toolCall", name: "exec' parameter='command' string='true" },
         expectedName: "exec",
+        projection: "message",
       },
       {
         label: "final opening-angle fragment",
         toolCall: { type: "toolCall", name: "write<parameter=path" },
         expectedName: "write",
+        projection: "final",
       },
       {
-        label: "unknown quoted prefix",
+        label: "partial slash-prefixed fragment",
+        toolCall: { type: "toolCall", name: 'provider/read" parameter="path"' },
+        expectedName: "read",
+        projection: "partial",
+      },
+      {
+        label: "message dotted-prefix fragment",
+        toolCall: { type: "toolCall", name: "provider.exec' parameter='command'" },
+        expectedName: "exec",
+        projection: "message",
+      },
+      {
+        label: "final qualified-tool fragment",
+        toolCall: { type: "toolCall", name: "qualified/write<parameter=path" },
+        expectedName: "qualified.write",
+        projection: "final",
+      },
+      {
+        label: "partial unknown quoted prefix",
         toolCall: { type: "toolCall", name: 'unknown" parameter="value" string="true' },
         expectedName: 'unknown" parameter="value" string="true',
+        projection: "partial",
       },
       {
-        label: "allowed prefix with bare closing angle",
+        label: "message allowed prefix with bare closing angle",
         toolCall: { type: "toolCall", name: "allowedTool>suffix" },
         expectedName: "allowedTool>suffix",
+        projection: "message",
+      },
+      {
+        label: "final unknown slash-prefixed fragment",
+        toolCall: { type: "toolCall", name: 'provider/unknown" parameter="value"' },
+        expectedName: 'provider/unknown" parameter="value"',
+        projection: "final",
       },
     ] as const;
-    const [partialCase, messageCase, finalCase, unknownCase, bareClosingAngleCase] = cases;
     const event = {
       type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialCase.toolCall] },
-      message: { role: "assistant", content: [messageCase.toolCall] },
+      partial: {
+        role: "assistant",
+        content: cases
+          .filter((testCase) => testCase.projection === "partial")
+          .map(({ toolCall }) => toolCall),
+      },
+      message: {
+        role: "assistant",
+        content: cases
+          .filter((testCase) => testCase.projection === "message")
+          .map(({ toolCall }) => toolCall),
+      },
     };
     const finalMessage = {
       role: "assistant",
-      content: [finalCase.toolCall, unknownCase.toolCall, bareClosingAngleCase.toolCall],
+      content: cases
+        .filter((testCase) => testCase.projection === "final")
+        .map(({ toolCall }) => toolCall),
     };
     const baseFn = vi.fn(() =>
       createFakeStream({
@@ -823,7 +863,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(
       baseFn,
-      new Set(["read", "write", "exec", "allowedTool"]),
+      new Set(["read", "write", "exec", "qualified.write", "allowedTool"]),
     );
 
     for await (const item of stream) {
@@ -1298,6 +1338,16 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     {
       name: "recovers canonical tool names from canonical ids when name is empty",
       toolCall: { type: "toolCall", id: "read", name: "" },
+      allowedTools: ["read", "write"],
+      expectedName: "read",
+    },
+    {
+      name: "recovers blank tool names from provider-prefixed XML-polluted ids",
+      toolCall: {
+        type: "toolCall",
+        id: 'provider/read" parameter="path"',
+        name: "",
+      },
       allowedTools: ["read", "write"],
       expectedName: "read",
     },

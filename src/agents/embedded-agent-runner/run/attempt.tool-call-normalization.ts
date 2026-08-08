@@ -108,6 +108,7 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
 
   addCandidate(trimmed);
   addCandidate(normalizeToolName(trimmed));
+  const structuredSeeds = [trimmed];
 
   const xmlFragmentOffset = ['"', "'", "<"]
     .map((separator) => trimmed.indexOf(separator))
@@ -120,18 +121,21 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
     const prefix = trimmed.slice(0, xmlFragmentOffset);
     addCandidate(prefix);
     addCandidate(normalizeToolName(prefix));
+    structuredSeeds.push(prefix);
   }
 
-  const normalizedDelimiter = trimmed.replace(/\//g, ".");
-  addCandidate(normalizedDelimiter);
-  addCandidate(normalizeToolName(normalizedDelimiter));
+  for (const seed of structuredSeeds) {
+    const normalizedDelimiter = seed.replace(/\//g, ".");
+    addCandidate(normalizedDelimiter);
+    addCandidate(normalizeToolName(normalizedDelimiter));
 
-  const segments = normalizeStringEntries(normalizedDelimiter.split("."));
-  if (segments.length > 1) {
-    for (let index = 1; index < segments.length; index += 1) {
-      const suffix = segments.slice(index).join(".");
-      addCandidate(suffix);
-      addCandidate(normalizeToolName(suffix));
+    const segments = normalizeStringEntries(normalizedDelimiter.split("."));
+    if (segments.length > 1) {
+      for (let index = 1; index < segments.length; index += 1) {
+        const suffix = segments.slice(index).join(".");
+        addCandidate(suffix);
+        addCandidate(normalizeToolName(suffix));
+      }
     }
   }
 
