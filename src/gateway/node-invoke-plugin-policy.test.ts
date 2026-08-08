@@ -274,32 +274,6 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
-  it("keeps gateway session attribution authoritative over nested policy params", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
-    const { context, invoke } = createContext();
-    const sessionKey = "agent:main:main";
-    const forgedParams = { ...DEMO_PARAMS, sessionKey: "agent:attacker:forged" };
-
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: forgedParams,
-      sessionKey,
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: forgedParams,
-        sessionKey,
-      }),
-    );
-  });
-
   it.each([5_000, 0])(
     "bounds plugin timeout override %i by the remaining invocation deadline",
     async (overrideTimeoutMs) => {

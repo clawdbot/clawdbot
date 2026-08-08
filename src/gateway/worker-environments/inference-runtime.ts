@@ -772,6 +772,20 @@ export function createWorkerInferenceExecutor(
                 message: event.message,
                 modelIdentity,
                 stopReason: event.reason,
+                onProviderReplayOmitted: ({ bytes, limitBytes, reason }) => {
+                  if (!isDiagnosticsEnabled(approved.config)) {
+                    return;
+                  }
+                  emitTrustedDiagnosticEvent({
+                    type: "payload.large",
+                    surface: "worker.provider-replay",
+                    action: "rejected",
+                    bytes,
+                    limitBytes,
+                    reason,
+                    trace: freezeDiagnosticTraceContext(trace),
+                  });
+                },
               }),
             };
           }

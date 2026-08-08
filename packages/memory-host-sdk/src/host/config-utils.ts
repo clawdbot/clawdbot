@@ -12,7 +12,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 export { normalizeAgentId };
-export { splitShellArgs } from "./openclaw-runtime-io.js";
+export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
 // Shared OpenClaw config helpers used by memory host, QMD, and agent context code.
 

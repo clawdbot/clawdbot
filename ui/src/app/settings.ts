@@ -30,6 +30,7 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
   normalizeSidebarEntries,
@@ -291,11 +292,7 @@ function parsePersistedSettings(raw: string | null): PersistedUiSettings | null 
   if (!raw) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as PersistedUiSettings;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(raw) as PersistedUiSettings | undefined) ?? null;
 }
 
 function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: string): boolean {

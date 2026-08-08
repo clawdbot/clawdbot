@@ -9,6 +9,7 @@ import type {
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
@@ -236,10 +237,6 @@ async function executeWorkerTurn(params: {
 
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
-  turn.onExecutionAttributionChanged?.({
-    lifecycleGeneration: turn.lifecycleGeneration,
-    attribution: turn.attribution,
-  });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const manager = SessionManager.open(transcriptTarget);
@@ -252,6 +249,19 @@ async function executeWorkerTurn(params: {
     userMessageAlreadyPersisted && leaf?.type === "message" && leaf.message.role === "user"
       ? contextMessages.slice(0, -1)
       : contextMessages,
+    ({ bytes, limitBytes, reason }) => {
+      if (!isDiagnosticsEnabled(turn.config)) {
+        return;
+      }
+      emitTrustedDiagnosticEvent({
+        type: "payload.large",
+        surface: "worker.provider-replay",
+        action: "rejected",
+        bytes,
+        limitBytes,
+        reason,
+      });
+    },
   );
   let baseLeafId = manager.getLeafId();
   if (!userMessageAlreadyPersisted) {

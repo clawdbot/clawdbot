@@ -2206,6 +2206,7 @@ describe("talk.session unified handlers", () => {
     expect(createResult.token).toBeTypeOf("string");
     expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
       cfg: {},
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
       p: {
         key: "session:main",
         includeGlobal: true,
@@ -2347,6 +2348,7 @@ describe("talk.session unified handlers", () => {
     });
     expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
       cfg: {},
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
         spawnedBy: "agent:main:parent",

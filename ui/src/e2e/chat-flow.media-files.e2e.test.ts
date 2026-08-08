@@ -645,13 +645,14 @@ suite.define(() => {
       const overflowProof = await readBlobProof();
       // Concurrent image fetches can resolve in any order. Find the real LRU
       // rather than assuming that creation order matches transcript order.
+      expect(overflowProof.revoked).toHaveLength(1);
       const evictedBlobUrl = expectDefined(
-        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
+        overflowProof.revoked.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      expect(overflowProof.created).toContain(evictedBlobUrl);
       const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
       expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
-      expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
       const evictedPath = new URL(

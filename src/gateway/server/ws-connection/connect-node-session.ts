@@ -10,7 +10,10 @@ import {
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
-import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
+import {
+  filterLegacyNodeProtocolFeatures,
+  normalizeLegacyNodeHostClientMetadata,
+} from "../../node-legacy-protocol-filter.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -83,6 +86,11 @@ export async function prepareGatewayNodeConnect(
     broadcastNodePairingResult,
   } = context;
   const { device, devicePublicKey, usesLegacyNodeProtocol, rejectUnauthorized } = state;
+  if (usesLegacyNodeProtocol) {
+    // Protocol-v3 node hosts predate canonical desktop family metadata. Repair
+    // that exact shipped envelope before policy reconciliation or exec vanishes.
+    connectParams.client = normalizeLegacyNodeHostClientMetadata(connectParams.client);
+  }
   const nodeId = connectParams.device?.id ?? connectParams.client.id;
   const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
   const pairedNode = nodePairingSnapshot.pairedNode;

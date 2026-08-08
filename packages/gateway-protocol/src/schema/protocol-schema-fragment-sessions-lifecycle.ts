@@ -47,6 +47,8 @@ export const SessionLifecycleProtocolSchemas = {
   SessionsViewerPresenceSetResult: viewerPresence.SessionsViewerPresenceSetResultSchema,
   SessionsAbortParams: sessions.SessionsAbortParamsSchema,
   SessionsPatchParams: sessions.SessionsPatchParamsSchema,
+  SessionsArchiveManyParams: sessions.SessionsArchiveManyParamsSchema,
+  SessionsArchiveManyResult: sessions.SessionsArchiveManyResultSchema,
   SessionsPluginPatchParams: sessions.SessionsPluginPatchParamsSchema,
   SessionsPluginPatchResult: sessions.SessionsPluginPatchResultSchema,
   SessionsResetParams: sessions.SessionsResetParamsSchema,

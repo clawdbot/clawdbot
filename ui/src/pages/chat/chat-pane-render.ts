@@ -60,6 +60,7 @@ import {
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
@@ -213,9 +214,6 @@ export class ChatPane extends ChatPaneHeader {
       narrowLayout:
         chatLayoutWidth <
         WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
-      onOpenSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
     // Only side-docked rails narrow the conversation region.
@@ -253,6 +251,7 @@ export class ChatPane extends ChatPaneHeader {
     });
     const props: ChatProps = {
       transcript: this.transcript,
+      backgroundTaskTranscript: this.backgroundTaskTranscript,
       paneId: this.paneId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active,
@@ -467,6 +466,8 @@ export class ChatPane extends ChatPaneHeader {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
+      // Metadata can resize a committed row; re-enter the scroll owner so the follow lock wins.
+      onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,
@@ -580,7 +581,6 @@ export class ChatPane extends ChatPaneHeader {
             },
             activeTabId: board.activeTabId,
             dock: board.dock,
-            reopenDock: board.reopenDock,
             dockSize: this.boardChatDockSize,
             chat,
             divider: this.renderBoardDivider("bottom"),
@@ -600,7 +600,6 @@ export class ChatPane extends ChatPaneHeader {
             } satisfies BoardViewCallbacks,
             widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
             workboardCardChip,
-            onDockChange: (dock) => this.handleBoardDockChange(dock),
           })
         : chat;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());

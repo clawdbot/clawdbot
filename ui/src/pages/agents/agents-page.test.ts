@@ -680,7 +680,7 @@ describe("AgentsPage gateway lifecycle", () => {
   it("preserves matching initial route data, then resets it on provider replacement", () => {
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client, false));
-    const preloadedAgents = {
+    const preloadedAgents: AgentsListResult = {
       defaultId: "main",
       mainKey: "main",
       scope: "per-sender",

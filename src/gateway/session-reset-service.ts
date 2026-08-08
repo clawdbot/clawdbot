@@ -32,6 +32,7 @@ import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-clea
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionWorkStartError,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
   deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
@@ -1527,6 +1528,7 @@ export async function performGatewaySessionReset(params: {
             outputTokens: 0,
             totalTokens: 0,
             totalTokensFresh: true,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           };
           // Drop CLI provider bindings so the next turn after reset starts a fresh
           // CLI conversation on the provider side. Preserved only for spawned

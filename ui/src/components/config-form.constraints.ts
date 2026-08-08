@@ -3,6 +3,7 @@ import {
   isJsonSchemaValueValid,
   jsonSchemaValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
+import { asFiniteNumber as finiteNumber } from "@openclaw/normalization-core/number-coercion";
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
@@ -15,10 +16,6 @@ export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown):
 function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
   const properties = schema.properties;
   return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function decimalPlaces(value: number): number {

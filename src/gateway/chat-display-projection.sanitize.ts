@@ -302,6 +302,10 @@ export function sanitizeChatHistoryMessage(
   }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
+  if ("providerReplay" in entry) {
+    delete entry.providerReplay;
+    changed = true;
+  }
   const openClawMeta = readRecord(entry["__openclaw"]);
   if (openClawMeta && "upstreamUserText" in openClawMeta) {
     // Codex retains the decorated upstream prompt for transcript reconstruction.

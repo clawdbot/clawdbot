@@ -4974,6 +4974,38 @@ describe("codex command", () => {
     expect(result.text).not.toContain("[trusted](https://evil)");
   });
 
+  it("reports a conversation-bound model without an OpenClaw session identity", async () => {
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-conversation", cwd: "/repo", model: "bound-model" },
+    );
+
+    const result = await handleCodexCommand(
+      createContext("model", undefined, {
+        sessionId: undefined,
+        sessionKey: undefined,
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: tempDir,
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result).toEqual({ text: "Codex model: bound-model" });
+  });
+
   it("rejects malformed model commands before persisting the model", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const setCodexConversationModel = vi.fn();

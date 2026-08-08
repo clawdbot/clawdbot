@@ -77,6 +77,34 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `session compaction checkpoint preserves canonical token version casing`() throws {
+        let checkpoint = SessionCompactionCheckpoint(
+            checkpointid: "checkpoint-1",
+            sessionkey: "main",
+            sessionid: "session-1",
+            createdat: 1,
+            reason: AnyCodable("manual"),
+            tokensVersion: 1,
+            precompaction: [:],
+            postcompaction: [:])
+
+        #expect(checkpoint.tokensVersion == 1)
+
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(checkpoint))
+        let encodedJSON = try #require(encoded as? [String: Any])
+        #expect(encodedJSON.keys.contains("tokensVersion"))
+        #expect(!encodedJSON.keys.contains("tokensversion"))
+
+        let decoded = try JSONDecoder().decode(
+            SessionCompactionCheckpoint.self,
+            from: Data(
+                #"{"checkpointId":"checkpoint-2","sessionKey":"main","sessionId":"session-2","createdAt":2,"reason":"manual","tokensVersion":1,"preCompaction":{},"postCompaction":{}}"#
+                    .utf8))
+
+        #expect(decoded.tokensVersion == 1)
+    }
+
+    @Test
     func `request frames round trip current payloads`() throws {
         let frame = try self.roundTripGatewayFrame(
             #"{"type":"req","id":"req-1","method":"sessions.list","params":{"limit":20}}"#)
@@ -179,28 +207,5 @@ struct GatewayModelsCompatibilityTests {
         #expect(decodedOmitted.modelvalue == nil)
         #expect(decodedCleared.modelvalue?.value is NSNull)
         #expect(reencodedCleared["model"] is NSNull)
-    }
-
-    @Test
-    func `node invoke session envelope preserves omitted null and value states`() throws {
-        let omitted = try JSONDecoder().decode(
-            NodeInvokeRequestEvent.self,
-            from: Data(#"{"id":"invoke-1","nodeId":"node-1","command":"debug.ping"}"#.utf8))
-        let cleared = try JSONDecoder().decode(
-            NodeInvokeRequestEvent.self,
-            from: Data(
-                #"{"id":"invoke-2","nodeId":"node-1","command":"debug.ping","sessionKey":null}"#.utf8))
-        let attributed = try JSONDecoder().decode(
-            NodeInvokeRequestEvent.self,
-            from: Data(
-                #"{"id":"invoke-3","nodeId":"node-1","command":"debug.ping","sessionKey":"agent:main:main"}"#.utf8))
-        let reencodedCleared = try #require(
-            JSONSerialization.jsonObject(with: JSONEncoder().encode(cleared))
-                as? [String: Any])
-
-        #expect(omitted.sessionkey == nil)
-        #expect(cleared.sessionkey?.value is NSNull)
-        #expect(attributed.sessionkey?.value as? String == "agent:main:main")
-        #expect(reencodedCleared["sessionKey"] is NSNull)
     }
 }

@@ -618,6 +618,10 @@ describe("doctor state integrity oauth dir checks", () => {
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
     await upsertSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      { sessionId: "sqlite-main-session", updatedAt: Date.now() },
+    );
+    await upsertSessionEntry(
       { agentId: "main", sessionKey: "agent:main:sqlite-only", storePath },
       { sessionId: "sqlite-only-session", updatedAt: Date.now() },
     );
@@ -628,6 +632,7 @@ describe("doctor state integrity oauth dir checks", () => {
     });
 
     expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+    expect(stateIntegrityText()).not.toContain("Main session transcript missing");
   });
 
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {

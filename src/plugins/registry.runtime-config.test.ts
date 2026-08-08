@@ -719,6 +719,12 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
     await expect(
+      otherApi.runtime.gateway.request("sessions.archiveMany", {
+        targets: [{ key: ordinaryKey }, { key: reservedKey }],
+        archived: true,
+      }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
       otherApi.runtime.gateway.request("agent", {
         sessionId: reservedEntry.sessionId,
         message: "continue",

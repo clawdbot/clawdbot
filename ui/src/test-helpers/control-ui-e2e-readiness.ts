@@ -10,6 +10,27 @@ export async function waitForControlUiGatewayReady(page: Page): Promise<void> {
   });
 }
 
+/** Wait for both the Gateway lifecycle and its dedicated visible reconnect status. */
+export async function waitForControlUiGatewayReconnecting(page: Page): Promise<void> {
+  await Promise.all([
+    page.waitForFunction(
+      () => {
+        const app = document.querySelector("openclaw-app") as
+          | (HTMLElement & {
+              runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } };
+            })
+          | null;
+        return app?.runtime?.context?.gateway?.snapshot?.phase === "reconnecting";
+      },
+      undefined,
+      { timeout: 10_000 },
+    ),
+    page
+      .locator(".sidebar-identity-card__status", { hasText: "Reconnecting…" })
+      .waitFor({ state: "visible", timeout: 10_000 }),
+  ]);
+}
+
 /** Wait for the lazy terminal itself before exercising a real keyboard shortcut. */
 export async function waitForControlUiTerminalReady(page: Page): Promise<void> {
   await page.waitForFunction(

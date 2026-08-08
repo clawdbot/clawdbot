@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
 import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -120,7 +124,6 @@ suite.define(() => {
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="openai"]').click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
@@ -205,7 +208,7 @@ suite.define(() => {
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -280,7 +283,7 @@ suite.define(() => {
         .toBe(listCalls + 1);
 
       await message.fill("create during refresh");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -351,7 +354,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
       await page.getByRole("heading", { name: "Research" }).waitFor();
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=research&catalog=claude");
@@ -362,12 +365,13 @@ suite.define(() => {
       await message.fill("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isEnabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(false);
       expect(await gateway.getRequests("sessions.catalog.list")).toHaveLength(0);
 
       await gateway.deferNext("sessions.catalog.list");
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await gateway.waitForRequest("sessions.catalog.list");
       await gateway.deferNext("sessions.catalog.list");
       await gateway.rejectDeferred("sessions.catalog.list", {
@@ -388,7 +392,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",
@@ -459,7 +463,7 @@ suite.define(() => {
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setMethodResponse("agents.list", {
         agents: [
           {
@@ -482,6 +486,7 @@ suite.define(() => {
         scope: "agent",
       });
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
 
       await expect
         .poll(async () => (await gateway.getRequests("agents.list")).length)
@@ -512,8 +517,9 @@ suite.define(() => {
       const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
         .length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
 
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -533,7 +539,7 @@ suite.define(() => {
       });
       await expect.poll(() => baseInput.inputValue()).toBe("feature-choice");
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",

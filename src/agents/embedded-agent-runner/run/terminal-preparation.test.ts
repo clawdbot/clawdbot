@@ -112,12 +112,15 @@ describe("prepareEmbeddedRunTerminal", () => {
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
   type StatsInput = {
-    attempt?: Partial<EmbeddedRunAttemptResult>;
+    attempt?: Partial<EmbeddedRunAttemptResult> & {
+      terminalTurnId?: string;
+    };
     assistantTurns?: number;
     bridgeCalls?: { search: number; describe: number; call: number };
     config?: unknown;
     provider?: string;
     model?: string;
+    responseModel?: string;
     usage?: Partial<
       Pick<
         ReturnType<typeof createUsageAccumulator>,
@@ -134,6 +137,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       ...assistantMessage("stop"),
       provider,
       model,
+      ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
     const usageAccumulator = createUsageAccumulator();
     Object.assign(usageAccumulator, statsInput.usage);
@@ -242,5 +246,40 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
   it("omits costUsd when the run reported no usage", async () => {
     const prepared = await prepareStats({ config: COST_CONFIG });
     expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  });
+
+  it("builds exact terminal model and successful-tool evidence", async () => {
+    const prepared = await prepareStats({
+      responseModel: "cost-model-rerouted",
+      attempt: {
+        terminalTurnId: "turn-7",
+        toolMetas: [
+          { toolName: "started" },
+          { toolName: "unknown" },
+          { toolName: "write", isError: true },
+          { toolName: "read", isError: false },
+          { toolName: "read", isError: false },
+        ],
+      },
+    });
+
+    expect(
+      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
+    ).toMatchObject({
+      runId: "run-1",
+      sessionId: "session-1",
+      turnId: "turn-7",
+      requested: { provider: "cost-test-provider", model: "cost-model" },
+      effective: {
+        provider: "cost-test-provider",
+        model: "cost-model-rerouted",
+        responseModel: "cost-model-rerouted",
+      },
+      successfulToolNames: ["read"],
+      rerouted: true,
+    });
+    expect(
+      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
+    ).not.toHaveProperty("terminalDisposition");
   });
 });

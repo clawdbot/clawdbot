@@ -164,10 +164,6 @@ export function resolveMemoryBackend(configObject: Record<string, unknown>): Mem
 
 type JsonRecord = Record<string, unknown>;
 
-function asJsonRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
-}
-
 // One narrowed schema object per (source schema, key set): the config view caches
 // its schema analysis by object identity, so a fresh clone per render would
 // re-analyze the whole tree on every update.
@@ -178,9 +174,9 @@ const narrowedMemorySchemas = new WeakMap<JsonRecord, Map<string, unknown>>();
  * page can host several tabs over disjoint slices of the same schema section.
  */
 export function narrowMemorySchema(schema: unknown, keys: readonly string[]): unknown {
-  const root = asJsonRecord(schema);
-  const memorySchema = asJsonRecord(asJsonRecord(root?.properties)?.memory);
-  const memoryProperties = asJsonRecord(memorySchema?.properties);
+  const root = asConfigRecord(schema);
+  const memorySchema = asConfigRecord(asConfigRecord(root?.properties)?.memory);
+  const memoryProperties = asConfigRecord(memorySchema?.properties);
   if (!root || !memorySchema || !memoryProperties) {
     return schema;
   }

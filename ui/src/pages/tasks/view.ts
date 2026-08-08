@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -56,14 +57,7 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
     class="session-link"
     href=${href}
     @click=${(event: MouseEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
+      if (!shouldHandleNavigationClick(event)) {
         return;
       }
       event.preventDefault();

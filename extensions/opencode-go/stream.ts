@@ -2,7 +2,7 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
-  streamWithPayloadPatch,
+  createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isOpencodeGoKimiNoReasoningModelId } from "./provider-catalog.js";
 import { isOpencodeGoDeepSeekV4ModelId } from "./provider-policy-api.js";
@@ -35,13 +35,14 @@ function createOpencodeGoKimiNoReasoningWrapper(
   if (!baseStreamFn) {
     return undefined;
   }
-  const underlying = baseStreamFn;
-  return (model, context, options) => {
-    if (model.provider !== "opencode-go" || !isOpencodeGoKimiNoReasoningModelId(model.id)) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, stripReasoningParams);
-  };
+  return createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload }) => stripReasoningParams(payload),
+    {
+      shouldPatch: ({ model }) =>
+        model.provider === "opencode-go" && isOpencodeGoKimiNoReasoningModelId(model.id),
+    },
+  );
 }
 
 export function createOpencodeGoWrapper(

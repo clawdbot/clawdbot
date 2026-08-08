@@ -3,6 +3,8 @@ const PAGE_SHARE_MAX_CONTENT_CHARS = 120_000;
 const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
 const PAGE_SHARE_MAX_TITLE_CHARS = 500;
 const PAGE_SHARE_MAX_URL_CHARS = 2_000;
+// Export precedes relay delivery, so its deadline owns capture settlement.
+const GOOGLE_DOC_EXPORT_TIMEOUT_MS = 30_000;
 
 function googleDocIdFromUrl(url) {
   let parsed;
@@ -80,7 +82,7 @@ export async function capturePageShare(tab) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId },
       func: fetchGoogleDocExportInTab,
-      args: [docId],
+      args: [docId, GOOGLE_DOC_EXPORT_TIMEOUT_MS],
     });
     const result = injection?.result;
     if (!result || result.error) {
@@ -226,11 +228,11 @@ function capturePageContent() {
 }
 
 /** Self-contained so the request runs in the tab with the user's Google cookies. */
-async function fetchGoogleDocExportInTab(docId) {
+async function fetchGoogleDocExportInTab(docId, timeoutMs) {
   try {
     const response = await fetch(
       `https://docs.google.com/document/d/${encodeURIComponent(docId)}/export?format=txt`,
-      { credentials: "include" },
+      { credentials: "include", signal: AbortSignal.timeout(timeoutMs) },
     );
     if (!response.ok) {
       return { error: `Google Docs export failed (${response.status}).` };

@@ -12,7 +12,11 @@ import {
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
-import { updateBoardSessionView, type BoardSessionView } from "../../lib/board/settings.ts";
+import {
+  updateBoardSessionView,
+  type BoardSessionView,
+  type BoardVisibleChatDock,
+} from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import {
@@ -30,11 +34,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { WorkboardCardChipProps } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
-import {
-  boardChatDockLayout,
-  type ResolvedBoardView,
-  type VisibleBoardDock,
-} from "./chat-pane-shared.ts";
+import { boardChatDockLayout, type ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -423,7 +423,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     this.requestUpdate();
   }
 
-  protected persistBoardReopenDock(board: ResolvedBoardView, dock: VisibleBoardDock): void {
+  protected persistBoardReopenDock(board: ResolvedBoardView, dock: BoardVisibleChatDock): void {
     if (!board.activeTabId) {
       return;
     }
@@ -489,7 +489,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       .catch((error: unknown) => this.publishHeaderError(error));
   }
 
-  protected renderBoardDivider(dock: VisibleBoardDock) {
+  protected renderBoardDivider(dock: BoardVisibleChatDock) {
     return renderChatResizableDivider({
       className: "board-session-surface__divider",
       orientation: dock === "bottom" ? "horizontal" : "vertical",
@@ -518,7 +518,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardDockResize(
-    dock: VisibleBoardDock,
+    dock: BoardVisibleChatDock,
     event: CustomEvent<{ splitRatio: number }>,
   ): void {
     if (dock !== "bottom") {

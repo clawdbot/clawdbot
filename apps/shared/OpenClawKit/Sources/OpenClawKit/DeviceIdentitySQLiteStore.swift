@@ -130,6 +130,12 @@ enum DeviceIdentitySQLiteStore {
     {
         try self.secureDirectory(destinationStateDirURL)
         try self.secureDirectory(databaseURL.deletingLastPathComponent())
+        // SQLite owns an existing profile; leave any downgrade-recreated legacy source for Doctor.
+        if self.pathMayExist(databaseURL),
+           let existing = try self.loadExisting(databaseURL: databaseURL, profile: profile)
+        {
+            return existing
+        }
         var claims: [LegacyClaim] = []
         do {
             for source in legacySources {

@@ -2169,7 +2169,15 @@ describe("config view", () => {
         unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
       ).toContain("Ripe when thumped.");
 
-      container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
+      const openLink = container.querySelector<HTMLAnchorElement>(".lobsterdex__open");
+      openLink?.addEventListener("click", (event) => event.preventDefault(), {
+        capture: true,
+        once: true,
+      });
+      openLink?.click();
+      expect(onOpenLobsterdex).not.toHaveBeenCalled();
+
+      openLink?.click();
       expect(onOpenLobsterdex).toHaveBeenCalledOnce();
     } finally {
       localStorage.removeItem("openclaw.control.lobsterdex.v1");

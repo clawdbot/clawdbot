@@ -1,5 +1,9 @@
 {
   "id": "ollama",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true
+  },
   "icon": "https://cdn.simpleicons.org/ollama",
   "activation": {
     "onStartup": true

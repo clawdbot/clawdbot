@@ -1,3 +1,4 @@
+import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/number-coercion";
 import type { PresenceEntry } from "../../api/types.ts";
 // Builds the unified nodes/devices inventory shown on the Nodes page.
 // The gateway exposes two overlapping views of the same machines: paired device
@@ -67,10 +68,6 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "pending-reapproval",
   "unapproved",
 ]);
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) {

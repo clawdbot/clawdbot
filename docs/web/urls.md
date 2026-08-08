@@ -103,9 +103,12 @@ slug matching.
 If one short id matches more than one session and the slug does not settle it,
 the UI does not guess. It shows a small disambiguation view with the matching
 display names, agents, and longer id prefixes. Use a longer prefix to make the
-URL unique. Resolution examines at
-most five pages of search results; if more remain, the view says that the search
-was incomplete instead of guessing.
+URL unique. Current Gateways return at most ten recent candidates; when that
+bound is reached, the view treats the result as incomplete instead of guessing.
+Against an older Gateway that predates short-id resolve support, the UI falls
+back to the prior bounded list search, scanning at most five pages of results.
+It likewise reports an incomplete search instead of guessing when that fallback
+cannot prove uniqueness.
 
 Canonical links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a

@@ -2,7 +2,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   expectObjectFields,
   mockCall,
@@ -103,52 +102,6 @@ describe("handleBtwCommand", () => {
     });
   });
 
-  it("clears the attribution reservation after a successful side question", async () => {
-    const runId = "btw-success-cleanup";
-    const params = buildParams("/btw what changed?");
-    params.opts = { runId };
-    params.agentDir = "/tmp/agent";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockImplementation(async () => {
-      expect(getAgentRunContext(runId)?.attribution).toMatchObject({ runId });
-      return { text: "snapshot answer" };
-    });
-
-    await handleBtwCommand(params, true);
-
-    expect(getAgentRunContext(runId)).toBeUndefined();
-  });
-
-  it("clears the attribution reservation after a failed side question", async () => {
-    const runId = "btw-failure-cleanup";
-    const params = buildParams("/btw what changed?");
-    params.opts = { runId };
-    params.agentDir = "/tmp/agent";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockImplementation(async () => {
-      expect(getAgentRunContext(runId)?.attribution).toMatchObject({ runId });
-      throw new Error("runner failed");
-    });
-
-    const result = await handleBtwCommand(params, true);
-
-    expect(getAgentRunContext(runId)).toBeUndefined();
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /btw failed: runner failed",
-        btw: { question: "what changed?" },
-        isError: true,
-      },
-    });
-  });
-
   it("starts the typing keepalive while the side question runs", async () => {
     const params = buildParams("/btw what changed?");
     const typing = createMockTypingController();
@@ -227,14 +180,6 @@ describe("handleBtwCommand", () => {
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
-    const runnerAttribution = runnerArgs.attribution as Record<string, unknown>;
-    expect(Object.isFrozen(runnerAttribution)).toBe(true);
-    expect(runnerAttribution).toMatchObject({
-      runId: (runnerArgs.opts as { runId?: string }).runId,
-      sessionKey: "agent:main:main",
-      sessionId: "session-1",
-      agentId: "main",
-    });
     expect(resolvedTurnContext).toMatchObject({
       requesterAccountId: "account-1",
       requesterSenderId: "sender-1",
