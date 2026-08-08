@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db-registry.js";
 import { resolveSessionArtifactCanonicalPathsForEntry } from "./disk-budget.js";
 import { cleanupSessionArchivedTranscriptFiles } from "./session-accessor.js";
 import { resolveSessionTranscriptArchiveDirectoryFromStorePath } from "./session-sqlite-target.js";
@@ -81,6 +82,20 @@ export class SessionArchiveCleanupPreviewCoordinator {
   readonly #filePathsByDirectory = new Map<string, Set<string>>();
   readonly #appliedDirectories = new Set<string>();
   readonly #cleanableDirectories = new Set<string>();
+  readonly #archiveDirectories = new Set<string>();
+  readonly #isSameArchiveDirectory = createOpenClawAgentDatabasePathMatcher();
+
+  #resolveDirectoryKey(target: SessionStoreTarget): string {
+    const directory = resolveArchiveDirectory(target);
+    const existing = [...this.#archiveDirectories].find((candidate) =>
+      this.#isSameArchiveDirectory(candidate, directory),
+    );
+    if (existing) {
+      return existing;
+    }
+    this.#archiveDirectories.add(directory);
+    return directory;
+  }
 
   constructor(params: {
     selectedTargets: readonly SessionStoreTarget[];
@@ -89,7 +104,7 @@ export class SessionArchiveCleanupPreviewCoordinator {
     const selectedIdentities = new Set(params.selectedTargets.map(resolveTargetIdentity));
     const ownersByDirectory = new Map<string, Set<string>>();
     for (const target of [...params.knownTargets, ...params.selectedTargets]) {
-      const directory = resolveArchiveDirectory(target);
+      const directory = this.#resolveDirectoryKey(target);
       const owners = ownersByDirectory.get(directory) ?? new Set<string>();
       owners.add(resolveTargetIdentity(target));
       ownersByDirectory.set(directory, owners);
@@ -105,7 +120,7 @@ export class SessionArchiveCleanupPreviewCoordinator {
     target: SessionStoreTarget;
     maintenance: ResolvedSessionMaintenanceConfig;
   }): Promise<SessionArchiveCleanupPreview> {
-    const archiveDirectory = resolveArchiveDirectory(params.target);
+    const archiveDirectory = this.#resolveDirectoryKey(params.target);
     if (!this.#cleanableDirectories.has(archiveDirectory)) {
       return {
         report: {
@@ -139,7 +154,7 @@ export class SessionArchiveCleanupPreviewCoordinator {
     target: SessionStoreTarget;
     maintenance: ResolvedSessionMaintenanceConfig;
   }): Promise<SessionArchiveCleanupReport> {
-    const archiveDirectory = resolveArchiveDirectory(params.target);
+    const archiveDirectory = this.#resolveDirectoryKey(params.target);
     if (!this.#cleanableDirectories.has(archiveDirectory)) {
       return {
         ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,

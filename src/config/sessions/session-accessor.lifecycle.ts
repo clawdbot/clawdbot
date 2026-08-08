@@ -46,14 +46,14 @@ import type {
   SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
 } from "./session-accessor.types.js";
-import {
-  resolveProjectionExistingEntry,
-  SessionLabelOwnerIndex,
-} from "./session-entry-selection.js";
 import type {
   SessionArchivedTranscriptFileCleanupParams,
   SessionArchivedTranscriptFileCleanupResult,
 } from "./session-archive-accessor.js";
+import {
+  resolveProjectionExistingEntry,
+  SessionLabelOwnerIndex,
+} from "./session-entry-selection.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Session lifecycle storage is canonical SQLite; direct exports keep reset,
