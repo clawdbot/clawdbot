@@ -73,6 +73,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
       "git@e8cbc62 · 4h ago",
     );
+    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Account: git@e8cbc62 · 4h ago",
+    );
 
     setControlUiBuildInfo({
       commit: CONTROL_UI_TEST_COMMIT,
@@ -85,6 +88,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Account",
+    );
   });
 
   it("stays hidden outside native chrome", async () => {
@@ -125,6 +131,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Account: Local Gateway, primary",
     );
+    expect(
+      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
+    ).not.toContain("git@e8cbc62");
   });
 
   it("keeps the reconnecting subtitle while offline", async () => {
@@ -139,6 +148,12 @@ describe("AppSidebar gateway footer subtitle", () => {
       "Reconnecting…",
     );
     expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Account: Reconnecting…",
+    );
+    expect(
+      sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label"),
+    ).not.toContain("git@e8cbc62");
   });
 
   it("updates when the native gateway snapshot changes", async () => {
