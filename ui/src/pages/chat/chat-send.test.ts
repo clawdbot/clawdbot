@@ -7470,8 +7470,13 @@ describe("handleSendChat", () => {
 
     await retryQueuedChatMessage(host, failedId);
 
-    // Manual retry re-enters the durable drain, which reconciles authoritative history first.
-    expect(historyRequests).toBe(3);
+    // Manual retry refreshes the displayed revision, then the durable drain
+    // performs its separate authoritative delivery reconciliation.
+    expect(historyRequests).toBe(4);
+    expect(host.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main",
+      limit: 100,
+    });
     expect(host.request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main",
       limit: 1000,
