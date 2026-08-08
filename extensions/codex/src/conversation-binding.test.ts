@@ -130,6 +130,7 @@ import {
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import {
   readCodexAppServerBinding,
@@ -1022,29 +1023,54 @@ describe("codex conversation binding", () => {
 
   it("never resumes or unsubscribes an actively claimed native child for a conversation", async () => {
     const sessionFile = path.join(tempDir, "active-child-session.jsonl");
-    const request = vi.fn(async () => conversationThreadStartResult("thread-active-child"));
-    const client = {
-      getInstanceId: () => "client-active-child",
-      request,
-      addNotificationHandler: vi.fn(() => () => undefined),
-      addRequestHandler: vi.fn(() => () => undefined),
-      addCloseHandler: vi.fn(() => () => undefined),
-    } as unknown as CodexAppServerClient;
-    ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
-    await retainCodexAppServerLiveThread(client, "thread-active-child", async () => undefined);
-    await consumeCodexAppServerLiveThread(client, "thread-active-child");
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+    const harness = createClientHarness();
+    const request = vi
+      .spyOn(harness.client, "request")
+      .mockResolvedValue(conversationThreadStartResult("thread-active-child") as never);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const parent = codexNativeSubagentMonitorRuntime.register({
+      client: harness.client,
+      parentThreadId: "thread-parent",
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
 
-    await expect(
-      startCodexConversationThread({
-        sessionFile,
-        threadId: "thread-active-child",
-        workspaceDir: tempDir,
-      }),
-    ).rejects.toThrow("active run");
+    try {
+      harness.send({
+        method: "thread/started",
+        params: {
+          thread: {
+            id: "thread-active-child",
+            parentThreadId: "thread-parent",
+            source: {
+              subAgent: {
+                thread_spawn: {
+                  parent_thread_id: "thread-parent",
+                  depth: 1,
+                  agent_path: "thread-active-child",
+                },
+              },
+            },
+          },
+        },
+      });
+      await vi.waitFor(() =>
+        expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-child")).toBe(true),
+      );
 
-    expect(request).not.toHaveBeenCalled();
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-active-child")).toBe(true);
+      await expect(
+        startCodexConversationThread({
+          sessionFile,
+          threadId: "thread-active-child",
+          workspaceDir: tempDir,
+        }),
+      ).rejects.toThrow("active run");
+
+      expect(request).not.toHaveBeenCalled();
+      expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-child")).toBe(true);
+    } finally {
+      parent.unregister();
+      harness.client.close();
+    }
   });
 
   it("keeps a retained native child owned when its pre-resume unsubscribe fails", async () => {

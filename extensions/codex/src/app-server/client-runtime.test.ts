@@ -19,6 +19,7 @@ vi.mock("./rate-limit-cache.js", () => ({
 }));
 
 const {
+  claimCodexAppServerLiveThread,
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
   isCodexAppServerLiveThreadClaimed,
@@ -132,6 +133,43 @@ describe("Codex app-server client runtime", () => {
     await expect(
       consumeCodexAppServerLiveThread(harness.client, "thread-a"),
     ).resolves.toBeUndefined();
+  });
+
+  it("claims a fresh auto-subscribed child without exposing or evicting an idle owner", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = {
+      request,
+      addCloseHandler: vi.fn(),
+      addNotificationHandler: vi.fn(),
+      addRequestHandler: vi.fn(),
+    } as unknown as CodexAppServerClient;
+    ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
+    const idleRelease = vi.fn(async () => undefined);
+    for (let index = 0; index < EXPECTED_MAX_IDLE_LIVE_THREADS; index += 1) {
+      await retainCodexAppServerLiveThread(client, `thread-idle-${index}`, idleRelease);
+    }
+
+    const ownership = await claimCodexAppServerLiveThread(client, "thread-fresh-child");
+
+    expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    expect(isCodexAppServerLiveThreadClaimed(client, "thread-fresh-child")).toBe(true);
+    expect(idleRelease).not.toHaveBeenCalled();
+    await expect(
+      claimCodexAppServerLiveThread(client, "thread-fresh-child"),
+    ).resolves.toBeUndefined();
+    await expect(retainCodexAppServerLiveThread(client, "thread-fresh-child")).resolves.toBe(false);
+    await expect(
+      consumeCodexAppServerLiveThread(client, "thread-fresh-child"),
+    ).resolves.toBeUndefined();
+    await ownership?.release("thread-fresh-child");
+
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "thread/unsubscribe",
+      { threadId: "thread-fresh-child" },
+      { timeoutMs: 5_000 },
+    );
+    expect(isCodexAppServerLiveThreadClaimed(client, "thread-fresh-child")).toBe(false);
+    expect(idleRelease).not.toHaveBeenCalled();
   });
 
   it("keeps an active claim until its exact ownership is successfully released", async () => {

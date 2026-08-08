@@ -23,6 +23,7 @@ import {
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
@@ -771,6 +772,10 @@ describe("codex command", () => {
   it("refuses manual resume ownership while the same native thread has an active claim", async () => {
     const harness = createClientHarness();
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const parent = codexNativeSubagentMonitorRuntime.register({
+      client: harness.client,
+      parentThreadId: "thread-parent",
+    });
     const identity = {
       kind: "session" as const,
       agentId: "main",
@@ -781,10 +786,26 @@ describe("codex command", () => {
       clientId: harness.client.getInstanceId(),
       cwd: "/repo",
     });
-    await retainCodexAppServerLiveThread(harness.client, "thread-active-resume");
-    const activeOwnership = await consumeCodexAppServerLiveThread(
-      harness.client,
-      "thread-active-resume",
+    harness.send({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "thread-active-resume",
+          parentThreadId: "thread-parent",
+          source: {
+            subAgent: {
+              thread_spawn: {
+                parent_thread_id: "thread-parent",
+                depth: 1,
+                agent_path: "thread-active-resume",
+              },
+            },
+          },
+        },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true),
     );
     const response = createThreadResumeResponse({ threadId: "thread-active-resume" });
     const codexControlRequest = vi.fn(
@@ -810,13 +831,10 @@ describe("codex command", () => {
         threadId: "thread-active-resume",
       });
       await expect(
-        retainCodexAppServerLiveThread(
-          harness.client,
-          "thread-active-resume",
-          activeOwnership?.release,
-        ),
-      ).resolves.toBe(true);
+        retainCodexAppServerLiveThread(harness.client, "thread-active-resume"),
+      ).resolves.toBe(false);
     } finally {
+      parent.unregister();
       harness.client.close();
     }
   });

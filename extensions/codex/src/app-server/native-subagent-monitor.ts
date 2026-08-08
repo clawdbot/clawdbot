@@ -14,7 +14,7 @@ import {
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  consumeCodexAppServerLiveThread,
+  claimCodexAppServerLiveThread,
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
   unsubscribeCodexAppServerLiveThread,
@@ -179,7 +179,9 @@ function registerMonitor(params: {
       retainParentThread: params.retainParentThread,
       claimChildThread: (threadId) =>
         childThreadTransitions.enqueue(threadId, async () => {
-          const ownership = await consumeCodexAppServerLiveThread(params.client, threadId);
+          // Codex subscribes fresh children before thread/started; they have
+          // no idle entry yet but must already be fenced from manual adoption.
+          const ownership = await claimCodexAppServerLiveThread(params.client, threadId);
           if (ownership) {
             childThreadOwnership.set(threadId, ownership);
           }

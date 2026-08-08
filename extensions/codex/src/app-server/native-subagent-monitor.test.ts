@@ -1984,6 +1984,53 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
+  it("claims a fresh auto-subscribed child until completion transfers its exact owner", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    client.request.mockImplementation(async (method) => {
+      if (method === "thread/unsubscribe") {
+        return {} as never;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
+    const parent = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+    });
+
+    await notifyChildStarted(client);
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true),
+    );
+    await expect(retainCodexAppServerLiveThread(client as never, "child-thread")).resolves.toBe(
+      false,
+    );
+    await expect(
+      consumeCodexAppServerLiveThread(client as never, "child-thread"),
+    ).resolves.toBeUndefined();
+    expect(client.request).not.toHaveBeenCalled();
+
+    await client.notify(nativeCompletionNotification());
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
+    );
+    const completed = await consumeCodexAppServerLiveThread(client as never, "child-thread");
+    expect(completed).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    await completed?.release("child-thread");
+
+    expect(client.request).toHaveBeenCalledExactlyOnceWith(
+      "thread/unsubscribe",
+      { threadId: "child-thread" },
+      { timeoutMs: 5_000 },
+    );
+    parent.unregister();
+    client.close();
+  });
+
   it("clears child recovery timers when the app-server client closes", async () => {
     vi.useFakeTimers();
     try {

@@ -363,6 +363,40 @@ export async function consumeCodexAppServerLiveThread(
   ) {
     return undefined;
   }
+  return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained);
+}
+
+/** Claims an observed Codex auto-subscription without exposing a temporarily idle owner. */
+export async function claimCodexAppServerLiveThread(
+  client: CodexAppServerClient,
+  threadId: string,
+): Promise<CodexAppServerLiveThreadOwnership | undefined> {
+  const runtime = configuredClients.get(client);
+  if (!runtime || runtime.closed || runtime.claimedThreads.has(threadId)) {
+    return undefined;
+  }
+  const pendingRelease = runtime.releasingThreads.get(threadId);
+  if (pendingRelease) {
+    // A pending unsubscribe can invalidate the observed subscription; it must
+    // never be resurrected after its physical connection acknowledges release.
+    await pendingRelease.completion;
+    return undefined;
+  }
+  const retained = runtime.retainedThreads.get(threadId) ?? {
+    expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
+    release: async (releasedThreadId: string) => {
+      await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000);
+    },
+  };
+  return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained);
+}
+
+function claimCodexAppServerThreadOwnership(
+  client: CodexAppServerClient,
+  runtime: ClientRuntime,
+  threadId: string,
+  retained: RetainedLiveThread,
+): CodexAppServerLiveThreadOwnership {
   runtime.retainedThreads.delete(threadId);
   const claimed = Symbol(threadId);
   runtime.claimedThreads.set(threadId, claimed);
