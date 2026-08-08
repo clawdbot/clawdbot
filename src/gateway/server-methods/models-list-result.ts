@@ -714,10 +714,11 @@ export async function buildModelsListResult(
       });
     },
   });
+  const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
   const catalogMode =
     view === "configured" &&
-    cfg.models?.mode === "replace" &&
-    buildProviderConfigModelCatalogForBrowse({ cfg, workspaceDir }).length > 0
+    sourceConfig.models?.mode === "replace" &&
+    buildProviderConfigModelCatalogForBrowse({ cfg: sourceConfig, workspaceDir }).length > 0
       ? "replace"
       : undefined;
   return {

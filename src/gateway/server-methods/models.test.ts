@@ -714,8 +714,8 @@ describe("models.list", () => {
     );
   });
 
-  it("omits replace mode metadata when configured view falls back to the full catalog", async () => {
-    const runtimeConfig = {
+  it("omits replace metadata when runtime hydration fills a source-empty model list", async () => {
+    const sourceConfig = {
       models: {
         mode: "replace",
         providers: {
@@ -728,31 +728,48 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const { request, respond } = requestModelsList({
-      view: "configured",
-      runtimeConfig,
-      loadGatewayModelCatalog: vi.fn(() =>
-        Promise.resolve([{ id: "demo", name: "Demo", provider: "test" }]),
-      ),
-      reqId: "req-models-list-replace-mode-full-catalog-fallback",
-    });
-
-    await request;
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        models: [
-          {
-            id: "demo",
-            name: "Demo",
-            provider: "test",
-            available: true,
+    const runtimeConfig = {
+      ...sourceConfig,
+      models: {
+        ...sourceConfig.models,
+        providers: {
+          test: {
+            ...sourceConfig.models?.providers?.test,
+            models: [{ id: "demo", name: "Demo" }],
           },
-        ],
+        },
       },
-      undefined,
-    );
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    try {
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        runtimeConfig,
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([{ id: "demo", name: "Demo", provider: "test" }]),
+        ),
+        reqId: "req-models-list-replace-mode-source-runtime-divergence",
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "demo",
+              name: "Demo",
+              provider: "test",
+              available: true,
+            },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("does not block the configured view on slow model catalog discovery", async () => {
