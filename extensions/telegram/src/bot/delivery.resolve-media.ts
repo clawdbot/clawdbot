@@ -508,12 +508,14 @@ export async function resolveMedia(params: {
 
   // Reply-chain hydration re-resolves media that an earlier turn already
   // downloaded; reuse the local file instead of another getFile + download.
+  // maxBytes is enforced on hits so a smaller per-account limit still wins.
   const fileUniqueId = m.file_unique_id;
   if (fileUniqueId) {
-    const cachedMedia = getCachedTelegramMediaFile(fileUniqueId);
+    const cachedMedia = getCachedTelegramMediaFile(fileUniqueId, maxBytes);
     if (cachedMedia) {
       logVerbose(`telegram: media file cache hit for ${fileUniqueId}`);
-      return { ...cachedMedia };
+      const { path: cachedPath, kind, contentType } = cachedMedia;
+      return { path: cachedPath, kind, ...(contentType ? { contentType } : {}) };
     }
   }
 
@@ -546,7 +548,7 @@ export async function resolveMedia(params: {
     ...(saved.contentType ? { contentType: saved.contentType } : {}),
   };
   if (fileUniqueId) {
-    cacheTelegramMediaFile(fileUniqueId, resolved);
+    cacheTelegramMediaFile(fileUniqueId, { ...resolved, size: saved.size });
   }
   return resolved;
 }

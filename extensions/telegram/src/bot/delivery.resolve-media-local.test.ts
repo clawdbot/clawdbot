@@ -77,6 +77,13 @@ vi.mock("../sticker-cache.js", () => ({
   describeStickerImage: async () => null,
 }));
 
+// These tests assert per-call download behavior with shared file_unique_id
+// fixtures; keep the media file cache (covered by its own tests) inert here.
+vi.mock("./media-file-cache.js", () => ({
+  getCachedTelegramMediaFile: () => null,
+  cacheTelegramMediaFile: () => {},
+}));
+
 const MAX_MEDIA_BYTES = 10_000_000;
 const FIXTURE = "fixture-token";
 

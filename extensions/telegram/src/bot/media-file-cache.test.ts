@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The cache is module-global; reset modules so each test gets a fresh map.
 let cacheModule: typeof import("./media-file-cache.js");
@@ -11,57 +8,52 @@ beforeEach(async () => {
   cacheModule = await import("./media-file-cache.js");
 });
 
-function writeTempMediaFile(dir: string, name: string): string {
-  const filePath = path.join(dir, name);
-  fs.writeFileSync(filePath, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
-  return filePath;
-}
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const ENTRY = { path: "/media/inbound/photo.jpg", kind: "image", size: 1024 } as const;
 
 describe("telegram media file cache", () => {
-  it("returns the cached entry while the local file exists", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-media-cache-"));
-    const filePath = writeTempMediaFile(dir, "photo.jpg");
-    cacheModule.cacheTelegramMediaFile("unique-1", {
-      path: filePath,
-      kind: "image",
+  it("returns the cached entry while it is fresh and within the caller limit", () => {
+    cacheModule.cacheTelegramMediaFile("unique-1", { ...ENTRY, contentType: "image/png" });
+
+    expect(cacheModule.getCachedTelegramMediaFile("unique-1", 2048)).toEqual({
+      ...ENTRY,
       contentType: "image/png",
+      expiresAt: expect.any(Number),
     });
-
-    expect(cacheModule.getCachedTelegramMediaFile("unique-1")).toEqual({
-      path: filePath,
-      kind: "image",
-      contentType: "image/png",
-    });
-  });
-
-  it("evicts the entry and misses when the local file was pruned", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-media-cache-"));
-    const filePath = writeTempMediaFile(dir, "photo.jpg");
-    cacheModule.cacheTelegramMediaFile("unique-1", { path: filePath, kind: "image" });
-
-    fs.rmSync(filePath);
-
-    expect(cacheModule.getCachedTelegramMediaFile("unique-1")).toBeNull();
-    // The stale entry was dropped, so a later re-download can re-cache cleanly.
-    expect(cacheModule.getCachedTelegramMediaFile("unique-1")).toBeNull();
   });
 
   it("misses for unknown files", () => {
-    expect(cacheModule.getCachedTelegramMediaFile("never-cached")).toBeNull();
+    expect(cacheModule.getCachedTelegramMediaFile("never-cached", 2048)).toBeNull();
+  });
+
+  it("refuses reuse when the caller enforces a smaller limit but keeps the entry", () => {
+    cacheModule.cacheTelegramMediaFile("unique-1", ENTRY);
+
+    // A second account with a smaller mediaMaxMb must not reuse the file.
+    expect(cacheModule.getCachedTelegramMediaFile("unique-1", 512)).toBeNull();
+    // The original larger-limit caller can still hit the same entry.
+    expect(cacheModule.getCachedTelegramMediaFile("unique-1", 2048)).not.toBeNull();
+  });
+
+  it("expires entries without touching the filesystem", () => {
+    vi.useFakeTimers();
+    cacheModule.cacheTelegramMediaFile("unique-1", ENTRY);
+
+    vi.advanceTimersByTime(56 * 60_000);
+
+    expect(cacheModule.getCachedTelegramMediaFile("unique-1", 2048)).toBeNull();
   });
 
   it("evicts the oldest entries beyond the bound", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-media-cache-"));
-    const firstPath = writeTempMediaFile(dir, "first.jpg");
-    cacheModule.cacheTelegramMediaFile("unique-first", { path: firstPath, kind: "image" });
+    cacheModule.cacheTelegramMediaFile("unique-first", ENTRY);
     for (let index = 0; index < 500; index += 1) {
-      cacheModule.cacheTelegramMediaFile(`unique-${index}`, {
-        path: writeTempMediaFile(dir, `photo-${index}.jpg`),
-        kind: "image",
-      });
+      cacheModule.cacheTelegramMediaFile(`unique-${index}`, ENTRY);
     }
 
-    expect(cacheModule.getCachedTelegramMediaFile("unique-first")).toBeNull();
-    expect(cacheModule.getCachedTelegramMediaFile("unique-499")).not.toBeNull();
+    expect(cacheModule.getCachedTelegramMediaFile("unique-first", 2048)).toBeNull();
+    expect(cacheModule.getCachedTelegramMediaFile("unique-499", 2048)).not.toBeNull();
   });
 });
