@@ -311,6 +311,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
+  sourceSessionKey?: string;
   sourceTool?: string;
   signal?: AbortSignal;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
@@ -349,6 +350,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     directIdempotencyKey: "announce-dm-fallback-empty",
     internalEvents: params.internalEvents,
     sourceRunId: "run-generated-media",
+    sourceSessionKey: params.sourceSessionKey,
     sourceTool: params.sourceTool,
     signal: params.signal,
     onDeliveryResult: params.onDeliveryResult,
@@ -2965,6 +2967,70 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
   });
+
+  it.each([
+    {
+      route: "configured Slack channel",
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+    },
+    {
+      route: "forced Discord direct message",
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+    },
+  ] as const)(
+    "accepts required no-output $route completions with committed outbound side effects",
+    async ({ route, channel, accountId, to }) => {
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          ...committedSessionSpawnEvidence,
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const childSessionKey = "agent:worker:subagent:no-output-side-effect";
+      const internalEvents = taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "no-output side-effect smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      });
+      const result =
+        route === "configured Slack channel"
+          ? await deliverSlackChannelAnnouncement({
+              callGateway,
+              sendMessage,
+              directIdempotencyKey: "announce-channel-subagent-no-output-side-effect",
+              sourceTool: "subagent_announce",
+              sourceSessionKey: childSessionKey,
+              runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+              internalEvents,
+            })
+          : await deliverDiscordDirectMessageCompletion({
+              callGateway,
+              sendMessage,
+              sourceTool: "subagent_announce",
+              sourceSessionKey: childSessionKey,
+              internalEvents,
+            });
+
+      expectDeliveryPath(result, "direct");
+      expectGatewayAgentParams(callGateway, {
+        deliver: false,
+        channel,
+        accountId,
+        to,
+        threadId: undefined,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails configured channel subagent completions when parent skips required message tool", async () => {
     const callGateway = createPayloadGatewayMock({ text: "The subagent is done." });

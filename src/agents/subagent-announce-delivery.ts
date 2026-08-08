@@ -1227,6 +1227,12 @@ async function sendSubagentAnnounceDirectly(params: {
         };
       }
     }
+    if (hasRequiredSubagentNoOutputCompletion && hasCompletionSideEffect) {
+      return {
+        delivered: true,
+        path: "direct",
+      };
+    }
     if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
