@@ -7,7 +7,6 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { tryNativeRequireJavaScriptModule } from "../plugins/native-module-require.js";
 import {
   createProfiler,
@@ -135,6 +134,12 @@ const resolvedModulePaths = new Map<string, string>();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
+function isBundledEntrySourceFallbackDisabled(value: string | undefined): boolean {
+  // Presence-based disable is a shipped operator contract; canonical opt-in
+  // truthiness intentionally does not apply to this packaging flag.
+  return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
+}
+
 function resolveSpecifierCandidates(modulePath: string): string[] {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(modulePath));
   if (ext === ".js") {
@@ -232,7 +237,7 @@ function resolveBundledEntryModuleCandidates(
   if (!importerPath.startsWith(distExtensionsRoot)) {
     return candidates;
   }
-  if (isTruthyEnvValue(process.env[disableBundledEntrySourceFallbackEnv])) {
+  if (isBundledEntrySourceFallbackDisabled(process.env[disableBundledEntrySourceFallbackEnv])) {
     return candidates;
   }
 
@@ -294,7 +299,7 @@ function formatBundledEntryModuleOpenFailure(params: {
 }
 
 function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: string): string {
-  const sourceFallbackDisabled = isTruthyEnvValue(
+  const sourceFallbackDisabled = isBundledEntrySourceFallbackDisabled(
     process.env[disableBundledEntrySourceFallbackEnv],
   );
   return `${sourceFallbackDisabled ? "1" : "0"}\0${importMetaUrl}\0${specifier}`;
