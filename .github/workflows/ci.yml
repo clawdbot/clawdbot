@@ -254,7 +254,7 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           RELEASE_GATE: ${{ inputs.release_gate }}
         run: |

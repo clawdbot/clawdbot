@@ -4312,6 +4312,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(diffBaseStep.run).toContain("--prefer-first-parent");
     expect(diffBaseStep.env.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
+    expect(diffBaseStep.env.GH_TOKEN).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}",
+    );
     expect(diffBaseStep.run).toContain(
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}"',
     );
