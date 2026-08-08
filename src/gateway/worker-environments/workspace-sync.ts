@@ -114,6 +114,11 @@ export function createWorkerWorkspaceActions(
         ? AbortSignal.any([options.ownerSignal, command.signal])
         : options.ownerSignal,
     });
+    // Exit 255 does not prove whether the remote command was accepted, so stateful
+    // commands must stay pinned to one transport attempt.
+    if (command.transportRetry === "never") {
+      return await runTask(workerWorkspaceSshArgv(prepared, command.argv), commandOptions);
+    }
     return await runWorkerSshCandidates(
       prepared,
       async (port) =>
@@ -126,6 +131,7 @@ export function createWorkerWorkspaceActions(
       throw new Error("Worker workspace quiescence path must be absolute");
     }
     const result = await runWorkspaceCommand({
+      transportRetry: "never",
       argv: [
         "node",
         "-e",
@@ -151,6 +157,7 @@ export function createWorkerWorkspaceActions(
     const renew = (validationMode: "heartbeat" | "final") => {
       const operation = renewalQueue.then(async () => {
         const renewedResult = await runWorkspaceCommand({
+          transportRetry: "never",
           argv: [
             "node",
             "-e",
@@ -211,6 +218,7 @@ export function createWorkerWorkspaceActions(
         renewalAbort.abort();
         await renewalLoop;
         const resumedResult = await runWorkspaceCommand({
+          transportRetry: "never",
           argv: ["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce],
         });
         if (!success(resumedResult)) {
@@ -235,6 +243,7 @@ export function createWorkerWorkspaceActions(
       String(request.generation),
     ].join("/");
     const setup = await runWorkspaceCommand({
+      transportRetry: "never",
       argv: ["sh", "-s", "--", remoteRelative],
       input: REMOTE_WORKSPACE_SETUP_SCRIPT,
     });
@@ -387,6 +396,7 @@ export function createWorkerWorkspaceActions(
           }),
         );
         const seeded = await runWorkspaceCommand({
+          transportRetry: "never",
           argv: [
             "sh",
             "-s",
@@ -423,6 +433,7 @@ export function createWorkerWorkspaceActions(
       }
 
       const manifest = await runWorkspaceCommand({
+        transportRetry: "idempotent",
         argv: [
           "node",
           "-e",
@@ -519,6 +530,7 @@ export function createWorkerWorkspaceActions(
           expectedRef,
         });
       const currentResult = await runWorkspaceCommand({
+        transportRetry: "idempotent",
         argv: [
           "node",
           "-e",

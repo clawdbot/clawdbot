@@ -39,6 +39,7 @@ const SSH: WorkerSshEndpoint = {
   hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "workers", id: "/identity" },
 };
+const PWD_COMMAND = { transportRetry: "idempotent", argv: ["pwd"] } as const;
 
 function success(stdout = "", stderr = ""): SpawnResult {
   return {
@@ -236,7 +237,7 @@ describe("worker tunnel manager", () => {
     const handle = await starting;
     expect(manager.status("worker:one")).toBe("connected");
 
-    await expect(handle.runWorkspaceCommand({ argv: ["pwd"] })).resolves.toEqual(success());
+    await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
     const workspace = fake.runs.at(-1);
     expect(workspace?.argv).toContain("ClearAllForwardings=yes");
     expect(workspace?.argv).toContain("ControlMaster=no");
@@ -445,7 +446,7 @@ describe("worker tunnel manager", () => {
       await expect(
         handle.syncWorkspace({ localPath, sessionId: "session:fallback", generation: 1 }),
       ).resolves.toEqual({ mode: "plain", remoteWorkspaceDir, manifestRef });
-      await expect(handle.runWorkspaceCommand({ argv: ["pwd"] })).resolves.toEqual(success());
+      await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
 
       const freshConnections = fake.runs.filter(
         (entry) => entry.argv[0] === "ssh" || entry.argv[0] === "rsync",

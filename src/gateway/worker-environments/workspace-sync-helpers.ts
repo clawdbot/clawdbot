@@ -101,6 +101,7 @@ async function resolveRemoteWorkspaceBaseManifest(
     throw new Error("Worker workspace base manifest reference is invalid");
   }
   const resolved = await runWorkspaceCommand({
+    transportRetry: "idempotent",
     argv: [
       "node",
       "-e",
@@ -141,6 +142,7 @@ export async function verifyRemoteWorkspaceManifest(params: {
 }): Promise<void> {
   const expectedDigest = params.expectedRef.slice("sha256:".length);
   const verified = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
     argv: [
       "node",
       "-e",

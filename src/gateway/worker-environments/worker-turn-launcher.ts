@@ -349,6 +349,7 @@ async function executeWorkerTurn(params: {
   const handoffAbort = new AbortController();
   params.onHandoff();
   const processPromise = tunnel.runWorkspaceCommand({
+    transportRetry: "never",
     argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", placement.workerBundleHash],
     input: JSON.stringify(descriptor),
     timeoutMs: turn.timeoutMs,

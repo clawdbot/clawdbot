@@ -24,6 +24,7 @@ export async function recoverAcceptedWorkspacePublication(params: {
   remoteWorkspaceDir: string;
 }) {
   const recovered = await params.runWorkspaceCommand({
+    transportRetry: "never",
     argv: [
       "node",
       "-e",
@@ -57,6 +58,7 @@ function createAcceptedWorkspacePublisher(params: {
       throw new Error("Accepted workspace manifest does not match its reference");
     }
     const published = await params.runWorkspaceCommand({
+      transportRetry: "idempotent",
       argv: [
         "node",
         "-e",
@@ -74,6 +76,7 @@ function createAcceptedWorkspacePublisher(params: {
 
     const verifyAcceptedWorkspace = async () => {
       const verified = await params.runWorkspaceCommand({
+        transportRetry: "idempotent",
         argv: [
           "node",
           "-e",
@@ -106,6 +109,7 @@ function createAcceptedWorkspacePublisher(params: {
     const transactionNonce = randomBytes(16).toString("hex");
     const transactionCommand = async (action: "apply" | "rollback" | "commit") =>
       await params.runWorkspaceCommand({
+        transportRetry: "never",
         argv: [
           "node",
           "-e",
@@ -118,6 +122,7 @@ function createAcceptedWorkspacePublisher(params: {
     let transactionBegun = false;
     try {
       const begun = await params.runWorkspaceCommand({
+        transportRetry: "never",
         argv: [
           "node",
           "-e",
