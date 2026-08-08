@@ -17,6 +17,20 @@ export const NODE_BROWSER_PROXY_COMMANDS = [
 ] as const;
 export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
 export const NODE_AGENT_CLI_CLAUDE_RUN_COMMAND = "agent.cli.claude.run.v1";
+export const NODE_AGENT_CLI_CLAUDE_RUN_V2_COMMAND = "agent.cli.claude.run.v2";
+export const NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS = [
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_V2_COMMAND,
+] as const;
+
+/** Expands a Claude-run wire version into the full approval-equivalent command family. */
+export function expandNodeAgentCliClaudeRunCommands(commands: readonly string[]): string[] {
+  const normalizedCommands = new Set(commands.map((command) => command.trim()));
+  if (!NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS.some((command) => normalizedCommands.has(command))) {
+    return [...commands];
+  }
+  return [...new Set([...commands, ...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS])];
+}
 export const NODE_DEVICE_APPS_COMMAND = "device.apps";
 
 // Node duplex heartbeats must arrive before the Gateway relay declares the

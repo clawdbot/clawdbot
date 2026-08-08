@@ -125,5 +125,5 @@ export function resolveCommandEnv(params: {
       resolvedEnv.npm_config_fund = "false";
     }
   }
-  return markOpenClawExecEnv(resolvedEnv);
+  return markOpenClawExecEnv(resolvedEnv, platform);
 }

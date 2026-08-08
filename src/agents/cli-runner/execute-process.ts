@@ -5,6 +5,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import type { AiAgentEnvPlan } from "../../infra/openclaw-exec-env.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import {
@@ -73,6 +74,7 @@ export async function executeCliProcess(params: {
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
+  nodeAiAgentEnv?: AiAgentEnvPlan;
   useManagedClaudeLiveSession: boolean;
   useResume: boolean;
   cliSessionIdToUse?: string;
@@ -242,6 +244,7 @@ export async function executeCliProcess(params: {
         : {}),
       ...(params.nodeEnv ? { nodeEnv: params.nodeEnv } : {}),
       ...(params.nodeClearEnv ? { nodeClearEnv: params.nodeClearEnv } : {}),
+      ...(params.nodeAiAgentEnv ? { nodeAiAgentEnv: params.nodeAiAgentEnv } : {}),
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       consumeStdout,
       consumeStderr,

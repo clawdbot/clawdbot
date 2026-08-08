@@ -29,7 +29,7 @@ import {
   resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
 import {
-  CLAUDE_CLI_NODE_RUN_COMMAND,
+  CLAUDE_CLI_NODE_RUN_COMMANDS,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   ClaudeCatalogParamsError,
@@ -73,6 +73,10 @@ const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 const TRANSCRIPT_READ_CHUNK_BYTES = 128 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
+
+function hasClaudeCliNodeRunCommand(commands: readonly string[] | undefined): boolean {
+  return CLAUDE_CLI_NODE_RUN_COMMANDS.some((command) => commands?.includes(command));
+}
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
 
@@ -1513,10 +1517,10 @@ async function listClaudeSessionCatalog(params: {
         nodeId: node.nodeId,
         canContinueClaude:
           node.commands?.includes(CLAUDE_SESSION_READ_COMMAND) === true &&
-          node.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+          hasClaudeCliNodeRunCommand(node.commands) &&
           node.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           node.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          node.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+          hasClaudeCliNodeRunCommand(node.invocableCommands),
         ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
@@ -1743,10 +1747,10 @@ async function continueClaudeSession(
           candidate.connected === true &&
           candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
           candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+          hasClaudeCliNodeRunCommand(candidate.commands) &&
           candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+          hasClaudeCliNodeRunCommand(candidate.invocableCommands),
       );
       if (!node) {
         throw new ClaudeCatalogParamsError(

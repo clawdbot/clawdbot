@@ -363,6 +363,38 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("forwards marker inputs to the node execution boundary", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(`${JSON.stringify({ type: "result", result: "node answer" })}\n`);
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildClaudeLiveRunContext({
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+      backend: { env: { AI_AGENT: "wrapper" }, clearEnv: ["AI_AGENT"] },
+    });
+
+    await executePreparedCliRun(context);
+
+    const request = invokeNode.mock.calls[0]?.[0];
+    expect(request?.env).toBeUndefined();
+    expect(request?.clearEnv).toBeUndefined();
+    expect(request?.aiAgentEnv).toEqual(
+      expect.objectContaining({
+        configuredEnv: { AI_AGENT: "wrapper" },
+        clearEnv: ["AI_AGENT"],
+      }),
+    );
+  });
+
   it("rejects a truncated node stream that lost the terminal result", async () => {
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
       params.onProgress(
@@ -5472,6 +5504,24 @@ describe("runCliAgent spawn path", () => {
       backend: { env: { SAFE_OVERRIDE: "from-override" }, clearEnv: ["SAFE_OVERRIDE"] },
       expected: { SAFE_OVERRIDE: "from-override" },
     },
+    {
+      name: "preserves an inherited AI agent marker when backend env adds another override",
+      baseEnv: { AI_AGENT: "wrapper" },
+      backend: { env: { SAFE_KEEP: "keep-me" } },
+      expected: { AI_AGENT: "wrapper", SAFE_KEEP: "keep-me" },
+    },
+    {
+      name: "keeps an AI agent marker cleared when backend env adds another override",
+      baseEnv: { AI_AGENT: "wrapper" },
+      backend: { env: { SAFE_KEEP: "keep-me" }, clearEnv: ["AI_AGENT"] },
+      expected: { AI_AGENT: undefined, SAFE_KEEP: "keep-me" },
+    },
+    {
+      name: "reasserts the required CLI marker after backend overrides",
+      baseEnv: {},
+      backend: { env: { OPENCLAW_CLI: "0" }, clearEnv: ["OPENCLAW_CLI"] },
+      expected: { OPENCLAW_CLI: "1" },
+    },
   ])("$name", async (testCase) => {
     Object.assign(process.env, testCase.baseEnv);
     if (testCase.preserve) {
@@ -5500,6 +5550,81 @@ describe("runCliAgent spawn path", () => {
         delete process.env[key];
       }
     }
+  });
+
+  it.each([
+    {
+      name: "defaults a blank POSIX backend override",
+      platform: "linux" as const,
+      backend: { env: { AI_AGENT: "   " }, clearEnv: ["AI_AGENT"] },
+      expectedMarker: "openclaw",
+      expectedSafe: undefined,
+    },
+    {
+      name: "honors a case-insensitive Windows clear",
+      platform: "win32" as const,
+      backend: { env: { SAFE_KEEP: "keep-me" }, clearEnv: ["ai_agent"] },
+      expectedMarker: undefined,
+      expectedSafe: "keep-me",
+    },
+    {
+      name: "collapses Windows backend aliases",
+      platform: "win32" as const,
+      backend: { env: { ai_agent: "backend" }, clearEnv: ["AI_AGENT"] },
+      expectedMarker: "backend",
+      expectedSafe: undefined,
+    },
+  ])("$name", async ({ platform, backend, expectedMarker, expectedSafe }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    process.env.AI_AGENT = "inherited";
+    try {
+      mockSuccessfulCliRun();
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          backend: backend as unknown as Partial<
+            PreparedCliRunContext["preparedBackend"]["backend"]
+          >,
+        }),
+        "thread-123",
+      );
+
+      const env = (mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> }).env ?? {};
+      expect(env.AI_AGENT).toBe(expectedMarker);
+      expect(env.SAFE_KEEP).toBe(expectedSafe);
+      expect(Object.keys(env).filter((key) => key.toUpperCase() === "AI_AGENT")).toEqual(
+        expectedMarker === undefined ? [] : ["AI_AGENT"],
+      );
+    } finally {
+      delete process.env.AI_AGENT;
+    }
+  });
+
+  it.each([
+    { platform: "linux" as const, preparedEnv: { AI_AGENT: "   " }, expected: "openclaw" },
+    {
+      platform: "win32" as const,
+      preparedEnv: { ai_agent: "prepared-agent" },
+      expected: "prepared-agent",
+    },
+  ])("normalizes $platform markers after the MCP capture merge", async (testCase) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(testCase.platform);
+    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        mcpDeliveryCapture: true,
+        preparedEnv: testCase.preparedEnv as unknown as Record<string, string>,
+      }),
+    );
+
+    const env = (mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> }).env ?? {};
+    expect(env.AI_AGENT).toBe(testCase.expected);
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "AI_AGENT")).toEqual([
+      "AI_AGENT",
+    ]);
+    expect(env.OPENCLAW_MCP_CLI_CAPTURE_KEY).toEqual(expect.any(String));
   });
 
   it("keeps selected Claude auth authoritative over ambient and configured credentials", async () => {

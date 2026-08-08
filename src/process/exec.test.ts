@@ -17,6 +17,7 @@ import {
 } from "./exec.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
+const AI_AGENT_ENV_VALUE = "openclaw";
 
 describe("runCommandWithTimeout", () => {
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
@@ -47,6 +48,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
     expect(resolved.OPENCLAW_TO_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(resolved.AI_AGENT).toBe(AI_AGENT_ENV_VALUE);
   });
 
   it("collapses case-insensitive duplicate env keys on Windows", () => {
@@ -69,6 +71,19 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
   });
 
+  it("preserves a mixed-case agent marker on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: { ai_agent: "wrapper" },
+    });
+
+    expect(resolved.AI_AGENT).toBe("wrapper");
+    expect(Object.keys(resolved).filter((key) => key.toUpperCase() === "AI_AGENT")).toEqual([
+      "AI_AGENT",
+    ]);
+  });
+
   it("removes case-insensitive inherited env keys on Windows", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
@@ -89,12 +104,14 @@ describe("runCommandWithTimeout", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
       platform: "linux",
-      baseEnv: { Path: "/base/bin" },
+      baseEnv: { Path: "/base/bin", ai_agent: "wrapper" },
       env: { PATH: "/override/bin" },
     });
 
     expect(resolved.Path).toBe("/base/bin");
     expect(resolved.PATH).toBe("/override/bin");
+    expect(resolved.ai_agent).toBe("wrapper");
+    expect(resolved.AI_AGENT).toBe(AI_AGENT_ENV_VALUE);
   });
 
   it("does not restore parent variables excluded from the child environment", async () => {
@@ -607,6 +624,22 @@ describe("runExec", () => {
     await expect(
       runExec(process.execPath, ["-e", "process.stdout.write('ok'); process.stderr.write('warn')"]),
     ).resolves.toEqual({ stdout: "ok", stderr: "warn" });
+  });
+
+  it("passes the default and explicit agent markers to real child processes", async () => {
+    const childCode = "process.stdout.write(`${process.env.AI_AGENT}:${process.env.OPENCLAW_CLI}`)";
+    const missing = await runExec(process.execPath, ["-e", childCode], {
+      baseEnv: {},
+      logOutput: false,
+    });
+    const wrapped = await runExec(process.execPath, ["-e", childCode], {
+      baseEnv: {},
+      env: { AI_AGENT: "wrapper" },
+      logOutput: false,
+    });
+
+    expect(missing.stdout).toBe("openclaw:1");
+    expect(wrapped.stdout).toBe("wrapper:1");
   });
 
   it("preserves the numeric exit code on command failures", async () => {

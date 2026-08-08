@@ -278,6 +278,14 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   };
 }
 
+/** Sanitizes overrides for merging into an already-sanitized host exec environment. */
+export function sanitizeHostExecEnvOverrides(params?: {
+  overrides?: Record<string, string> | null;
+  blockPathOverrides?: boolean;
+}): Record<string, string> {
+  return sanitizeHostEnvOverridesWithDiagnostics(params).acceptedOverrides ?? {};
+}
+
 export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;

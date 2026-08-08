@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
-  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS,
   NODE_DEVICE_APPS_COMMAND,
   NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
   NODE_EXEC_APPROVALS_COMMANDS,
@@ -282,7 +282,7 @@ export async function prepareNodeHostRuntime(params?: {
         NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
         ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
-        ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
+        ...(claudePath ? NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS : []),
         ...pluginManifest.commands,
       ]),
     ].toSorted(),

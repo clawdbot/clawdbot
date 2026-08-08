@@ -413,11 +413,11 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
-  it("recreates a cold browser container when the shared args epoch changes", async () => {
+  it("recreates a cold browser container from the pre-agent-marker create-args epoch", async () => {
     const cfg = buildConfig(false);
     const oldHash = computeTestBrowserHash({
       cfg,
-      createArgsEpoch: "pre-init",
+      createArgsEpoch: "2026-07-10-init",
     });
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");

@@ -4,6 +4,7 @@
  * coercion, and compact session labels.
  */
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
+import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { sliceUtf16Safe } from "../utils.js";
 import type {
   SandboxBackendExecSpec,
@@ -61,7 +62,7 @@ export function buildSandboxEnv(params: {
   for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
     env[key] = value;
   }
-  return env;
+  return markOpenClawExecEnv(env, "linux");
 }
 
 /** Coerces process/env-like records to string-only environment variables. */

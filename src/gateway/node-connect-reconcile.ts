@@ -2,6 +2,7 @@
 // Computes approved runtime surfaces and pending pairing upgrades on reconnect.
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expandNodeAgentCliClaudeRunCommands } from "../infra/node-commands.js";
 import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
 import type {
   NodePairingPairedNode,
@@ -33,7 +34,11 @@ function resolveApprovedReconnectCommands(params: {
   allowlist: Set<string>;
 }) {
   return normalizeDeclaredNodeCommands({
-    declaredCommands: Array.isArray(params.pairedCommands) ? params.pairedCommands : [],
+    // v1/v2 are approval-equivalent wire aliases. Expanding durable approval
+    // keeps an ordinary node upgrade from requiring a new privilege grant.
+    declaredCommands: expandNodeAgentCliClaudeRunCommands(
+      Array.isArray(params.pairedCommands) ? params.pairedCommands : [],
+    ),
     allowlist: params.allowlist,
   });
 }

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostInheritedEnvVarName,
@@ -279,7 +279,7 @@ NODE_REPL_HISTORY=/tmp/node-repl-history | NODE_V8_COVERAGE=/tmp/coverage | OK=1
     });
 
     expect(env).toEqual(
-      envRecord(`OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
+      envRecord(`AI_AGENT=openclaw | OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
 AWS_CONFIG_FILE=/tmp/aws-config | KUBECONFIG=/tmp/kubeconfig
 GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json | AWS_SHARED_CREDENTIALS_FILE=/tmp/aws-credentials
 AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/aws-web-token | AZURE_AUTH_LOCATION=/tmp/azure-auth.json
@@ -588,7 +588,7 @@ NODE_TLS_REJECT_UNAUTHORIZED=1 | DOCKER_TLS_VERIFY=0`),
     });
 
     expect(env).toEqual(
-      envRecord(`OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
+      envRecord(`AI_AGENT=openclaw | OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE} | PATH=/usr/bin:/bin
 HTTP_PROXY=http://trusted-proxy.example.test:8080 | HTTPS_PROXY=http://trusted-proxy.example.test:8443
 NODE_TLS_REJECT_UNAUTHORIZED=0 | SSL_CERT_DIR=/etc/ssl/certs
 CURL_CA_BUNDLE=/etc/ssl/cert.pem | DOCKER_TLS_VERIFY=1`),
@@ -665,6 +665,7 @@ CURL_CA_BUNDLE=/etc/ssl/cert.pem | DOCKER_TLS_VERIFY=1`),
     });
 
     expect(env).toEqual({
+      AI_AGENT: "openclaw",
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
       GOOD: "1",
@@ -718,6 +719,23 @@ REDIS_URL MONGODB_URI AMQP_URL SSH_AUTH_SOCK`);
 });
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
+  it("lets a differently cased Windows override replace an inherited AI agent marker", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const result = sanitizeHostExecEnvWithDiagnostics({
+        baseEnv: { AI_AGENT: "inherited-agent" },
+        overrides: { ai_agent: "wrapper-agent" },
+      });
+
+      expect(result.env.AI_AGENT).toBe("wrapper-agent");
+      expect(Object.keys(result.env).filter((key) => key.toUpperCase() === "AI_AGENT")).toEqual([
+        "AI_AGENT",
+      ]);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("reports blocked and invalid requested overrides", () => {
     const overrides = envRecord(`PATH=/tmp/evil | CPP=/tmp/evil-cpp | CXX=/tmp/evil-cxx
 CARGO_BUILD_RUSTC_WRAPPER=/tmp/evil-rustc-wrapper

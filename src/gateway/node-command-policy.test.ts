@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS } from "../infra/node-commands.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -500,6 +501,49 @@ describe("gateway/node-command-policy", () => {
     );
     expect(denied.has("mcp.tools.call.v1")).toBe(false);
   });
+
+  it.each(NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS)(
+    "revokes every Claude run wire version when %s is denied",
+    (deniedCommand) => {
+      const cfg = {
+        gateway: { nodes: { commands: { deny: [deniedCommand] } } },
+      } as OpenClawConfig;
+      const node = {
+        platform: "linux",
+        deviceFamily: "Linux",
+        commands: [...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS],
+        approvedCommands: [...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS],
+      };
+
+      const runtimeAllowlist = resolveNodeCommandAllowlist(cfg, node);
+      const pairingAllowlist = resolveNodePairingCommandAllowlist(cfg, node);
+      for (const command of NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS) {
+        expect(runtimeAllowlist.has(command)).toBe(false);
+        expect(pairingAllowlist.has(command)).toBe(false);
+      }
+    },
+  );
+
+  it.each([...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS, ` ${NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS[0]} `])(
+    "allows every Claude run wire version when %s is explicitly allowed",
+    (allowedCommand) => {
+      const cfg = {
+        gateway: { nodes: { commands: { allow: [allowedCommand] } } },
+      } as OpenClawConfig;
+      const node = {
+        platform: "unknown",
+        commands: [...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS],
+        approvedCommands: [...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS],
+      };
+
+      const runtimeAllowlist = resolveNodeCommandAllowlist(cfg, node);
+      const pairingAllowlist = resolveNodePairingCommandAllowlist(cfg, node);
+      for (const command of NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS) {
+        expect(runtimeAllowlist.has(command)).toBe(true);
+        expect(pairingAllowlist.has(command)).toBe(true);
+      }
+    },
+  );
 
   it("does not treat unconnected declared host commands as approved", () => {
     const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {

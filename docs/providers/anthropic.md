@@ -271,24 +271,24 @@ the node-local setting below and restarting the node host:
 }
 ```
 
-The node advertises `agent.cli.claude.run.v1` only when the setting is enabled
-and its local `claude` executable resolves. OpenClaw re-resolves the catalog
-record on that node, imports the same bounded history, and binds the adopted
-session to the node and catalog-reported working directory. Each turn runs the
-node's real `claude -p` process using that node's Claude files and login. The
-node's exec approval policy still applies; the Gateway cannot force the opt-in.
+When enabled and the local `claude` executable resolves, OpenClaw re-resolves
+the catalog record on that node, imports the same bounded history, and binds the
+adopted session to the node and catalog-reported working directory. Each turn
+runs the node's real `claude -p` process using that node's Claude files and
+login. The node's exec approval policy still applies; the Gateway cannot force
+the opt-in.
 
-Node continuation v1 is one-shot only. It omits Gateway loopback MCP config and
+Node continuation is one-shot only. It omits Gateway loopback MCP config and
 Gateway skills plugin arguments, does not reseed from a Gateway transcript, and
 rejects attachments and images. Claude Desktop rows remain view-only. Native
 macOS app nodes also remain view-only until the app advertises the run command.
 
 <Note>
 Paired-node Claude sessions remain read-only unless the headless node explicitly
-advertises `agent.cli.claude.run.v1`. OpenClaw never modifies Claude Desktop
-metadata or archives Claude sessions. The page requires an operator connection
-with write scope because it uses authenticated `node.invoke`; list and read
-remain read-only even on a continuation-enabled node.
+advertises the run capability. OpenClaw never modifies Claude Desktop metadata
+or archives Claude sessions. The page requires an operator connection with
+write scope because it uses authenticated `node.invoke`; list and read remain
+read-only even on a continuation-enabled node.
 </Note>
 
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)

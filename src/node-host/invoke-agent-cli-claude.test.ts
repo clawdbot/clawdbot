@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
@@ -13,11 +14,11 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-function frame(params: unknown): NodeInvokeRequestPayload {
+function frame(params: unknown, command = "agent.cli.claude.run.v1"): NodeInvokeRequestPayload {
   return {
     id: "invoke-1",
     nodeId: "node-1",
-    command: "agent.cli.claude.run.v1",
+    command,
     paramsJSON: JSON.stringify(params),
   };
 }
@@ -84,8 +85,12 @@ describe("Claude CLI node command", () => {
           stdin: "hello",
           systemPrompt: "private prompt",
           cwd,
-          env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+          env: {
+            AI_AGENT: "wrapper",
+            NO_COLOR: "1",
+            CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+          },
+          clearEnv: ["AI_AGENT", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
         }),
@@ -94,8 +99,100 @@ describe("Claude CLI node command", () => {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
-      env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+      env: {
+        AI_AGENT: "wrapper",
+        NO_COLOR: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+      },
+      clearEnv: ["AI_AGENT", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+    });
+  });
+
+  it.each([
+    {
+      name: "AI_AGENT=openclaw when the marker is missing",
+      requestEnv: undefined,
+      clearEnv: undefined,
+      expected: { present: true, marker: "openclaw" },
+    },
+    {
+      name: "AI_AGENT=wrapper for an explicit wrapper marker",
+      requestEnv: { AI_AGENT: "wrapper" },
+      clearEnv: undefined,
+      expected: { present: true, marker: "wrapper" },
+    },
+    {
+      name: "no AI_AGENT after an explicit clear",
+      requestEnv: undefined,
+      clearEnv: ["AI_AGENT"],
+      expected: { present: false, marker: null },
+    },
+  ])("runs a real v2 node-host child and $name", async ({ requestEnv, clearEnv, expected }) => {
+    const proofDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-proof-"));
+    tempDirs.push(proofDir);
+    const outputPath = path.join(proofDir, "marker.json");
+    const executable = await executableScript(`
+require("node:fs").writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({
+  type: "result",
+  present: Object.hasOwn(process.env, "AI_AGENT"),
+  marker: process.env.AI_AGENT ?? null,
+}));`);
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const handleSystemRun = vi.fn(
+      async (options: {
+        params: {
+          command: string[];
+          env?: Record<string, string>;
+          timeoutMs?: number;
+        };
+        runCommand: (
+          argv: string[],
+          cwd: string | undefined,
+          env: Record<string, string> | undefined,
+          timeoutMs: number | undefined,
+        ) => Promise<unknown>;
+        sendInvokeResult: (result: unknown) => Promise<void>;
+      }) => {
+        await options.runCommand(
+          options.params.command,
+          undefined,
+          sanitizeHostExecEnv({
+            baseEnv: { PATH: process.env.PATH },
+            overrides: options.params.env,
+          }),
+          options.params.timeoutMs,
+        );
+        await options.sendInvokeResult({ ok: true });
+      },
+    );
+
+    await handleInvoke(
+      frame(
+        {
+          argv: ["-p"],
+          ...(requestEnv ? { env: requestEnv } : {}),
+          ...(clearEnv ? { clearEnv } : {}),
+          idleTimeoutMs: 1_000,
+          timeoutMs: 5_000,
+        },
+        "agent.cli.claude.run.v2",
+      ),
+      client(calls),
+      { current: async () => [] },
+      undefined,
+      { claudePath: executable, handleSystemRun: handleSystemRun as never },
+    );
+
+    const response = calls.find((call) => call.method === "node.invoke.result")?.params as
+      | { ok?: boolean; payloadJSON?: string }
+      | undefined;
+    expect(response).toMatchObject({
+      ok: true,
+      payloadJSON: expect.stringContaining('"exitCode":0'),
+    });
+    expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toEqual({
+      type: "result",
+      ...expected,
     });
   });
 
@@ -155,26 +252,29 @@ describe("Claude CLI node command", () => {
     ).rejects.toThrow("exactly one Claude credential");
   });
 
-  it("requires binary availability before consulting exec approval policy", async () => {
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn();
-    await handleInvoke(
-      frame({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { handleSystemRun },
-    );
+  it.each(["agent.cli.claude.run.v1", "agent.cli.claude.run.v2"])(
+    "requires binary availability before consulting exec approval policy for $command",
+    async (command) => {
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const handleSystemRun = vi.fn();
+      await handleInvoke(
+        frame({ argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 2_000 }, command),
+        client(calls),
+        { current: async () => [] },
+        undefined,
+        { handleSystemRun },
+      );
 
-    expect(handleSystemRun).not.toHaveBeenCalled();
-    expect(calls).toContainEqual({
-      method: "node.invoke.result",
-      params: expect.objectContaining({
-        ok: false,
-        error: expect.objectContaining({ message: "Claude CLI agent runs are unavailable" }),
-      }),
-    });
-  });
+      expect(handleSystemRun).not.toHaveBeenCalled();
+      expect(calls).toContainEqual({
+        method: "node.invoke.result",
+        params: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ message: "Claude CLI agent runs are unavailable" }),
+        }),
+      });
+    },
+  );
 
   it("consults the system.run approval surface with a prompt-free command", async () => {
     const executable = await executableScript("process.exit(0);");

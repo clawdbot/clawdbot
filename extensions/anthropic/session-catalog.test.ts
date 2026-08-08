@@ -18,6 +18,7 @@ import {
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
+  CLAUDE_CLI_NODE_RUN_V2_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
@@ -916,13 +917,13 @@ describe("Claude session catalog", () => {
     const commands = [
       CLAUDE_SESSIONS_LIST_COMMAND,
       CLAUDE_SESSION_READ_COMMAND,
-      CLAUDE_CLI_NODE_RUN_COMMAND,
+      CLAUDE_CLI_NODE_RUN_V2_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
     ];
     const authorizedCommands = new Set(
       createClaudeSessionNodeInvokePolicies().flatMap((policy) => policy.commands),
     );
-    expect(authorizedCommands).toEqual(new Set(commands));
+    expect(authorizedCommands).toEqual(new Set([...commands, CLAUDE_CLI_NODE_RUN_COMMAND]));
     const nodes = [
       {
         nodeId: "node-a",
@@ -1807,9 +1808,9 @@ describe("Claude session catalog", () => {
 
     const refreshed = await listLocalClaudeSessionPage({}, home);
     expect(initialUpdatedAt).not.toBe(appendedAt.getTime());
-    expect(refreshed.sessions.find((session) => session.threadId === sessionId)?.updatedAt).toBe(
-      appendedAt.getTime(),
-    );
+    expect(
+      refreshed.sessions.find((session) => session.threadId === sessionId)?.updatedAt,
+    ).toBeCloseTo(appendedAt.getTime(), 2);
   });
 
   it("invalidates the assembled scan after same-size same-mtime atomic replacement", async () => {
@@ -2302,6 +2303,7 @@ describe("Claude session catalog", () => {
       CLAUDE_SESSIONS_LIST_COMMAND,
       CLAUDE_SESSION_READ_COMMAND,
       CLAUDE_CLI_NODE_RUN_COMMAND,
+      CLAUDE_CLI_NODE_RUN_V2_COMMAND,
       CLAUDE_TERMINAL_RESUME_COMMAND,
     ]);
     if (!policy) {

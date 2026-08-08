@@ -5,10 +5,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildDockerExecArgs,
+  buildSandboxEnv,
   chunkString,
   deriveSessionName,
   readEnvInt,
 } from "./bash-tools.shared.js";
+
+describe("buildSandboxEnv", () => {
+  it("marks sandbox subprocesses by default", () => {
+    expect(
+      buildSandboxEnv({
+        defaultPath: "/usr/bin",
+        containerWorkdir: "/workspace",
+      }),
+    ).toEqual({
+      AI_AGENT: "openclaw",
+      HOME: "/workspace",
+      OPENCLAW_CLI: "1",
+      PATH: "/usr/bin",
+    });
+  });
+});
 
 describe("buildDockerExecArgs", () => {
   it("prepends custom PATH after login shell sourcing to preserve both custom and system tools", () => {

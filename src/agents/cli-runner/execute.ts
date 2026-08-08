@@ -4,7 +4,15 @@ import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import {
+  sanitizeHostExecEnv,
+  sanitizeHostExecEnvOverrides,
+} from "../../infra/host-env-security.js";
+import {
+  canonicalizeAiAgentEnvOverrides,
+  ensureOpenClawCliExecMarker,
+  pickAiAgentEnvAliases,
+} from "../../infra/openclaw-exec-env.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -70,6 +78,10 @@ function normalizeCliBackendThinkingLevel(
   level: PreparedCliRunContext["params"]["thinkLevel"],
 ): CliBackendThinkingLevel | undefined {
   return level === "ultra" ? "max" : level;
+}
+
+function normalizeCliEnvKey(key: string): string {
+  return process.platform === "win32" ? key.toUpperCase() : key;
 }
 
 function exactToolAvailabilityError(params: {
@@ -400,12 +412,45 @@ export async function executePreparedCliRun(
         Boolean(context.preparedBackend.secretInput) ||
         [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
       const selectedClaudeClearEnv = hasSelectedClaudeAuth
-        ? new Set(backend.clearEnv ?? [])
+        ? new Set((backend.clearEnv ?? []).map(normalizeCliEnvKey))
         : undefined;
       const configuredBackendEnv = Object.fromEntries(
-        Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
+        Object.entries(backend.env ?? {}).filter(
+          ([key]) => !selectedClaudeClearEnv?.has(normalizeCliEnvKey(key)),
+        ),
       );
       const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
+      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+      const preservedEnvKeys = [
+        ...parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]),
+      ];
+      const preservedEnv = new Set(preservedEnvKeys.map(normalizeCliEnvKey));
+      const clearEnv = new Set((backend.clearEnv ?? []).map(normalizeCliEnvKey));
+      for (const key of Object.keys(env)) {
+        const normalizedKey = normalizeCliEnvKey(key);
+        if (
+          clearEnv.has(normalizedKey) &&
+          (!preservedEnv.has(normalizedKey) || selectedClaudeClearEnv?.has(normalizedKey))
+        ) {
+          delete env[key];
+        }
+      }
+      const sanitizedBackendEnv =
+        Object.keys(backendEnv).length > 0
+          ? sanitizeHostExecEnvOverrides({
+              overrides: backendEnv,
+              blockPathOverrides: true,
+            })
+          : {};
+      if (Object.keys(sanitizedBackendEnv).length > 0) {
+        Object.assign(env, canonicalizeAiAgentEnvOverrides(sanitizedBackendEnv));
+      }
+      const captureEnv = mcpCaptureAttempt.env ?? {};
+      Object.assign(env, canonicalizeAiAgentEnvOverrides(captureEnv));
+      ensureOpenClawCliExecMarker(env);
+      // Never mark Claude CLI as host-managed. That marker routes runs into
+      // Anthropic's separate host-managed usage tier instead of normal CLI use.
+      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
@@ -415,27 +460,26 @@ export async function executePreparedCliRun(
             ...resolveNodeClaudeAuthEnv(context),
           }
         : undefined;
-      const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
-      const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
-      for (const key of backend.clearEnv ?? []) {
-        if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
-          delete env[key];
-        }
-      }
-      if (Object.keys(backendEnv).length > 0) {
-        Object.assign(
-          env,
-          sanitizeHostExecEnv({
-            baseEnv: {},
-            overrides: backendEnv,
-            blockPathOverrides: true,
-          }),
-        );
-      }
-      Object.assign(env, mcpCaptureAttempt.env);
-      // Never mark Claude CLI as host-managed. That marker routes runs into
-      // Anthropic's separate host-managed usage tier instead of normal CLI use.
-      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+      const nodeClearEnv = nodePlacement
+        ? new Set(
+            [...(selectedClaudeClearEnv ?? [])].filter((key) => key.toUpperCase() !== "AI_AGENT"),
+          )
+        : undefined;
+      // The Gateway transport resolves these aliases against the paired node's
+      // platform, then emits only the canonical uppercase protocol key.
+      const nodeAiAgentEnv = nodePlacement
+        ? {
+            baseEnv: pickAiAgentEnvAliases(process.env),
+            configuredEnv: pickAiAgentEnvAliases(backend.env ?? {}),
+            overrideEnv: {
+              ...pickAiAgentEnvAliases(preparedBackendEnv),
+              ...pickAiAgentEnvAliases(captureEnv),
+            },
+            clearEnv: [...(backend.clearEnv ?? [])],
+            preserveEnv: preservedEnvKeys,
+            forceClearBeforeOverrides: hasSelectedClaudeAuth,
+          }
+        : undefined;
 
       let executionCommand = backend.command;
       let executionLeadingArgv: readonly string[] = [];
@@ -538,7 +582,8 @@ export async function executePreparedCliRun(
         nodePlacement,
         nodeSystemPrompt,
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
-        nodeClearEnv: selectedClaudeClearEnv ? [...selectedClaudeClearEnv] : undefined,
+        nodeClearEnv: nodeClearEnv && nodeClearEnv.size > 0 ? [...nodeClearEnv] : undefined,
+        nodeAiAgentEnv,
         useManagedClaudeLiveSession,
         useResume,
         cliSessionIdToUse,

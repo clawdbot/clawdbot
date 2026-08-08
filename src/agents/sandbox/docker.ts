@@ -387,7 +387,8 @@ export function buildSandboxCreateArgs(params: {
       `Suspicious configured sandbox environment variables: ${envSanitization.warnings.join(", ")}`,
     );
   }
-  for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
+  const sandboxEnv = markOpenClawExecEnv(envSanitization.allowed, "linux");
+  for (const [key, value] of Object.entries(sandboxEnv)) {
     args.push("--env", `${key}=${value}`);
   }
   for (const cap of params.cfg.capDrop) {

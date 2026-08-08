@@ -5,7 +5,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  expandNodeAgentCliClaudeRunCommands,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS,
   NODE_BROWSER_PROXY_COMMANDS,
   NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
@@ -81,7 +82,7 @@ const SYSTEM_COMMANDS = [
   NODE_SYSTEM_NOTIFY_COMMAND,
   ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
-  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  ...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
@@ -89,7 +90,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_FILE_COMMANDS,
   ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
-  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  ...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS,
   ...SCREEN_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
@@ -97,6 +98,14 @@ const UNKNOWN_PLATFORM_COMMANDS = [
   ...MOBILE_NODE_COMMANDS.location,
   NODE_SYSTEM_NOTIFY_COMMAND,
 ];
+
+function resolveNodeCommandDenylist(commands: readonly string[]): Set<string> {
+  // Wire aliases share authorization: revoking one must not let a node upgrade
+  // reopen the same execution capability under another version.
+  return new Set(
+    expandNodeAgentCliClaudeRunCommands(commands.map((command) => command.trim()).filter(Boolean)),
+  );
+}
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.commands.allow` (and ensuring they're not blocked by commands.deny).
@@ -400,8 +409,8 @@ function resolveNodeCommandAllowlistInternal(
     platformId,
     commands: node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : []),
   });
-  const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
-  const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
+  const extra = expandNodeAgentCliClaudeRunCommands(cfg.gateway?.nodes?.commands?.allow ?? []);
+  const deny = resolveNodeCommandDenylist(cfg.gateway?.nodes?.commands?.deny ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
   // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
   // at pairing but do not enter the runtime allowlist by default.
