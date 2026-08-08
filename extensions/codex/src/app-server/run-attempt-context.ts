@@ -20,6 +20,7 @@ import {
   resolveCodexContextEngineProjectionReserveTokens,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
+import { shouldRequireCodexSandboxExecServerEnvironment } from "./dynamic-tool-build.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
@@ -146,6 +147,13 @@ export async function prepareCodexAttemptContext(
     sessionAgentId,
     memoryToolNames,
     sandboxed: sandbox?.enabled === true,
+    // Same predicate that gates the exec-server environment, so the two cannot
+    // drift: only that environment hands Codex a container cwd.
+    execCwdRemapped: shouldRequireCodexSandboxExecServerEnvironment({
+      sandbox,
+      nativeToolSurfaceEnabled: runtime.nativeToolSurfaceEnabled,
+      sandboxExecServerEnabled: runtime.sandboxExecServerEnabled,
+    }),
   });
   const baseDeveloperInstructions = buildDeveloperInstructions(runtimeParams, {
     dynamicTools: toolBridge.availableSpecs,

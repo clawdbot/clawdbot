@@ -173,6 +173,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionAgentId: string;
   memoryToolNames: readonly string[];
   sandboxed?: boolean;
+  // True when the turn runs in the sandbox exec-server environment, whose cwd is
+  // a container path the host-side app-server cannot resolve. Narrower than
+  // `sandboxed`: a sandboxed run without that environment keeps the host
+  // workspace as its cwd, where Codex still loads the project doc natively.
+  execCwdRemapped?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const memoryToolsAvailable =
@@ -239,7 +244,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     )
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
           contextFiles,
-          params.sandboxed === true,
+          params.execCwdRemapped === true,
         )
       : [];
     return {
@@ -723,12 +728,13 @@ function selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
   injectNativeProjectDoc = false,
 ): EmbeddedContextFile[] {
   // Codex resolves AGENTS.md itself, walking up from the thread cwd, which is
-  // why it is normally excluded here. A sandboxed run is started with the
-  // container workdir while the app-server resolves that path on the host, so
-  // the native loader looks in a directory that does not exist there and the
-  // project doc silently never reaches the model. Inject it as a turn-scoped
-  // developer instruction in that case only; unsandboxed runs keep the native
-  // path, so the file is still delivered exactly once.
+  // why it is normally excluded here. When the turn runs in the sandbox
+  // exec-server environment, that cwd is the container workdir while the
+  // app-server resolves it on the host, so the native loader looks in a
+  // directory that does not exist there and the project doc silently never
+  // reaches the model. Inject it as a turn-scoped developer instruction in that
+  // case only; every cwd Codex can still resolve keeps the native path, so the
+  // file is delivered exactly once either way.
   const basenames = injectNativeProjectDoc
     ? new Set([
         ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,

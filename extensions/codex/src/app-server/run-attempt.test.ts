@@ -412,7 +412,7 @@ async function buildDynamicToolsForTest(
 async function buildCodexTurnContextForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
-  options: { sandboxed?: boolean } = {},
+  options: { sandboxed?: boolean; execCwdRemapped?: boolean } = {},
 ) {
   const sessionAgentId = "main";
   const agentTools = await buildDynamicToolsForTest(params, workspaceDir);
@@ -430,6 +430,7 @@ async function buildCodexTurnContextForTest(
     sessionAgentId,
     memoryToolNames,
     ...(options.sandboxed === undefined ? {} : { sandboxed: options.sandboxed }),
+    ...(options.execCwdRemapped === undefined ? {} : { execCwdRemapped: options.execCwdRemapped }),
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
@@ -3158,10 +3159,12 @@ describe("runCodexAppServerAttempt", () => {
       truncated: false,
     });
   });
-  it("injects AGENTS.md when the run is sandboxed and Codex cannot resolve it", async () => {
-    // A sandboxed run is started with the container workdir while the
-    // app-server resolves that path on the host, so Codex's native project-doc
-    // loader finds nothing and AGENTS.md silently never reaches the model.
+  it("injects AGENTS.md only when the exec cwd is remapped away from the host", async () => {
+    // The sandbox exec-server environment hands Codex a container workdir while
+    // the app-server resolves it on the host, so the native project-doc loader
+    // finds nothing and AGENTS.md silently never reaches the model. Every cwd
+    // Codex can still resolve must keep the native path, or the file lands
+    // twice.
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
@@ -3171,23 +3174,33 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(sessionFile, workspaceDir);
     setAgentWorkspaceForTest(params, workspaceDir);
 
-    const sandboxed = await buildCodexTurnContextForTest(params, workspaceDir, {
+    const remapped = await buildCodexTurnContextForTest(params, workspaceDir, {
       sandboxed: true,
+      execCwdRemapped: true,
+    });
+    // Sandboxed, but no exec-server environment: cwd stays the host workspace.
+    const sandboxedHostCwd = await buildCodexTurnContextForTest(params, workspaceDir, {
+      sandboxed: true,
+      execCwdRemapped: false,
     });
     const unsandboxed = await buildCodexTurnContextForTest(params, workspaceDir, {
       sandboxed: false,
+      execCwdRemapped: false,
     });
 
     // Delivered exactly once, through the same channel as the other base files.
-    expect(sandboxed.collaborationInstructions).toContain(agentsGuidance);
-    expect(sandboxed.collaborationInstructions?.split(agentsGuidance).length).toBe(2);
-    expect(sandboxed.collaborationInstructions).toContain(soulGuidance);
+    expect(remapped.collaborationInstructions).toContain(agentsGuidance);
+    expect(remapped.collaborationInstructions?.split(agentsGuidance).length).toBe(2);
+    expect(remapped.collaborationInstructions).toContain(soulGuidance);
     // Never duplicated into the workspace prompt context.
-    expect(sandboxed.inputText).not.toContain(agentsGuidance);
+    expect(remapped.inputText).not.toContain(agentsGuidance);
 
-    // Unsandboxed runs keep Codex's native project-doc path untouched.
-    expect(unsandboxed.collaborationInstructions).not.toContain(agentsGuidance);
-    expect(unsandboxed.collaborationInstructions).toContain(soulGuidance);
+    // Both host-cwd shapes keep Codex's native project-doc path untouched.
+    for (const hostCwd of [sandboxedHostCwd, unsandboxed]) {
+      expect(hostCwd.collaborationInstructions).not.toContain(agentsGuidance);
+      expect(hostCwd.inputText).not.toContain(agentsGuidance);
+      expect(hostCwd.collaborationInstructions).toContain(soulGuidance);
+    }
   });
 
   it("adds memory recall guidance when dated memory notes exist without root MEMORY.md", async () => {
