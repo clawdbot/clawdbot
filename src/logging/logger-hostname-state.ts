@@ -1,6 +1,6 @@
 import os from "node:os";
 
-export type LoggerHostnameResolver = () => string;
+type LoggerHostnameResolver = () => string;
 
 export const defaultLoggerHostnameResolver: LoggerHostnameResolver = () => os.hostname();
 

@@ -28,7 +28,7 @@ import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
 import { resolveDefaultRollingLogFile } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
-import { enqueueFileLog, flushFileLogQueue } from "./logger-file-transport.js";
+import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
@@ -625,7 +625,7 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
         ...traceFields,
       };
       const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
-      enqueueFileLog({
+      fileLogTransport.enqueue({
         file: activeFile,
         hostname: expectDefined(structuredFields.hostname, "structured log hostname"),
         maxFileBytes: settings.maxFileBytes,
@@ -735,7 +735,7 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
 
 /** Flushes queued file logs before a graceful owner exits the process. */
 export async function flushLogger(): Promise<void> {
-  await flushFileLogQueue();
+  await fileLogTransport.flush();
 }
 
 // Test helpers
