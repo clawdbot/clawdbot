@@ -902,7 +902,10 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
-  it("preserves registry-active terminal rows without matching run identity", () => {
+  it("settles stale terminal rows even without a matching run identity", () => {
+    // A row that already carries an explicit terminal status together with a
+    // stale hasActiveRun: true must be settled by the terminal event. The
+    // overlap guard only applies while the row is genuinely active.
     const result = sessionsResult(
       [
         {
@@ -923,7 +926,17 @@ describe("createSessionCapability", () => {
         status: "done",
         endedAt: 160,
       }),
-    ).toBe(result);
+    ).toEqual({
+      ...result,
+      sessions: [
+        {
+          ...result.sessions[0],
+          hasActiveRun: false,
+          status: "done",
+          endedAt: 160,
+        },
+      ],
+    });
   });
 
   it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {

@@ -557,7 +557,7 @@ export function reconcileSessionRunTerminal(
     if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
       return row;
     }
-    if (row.hasActiveRun === true || isSessionRunActive(row)) {
+    if (isSessionRunActive(row)) {
       // Active identity belongs to the originating model run, not a newer overlap.
       if (!runId || !row.activeRunIds?.includes(runId)) {
         return row;
