@@ -107,22 +107,30 @@ export function createWorkerWorkspaceActions(
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
     const prepared = requirePrepared();
-    const commandOptions = workerSshCommandOptions({
-      input: command.input,
-      timeoutMs: command.timeoutMs ?? WORKSPACE_TIMEOUT_MS,
-      signal: command.signal
-        ? AbortSignal.any([options.ownerSignal, command.signal])
-        : options.ownerSignal,
-    });
+    const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
+    const signal = command.signal
+      ? AbortSignal.any([options.ownerSignal, command.signal])
+      : options.ownerSignal;
     // Exit 255 does not prove whether the remote command was accepted, so stateful
     // commands must stay pinned to one transport attempt.
     if (command.transportRetry === "never") {
-      return await runTask(workerWorkspaceSshArgv(prepared, command.argv), commandOptions);
+      return await runTask(
+        workerWorkspaceSshArgv(prepared, command.argv),
+        workerSshCommandOptions({ input: command.input, timeoutMs, signal }),
+      );
     }
     return await runWorkerSshCandidates(
       prepared,
-      async (port) =>
-        await runTask(workerWorkspaceSshArgv(prepared, command.argv, port), commandOptions),
+      timeoutMs,
+      async (port, remainingTimeoutMs) =>
+        await runTask(
+          workerWorkspaceSshArgv(prepared, command.argv, port),
+          workerSshCommandOptions({
+            input: command.input,
+            timeoutMs: remainingTimeoutMs,
+            signal,
+          }),
+        ),
     );
   };
 

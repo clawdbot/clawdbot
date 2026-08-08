@@ -141,7 +141,13 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
   const sshCommand = (
     prepared: PreparedWorkerSsh,
-    params: { input: string; port: number; remoteArgs: readonly string[]; signal?: AbortSignal },
+    params: {
+      input: string;
+      port: number;
+      remoteArgs: readonly string[];
+      timeoutMs: number;
+      signal?: AbortSignal;
+    },
   ) => ({
     argv: [
       "ssh",
@@ -157,7 +163,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     ],
     options: workerSshCommandOptions({
       input: params.input,
-      timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
     }),
   });
@@ -167,15 +173,20 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     if (!prepared) {
       throw new Error("Worker tunnel SSH context is unavailable");
     }
-    const result = await runWorkerSshCandidates(prepared, async (port) => {
-      const command = sshCommand(prepared, {
-        input: REMOTE_SOCKET_SETUP_SCRIPT,
-        port,
-        remoteArgs: [entry.remoteDirectory, entry.remoteSocketPath],
-        signal: entry.abortController.signal,
-      });
-      return await runner.run(command.argv, command.options);
-    });
+    const result = await runWorkerSshCandidates(
+      prepared,
+      REMOTE_SETUP_TIMEOUT_MS,
+      async (port, remainingTimeoutMs) => {
+        const command = sshCommand(prepared, {
+          input: REMOTE_SOCKET_SETUP_SCRIPT,
+          port,
+          remoteArgs: [entry.remoteDirectory, entry.remoteSocketPath],
+          timeoutMs: remainingTimeoutMs,
+          signal: entry.abortController.signal,
+        });
+        return await runner.run(command.argv, command.options);
+      },
+    );
     if (!success(result)) {
       throw workerSshProcessError(result.stderr || result.stdout);
     }
@@ -186,14 +197,19 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     if (!prepared) {
       return;
     }
-    await runWorkerSshCandidates(prepared, async (port) => {
-      const command = sshCommand(prepared, {
-        input: REMOTE_SOCKET_CLEANUP_SCRIPT,
-        port,
-        remoteArgs: [entry.remoteSocketPath, entry.remoteDirectory],
-      });
-      return await runner.run(command.argv, command.options);
-    }).catch(() => undefined);
+    await runWorkerSshCandidates(
+      prepared,
+      REMOTE_SETUP_TIMEOUT_MS,
+      async (port, remainingTimeoutMs) => {
+        const command = sshCommand(prepared, {
+          input: REMOTE_SOCKET_CLEANUP_SCRIPT,
+          port,
+          remoteArgs: [entry.remoteSocketPath, entry.remoteDirectory],
+          timeoutMs: remainingTimeoutMs,
+        });
+        return await runner.run(command.argv, command.options);
+      },
+    ).catch(() => undefined);
   };
 
   const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => ({

@@ -197,17 +197,26 @@ function isWorkerSshTransportFailure(result: WorkerSshCommandResult): boolean {
   return result.termination === "exit" && result.code === 255;
 }
 
-/** Retries only SSH's transport-level exit 255 and records the first authenticated candidate. */
+/** Retries only SSH's transport-level exit 255 under one operation deadline. */
 export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
   prepared: PreparedWorkerSsh,
-  run: (port: number) => Promise<T>,
+  timeoutMs: number,
+  run: (port: number, remainingTimeoutMs: number) => Promise<T>,
 ): Promise<T> {
+  const deadlineMs = Date.now() + timeoutMs;
   let lastResult: T | undefined;
   for (const port of workerSshCandidatePorts(prepared)) {
-    const result = await run(port);
+    const remainingTimeoutMs = deadlineMs - Date.now();
+    if (lastResult !== undefined && remainingTimeoutMs <= 0) {
+      return lastResult;
+    }
+    const result = await run(port, Math.max(0, remainingTimeoutMs));
     lastResult = result;
-    if (!isWorkerSshTransportFailure(result)) {
+    if (result.termination === "exit" && result.code !== null && result.code !== 255) {
       prepared.selectPort(port);
+      return result;
+    }
+    if (!isWorkerSshTransportFailure(result)) {
       return result;
     }
   }

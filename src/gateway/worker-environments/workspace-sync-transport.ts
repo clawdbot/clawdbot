@@ -19,11 +19,12 @@ export function createWorkerWorkspaceRsyncTransport(options: WorkerWorkspaceRsyn
   ): Promise<SpawnResult> =>
     await runWorkerSshCandidates(
       prepared,
-      async (port) =>
+      options.timeoutMs,
+      async (port, remainingTimeoutMs) =>
         await options.runTask(
           argv(workerWorkspaceRsyncRemoteCommand(prepared, port)),
           workerSshCommandOptions({
-            timeoutMs: options.timeoutMs,
+            timeoutMs: remainingTimeoutMs,
             signal: options.ownerSignal,
           }),
         ),
@@ -38,7 +39,8 @@ export function createWorkerWorkspaceRsyncTransport(options: WorkerWorkspaceRsyn
   }): Promise<SpawnResult> =>
     await runWorkerSshCandidates(
       params.prepared,
-      async (port) =>
+      options.timeoutMs,
+      async (port, remainingTimeoutMs) =>
         await runBoundedInboundRsyncTransfer({
           argv: params.argv(workerWorkspaceRsyncRemoteCommand(params.prepared, port)),
           destinationRoot: params.destinationRoot,
@@ -46,7 +48,7 @@ export function createWorkerWorkspaceRsyncTransport(options: WorkerWorkspaceRsyn
           totalByteLimit: params.totalByteLimit,
           ownerSignal: options.ownerSignal,
           runTask: options.runTask,
-          timeoutMs: options.timeoutMs,
+          timeoutMs: remainingTimeoutMs,
         }),
     );
 
