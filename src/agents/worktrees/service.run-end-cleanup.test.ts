@@ -114,4 +114,26 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     await expect(fs.access(created.path)).resolves.toBeUndefined();
     await lease.release();
   });
+
+  it("records and rethrows an unexpected removal claim failure", async () => {
+    const created = await materialize("claim-failure");
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    const failure = new Error("synthetic removal claim failure");
+    runLeaseTesting.setDeadPidResolverForTest(() => {
+      throw failure;
+    });
+
+    await expect(service.removeIfLossless(created.id)).rejects.toBe(failure);
+
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      runEndCleanup: {
+        outcome: "failed",
+        at: now,
+        reason: "synthetic removal claim failure",
+      },
+    });
+    await expect(fs.access(created.path)).resolves.toBeUndefined();
+    runLeaseTesting.setDeadPidResolverForTest(null);
+    await lease.release();
+  });
 });

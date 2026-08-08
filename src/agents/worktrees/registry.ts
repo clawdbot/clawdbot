@@ -446,6 +446,13 @@ export function deleteRegistryWorktree(env: NodeJS.ProcessEnv, id: string): void
 const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
 
+export class WorktreeRemovalContentionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorktreeRemovalContentionError";
+  }
+}
+
 export type RunLeaseOwnerChecks = {
   isPidDefinitelyDead?: (pid: number) => boolean;
   getProcessStartTime?: (pid: number) => number | null;
@@ -594,12 +601,14 @@ export function claimWorktreeRemovalRow(
       const scope = worktreeRunLeaseScope(params.worktreeId);
       const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
       if (!params.force && livePids.length > 0) {
-        throw new Error(`worktree is busy: locked by live pid ${livePids[0]}`);
+        throw new WorktreeRemovalContentionError(
+          `worktree is busy: locked by live pid ${livePids[0]}`,
+        );
       }
       // The removal claim is exclusive: a live marker owned by a different token means
       // another remover is mid-operation, so this remover must not enter it too.
       if (removingToken !== undefined && removingToken !== params.token) {
-        throw new Error("worktree removal is already in progress");
+        throw new WorktreeRemovalContentionError("worktree removal is already in progress");
       }
       const payloadJson = JSON.stringify({
         pid: params.pid,

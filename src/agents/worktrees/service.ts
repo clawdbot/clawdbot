@@ -44,6 +44,7 @@ import {
   insertRegistryWorktree,
   listRegistryWorktrees,
   updateRegistryWorktree,
+  WorktreeRemovalContentionError,
 } from "./registry.js";
 import {
   abortWorktreeRemoval,
@@ -1061,11 +1062,19 @@ export class ManagedWorktreeService {
     // QA and operators observe this product-boundary fact through worktrees.list.
     try {
       claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
-    } catch {
-      // A live run lease or a competing remover holds the worktree; a lossless
-      // auto-cleanup must not race it.
-      recordOutcome("retained-busy");
-      return false;
+    } catch (error) {
+      if (error instanceof WorktreeRemovalContentionError) {
+        // A live run lease or a competing remover holds the worktree; a lossless
+        // auto-cleanup must not race it.
+        recordOutcome("retained-busy");
+        return false;
+      }
+      try {
+        recordOutcome("failed", error);
+      } catch {
+        // Preserve the claim failure when the same infrastructure blocks recording it.
+      }
+      throw error;
     }
     try {
       const status = await requireGit(record.path, ["status", "--porcelain"]);
