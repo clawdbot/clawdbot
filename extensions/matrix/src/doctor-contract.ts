@@ -10,7 +10,7 @@ import {
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
   stripRetiredChannelKeys,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,

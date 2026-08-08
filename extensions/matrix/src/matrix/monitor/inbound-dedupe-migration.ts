@@ -19,7 +19,7 @@ import {
   createPersistentDedupeImportEntry,
   type PersistentDedupeEntry,
 } from "openclaw/plugin-sdk/persistent-dedupe";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,

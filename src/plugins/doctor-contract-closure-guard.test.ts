@@ -10,6 +10,19 @@ import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
 const FORBIDDEN_SPECIFIER = "openclaw/plugin-sdk/agent-runtime";
+// Static value imports only; type-only and lazy dynamic imports of these stay allowed.
+const FORBIDDEN_SPECIFIER_REASONS = new Map([
+  [
+    FORBIDDEN_SPECIFIER,
+    "the deprecated broad barrel makes doctor enumeration cold-load the core agents graph; " +
+      "use openclaw/plugin-sdk/agent-scope-runtime or another focused subpath",
+  ],
+  [
+    "openclaw/plugin-sdk/runtime-doctor",
+    "the heavy doctor barrel makes doctor enumeration cold-load the state-db/kysely graph; " +
+      "use openclaw/plugin-sdk/runtime-doctor-migrations, or defer heavy helpers behind a dynamic import",
+  ],
+]);
 const LEGACY_SETUP_PROPERTIES = new Set([
   "legacyStateMigrations",
   "legacySessionSurface",
@@ -134,7 +147,8 @@ function collectStaticValueReferences(filePath: string, source: string): ModuleR
   const staticValueReferenceKeys = collectStaticValueReferenceKeys(sourceFile);
   return collectModuleReferencesFromSource(source, {
     fileName: filePath,
-    acceptSpecifier: (specifier) => specifier === FORBIDDEN_SPECIFIER || specifier.startsWith("."),
+    acceptSpecifier: (specifier) =>
+      FORBIDDEN_SPECIFIER_REASONS.has(specifier) || specifier.startsWith("."),
   }).filter((reference) =>
     staticValueReferenceKeys.has(`${reference.kind}\0${reference.line}\0${reference.specifier}`),
   );
@@ -178,7 +192,7 @@ function collectClosureEntries(): ClosureEntry[] {
   return entries;
 }
 
-function collectBroadAgentRuntimeImports(entry: ClosureEntry): string[] {
+function collectForbiddenClosureImports(entry: ClosureEntry): string[] {
   const violations: string[] = [];
   const visited = new Set<string>();
   const pending = [entry.entryPath];
@@ -191,11 +205,10 @@ function collectBroadAgentRuntimeImports(entry: ClosureEntry): string[] {
     visited.add(filePath);
     const source = fs.readFileSync(filePath, "utf8");
     for (const reference of collectStaticValueReferences(filePath, source)) {
-      if (reference.specifier === FORBIDDEN_SPECIFIER) {
+      const reason = FORBIDDEN_SPECIFIER_REASONS.get(reference.specifier);
+      if (reason) {
         violations.push(
-          `${entry.pluginId}: ${formatRepoPath(filePath)}:${reference.line} imports ${FORBIDDEN_SPECIFIER}; ` +
-            "the deprecated broad barrel makes doctor enumeration cold-load the core agents graph; " +
-            "use openclaw/plugin-sdk/agent-scope-runtime or another focused subpath",
+          `${entry.pluginId}: ${formatRepoPath(filePath)}:${reference.line} imports ${reference.specifier}; ${reason}`,
         );
         continue;
       }
@@ -228,8 +241,8 @@ describe("doctor contract import closures", () => {
     ]);
   });
 
-  it("keep the broad agent runtime barrel off doctor enumeration paths", () => {
-    const violations = collectClosureEntries().flatMap(collectBroadAgentRuntimeImports).toSorted();
+  it("keeps broad agent runtime and heavy doctor barrels off doctor enumeration paths", () => {
+    const violations = collectClosureEntries().flatMap(collectForbiddenClosureImports).toSorted();
     expect(violations).toStrictEqual([]);
   });
 });

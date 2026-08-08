@@ -12,7 +12,7 @@ import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,

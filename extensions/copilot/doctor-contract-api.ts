@@ -14,7 +14,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
+import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 type LegacyConfigRule = {
   path: string[];

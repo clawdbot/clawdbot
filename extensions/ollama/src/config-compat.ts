@@ -1,6 +1,6 @@
 // Ollama helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_PROVIDER_ID } from "./defaults.js";
 
 type LegacyConfigRule = {
