@@ -14,7 +14,11 @@ describe("AgentSession context usage", () => {
     const compacted = await checkCompaction.call(
       {
         settingsManager: {
-          getCompactionSettings: () => ({ enabled: true, reserveTokens: 100, keepRecentTokens: 20 }),
+          getCompactionSettings: () => ({
+            enabled: true,
+            reserveTokens: 100,
+            keepRecentTokens: 20,
+          }),
         },
         model: { provider: "test", id: "model", contextWindow: 1_000 },
         sessionManager: { getBranch: () => [] },
