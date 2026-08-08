@@ -185,7 +185,13 @@ export class ChatPage extends OpenClawLightDomElement {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.draftFocus.beforeDraftCleanup(data);
           this.consumedDraftData = data;
-          this.route.update(data.sessionKey, true, data.face ?? "chat");
+          // Remove the one-shot draft from history once the matching pane owns it.
+          this.route.update(
+            data.sessionKey,
+            true,
+            data.face ?? "chat",
+            data.historyAnchor ? { historyAnchor: data.historyAnchor } : undefined,
+          );
           this.requestUpdate();
         }
       });
