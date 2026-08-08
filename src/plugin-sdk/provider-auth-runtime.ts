@@ -165,7 +165,7 @@ export async function waitForLocalOAuthCallback(params: {
   successTitle: string;
   /** Optional progress message emitted once the listener starts. */
   progressMessage?: string;
-  /** Loopback hostname to bind; defaults to localhost. */
+  /** Extra loopback hostname to bind; the redirect URI hostname is always bound. */
   hostname?: string;
   /** Progress callback invoked after the server begins listening. */
   onProgress?: (message: string) => void;

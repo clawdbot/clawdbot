@@ -64,9 +64,6 @@ function resolveBindAddresses(
     return redirectAddresses;
   }
   const requestedAddresses = resolveLoopbackHostname(requestedHostname, lookup);
-  if (redirectHostname !== "localhost") {
-    throw new Error("OAuth callback bind hostname must match the redirect hostname");
-  }
   return Promise.all([redirectAddresses, requestedAddresses]).then(([redirect, requested]) => [
     ...new Set([...requested, ...redirect]),
   ]);
