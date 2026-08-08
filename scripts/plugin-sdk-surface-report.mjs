@@ -164,7 +164,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: pinned secret reads and first-writer-wins creation.
       // +2: restore the documented session-catalog and tool-results plugin contracts.
       // +1: focused inbound-event delivery correlation for channel plugins.
-      149,
+      // +1: dependency-light agent scope helpers for doctor migration enumeration.
+      150,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -220,7 +221,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      4831,
+      // +2: shared channel question-reaction store and preflight-audio factories.
+      // +1: shared channel interactive dispatcher with canonical binding authorization.
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      // +4: focused agent scope functions for doctor migration enumeration.
+      4839,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -268,7 +273,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      2908,
+      // +2: shared channel question-reaction store and preflight-audio factories.
+      // +1: shared channel interactive dispatcher with canonical binding authorization.
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      // +4: focused agent scope functions for doctor migration enumeration.
+      2916,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -286,7 +295,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // -1: text-runtime now names its global-singleton exports explicitly.
-      81,
+      // -1: infra-runtime now names its error exports explicitly.
+      80,
       env,
     ),
   };

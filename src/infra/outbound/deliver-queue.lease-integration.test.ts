@@ -22,12 +22,65 @@ import {
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
+function createDeferred<Value = void>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise) => {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function startBlockedFreshDelivery(params: { tmpDir: string }) {
+  process.env.OPENCLAW_STATE_DIR = params.tmpDir;
+  const preparationEntered = createDeferred();
+  const releasePreparation = createDeferred();
+  const queueIdReady = createDeferred<string>();
+  const messageId = "fresh-live-message";
+  const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+    await ctx.onPlatformSendDispatch?.();
+    return {
+      messageId,
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId }],
+        kind: "text",
+      }),
+    };
+  });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
+          message: {
+            id: "matrix",
+            durableFinal: { capabilities: { text: true } },
+            send: {
+              lifecycle: {
+                beforeSendAttempt: async () => {
+                  preparationEntered.resolve();
+                  await releasePreparation.promise;
+                },
+              },
+              text: sendText,
+            },
+          },
+        },
+      },
+    ]),
+  );
+  const delivery = deliverOutboundPayloads({
+    cfg: {} as OpenClawConfig,
+    channel: "matrix",
+    to: "!room:example",
+    payloads: [{ text: "fresh live content" }],
+    queuePolicy: "best_effort",
+    onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
+  });
+  const queueId = await queueIdReady.promise;
+  await preparationEntered.promise;
+  return { delivery, messageId, queueId, releasePreparation: releasePreparation.resolve, sendText };
 }
 
 async function startBlockedStableDelivery(params: {
@@ -240,7 +293,7 @@ async function startBlockedProviderStableDelivery(params: {
   return { delivery, onDeliveryResult, releaseProvider: releaseProvider.resolve, sendText };
 }
 
-describe("stable delivery producer lease integration", () => {
+describe("delivery producer lease integration", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
 
   beforeAll(async () => {
@@ -251,6 +304,34 @@ describe("stable delivery producer lease integration", () => {
     vi.useRealTimers();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("publishes a fresh live delivery with cross-process ownership before provider I/O", async () => {
+    const tmpDir = fixtures.tmpDir();
+    let blocked: Awaited<ReturnType<typeof startBlockedFreshDelivery>> | undefined;
+    try {
+      blocked = await startBlockedFreshDelivery({ tmpDir });
+      const entry = readQueuedEntry(tmpDir, blocked.queueId);
+
+      expect(entry).toMatchObject({
+        recoveryState: "producer_claimed",
+        requiresProducerClaim: true,
+        producerClaimId: expect.any(String),
+        availableAt: expect.any(Number),
+      });
+      expect(entry.availableAt as number).toBeGreaterThan(Date.now());
+      expect(await claimDeliveryPlatformSendAttempt(blocked.queueId, tmpDir)).toBeUndefined();
+
+      blocked.releasePreparation();
+      await expect(blocked.delivery).resolves.toMatchObject([{ messageId: blocked.messageId }]);
+      expect(blocked.sendText).toHaveBeenCalledOnce();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, blocked.queueId, tmpDir),
+      ).toBeUndefined();
+    } finally {
+      blocked?.releasePreparation();
+      await blocked?.delivery.catch(() => undefined);
+    }
   });
 
   it("upgrades and renews a legacy reused intent through long channel preparation", async () => {
@@ -309,7 +390,7 @@ describe("stable delivery producer lease integration", () => {
       await vi.advanceTimersByTimeAsync(10_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releasePreparation();
       await rejected;
@@ -347,7 +428,7 @@ describe("stable delivery producer lease integration", () => {
       await vi.advanceTimersByTimeAsync(10_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releasePreparation();
       await rejected;
@@ -388,7 +469,7 @@ describe("stable delivery producer lease integration", () => {
       await vi.advanceTimersByTimeAsync(10_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releaseRender();
       await rejected;
@@ -439,7 +520,7 @@ describe("stable delivery producer lease integration", () => {
       await vi.advanceTimersByTimeAsync(10_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Stable delivery platform claim was lost: ${deliveryIntentId}`,
+        `Delivery platform claim was lost: ${deliveryIntentId}`,
       );
       blocked.releaseProvider();
       await rejected;

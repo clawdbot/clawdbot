@@ -86,6 +86,33 @@ describe("config io paths", () => {
     });
   });
 
+  it.each(["lan", "loopback", "tailnet", "auto", "custom", undefined] as const)(
+    "keeps canonical gateway bind %s byte-identical during load",
+    async (bind) => {
+      await withTempHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        const gateway = {
+          mode: "local" as const,
+          ...(bind ? { bind } : {}),
+          ...(bind === "custom" ? { customBindHost: "127.0.0.1" } : {}),
+        };
+        const raw = `${JSON.stringify({ gateway }, null, 2)}\n`;
+        await fs.writeFile(configPath, raw, "utf-8");
+        const io = createConfigIO({
+          configPath,
+          env: { HOME: home } as NodeJS.ProcessEnv,
+          homedir: () => home,
+        });
+
+        const config = io.loadConfig();
+
+        expect(config.gateway?.bind).toBe(bind);
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
+      });
+    },
+  );
+
   it("logs validation warnings with real line breaks", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

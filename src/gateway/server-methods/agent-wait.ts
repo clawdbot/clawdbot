@@ -47,6 +47,8 @@ export const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
     pendingError: snapshot.pendingError,
     timeoutPhase: snapshot.timeoutPhase,
     providerStarted: snapshot.providerStarted,
+    ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
+    terminalReceipt: snapshot.terminalReceipt,
     terminalReply: snapshot.terminalReply,
   });
 };

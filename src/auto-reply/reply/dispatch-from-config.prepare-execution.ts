@@ -265,7 +265,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       releaseStart: () => releaseStart?.(),
     };
   };
-  const wrapProgressCallback = <Args extends unknown[], Result extends false | void>(
+  const wrapProgressCallback = <Args extends unknown[], Result extends boolean | void>(
     callback: ((...args: Args) => Promise<Result> | Result) | undefined,
     options?: {
       allowWhenToolSummariesHidden?: boolean;

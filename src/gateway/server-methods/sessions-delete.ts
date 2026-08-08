@@ -27,6 +27,7 @@ import { handleSessionStateSessionDeleted } from "../../sessions/session-state-e
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
+import type { WorkerSessionPlacementRetirement } from "../worker-environments/placement-store.js";
 import { chatHandlers } from "./chat.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -35,6 +36,7 @@ import {
   rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
+  resolveSessionWorkerPlacementMutationGuard,
   resolveSessionWorkerPlacementMutationError,
   respondSessionWorkerPlacementMutationError,
   sessionLog,
@@ -231,6 +233,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     let expectedSessionStillCurrent = true;
     let deleteBlockedByModelLock = false;
     let deleteBlockedByWorkerPlacement = false;
+    let placementRetirement: WorkerSessionPlacementRetirement | undefined;
     const deletion = await runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: deleteLifecycleIdentities,
@@ -248,16 +251,22 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         if (!expectedSessionStillCurrent) {
           return;
         }
-        const placementError = resolveSessionWorkerPlacementMutationError({
+        const placementGuard = resolveSessionWorkerPlacementMutationGuard({
           action: "delete",
           context,
           key,
           sessionId: normalizeOptionalString(preparedEntry?.sessionId),
         });
-        if (placementError) {
+        if (placementGuard.error) {
           deleteBlockedByWorkerPlacement = true;
-          respondSessionWorkerPlacementMutationError(placementError, respond);
+          respondSessionWorkerPlacementMutationError(placementGuard.error, respond);
           return;
+        }
+        if (placementGuard.retirement) {
+          if (!context.workerSessionPlacementService?.retireSessionPlacement) {
+            throw new Error("Worker session placement retirement service is unavailable");
+          }
+          placementRetirement = placementGuard.retirement;
         }
         admittedWorkReleased = await interruptSessionWorkAdmissions({
           scope: storePath,
@@ -378,6 +387,12 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (result.deleted) {
+          if (placementRetirement) {
+            if (result.deletedSessionId !== placementRetirement.sessionId) {
+              throw new Error("Deleted session id changed before placement retirement");
+            }
+            context.workerSessionPlacementService?.retireSessionPlacement?.(placementRetirement);
+          }
           emitGatewaySessionEndPluginHook({
             cfg,
             sessionKey: target.canonicalKey ?? key,

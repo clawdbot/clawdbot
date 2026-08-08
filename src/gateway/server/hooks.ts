@@ -53,10 +53,45 @@ const HOOK_AGENT_SESSION_CONFLICT_ERROR =
   "hook agent run was rejected because the target session changed";
 const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
 
-function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
-  return params.agentId
-    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
-    : resolveMainSessionKey(params.cfg);
+type HookEventTarget = {
+  eventSessionKey: string;
+  heartbeatTarget: { agentId?: string; sessionKey?: string };
+};
+
+function resolveHookEventTarget(params: {
+  cfg: OpenClawConfig;
+  resolvedAgentId: string;
+  explicitAgentId?: string;
+  sessionKey?: string;
+}): HookEventTarget {
+  if (params.cfg.session?.scope === "global") {
+    // Each agent owns a literal `global` row in its store. Target the agent,
+    // but never force an agent-qualified session key that the runner ignores.
+    return {
+      eventSessionKey: "global",
+      heartbeatTarget: { agentId: params.resolvedAgentId },
+    };
+  }
+  const eventSessionKey = params.sessionKey
+    ? canonicalizeMainSessionAlias({
+        cfg: params.cfg,
+        agentId: params.resolvedAgentId,
+        sessionKey: toAgentStoreSessionKey({
+          agentId: params.resolvedAgentId,
+          requestKey: params.sessionKey,
+          mainKey: params.cfg.session?.mainKey,
+        }),
+      })
+    : params.explicitAgentId
+      ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.explicitAgentId })
+      : resolveMainSessionKey(params.cfg);
+  return {
+    eventSessionKey,
+    heartbeatTarget: {
+      ...(params.explicitAgentId ? { agentId: params.explicitAgentId } : {}),
+      sessionKey: eventSessionKey,
+    },
+  };
 }
 
 function shouldAnnounceHookRunResult(params: {
@@ -233,27 +268,12 @@ export function createGatewayHooksRequestHandler(params: {
       ? (() => {
           const cfg = getRuntimeConfig();
           const agentId = value.agentId ?? resolveDefaultAgentId(cfg);
-          if (cfg.session?.scope === "global") {
-            return {
-              eventSessionKey: "global",
-              heartbeatTarget: { agentId },
-            };
-          }
-          const eventSessionKey = canonicalizeMainSessionAlias({
+          return resolveHookEventTarget({
             cfg,
-            agentId,
-            sessionKey: value.sessionKey
-              ? toAgentStoreSessionKey({
-                  agentId,
-                  requestKey: value.sessionKey,
-                  mainKey: cfg.session?.mainKey,
-                })
-              : resolveAgentMainSessionKey({ cfg, agentId }),
+            resolvedAgentId: agentId,
+            explicitAgentId: value.agentId,
+            sessionKey: value.sessionKey,
           });
-          return {
-            eventSessionKey,
-            heartbeatTarget: { agentId, sessionKey: eventSessionKey },
-          };
         })()
       : undefined;
     const sessionKey = target?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
@@ -303,17 +323,21 @@ export function createGatewayHooksRequestHandler(params: {
       delivery: value.delivery,
       state: { nextRunAtMs: nowMs },
     };
-    let hookEventSessionKey: string | undefined;
+    let hookEventTarget: HookEventTarget | undefined;
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
+      const eventSessionKey = hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
       enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-        sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
+        sessionKey: eventSessionKey,
       });
       if (value.wakeMode === "now") {
+        // Before config resolves, the error belongs to the fallback main session.
+        // Wake that exact session; the requested hook agent may not own it.
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
+          ...(hookEventTarget?.heartbeatTarget ?? { sessionKey: eventSessionKey }),
         });
       }
     };
@@ -398,9 +422,10 @@ export function createGatewayHooksRequestHandler(params: {
           }
           // Keep an omitted agent omitted for event routing so global session scope
           // stays global; runner identity is frozen separately via accepted agentId.
-          hookEventSessionKey = resolveHookEventSessionKey({
+          hookEventTarget = resolveHookEventTarget({
             cfg,
-            agentId: acceptedValue.agentId,
+            resolvedAgentId: agentId,
+            explicitAgentId: acceptedValue.agentId,
           });
           const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           // Lazy module loading is the last Gateway-owned async boundary before
@@ -466,12 +491,18 @@ export function createGatewayHooksRequestHandler(params: {
             });
           }
           if (shouldAnnounce) {
-            const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
+            const eventSessionKey =
+              hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
             enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
               sessionKey: eventSessionKey,
             });
             if (value.wakeMode === "now") {
-              requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+              requestHeartbeat({
+                source: "hook",
+                intent: "immediate",
+                reason: `hook:${jobId}`,
+                ...(hookEventTarget?.heartbeatTarget ?? { sessionKey: eventSessionKey }),
+              });
             }
           } else if (result.status === "ok" && !value.deliver) {
             logHooks.info("hook agent run completed without announcement", {

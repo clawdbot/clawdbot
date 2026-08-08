@@ -746,10 +746,11 @@ describe("createChildAdapter", () => {
     process.env.ENV = "/tmp/env";
     process.env.CDPATH = "/tmp";
     try {
-      await createAdapterHarness({
+      const { adapter } = await createAdapterHarness({
         pid: 3334,
         argv: ["/usr/bin/node", "-e", "process.exit(0)"],
       });
+      expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
       if (originalBashEnv === undefined) {
         delete process.env.BASH_ENV;

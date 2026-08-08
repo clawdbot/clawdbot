@@ -94,6 +94,55 @@ describe("createQaStateBackedTransportAdapter", () => {
     expect(adapter.prepareFlow).toBeTypeOf("function");
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
+
+  it("adds redacted transport and bus-kind evidence to outbound timeouts", async () => {
+    const state = createQaBusState();
+    state.addInboundMessage(
+      {
+        accountId: "sut",
+        conversation: { id: "private-chat-id", kind: "group" },
+        senderId: "private-sender-id",
+        text: "private message content",
+      },
+      "private-native-message-id",
+    );
+    const adapter = createQaStateBackedTransportAdapter(state, {
+      id: "live",
+      label: "Live",
+      accountId: "sut",
+      requiredPluginIds: [],
+      supportedActions: [],
+      describeTransportState: () =>
+        "telegram observer polls=3; updates=2; filtered=1; matched=1; update kinds=[message]; terminal error=none",
+      sendInbound: async (input) => state.addInboundMessage(input),
+      createGatewayConfig: () => ({}),
+      waitReady: async () => undefined,
+      buildAgentDelivery: ({ target }) => ({
+        channel: "live",
+        to: target,
+        replyChannel: "live",
+        replyTo: target,
+      }),
+      handleAction: async () => undefined,
+      createReportNotes: () => [],
+    });
+
+    const error = await adapter
+      .waitForOutboundSequence?.({
+        finalTextIncludes: "missing final",
+        timeoutMs: 5,
+      })
+      .catch((caught: unknown) => caught);
+    const message = String(error);
+
+    expect(message).toContain(
+      "telegram observer polls=3; updates=2; filtered=1; matched=1; update kinds=[message]; terminal error=none",
+    );
+    expect(message).toContain("final bus-event kinds=[inbound-message]");
+    expect(message).not.toMatch(
+      /private-chat-id|private-sender-id|private message content|private-native-message-id/u,
+    );
+  });
 });
 
 describe("waitForQaTransportOutboundSequence", () => {
@@ -134,6 +183,38 @@ describe("waitForQaTransportOutboundSequence", () => {
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { text: "final marker", threadId: "42" },
     });
+  });
+
+  it("returns preview and final sends across distinct messages", async () => {
+    const state = createQaBusState();
+    const preview = state.addOutboundMessage({
+      accountId: "default",
+      text: "preview",
+      to: "dm:alice",
+    });
+    const final = state.addOutboundMessage({
+      accountId: "default",
+      text: "final marker",
+      to: "dm:alice",
+    });
+
+    const sequence = await waitForQaTransportOutboundSequence({
+      accountId: "default",
+      input: {
+        conversationId: "alice",
+        finalSettleMs: 0,
+        finalTextIncludes: "final marker",
+        minimumPreviewEvents: 1,
+        timeoutMs: 100,
+      },
+      readEvents: () => state.getSnapshot().events,
+    });
+
+    expect(sequence.events.map(({ kind, message }) => [kind, message.id])).toEqual([
+      ["sent", preview.id],
+      ["sent", final.id],
+    ]);
+    expect(sequence.final).toMatchObject({ id: final.id, text: "final marker" });
   });
 
   it.each([
@@ -269,6 +350,13 @@ describe("waitForQaTransportOutboundSequence", () => {
 
   it("does not count an already-final send as a preview", async () => {
     const state = createQaBusState();
+    state.addOutboundMessage({
+      accountId: "default",
+      senderId: "openclaw",
+      text: "stale preview",
+      to: "dm:alice",
+    });
+    const sinceCursor = state.getSnapshot().cursor;
     const final = state.addOutboundMessage({
       accountId: "default",
       senderId: "openclaw",
@@ -289,6 +377,7 @@ describe("waitForQaTransportOutboundSequence", () => {
           finalSettleMs: 0,
           finalTextIncludes: "final marker",
           minimumPreviewEvents: 1,
+          sinceCursor,
           timeoutMs: 20,
         },
         readEvents: () => state.getSnapshot().events,

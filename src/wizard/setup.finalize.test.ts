@@ -91,6 +91,9 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
   })),
 );
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
+const resolveSystemdUserServiceAccount = vi.hoisted(() =>
+  vi.fn(() => "test-user" as string | null),
+);
 const readSystemdUserLingerStatus = vi.hoisted(() =>
   vi.fn(async () => ({ user: "test-user", linger: "yes" as const })),
 );
@@ -237,6 +240,7 @@ vi.mock("../daemon/service.js", () => ({
 
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUserServiceAvailable,
+  resolveSystemdUserServiceAccount,
   readSystemdUserLingerStatus,
 }));
 
@@ -489,6 +493,8 @@ describe("finalizeSetupWizard", () => {
     resolveGatewayInstallToken.mockClear();
     isSystemdUserServiceAvailable.mockReset();
     isSystemdUserServiceAvailable.mockResolvedValue(true);
+    resolveSystemdUserServiceAccount.mockReset();
+    resolveSystemdUserServiceAccount.mockReturnValue("test-user");
     readSystemdUserLingerStatus.mockReset();
     readSystemdUserLingerStatus.mockResolvedValue({ user: "test-user", linger: "yes" });
     resolveSetupSecretInputString.mockReset();
@@ -1481,7 +1487,7 @@ describe("finalizeSetupWizard", () => {
       state: { installed: true, loaded: true, running: false },
       issues: [
         { code: "port-mismatch", message: "service is configured for another port" },
-        { code: "version-mismatch", message: "service was installed by an older version" },
+        { code: "missing-program", message: "service command points at a missing path" },
       ],
     });
 
@@ -1497,7 +1503,7 @@ describe("finalizeSetupWizard", () => {
 
     expect(result.gateway).toEqual({
       status: "failed",
-      error: "service is configured for another port; service was installed by an older version",
+      error: "service is configured for another port; service command points at a missing path",
     });
     expect(
       vi

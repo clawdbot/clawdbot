@@ -44,7 +44,7 @@ beforeAll(() => {
         dedupeRemovedManyAndKept: "Removed {removed} duplicate dream entries and kept {kept}.",
         dedupeRemovedOne: "Removed {removed} duplicate dream entry.",
         dedupeRemovedMany: "Removed {removed} duplicate dream entries.",
-        repairArchivedThreadCorpus: "archived thread corpus",
+        repairArchivedThreadCorpus: "archived session corpus",
         repairArchivedIngestionState: "archived ingestion state",
         repairArchivedDreamDiary: "archived dream diary",
         repairNoChanges: "Dream cache repair finished with no changes.",
@@ -1437,7 +1437,7 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
-      text: "Dream cache repair complete: archived thread corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+      text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
     });
     expect(state.dreamDiaryActionArchivePath).toBe(
       "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",

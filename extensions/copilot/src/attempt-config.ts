@@ -32,6 +32,7 @@ export function createResult(
     aborted?: boolean;
     assistantTranscriptOwned?: boolean;
     assistantTranscriptIdempotencyKey?: string;
+    contextEngineTerminalAnchor?: import("openclaw/plugin-sdk/session-transcript-runtime").TranscriptEntryAnchor;
     assistantTexts?: string[];
     codeModeEngaged?: boolean;
     currentAttemptAssistant?: AssistantMessage;
@@ -104,6 +105,9 @@ export function createResult(
         }
       : {}),
     ...(state.sdkSessionId ? { sdkSessionId: state.sdkSessionId } : {}),
+    ...(state.contextEngineTerminalAnchor
+      ? { contextEngineTerminalAnchor: state.contextEngineTerminalAnchor }
+      : {}),
     ...(state.journalValidated !== undefined ? { journalValidated: state.journalValidated } : {}),
     ...(state.codeModeEngaged !== undefined ? { codeModeEngaged: state.codeModeEngaged } : {}),
     assistantTexts: state.assistantTexts ?? [],

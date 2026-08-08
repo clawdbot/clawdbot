@@ -131,6 +131,27 @@ function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: strin
   });
 }
 
+function makeQmdChild(
+  overrides: {
+    stream?: "stdout" | "stderr";
+    data?: string;
+    code?: number;
+  } = {},
+): MockChild {
+  const output = { stream: "stdout" as const, data: "[]", code: 0, ...overrides };
+  const child = createMockChild({ autoClose: false });
+  emitAndClose(child, output.stream, output.data, output.code);
+  return child;
+}
+
+function makeMcporterChild(results: unknown[] = []): MockChild {
+  return makeQmdChild({ data: JSON.stringify({ results }) });
+}
+
+function makeQmdResults(...results: unknown[]): MockChild {
+  return makeQmdChild({ data: JSON.stringify(results) });
+}
+
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const startedAt = Date.now();
   while (!predicate()) {
@@ -473,9 +494,7 @@ describe("QmdMemoryManager", () => {
     await configureMemoryCoreDreamingStateForTests();
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "add") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "permission denied", 1);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "permission denied", code: 1 });
       }
       return createMockChild();
     });
@@ -511,9 +530,7 @@ describe("QmdMemoryManager", () => {
     await configureMemoryCoreDreamingStateForTests();
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query" || args[0] === "search" || args[0] === "vsearch") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -629,14 +646,10 @@ describe("QmdMemoryManager", () => {
     configureQmd({ sessions: { enabled: true } });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "Usage: qmd search -c one or more collections");
-        return child;
+        return makeQmdChild({ data: "Usage: qmd search -c one or more collections" });
       }
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -669,14 +682,10 @@ describe("QmdMemoryManager", () => {
     configureQmd({ sessions: { enabled: true } });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "Usage: qmd search -c one or more collections");
-        return child;
+        return makeQmdChild({ data: "Usage: qmd search -c one or more collections" });
       }
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -718,9 +727,7 @@ describe("QmdMemoryManager", () => {
         return child;
       }
       if (args[0] === "--version") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "qmd 1.0.0");
-        return child;
+        return makeQmdChild({ data: "qmd 1.0.0" });
       }
       return createMockChild();
     });
@@ -764,9 +771,7 @@ describe("QmdMemoryManager", () => {
     );
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -799,24 +804,16 @@ describe("QmdMemoryManager", () => {
       args.filter((token) => token === "-c").length > 1;
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "--version") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "qmd 1.0.0");
-        return child;
+        return makeQmdChild({ data: "qmd 1.0.0" });
       }
       if (args[0] === "--help") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "Usage: qmd search -c one or more collections");
-        return child;
+        return makeQmdChild({ data: "Usage: qmd search -c one or more collections" });
       }
       if (isCombinedSearch(args)) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "unknown flag: -c", 1);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "unknown flag: -c", code: 1 });
       }
       if (args[0] === "search" || args[0] === "query" || args[0] === "vsearch") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -1021,9 +1018,7 @@ describe("QmdMemoryManager", () => {
       }
       const output = scenario.outputFor?.(cmd, args);
       if (output) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, output.stream, output.data, output.code);
-        return child;
+        return makeQmdChild(output);
       }
       return createMockChild();
     });
@@ -1094,23 +1089,15 @@ describe("QmdMemoryManager", () => {
     await scenario.configure();
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "--help" && scenario.supportsMultiCollection) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          "-c, --collection <name>    Filter by one or more collections",
-        );
-        return child;
+        return makeQmdChild({
+          data: "-c, --collection <name>    Filter by one or more collections",
+        });
       }
       if (args[0] === "search" && scenario.rejectSearchFlags) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "unknown flag: --json", 2);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "unknown flag: --json", code: 2 });
       }
       if (args[0] === "search" || args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -1303,9 +1290,7 @@ describe("QmdMemoryManager", () => {
         return child;
       }
       if (args[0] === "search" || args[0] === "query" || args[0] === "vsearch") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -1619,9 +1604,7 @@ describe("QmdMemoryManager", () => {
     );
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -1732,15 +1715,11 @@ describe("QmdMemoryManager", () => {
     const wrongSessionsPath = path.join(stateDir, "agents", agentId, "qmd", "sessions");
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
+        return makeQmdChild({
+          data: JSON.stringify([
             { name: sessionCollectionName, path: wrongSessionsPath, mask: "**/*.md" },
           ]),
-        );
-        return child;
+        });
       }
       return createMockChild();
     });
@@ -1782,13 +1761,9 @@ describe("QmdMemoryManager", () => {
     const sessionCollectionName = `sessions-${agentId}`;
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([`workspace-${agentId}`, sessionCollectionName]),
-        );
-        return child;
+        return makeQmdChild({
+          data: JSON.stringify([`workspace-${agentId}`, sessionCollectionName]),
+        });
       }
       return createMockChild();
     });
@@ -1809,15 +1784,13 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          ["workspace-main (qmd://workspace-main/)", "  Pattern:  *.txt", "  Files:    17"].join(
-            "\n",
-          ),
-        );
-        return child;
+        return makeQmdChild({
+          data: [
+            "workspace-main (qmd://workspace-main/)",
+            "  Pattern:  *.txt",
+            "  Files:    17",
+          ].join("\n"),
+        });
       }
       return createMockChild();
     });
@@ -1860,19 +1833,15 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify(
+        return makeQmdChild({
+          data: JSON.stringify(
             [...legacyCollections.entries()].map(([name, info]) => ({
               name,
               path: info.path,
               mask: info.pattern,
             })),
           ),
-        );
-        return child;
+        });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -1931,19 +1900,15 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify(
+        return makeQmdChild({
+          data: JSON.stringify(
             [...listedCollections.entries()].map(([name, info]) => ({
               name,
               path: info.path,
               mask: info.pattern,
             })),
           ),
-        );
-        return child;
+        });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -1999,19 +1964,15 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify(
+        return makeQmdChild({
+          data: JSON.stringify(
             [...listedCollections.entries()].map(([name, info]) => ({
               name,
               path: info.path,
               mask: info.pattern,
             })),
           ),
-        );
-        return child;
+        });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -2060,15 +2021,11 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
         // Name-only rows do not expose path/mask metadata.
-        emitAndClose(child, "stdout", JSON.stringify(["workspace-legacy"]));
-        return child;
+        return makeQmdChild({ data: JSON.stringify(["workspace-legacy"]) });
       }
       if (args[0] === "collection" && args[1] === "add") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "collection already exists", 1);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "collection already exists", code: 1 });
       }
       return createMockChild();
     });
@@ -2088,10 +2045,8 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
         // Older qmd output may expose only names, so path/pattern matching cannot find this.
-        emitAndClose(child, "stdout", JSON.stringify(["workspace-legacy"]));
-        return child;
+        return makeQmdChild({ data: JSON.stringify(["workspace-legacy"]) });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -2151,9 +2106,7 @@ describe("QmdMemoryManager", () => {
     const addAttempts = new Map<string, number>();
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "temporary qmd list failure", 1);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "temporary qmd list failure", code: 1 });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -2204,11 +2157,8 @@ describe("QmdMemoryManager", () => {
     const added = new Map<string, string>();
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          [
+        return makeQmdChild({
+          data: [
             "Collections (2):",
             "",
             "memory-dir-main (qmd://memory-dir-main/)",
@@ -2218,8 +2168,7 @@ describe("QmdMemoryManager", () => {
             "  Pattern:  **/*.md",
             "",
           ].join("\n"),
-        );
-        return child;
+        });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -2258,9 +2207,7 @@ describe("QmdMemoryManager", () => {
     const addFlagCalls: string[] = [];
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
@@ -2289,11 +2236,8 @@ describe("QmdMemoryManager", () => {
     const addCalls: string[] = [];
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          [
+        return makeQmdChild({
+          data: [
             "Collections (2):",
             "",
             "memory-root (qmd://memory-root/)",
@@ -2303,8 +2247,7 @@ describe("QmdMemoryManager", () => {
             "  Pattern:  **/*.md",
             "",
           ].join("\n"),
-        );
-        return child;
+        });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -2336,13 +2279,9 @@ describe("QmdMemoryManager", () => {
     const removeCalls: string[] = [];
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([{ name: "memory-root", path: differentPath, mask: "MEMORY.md" }]),
-        );
-        return child;
+        return makeQmdChild({
+          data: JSON.stringify([{ name: "memory-root", path: differentPath, mask: "MEMORY.md" }]),
+        });
       }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
@@ -2568,9 +2507,11 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "update") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "SQLiteError: UNIQUE constraint failed: documents.docid", 1);
-        return child;
+        return makeQmdChild({
+          stream: "stderr",
+          data: "SQLiteError: UNIQUE constraint failed: documents.docid",
+          code: 1,
+        });
       }
       return createMockChild();
     });
@@ -2597,14 +2538,11 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "update") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stderr",
-          "ENOTDIR: not a directory, open '/tmp/workspace/MEMORY.md'",
-          1,
-        );
-        return child;
+        return makeQmdChild({
+          stream: "stderr",
+          data: "ENOTDIR: not a directory, open '/tmp/workspace/MEMORY.md'",
+          code: 1,
+        });
       }
       return createMockChild();
     });
@@ -2626,9 +2564,7 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "search" });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -2719,9 +2655,7 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "not json", 134);
-        return child;
+        return makeQmdChild({ data: "not json", code: 134 });
       }
       return createMockChild();
     });
@@ -2769,9 +2703,7 @@ describe("QmdMemoryManager", () => {
     let addCallsAfterMissing = 0;
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       if (args[0] === "collection" && args[1] === "add") {
         if (missingCollectionSeen) {
@@ -2793,17 +2725,13 @@ describe("QmdMemoryManager", () => {
           return child;
         }
         if (collection === "memory-root-main") {
-          const child = createMockChild({ autoClose: false });
-          emitAndClose(
-            child,
-            "stdout",
-            JSON.stringify([{ docid: expectedDocId, score: 1, snippet: "@@ -1,1\nremember this" }]),
-          );
-          return child;
+          return makeQmdChild({
+            data: JSON.stringify([
+              { docid: expectedDocId, score: 1, snippet: "@@ -1,1\nremember this" },
+            ]),
+          });
         }
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -2900,9 +2828,7 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "search" });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -2936,9 +2862,7 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "search" });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -2959,9 +2883,7 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "search" });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -2983,9 +2905,7 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "query" });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -3006,14 +2926,10 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "search" });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "unknown flag: --json", 2);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "unknown flag: --json", code: 2 });
       }
       if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -3044,9 +2960,7 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "query", rerank: false });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -3132,14 +3046,10 @@ describe("QmdMemoryManager", () => {
     configureQmd({ searchMode: "search", rerank: false });
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stderr", "unknown flag: --json", 2);
-        return child;
+        return makeQmdChild({ stream: "stderr", data: "unknown flag: --json", code: 2 });
       }
       if (args[0] === "query") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -3363,13 +3273,10 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -3399,7 +3306,6 @@ describe("QmdMemoryManager", () => {
 
     const commandPhases: string[] = [];
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(commandPhases).toEqual(["pause"]);
         // Verify it calls qmd.query (v2) not qmd.deep_search (v1)
@@ -3418,11 +3324,9 @@ describe("QmdMemoryManager", () => {
         expect(callArgs).not.toHaveProperty("minScore");
         expect(callArgs).not.toHaveProperty("collection");
         expect(callArgs).not.toHaveProperty("rerank");
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -3444,7 +3348,6 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(requireArgAfter(args, "--args"));
@@ -3458,11 +3361,9 @@ describe("QmdMemoryManager", () => {
           collections: ["workspace-main"],
           rerank: false,
         });
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -3478,14 +3379,11 @@ describe("QmdMemoryManager", () => {
 
     let captured: Record<string, unknown> | null = null;
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         captured = JSON.parse(requireArgAfter(args, "--args"));
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -3508,7 +3406,6 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(requireArgAfter(args, "--args"));
@@ -3517,11 +3414,9 @@ describe("QmdMemoryManager", () => {
           { type: "vec", query: "sqlite vec qmd backend health 2026 05 04 multi agent" },
           { type: "hyde", query: "sqlite vec qmd backend health 2026 05 04 multi agent" },
         ]);
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -3538,16 +3433,13 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs.searches).toEqual([{ type: "vec", query: "sqlite vec backend health" }]);
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -3564,16 +3456,13 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         // mcporter exits 0 but prints non-JSON to stdout (daemon warning, truncated
         // output, or CLI flag mismatch). Without the guard this throws a raw
         // SyntaxError out of runQmdSearchViaMcporter; the guard wraps it.
-        emitAndClose(child, "stdout", "mcporter: daemon warning: connection unstable\n");
-        return child;
+        return makeQmdChild({ data: "mcporter: daemon warning: connection unstable\n" });
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -4210,9 +4099,7 @@ describe("QmdMemoryManager", () => {
             });
             return child;
           }
-          const child = createMockChild({ autoClose: false });
-          emitAndClose(child, "stdout", "[]");
-          return child;
+          return makeQmdChild();
         });
 
         const { manager } = await createManager();
@@ -4242,13 +4129,10 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -4277,22 +4161,16 @@ describe("QmdMemoryManager", () => {
 
     let daemonAttempts = 0;
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "daemon") {
         daemonAttempts += 1;
-        if (daemonAttempts === 1) {
-          emitAndClose(child, "stderr", "failed", 1);
-        } else {
-          emitAndClose(child, "stdout", "");
-        }
-        return child;
+        return daemonAttempts === 1
+          ? makeQmdChild({ stream: "stderr", data: "failed", code: 1 })
+          : makeQmdChild({ data: "" });
       }
       if (isMcporterCommand(cmd) && args[0] === "call") {
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -4311,17 +4189,13 @@ describe("QmdMemoryManager", () => {
     });
 
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
-      const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "daemon") {
-        emitAndClose(child, "stdout", "");
-        return child;
+        return makeQmdChild({ data: "" });
       }
       if (isMcporterCommand(cmd) && args[0] === "call") {
-        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
-        return child;
+        return makeMcporterChild();
       }
-      emitAndClose(child, "stdout", "[]");
-      return child;
+      return makeQmdChild();
     });
 
     const { manager } = await createManager();
@@ -4355,27 +4229,15 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search" && args.includes("workspace-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([{ docid: "m1", score: 0.6, snippet: "@@ -1,1\nmemory fact" }]),
-        );
-        return child;
+        return makeQmdResults({ docid: "m1", score: 0.6, snippet: "@@ -1,1\nmemory fact" });
       }
       if (args[0] === "search" && args.includes("sessions-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            { docid: "s1", score: 0.99, snippet: "@@ -1,1\nsession top 1" },
-            { docid: "s2", score: 0.95, snippet: "@@ -1,1\nsession top 2" },
-            { docid: "s3", score: 0.91, snippet: "@@ -1,1\nsession top 3" },
-            { docid: "s4", score: 0.88, snippet: "@@ -1,1\nsession top 4" },
-          ]),
+        return makeQmdResults(
+          { docid: "s1", score: 0.99, snippet: "@@ -1,1\nsession top 1" },
+          { docid: "s2", score: 0.95, snippet: "@@ -1,1\nsession top 2" },
+          { docid: "s3", score: 0.91, snippet: "@@ -1,1\nsession top 3" },
+          { docid: "s4", score: 0.88, snippet: "@@ -1,1\nsession top 4" },
         );
-        return child;
       }
       return createMockChild();
     });
@@ -5645,15 +5507,11 @@ describe("QmdMemoryManager", () => {
     const exactDocid = "abc123";
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            { docid: exactDocid, score: 1, snippet: "@@ -5,2\nremember this\nnext line" },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          docid: exactDocid,
+          score: 1,
+          snippet: "@@ -5,2\nremember this\nnext line",
+        });
       }
       return createMockChild();
     });
@@ -5719,20 +5577,14 @@ describe("QmdMemoryManager", () => {
     const duplicateDocid = "dup-123";
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search" && args.includes("workspace-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            { docid: duplicateDocid, score: 0.9, snippet: "@@ -3,1\nworkspace hit" },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          docid: duplicateDocid,
+          score: 0.9,
+          snippet: "@@ -3,1\nworkspace hit",
+        });
       }
       if (args[0] === "search" && args.includes("notes-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
+        return makeQmdChild();
       }
       return createMockChild();
     });
@@ -5776,19 +5628,11 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              file: "qmd://workspace-main/notes/welcome.md",
-              score: 0.71,
-              snippet: "@@ -4,1\ntoken unlock",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          file: "qmd://workspace-main/notes/welcome.md",
+          score: 0.71,
+          snippet: "@@ -4,1\ntoken unlock",
+        });
       }
       return createMockChild();
     });
@@ -5822,19 +5666,11 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              file: "qmd://sessions-main/session-1.md",
-              score: 0.84,
-              snippet: "@@ -2,1\nsession canary",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          file: "qmd://sessions-main/session-1.md",
+          score: 0.84,
+          snippet: "@@ -2,1\nsession canary",
+        });
       }
       return createMockChild();
     });
@@ -5907,34 +5743,18 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search" && args.includes("workspace-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              file: "qmd://workspace-main/notes.md",
-              score: 0.99,
-              snippet: "@@ -1,1\nmemory hit",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          file: "qmd://workspace-main/notes.md",
+          score: 0.99,
+          snippet: "@@ -1,1\nmemory hit",
+        });
       }
       if (args[0] === "search" && args.includes("sessions-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              file: "qmd://sessions-main/session-1.md",
-              score: 0.8,
-              snippet: "@@ -2,1\nsession hit",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          file: "qmd://sessions-main/session-1.md",
+          score: 0.8,
+          snippet: "@@ -2,1\nsession hit",
+        });
       }
       return createMockChild();
     });
@@ -5978,34 +5798,18 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search" && args.includes("workspace-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              file: "qmd://workspace-main/memory/facts.md",
-              score: 0.8,
-              snippet: "@@ -2,1\nworkspace fact",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          file: "qmd://workspace-main/memory/facts.md",
+          score: 0.8,
+          snippet: "@@ -2,1\nworkspace fact",
+        });
       }
       if (args[0] === "search" && args.includes("notes-main")) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              file: "qmd://notes-main/guide.md",
-              score: 0.7,
-              snippet: "@@ -1,1\nnotes guide",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          file: "qmd://notes-main/guide.md",
+          score: 0.7,
+          snippet: "@@ -1,1\nnotes guide",
+        });
       }
       return createMockChild();
     });
@@ -6042,9 +5846,7 @@ describe("QmdMemoryManager", () => {
     const noisyPayload = "x".repeat(240_000);
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", noisyPayload);
-        return child;
+        return makeQmdChild({ data: noisyPayload });
       }
       return createMockChild();
     });
@@ -6067,9 +5869,7 @@ describe("QmdMemoryManager", () => {
     for (const testCase of cases) {
       spawnMock.mockImplementation((_cmd: string, args: string[]) => {
         if (args[0] === "search") {
-          const child = createMockChild({ autoClose: false });
-          emitAndClose(child, testCase.stream, testCase.payload);
-          return child;
+          return makeQmdChild({ stream: testCase.stream, data: testCase.payload });
         }
         return createMockChild();
       });
@@ -6086,20 +5886,12 @@ describe("QmdMemoryManager", () => {
   it("uses qmd file hints when docid lookup misses", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              docid: "missing-from-openclaw-index",
-              file: "qmd://workspace-main/notes/welcome.md",
-              score: 0.91,
-              snippet: "@@ -3,1\nQMD activation",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          docid: "missing-from-openclaw-index",
+          file: "qmd://workspace-main/notes/welcome.md",
+          score: 0.91,
+          snippet: "@@ -3,1\nQMD activation",
+        });
       }
       return createMockChild();
     });
@@ -6135,20 +5927,12 @@ describe("QmdMemoryManager", () => {
     const searchDocid = "recovered-doc-after-empty-index";
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          JSON.stringify([
-            {
-              docid: searchDocid,
-              file: "qmd://workspace-main/notes/welcome.md",
-              score: 0.91,
-              snippet: "@@ -3,1\nQMD activation",
-            },
-          ]),
-        );
-        return child;
+        return makeQmdResults({
+          docid: searchDocid,
+          file: "qmd://workspace-main/notes/welcome.md",
+          score: 0.91,
+          snippet: "@@ -3,1\nQMD activation",
+        });
       }
       return createMockChild();
     });
@@ -6306,9 +6090,7 @@ describe("QmdMemoryManager", () => {
   it("reports vector availability as unavailable when qmd status shows zero vectors", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "status") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "Documents: 12\nVectors: 0\n");
-        return child;
+        return makeQmdChild({ data: "Documents: 12\nVectors: 0\n" });
       }
       return createMockChild();
     });
@@ -6340,9 +6122,7 @@ describe("QmdMemoryManager", () => {
   it("reports vector availability as ready when qmd status shows vectors", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "status") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "Documents: 12\nVectors: 42\n");
-        return child;
+        return makeQmdChild({ data: "Documents: 12\nVectors: 42\n" });
       }
       return createMockChild();
     });
@@ -6379,9 +6159,7 @@ describe("QmdMemoryManager", () => {
   ])("reports vector availability as ready for qmd status %s", async (_name, statusOutput) => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "status") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", statusOutput);
-        return child;
+        return makeQmdChild({ data: statusOutput });
       }
       return createMockChild();
     });
@@ -6403,9 +6181,7 @@ describe("QmdMemoryManager", () => {
   it("does not parse unrelated qmd status vector-like fields", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "status") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "Documents: 12\nMaxVectors: 42\nVector index: yes\n");
-        return child;
+        return makeQmdChild({ data: "Documents: 12\nMaxVectors: 42\nVector index: yes\n" });
       }
       return createMockChild();
     });
@@ -6562,24 +6338,18 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
         // Real qmd: names only, no path/pattern in list output.
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", JSON.stringify([collectionName]));
-        return child;
+        return makeQmdResults(collectionName);
       }
       if (args[0] === "collection" && args[1] === "show" && args[2] === collectionName) {
         // Real qmd `collection show` output — exposes the stale (old) path.
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          [
+        return makeQmdChild({
+          data: [
             `Collection: ${collectionName}`,
             `  Path:     ${oldWorkspaceDir}`,
             `  Pattern:  **/*.md`,
             `  Include:  yes (default)`,
           ].join("\n"),
-        );
-        return child;
+        });
       }
       return createMockChild();
     });
@@ -6622,23 +6392,17 @@ describe("QmdMemoryManager", () => {
 
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", JSON.stringify([collectionName]));
-        return child;
+        return makeQmdResults(collectionName);
       }
       if (args[0] === "collection" && args[1] === "show" && args[2] === collectionName) {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(
-          child,
-          "stdout",
-          [
+        return makeQmdChild({
+          data: [
             `Collection: ${collectionName}`,
             `  Path:     ${containerRoot}`,
             `  Pattern:  **/*.md`,
             `  Include:  yes (default)`,
           ].join("\n"),
-        );
-        return child;
+        });
       }
       return createMockChild();
     });

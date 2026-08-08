@@ -549,7 +549,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.146.1",
+      cliVersion: "0.147.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -1264,6 +1264,22 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("preserves omitted native tiers until a previously owned sticky tier must be cleared", () => {
+    const options = {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    };
+    const inherited = buildTurnStartParams(createAttemptParams({ provider: "openai" }), options);
+    const cleared = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      ...options,
+      clearInheritedServiceTier: true,
+    });
+
+    expect(inherited).not.toHaveProperty("serviceTier");
+    expect(cleared.serviceTier).toBeNull();
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {

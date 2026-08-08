@@ -102,6 +102,28 @@ export function parseEnvTemplateSecretRef(
   };
 }
 
+/** Collect env ids from supported SecretRef shapes anywhere in a config tree. */
+export function collectEnvSecretRefIds(value: unknown): Set<string> {
+  const ids = new Set<string>();
+  const seen = new WeakSet<object>();
+  const visit = (candidate: unknown): void => {
+    const ref = coerceSecretRef(candidate);
+    if (ref?.source === "env" && isValidEnvSecretRefId(ref.id)) {
+      ids.add(ref.id);
+      return;
+    }
+    if (typeof candidate !== "object" || candidate === null || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    for (const child of Array.isArray(candidate) ? candidate : Object.values(candidate)) {
+      visit(child);
+    }
+  };
+  visit(value);
+  return ids;
+}
+
 /** Detect retired env SecretRef marker strings for migration and explicit rejection. */
 export function isLegacySecretRefEnvMarker(value: unknown): value is string {
   if (typeof value !== "string") {

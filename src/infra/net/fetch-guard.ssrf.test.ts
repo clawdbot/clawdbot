@@ -1,5 +1,6 @@
 // Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
 // trusted proxy modes, and safe header retention.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
@@ -120,12 +121,7 @@ function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
   return new Headers(secondInit.headers);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
   const [call] = fetchImpl.mock.calls;
@@ -807,61 +803,30 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(blockedFetchImpl).not.toHaveBeenCalled();
   });
 
-  it("blocks exact-origin private DNS when it resolves to link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "169.254.169.254", family: 4 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "64:ff9b::a9fe:a9fe", family: 6 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to non-link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "100.100.100.200", family: 4 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "fd00:ec2::254", family: 6 },
-    ]) as unknown as LookupFn;
+  it.each([
+    {
+      title: "blocks exact-origin private DNS when it resolves to link-local metadata IPs",
+      address: "169.254.169.254",
+      family: 4,
+    },
+    {
+      title:
+        "blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs",
+      address: "64:ff9b::a9fe:a9fe",
+      family: 6,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to non-link-local metadata IPs",
+      address: "100.100.100.200",
+      family: 4,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs",
+      address: "fd00:ec2::254",
+      family: 6,
+    },
+  ])("$title", async ({ address, family }) => {
+    const lookupFn: LookupFn = vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
     const fetchImpl = vi.fn(async () => okResponse());
 
     await expect(

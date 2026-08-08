@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OpenClawKit
 import Testing
@@ -17,7 +18,7 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
             pathEnv: "/usr/bin:/bin")
     }
 
-    func start(command _: [String]) async throws -> MacNodeHostManifest { self.manifest }
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest { self.manifest }
     func supports(_ command: String) async -> Bool { self.manifest.commands.contains(command) }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -38,7 +39,8 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
         let input = MacNodeHostWorkerRetryPolicy.Input(
-            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            launch: MacNodeHostWorkerLaunch(
+                command: ["/usr/local/bin/openclaw", "node", "worker"]),
             configurationGeneration: 4)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
@@ -62,10 +64,11 @@ struct MacNodeHostWorkerTests {
 
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
         let original = MacNodeHostWorkerRetryPolicy.Input(
-            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            launch: MacNodeHostWorkerLaunch(
+                command: ["/usr/local/bin/openclaw", "node", "worker"]),
             configurationGeneration: 4)
         let updated = MacNodeHostWorkerRetryPolicy.Input(
-            command: original.command,
+            launch: original.launch,
             configurationGeneration: 5)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
@@ -89,8 +92,28 @@ struct MacNodeHostWorkerTests {
         while IFS= read -r line; do :; done
         """
 
-        let manifest = try await worker.start(command: ["/bin/sh", "-c", script])
+        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         #expect(manifest.version == "test")
+        await worker.stop()
+    }
+
+    @Test func `worker launches in the selected checkout`() async throws {
+        let checkout = try makeTempDirForTests().resolvingSymlinksInPath()
+        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        let script = """
+        printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
+          "$(/bin/pwd -P)"
+        while IFS= read -r line; do :; done
+        """
+
+        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script],
+            currentDirectoryURL: checkout))
+
+        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
+        defer { free(expectedCurrentDirectory) }
+        #expect(manifest.pathEnv == String(cString: expectedCurrentDirectory))
         await worker.stop()
     }
 
@@ -227,7 +250,8 @@ struct MacNodeHostWorkerTests {
         done
         """
 
-        let manifest = try await worker.start(command: ["/bin/sh", "-c", script])
+        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         #expect(manifest.commands == ["system.run"])
         let response = await worker.invoke(BridgeInvokeRequest(
             id: "worker-run",
@@ -255,7 +279,8 @@ struct MacNodeHostWorkerTests {
         while IFS= read -r line; do :; done
         """
 
-        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
         await worker.cancel(invokeId: "terminal-1")
         let response = await worker.invoke(BridgeInvokeRequest(
@@ -277,7 +302,8 @@ struct MacNodeHostWorkerTests {
             exit 7
             """
 
-            _ = try await worker.start(command: ["/bin/sh", "-c", script])
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script]))
             try? await Task.sleep(for: .milliseconds(200))
         }
     }
@@ -293,8 +319,10 @@ struct MacNodeHostWorkerTests {
         while IFS= read -r line; do :; done
         """
 
-        let first = try await worker.start(command: ["/bin/sh", "-c", firstScript])
-        let second = try await worker.start(command: ["/bin/sh", "-c", secondScript])
+        let first = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", firstScript]))
+        let second = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", secondScript]))
 
         #expect(first.version == "first")
         #expect(second.version == "second")
@@ -312,7 +340,8 @@ struct MacNodeHostWorkerTests {
         IFS= read -r second
         printf '%s\\n' '{"type":"invoke-result","result":{"id":"second","ok":true,"payload":{"done":true}}}'
         """
-        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
 
         let first = Task {
             await worker.invoke(BridgeInvokeRequest(

@@ -23,7 +23,7 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import { resolveAvatarImageUrl, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -99,11 +99,12 @@ export function renderChatAvatar(
           : "other";
 
   if (normalized === "user" && userAvatarUrl) {
+    const imageUrl = resolveAvatarImageUrl(userAvatarUrl) ?? userAvatarUrl;
     return renderUserAvatarSlot(
       {
         fallback: resolveAvatarInitials({ name: userName }),
-        imageUrl: userAvatarUrl,
-        pending: false,
+        imageUrl,
+        pending: typeof imageUrl !== "string",
       },
       userName,
     );

@@ -1,13 +1,7 @@
 // Qa Lab plugin module implements gateway child behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
-  createWriteStream,
-  existsSync,
-  readFileSync,
-  readdirSync,
-  type WriteStream,
-} from "node:fs";
+import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -54,6 +48,11 @@ import {
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
+import {
+  inspectLinuxProcessGroup,
+  inspectLinuxProcessGroupStats,
+  type QaLinuxProcessGroupInspector,
+} from "./posix-process-group.js";
 import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
 import {
   normalizeQaProviderModeEnv,
@@ -70,7 +69,7 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
-import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import { buildQaMockProfileId, stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
@@ -89,7 +88,7 @@ const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
 // Loaded Docker runners can take several seconds to reap a force-killed process group.
 const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const QA_GATEWAY_LOG_CLOSE_TIMEOUT_MS = 5_000;
-const QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS = 2_048;
+const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -181,13 +180,64 @@ async function runQaGatewayCliCommand(params: {
   args: readonly string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  stdin?: string;
 }): Promise<string> {
+  const hasStdin = params.stdin !== undefined;
   const child = spawn(params.executablePath, [...params.argsPrefix, ...params.args], {
     cwd: params.cwd,
     env: { ...params.env, OPENCLAW_CLI: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [hasStdin ? "pipe" : "ignore", "pipe", "pipe"],
   });
-  return await readQaGatewayCliCommand(child);
+  const result = readQaGatewayCliCommand(child);
+  if (hasStdin) {
+    child.stdin?.once("error", () => {});
+    child.stdin?.end(params.stdin);
+  }
+  return await result;
+}
+
+function createQaPackagedMockApiKey(): string {
+  const prefix = ["s", "k"].join("");
+  return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
+}
+
+async function stageQaPackagedMockAuthProfiles(params: {
+  command: QaGatewayChildCommand;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  providers: readonly string[];
+}): Promise<void> {
+  for (const provider of uniqueStrings(params.providers)) {
+    try {
+      await runQaGatewayCliCommand({
+        executablePath: params.command.executablePath,
+        argsPrefix: params.command.argsPrefix ?? [],
+        args: [
+          "models",
+          "auth",
+          "--agent",
+          "qa",
+          "paste-api-key",
+          "--provider",
+          provider,
+          "--profile-id",
+          buildQaMockProfileId(provider),
+        ],
+        cwd: params.command.cwd ?? params.cwd,
+        env: params.env,
+        stdin: `${createQaPackagedMockApiKey()}\n`,
+      });
+    } catch (error) {
+      const errorMessage = toErrorObject(error, "installed package auth command failed").message;
+      const details = sliceUtf16Safe(
+        redactQaGatewayDebugText(errorMessage),
+        0,
+        QA_PACKAGE_AUTH_FAILURE_MAX_CHARS,
+      );
+      // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
+      throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
+    }
+  }
 }
 
 type QaChildFailure = {
@@ -569,6 +619,56 @@ function isRetryableGatewayCallError(details: string): boolean {
   );
 }
 
+async function callQaGatewayWithRetry<T>(params: {
+  deadlineMs?: number;
+  logs: () => string;
+  request: (options: { deadlineMs?: number; timeoutMs: number }) => Promise<T>;
+  throwChildFailure: () => void;
+  timeoutMs: number;
+  waitForReady: (timeoutMs: number) => Promise<void>;
+}) {
+  const remainingMs = () =>
+    params.deadlineMs === undefined ? undefined : params.deadlineMs - Date.now();
+  const deadlineError = () =>
+    new Error(`gateway call deadline exceeded${formatQaGatewayLogsForError(params.logs())}`);
+  let lastDetails = "";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    params.throwChildFailure();
+    const requestRemainingMs = remainingMs();
+    if (requestRemainingMs !== undefined && requestRemainingMs <= 0) {
+      throw deadlineError();
+    }
+    try {
+      return await params.request({
+        ...(params.deadlineMs === undefined ? {} : { deadlineMs: params.deadlineMs }),
+        timeoutMs:
+          requestRemainingMs === undefined
+            ? params.timeoutMs
+            : Math.min(params.timeoutMs, requestRemainingMs),
+      });
+    } catch (error) {
+      params.throwChildFailure();
+      const details = formatErrorMessage(error);
+      lastDetails = details;
+      if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
+        throw new Error(`${details}${formatQaGatewayLogsForError(params.logs())}`, {
+          cause: error,
+        });
+      }
+      const readinessRemainingMs = remainingMs();
+      if (readinessRemainingMs !== undefined && readinessRemainingMs <= 0) {
+        throw deadlineError();
+      }
+      await params.waitForReady(
+        readinessRemainingMs === undefined
+          ? Math.max(10_000, params.timeoutMs)
+          : Math.min(Math.max(10_000, params.timeoutMs), readinessRemainingMs),
+      );
+    }
+  }
+  throw new Error(`${lastDetails}${formatQaGatewayLogsForError(params.logs())}`);
+}
+
 function createQaGatewayChildLogCollector() {
   const chunks: Buffer[] = [];
   return {
@@ -633,6 +733,7 @@ function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: stri
 async function fetchLocalGatewayHealth(params: {
   baseUrl: string;
   healthPath: "/readyz" | "/healthz";
+  timeoutMs?: number;
 }): Promise<boolean> {
   const { response, release } = await fetchWithSsrFGuard({
     url: `${params.baseUrl}${params.healthPath}`,
@@ -641,7 +742,7 @@ async function fetchLocalGatewayHealth(params: {
       headers: {
         connection: "close",
       },
-      signal: AbortSignal.timeout(2_000),
+      signal: AbortSignal.timeout(params.timeoutMs ?? 2_000),
     },
     policy: { allowPrivateNetwork: true },
     auditContext: "qa-lab-gateway-child-health",
@@ -698,6 +799,7 @@ export const testing = {
   buildQaRuntimeEnv,
   cleanupQaGatewayTempRoots,
   fetchLocalGatewayHealth,
+  callQaGatewayWithRetry,
   isRetryableGatewayCallError,
   isRetryableRpcStartupError,
   classifyQaGatewayStartupRetry,
@@ -742,98 +844,11 @@ function isProcessAlreadyExitedError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ESRCH";
 }
 
-function parseLinuxProcessStat(raw: string) {
-  const commandStart = raw.indexOf("(");
-  const commandEnd = raw.lastIndexOf(")");
-  if (commandStart <= 0 || commandEnd <= commandStart) {
-    return null;
-  }
-  const pid = Number.parseInt(raw.slice(0, commandStart).trim(), 10);
-  const fields = raw
-    .slice(commandEnd + 1)
-    .trim()
-    .split(/\s+/u);
-  const state = fields[0];
-  const processGroupId = Number.parseInt(fields[2] ?? "", 10);
-  if (
-    !Number.isSafeInteger(pid) ||
-    pid <= 0 ||
-    !state ||
-    !Number.isSafeInteger(processGroupId) ||
-    processGroupId <= 0
-  ) {
-    return null;
-  }
-  return {
-    command: raw.slice(commandStart + 1, commandEnd),
-    pid,
-    processGroupId,
-    state,
-  };
-}
-
 function boundQaGatewayProcessTreeDiagnostics(details: string) {
-  if (details.length <= QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS) {
+  if (details.length <= 2_048) {
     return details;
   }
-  return `${sliceUtf16Safe(details, 0, QA_GATEWAY_PROCESS_TREE_DIAGNOSTIC_MAX_CHARS - 3)}...`;
-}
-
-function inspectLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
-  const members = stats
-    .map((raw) => parseLinuxProcessStat(raw))
-    .filter(
-      (entry): entry is NonNullable<ReturnType<typeof parseLinuxProcessStat>> =>
-        entry?.processGroupId === processGroupId,
-    )
-    .toSorted((left, right) => left.pid - right.pid);
-  const diagnostics = members
-    .map(
-      (member) =>
-        `pid=${member.pid} state=${member.state} command=${JSON.stringify(member.command)}`,
-    )
-    .join(", ");
-  return {
-    alive:
-      members.length === 0
-        ? null
-        : members.some((entry) => entry.state !== "Z" && entry.state !== "X"),
-    diagnostics: boundQaGatewayProcessTreeDiagnostics(
-      `pgid=${processGroupId} members=[${diagnostics}]`,
-    ),
-  };
-}
-
-type QaLinuxProcessGroupInspection = ReturnType<typeof inspectLinuxProcessGroupStats>;
-type QaLinuxProcessGroupInspector = (
-  processGroupId: number,
-) => QaLinuxProcessGroupInspection | null;
-
-function inspectLinuxProcessGroup(processGroupId: number): QaLinuxProcessGroupInspection | null {
-  if (process.platform !== "linux") {
-    return null;
-  }
-  let entries;
-  try {
-    entries = readdirSync("/proc", { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const stats: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) {
-      continue;
-    }
-    try {
-      stats.push(readFileSync(path.join("/proc", entry.name, "stat"), "utf8"));
-    } catch (error) {
-      // Processes can exit while /proc is being scanned.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return null;
-      }
-    }
-  }
-  return inspectLinuxProcessGroupStats(processGroupId, stats);
+  return `${sliceUtf16Safe(details, 0, 2_045)}...`;
 }
 
 function isQaGatewayChildProcessTreeAlive(
@@ -1093,8 +1108,9 @@ async function waitForGatewayReady(params: {
   getChildFailure?: () => QaChildFailure | null;
   timeoutMs?: number;
 }) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
+  const deadline = Date.now() + (params.timeoutMs ?? 60_000);
+  let remainingMs: number;
+  while ((remainingMs = deadline - Date.now()) > 0) {
     throwQaGatewayChildFailure(params.getChildFailure, params.logs);
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
       throw new QaSuiteInfraError(
@@ -1104,13 +1120,19 @@ async function waitForGatewayReady(params: {
     }
     // Listener liveness can turn green before the Gateway can admit startup or restart work.
     try {
-      if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath: "/readyz" })) {
+      if (
+        await fetchLocalGatewayHealth({
+          baseUrl: params.baseUrl,
+          healthPath: "/readyz",
+          timeoutMs: Math.min(2_000, remainingMs),
+        })
+      ) {
         return;
       }
     } catch {
       // retry until timeout
     }
-    await sleep(250);
+    await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
   }
   throw new QaSuiteInfraError(
     "gateway_startup_unhealthy",
@@ -1219,6 +1241,7 @@ export async function startQaGatewayChild(params: {
     const gatewayCommand =
       params.command ??
       (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
+    const usesPackagedCandidate = params.command?.usePackagedPlugins === true;
     const gatewayExecutablePath = gatewayCommand?.executablePath;
     const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
     const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -1312,12 +1335,14 @@ export async function startQaGatewayChild(params: {
       });
       const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
       if (mockAuthProviders && mockAuthProviders.length > 0) {
-        cfg = await stageQaMockAuthProfiles({
-          cfg,
-          stateDir,
-          agentIds: params.mockAuthAgentIds,
-          providers: mockAuthProviders,
-        });
+        if (!usesPackagedCandidate) {
+          cfg = await stageQaMockAuthProfiles({
+            cfg,
+            stateDir,
+            agentIds: params.mockAuthAgentIds,
+            providers: mockAuthProviders,
+          });
+        }
       }
       return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
     };
@@ -1536,6 +1561,15 @@ export async function startQaGatewayChild(params: {
           encoding: "utf8",
           mode: 0o600,
         });
+        const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+        if (usesPackagedCandidate && gatewayCommand && mockAuthProviders?.length) {
+          await stageQaPackagedMockAuthProfiles({
+            command: gatewayCommand,
+            cwd: gatewayCwd,
+            env,
+            providers: mockAuthProviders,
+          });
+        }
       }
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");
@@ -1853,34 +1887,28 @@ export async function startQaGatewayChild(params: {
       async call(
         method: string,
         rpcParams?: unknown,
-        opts?: { expectFinal?: boolean; timeoutMs?: number },
+        opts?: { deadlineMs?: number; expectFinal?: boolean; timeoutMs?: number },
       ) {
         const timeoutMs = opts?.timeoutMs ?? 20_000;
-        let lastDetails = "";
-        for (let attempt = 1; attempt <= 3; attempt += 1) {
-          throwActiveChildFailure();
-          try {
-            return await activeRpcClient.request(method, rpcParams, {
+        return await callQaGatewayWithRetry({
+          deadlineMs: opts?.deadlineMs,
+          logs,
+          request: async (requestOptions) =>
+            await activeRpcClient.request(method, rpcParams, {
               ...opts,
-              timeoutMs,
-            });
-          } catch (error) {
-            throwActiveChildFailure();
-            const details = formatErrorMessage(error);
-            lastDetails = details;
-            if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
-              throw new Error(`${details}${formatQaGatewayLogsForError(logs())}`, { cause: error });
-            }
+              ...requestOptions,
+            }),
+          throwChildFailure: throwActiveChildFailure,
+          timeoutMs,
+          waitForReady: async (readinessTimeoutMs) =>
             await waitForGatewayReady({
               baseUrl,
               logs,
               child: activeChild,
               getChildFailure: activeGetChildFailure,
-              timeoutMs: Math.max(10_000, timeoutMs),
-            });
-          }
-        }
-        throw new Error(`${lastDetails}${formatQaGatewayLogsForError(logs())}`);
+              timeoutMs: readinessTimeoutMs,
+            }),
+        });
       },
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
         await activeRpcClient.stop().catch(() => {});

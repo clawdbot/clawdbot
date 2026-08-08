@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
@@ -34,10 +35,6 @@ export type ConversationIdentity = {
   label?: string;
   metadata?: Record<string, unknown>;
 };
-
-function normalizeText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function normalizeThreadId(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {

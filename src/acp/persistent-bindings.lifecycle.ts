@@ -13,7 +13,7 @@ import {
 } from "./persistent-bindings.types.js";
 
 // Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
-function sessionMatchesConfiguredBinding(params: {
+function sessionStructurallyMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
@@ -67,12 +67,23 @@ export async function ensureConfiguredAcpBindingSession(params: {
     });
     if (
       resolution.kind === "ready" &&
-      sessionMatchesConfiguredBinding({
+      sessionStructurallyMatchesConfiguredBinding({
         cfg: params.cfg,
         spec: params.spec,
         meta: resolution.meta,
       })
     ) {
+      // Model drift is live-configurable; preserve the bound conversation and patch it in place.
+      if (
+        params.spec.model &&
+        normalizeText(resolution.meta.runtimeOptions?.model) !== params.spec.model
+      ) {
+        await acpManager.updateSessionRuntimeOptions({
+          cfg: params.cfg,
+          sessionKey,
+          patch: { model: params.spec.model },
+        });
+      }
       return {
         ok: true,
         sessionKey,
@@ -95,6 +106,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
+      runtimeOptions: params.spec.model ? { model: params.spec.model } : undefined,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
     });

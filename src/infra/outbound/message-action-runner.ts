@@ -1,5 +1,6 @@
 // Message-action runner normalizes tool params, resolves channel/target/media,
 // applies policies, and dispatches send/poll/plugin actions.
+import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -282,12 +283,6 @@ export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
-}
-
-function asResultRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function withSendNormalization(
@@ -716,6 +711,7 @@ async function resolveResolvedTargetOrThrow(params: {
 type ResolvedActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  idempotencyKey?: string;
   channel: ChannelId;
   channelPlugin?: ChannelPlugin;
   mediaAccess: OutboundMediaAccess;
@@ -1635,6 +1631,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       cfg,
       channel,
       params,
+      idempotencyKey: ctx.idempotencyKey,
       agentId,
       sessionKey: input.sessionKey,
       requesterAccountId: input.requesterAccountId ?? undefined,
@@ -1801,6 +1798,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       cfg,
       channel,
       params,
+      idempotencyKey: ctx.idempotencyKey,
       accountId: accountId ?? undefined,
       agentId,
       requesterAccountId: input.requesterAccountId ?? undefined,
@@ -2222,6 +2220,7 @@ export async function runMessageAction(
   const context: ResolvedActionContext = {
     cfg,
     params,
+    idempotencyKey: normalizeOptionalString(params.idempotencyKey),
     channel,
     channelPlugin,
     mediaAccess,

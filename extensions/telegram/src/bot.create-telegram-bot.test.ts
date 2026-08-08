@@ -19,7 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTelegramNativeCommandTestDeps,
@@ -42,7 +42,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
-const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
+const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
@@ -386,12 +386,7 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,
@@ -5376,8 +5371,11 @@ describe("createTelegramBot", () => {
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
-    const patchSessionEntrySpy = vi.spyOn(sessionStoreRuntime, "patchSessionEntry");
-    patchSessionEntrySpy.mockRejectedValueOnce(new Error("session store boom"));
+    const applySessionModelSelectionSpy = vi.spyOn(
+      modelSessionRuntime,
+      "applySessionModelSelection",
+    );
+    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = makeCallbackRetryContext({
       updateId: 890,
@@ -5390,7 +5388,7 @@ describe("createTelegramBot", () => {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
     } finally {
-      patchSessionEntrySpy.mockRestore();
+      applySessionModelSelectionSpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
@@ -5408,15 +5406,14 @@ describe("createTelegramBot", () => {
   it("shows a permanent rejection when model selection is locked", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const patchSessionEntrySpy = vi
-      .spyOn(sessionStoreRuntime, "patchSessionEntry")
-      .mockImplementationOnce(async (params) => {
+    const getSessionEntrySpy = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntry")
+      .mockImplementationOnce(() => {
         const entry = {
           sessionId: "locked-session",
           updatedAt: Date.now(),
           modelSelectionLocked: true,
         };
-        await params.update(entry, { existingEntry: entry });
         return entry;
       });
     const ctx = makeCallbackRetryContext({
@@ -5428,7 +5425,7 @@ describe("createTelegramBot", () => {
     try {
       await expect(callbackHandler(ctx)).resolves.toBeUndefined();
     } finally {
-      patchSessionEntrySpy.mockRestore();
+      getSessionEntrySpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

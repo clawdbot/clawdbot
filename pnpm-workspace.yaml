@@ -24,6 +24,7 @@ minimumReleaseAgeExclude:
   - "hono"
   - "libopus-wasm@0.2.0"
   - "libsignal@6.0.0"
+  - "nanoid@3.3.18"
   - "openclaw"
   - "protobufjs"
   - "vite"
@@ -119,7 +120,7 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.146.1
+  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.147.0
   "@anthropic-ai/sdk": 0.115.0
   "@opentelemetry/core": 2.10.0
   "@opentelemetry/propagator-jaeger": 2.10.0

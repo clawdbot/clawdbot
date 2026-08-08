@@ -173,6 +173,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.executablePath": "Browser Profile Executable Path",
   "browser.profiles.*.headless": "Browser Profile Headless Mode",
   "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
+  "browser.extensionRelay": "Browser Extension Relay",
+  "browser.extensionRelay.allowLegacyAuth": "Allow Legacy Browser Relay Auth",
   tools: "Tools",
   "tools.allow": "Tool Allowlist",
   "tools.deny": "Tool Denylist",

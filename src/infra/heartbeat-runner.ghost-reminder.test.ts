@@ -13,7 +13,13 @@ import {
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -754,6 +760,31 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Provider).toBe("exec-event");
     expect(calledCtx?.Body).toContain("deploy succeeded");
     expect(calledCtx?.Body).not.toContain("Node connected");
+    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
+  });
+
+  it("ignores an acknowledged exec-event wake without consuming unrelated events", async () => {
+    const { result, sendTelegram, calledCtx, replyCallCount, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-acknowledged-",
+      replyText: "Unexpected heartbeat",
+      reason: "exec-event",
+      enqueue: (key) => {
+        const completion = enqueueSystemEventEntry(
+          "Exec completed (abc12345, code 0) :: deploy succeeded",
+          { sessionKey: key },
+        );
+        if (!completion) {
+          throw new Error("expected exec completion event");
+        }
+        expect(consumeSelectedSystemEventEntries(key, [completion])).toHaveLength(1);
+        enqueueSystemEvent("Node connected", { sessionKey: key });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: "no-pending-event" });
+    expect(replyCallCount).toBe(0);
+    expect(calledCtx).toBeNull();
+    expect(sendTelegram).not.toHaveBeenCalled();
     expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
   });
 

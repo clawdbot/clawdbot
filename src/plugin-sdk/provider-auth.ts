@@ -34,6 +34,7 @@ import {
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_GITHUB_COPILOT_DOMAIN,
@@ -271,12 +272,6 @@ function parseCopilotTokenResponse(value: unknown): {
   }
 
   return { token, expiresAt: expiresAtMs };
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */

@@ -13,6 +13,7 @@ type PopupMessage = {
 type PopupState = {
   paired?: boolean;
   shared?: boolean;
+  statusHint?: string;
   failures: Partial<Record<"getStatus" | "pair" | "unpair" | "toggleShareTab", string>>;
   onFailure?: (message: PopupMessage) => void;
 };
@@ -39,6 +40,7 @@ async function loadPopup(params: PopupState) {
           state: "on",
           sharedTabCount: params.shared ? 1 : 0,
           relayUrl: "ws://127.0.0.1:18797/extension",
+          ...(params.statusHint ? { hint: params.statusHint } : {}),
         };
       case "prepareCopilotPanel":
         return { ok: true, path: "sidepanel.html?binding=fixture" };
@@ -104,6 +106,15 @@ describe("Chrome extension popup action errors", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
+  });
+
+  it("shows persisted re-pair guidance after an unsupported pairing is cleared", async () => {
+    const hint =
+      "Stored proxy-prefixed browser relay pairing is no longer supported. Re-run openclaw browser extension pair with a Gateway URL that has no path prefix.";
+    await loadPopup({ paired: false, statusHint: hint, failures: {} });
+
+    expect(popupElement("statusLine").textContent).toBe(hint);
+    expect(popupElement("pairSection").classList.contains("hidden")).toBe(false);
   });
 
   afterEach(() => {

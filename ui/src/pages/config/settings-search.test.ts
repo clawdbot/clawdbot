@@ -420,11 +420,11 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("finds archived workspace threads using translated filter text", async () => {
+  it("finds archived workspace sessions using translated filter text", async () => {
     await i18n.setLocale("es");
 
     const matches = findSettingsSearchBlocks({
-      query: "archivadas",
+      query: "archivada",
       schema: null,
       value: null,
       uiHints: {},

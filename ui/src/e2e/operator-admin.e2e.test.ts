@@ -1,28 +1,24 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI operator administration",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
+
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "operator-admin");
 const viewport = { height: 960, width: 1440 };
-
-let browser: Browser;
-let server: ControlUiE2eServer;
 
 const agentRoster = [
   { id: "main", identity: { name: "Main" }, name: "Main" },
@@ -123,7 +119,7 @@ async function createContext(): Promise<BrowserContext> {
   if (captureUiProof) {
     await mkdir(proofDir, { recursive: true });
   }
-  return browser.newContext({
+  return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
@@ -151,20 +147,7 @@ async function screenshot(page: Page, name: string) {
   });
 }
 
-describeControlUiE2e("Control UI operator administration", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("administers agent-scoped Skills and inspects the connected Nodes inventory", async () => {
     const context = await createContext();
     const page = await context.newPage();
@@ -218,7 +201,7 @@ describeControlUiE2e("Control UI operator administration", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}skills`);
+      const response = await page.goto(`${suite.server.baseUrl}skills`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.status");
 
@@ -250,7 +233,7 @@ describeControlUiE2e("Control UI operator administration", () => {
       await expect.poll(() => dialog.getByText("Installed Deploy Helper").isVisible()).toBe(true);
       await screenshot(page, "01-reviewer-skill-installed.png");
 
-      await page.goto(`${server.baseUrl}nodes`);
+      await page.goto(`${suite.server.baseUrl}nodes`);
       await Promise.all([
         gateway.waitForRequest("node.list"),
         gateway.waitForRequest("device.pair.list"),
@@ -376,7 +359,7 @@ describeControlUiE2e("Control UI operator administration", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
@@ -385,7 +368,7 @@ describeControlUiE2e("Control UI operator administration", () => {
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await screenshot(page, "05-read-only-agents.png");
 
-      await page.goto(`${server.baseUrl}settings/agents/main/files`);
+      await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
       await gateway.waitForRequest("agents.files.list");
       await page.locator("openclaw-agents-page").evaluate((element) => {
         const agentsPage = element as HTMLElement & {
@@ -422,7 +405,7 @@ describeControlUiE2e("Control UI operator administration", () => {
       await fileSave.click({ force: true });
       expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
 
-      await page.goto(`${server.baseUrl}settings/agents/main/skills`);
+      await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "main");
       const agentSkillsActions = page.locator(".settings-section", { hasText: "Skills" });
       const disableAll = agentSkillsActions.getByRole("button", { name: "Disable All" });
@@ -430,7 +413,7 @@ describeControlUiE2e("Control UI operator administration", () => {
       await disableAll.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await page.goto(`${server.baseUrl}skills`);
+      await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
       const globalSkillToggle = page.locator("wa-switch.settings-toggle").first();
       await expect.poll(() => globalSkillToggle.getAttribute("disabled")).not.toBeNull();
@@ -444,7 +427,7 @@ describeControlUiE2e("Control UI operator administration", () => {
       expect(await gateway.getRequests("skills.install")).toHaveLength(0);
       await screenshot(page, "06-read-only-skills.png");
 
-      await page.goto(`${server.baseUrl}skills/workshop`);
+      await page.goto(`${suite.server.baseUrl}skills/workshop`);
       await gateway.waitForRequest("skills.proposals.list");
       await page.locator("#skill-workshop-mode-tab-board").click();
       const actionButtons = page.locator(".sw-action-bar button");
@@ -499,7 +482,7 @@ describeControlUiE2e("Control UI operator administration", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}agents`);
+      await page.goto(`${suite.server.baseUrl}agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
@@ -507,7 +490,7 @@ describeControlUiE2e("Control UI operator administration", () => {
       await setDefault.click();
       await gateway.waitForRequest("config.set");
 
-      await page.goto(`${server.baseUrl}skills`);
+      await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const install = page
@@ -573,7 +556,7 @@ describeControlUiE2e("Control UI operator administration", () => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}nodes`);
+      const response = await page.goto(`${suite.server.baseUrl}nodes`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("exec.approvals.get");
 

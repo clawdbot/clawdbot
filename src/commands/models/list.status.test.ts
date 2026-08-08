@@ -1,4 +1,5 @@
 // Model list status tests cover status column construction and auth/probe summaries.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -349,12 +350,7 @@ function parseFirstJsonLog(runtimeLike: { log: Mock }) {
   return JSON.parse(String(runtimeLike.log.mock.calls[0]?.[0]));
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {

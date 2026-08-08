@@ -440,7 +440,16 @@ export async function runMemoryStatus(
         lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
       };
       if (status.backend === "builtin") {
-        const storeState = formatVectorState(status.vector.storeAvailable);
+        const storeState =
+          status.vector.storeAvailable === undefined && status.vector.enabled
+            ? status.vector.index?.state === "complete"
+              ? "indexed (unprobed)"
+              : status.vector.index?.state === "incomplete"
+                ? "index incomplete (unprobed)"
+                : status.vector.index?.state === "unverified"
+                  ? "index unverified (unprobed)"
+                  : formatVectorState(undefined)
+            : formatVectorState(status.vector.storeAvailable);
         formatVectorLine("Vector store", storeState);
         if (status.vector.semanticAvailable !== undefined) {
           formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));

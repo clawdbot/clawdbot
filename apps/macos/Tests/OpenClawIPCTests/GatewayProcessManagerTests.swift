@@ -680,7 +680,7 @@ struct GatewayProcessManagerTests {
                   "loaded":true,
                   "runtime":{"status":"running","pid":4242},
                   "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
-                  "configAudit":{"ok":false,"issues":[{"code":"gateway-service-version-mismatch"}]}
+                  "configAudit":{"ok":false,"issues":[{"code":"gateway-entrypoint-mismatch"}]}
                 }}
                 """,
             ]

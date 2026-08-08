@@ -1529,6 +1529,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "audio" to R.string.native_6ed8919ce20490a5,
     "ban" to R.string.native_b2a96c3d3fc2b6ac,
     "bounds: \$value" to R.string.native_8224853603189c0f,
+    "camera PTZ" to R.string.native_0b23b09cee45a5e1,
     "camera clip" to R.string.native_859270e63a2904d7,
     "camera list" to R.string.native_84db8228370efedd,
     "camera snap" to R.string.native_6965fdd9e5a18c87,

@@ -649,6 +649,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
         });
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
+        expect(command.transportRetry).toBe("never");
         expect(command.argv).toEqual([
           "sh",
           "-c",

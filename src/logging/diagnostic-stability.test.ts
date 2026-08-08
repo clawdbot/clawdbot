@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -855,6 +856,30 @@ describe("diagnostic stability recorder", () => {
       type: "payload.large",
       action: "chunked",
     });
+  });
+
+  it("records sanitized trusted model request instrumentation", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "private-run-id",
+      callId: "private-call-id",
+      sessionKey: "private-session-key",
+      provider: "openai",
+      model: "gpt-5.4",
+      observationUnit: "request",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticStabilitySnapshot({ type: "model.call.started" }).events).toEqual([
+      expect.objectContaining({
+        type: "model.call.started",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ]);
+    expect(JSON.stringify(getDiagnosticStabilitySnapshot())).not.toContain("private-");
   });
 
   it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {

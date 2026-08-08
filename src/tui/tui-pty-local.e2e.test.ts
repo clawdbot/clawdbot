@@ -63,6 +63,9 @@ type GatewayScenario = MockModelBehavior & {
 };
 
 const SHARED_GATEWAY_AGENT_ID = "tui-pty-gateway";
+// These cases spawn openclaw.mjs outside the source TUI runner. CI opts in only
+// after the exact head has a complete build, so source-mode PTY smoke must skip them.
+const itWithBuiltCli = process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1" ? it : it.skip;
 
 const GATEWAY_SCENARIOS = {
   validation: {
@@ -743,7 +746,6 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
     controlClient = new GatewayChatClient({
       url: gateway.url,
       token: gateway.gatewayToken,
-      allowInsecureLocalOperatorUi: false,
     });
     controlClient.onConnected = () => {
       controlClientConnected = true;
@@ -857,7 +859,6 @@ async function startGatewayModeTui(
   const controlClient = new GatewayChatClient({
     url: shared.gateway.url,
     token: shared.gateway.gatewayToken,
-    allowInsecureLocalOperatorUi: false,
   });
   let controlClientConnected = false;
   controlClient.onConnected = () => {
@@ -1344,7 +1345,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  itWithBuiltCli(
     "repairs isolated config through the approved built CLI and resumes local chat",
     async ({ onTestFinished }) => {
       const fixture = await startLocalModeTui(onTestFinished, {
@@ -1398,7 +1399,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  itWithBuiltCli(
     "authenticates a manifest-discovered provider and resumes the unchanged local model",
     async ({ onTestFinished }) => {
       const pluginId = "t05-local-auth-fixture";
@@ -1570,7 +1571,6 @@ export default {
             eventProbe = new GatewayChatClient({
               url: fixture.gateway.url,
               token: fixture.gateway.gatewayToken,
-              allowInsecureLocalOperatorUi: false,
             });
             eventProbe.onConnected = () => {
               probeConnected = true;
@@ -1722,7 +1722,6 @@ export default {
       const historyClient = new GatewayChatClient({
         url: shared.gateway.url,
         token: shared.gateway.gatewayToken,
-        allowInsecureLocalOperatorUi: false,
       });
       let historyClientConnected = false;
       historyClient.onConnected = () => {
@@ -1806,7 +1805,6 @@ export default {
       const controlClient = new GatewayChatClient({
         url: shared.gateway.url,
         token: shared.gateway.gatewayToken,
-        allowInsecureLocalOperatorUi: false,
       });
       let controlClientConnected = false;
       controlClient.onConnected = () => {
@@ -2264,7 +2262,6 @@ export default {
       const queueClient = new GatewayChatClient({
         url: fixture.gateway.url,
         token: fixture.gateway.gatewayToken,
-        allowInsecureLocalOperatorUi: false,
       });
       try {
         let queueClientConnected = false;

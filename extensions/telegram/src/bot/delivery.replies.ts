@@ -1,5 +1,5 @@
 // Telegram plugin module implements delivery.replies behavior.
-import { type Bot, GrammyError } from "grammy";
+import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import {
   createOutboundPayloadPlan,
@@ -57,7 +57,11 @@ import {
   type TelegramInputRichMessage,
 } from "../rich-message.js";
 import { isTelegramEmptyContentError } from "../rich-plain-fallback.js";
-import { isTelegramPhotoLimitError } from "../send-error-predicates.js";
+import {
+  isTelegramCaptionTooLongError,
+  isTelegramPhotoLimitError,
+  isTelegramVoiceMessagesForbiddenError,
+} from "../send-error-predicates.js";
 import { reportTelegramProviderDelivery } from "../send-outbound.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { recordSentMessage } from "../sent-message-cache.js";
@@ -75,11 +79,6 @@ import {
   sendChunkedTelegramReplyText,
   type DeliveryProgress as ReplyThreadDeliveryProgress,
 } from "./reply-threading.js";
-
-const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
-const CAPTION_TOO_LONG_RE = /caption is too long/i;
-const GrammyErrorCtor: typeof GrammyError | undefined =
-  typeof GrammyError === "function" ? GrammyError : undefined;
 
 type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
@@ -316,20 +315,6 @@ async function deliverTextReply(params: {
   return firstDeliveredMessageId;
 }
 
-function isVoiceMessagesForbidden(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return err.description.includes(VOICE_FORBIDDEN_MARKER);
-  }
-  return formatErrorMessage(err).includes(VOICE_FORBIDDEN_MARKER);
-}
-
-function isCaptionTooLong(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return CAPTION_TOO_LONG_RE.test(err.description);
-  }
-  return CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
-}
-
 function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
   if (reply.text?.trim()) {
     return reply.text;
@@ -536,9 +521,9 @@ async function deliverMediaReply(params: {
 
       await params.onVoiceRecording?.();
       try {
-        await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
+        await sendVoiceMedia(mediaParams, (err) => !isTelegramVoiceMessagesForbiddenError(err));
       } catch (voiceErr) {
-        if (isVoiceMessagesForbidden(voiceErr)) {
+        if (isTelegramVoiceMessagesForbiddenError(voiceErr)) {
           const fallbackText = resolveVoiceFallbackText(params.reply);
           if (!fallbackText || !fallbackText.trim()) {
             throw voiceErr;
@@ -564,7 +549,7 @@ async function deliverMediaReply(params: {
           markDelivered(params.progress);
           continue;
         }
-        if (isCaptionTooLong(voiceErr)) {
+        if (isTelegramCaptionTooLongError(voiceErr)) {
           logVerbose(
             "telegram sendVoice caption too long; resending voice without caption + text separately",
           );
@@ -774,7 +759,7 @@ export async function deliverReplies(params: {
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
-  /** Opt into Telegram Bot API 10.1 rich text delivery. */
+  /** Opt into Telegram Bot API 10.2 rich text delivery. */
   richMessages?: boolean;
   /** Callback invoked before sending a voice message to switch typing indicator. */
   onVoiceRecording?: () => Promise<void> | void;
@@ -844,6 +829,9 @@ export async function deliverReplies(params: {
   for (const originalReply of normalizedReplies) {
     let reply = canonicalizeTelegramPresentationPayload(originalReply, {
       allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
+      // HTML-mode text bypasses the markdown -> rich-block converter, so native
+      // table rendering only applies to the rich markdown funnel.
+      richTables: params.richMessages === true && params.textMode !== "html",
     });
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls

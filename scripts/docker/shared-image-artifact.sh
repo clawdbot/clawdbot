@@ -51,6 +51,61 @@ configure_image_artifact_inputs() {
   archive_path="${artifact_dir}/${archive_name}"
 }
 
+is_transient_gh_api_get_error() {
+  local error_text="$1"
+  if [[ "$error_text" =~ (^|[^0-9])(401|403|404|422)([^0-9]|$) ||
+    "$error_text" =~ [Bb]ad[[:space:]]+[Cc]redentials ||
+    "$error_text" =~ [Cc]redential ||
+    "$error_text" =~ [Aa]uthentication ]]; then
+    return 1
+  fi
+
+  [[ "$error_text" == *"i/o timeout"* ||
+    "$error_text" =~ [Cc]ontext[[:space:]]+deadline[[:space:]]+exceeded ||
+    "$error_text" =~ [Cc]onnection[[:space:]]+(refused|reset) ||
+    "$error_text" =~ [Nn]etwork[[:space:]]+is[[:space:]]+unreachable ||
+    "$error_text" =~ [Nn]o[[:space:]]+such[[:space:]]+host ||
+    "$error_text" =~ [Tt]emporary[[:space:]]+failure ||
+    "$error_text" =~ TLS[[:space:]]+handshake[[:space:]]+timeout ||
+    "$error_text" =~ [Uu]nexpected[[:space:]]+EOF ||
+    "$error_text" =~ (^|[^0-9])429([^0-9]|$) ||
+    "$error_text" =~ [Rr]ate[[:space:]-]*limit ||
+    "$error_text" =~ ([Hh][Tt][Tt][Pp]|[Ss]tatus([[:space:]_-]*code)?)[^0-9]*5[0-9]{2} ]]
+}
+
+gh_api_get_with_retry() {
+  local label="$1"
+  local endpoint="$2"
+  local attempt error_file response_file retry_delay retry_dir
+  retry_dir="$(mktemp -d)"
+  response_file="${retry_dir}/response"
+  error_file="${retry_dir}/error"
+
+  for attempt in 1 2 3; do
+    : > "$response_file"
+    : > "$error_file"
+    if gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
+      cat "$response_file"
+      rm -rf -- "$retry_dir"
+      return 0
+    fi
+
+    if [[ "$attempt" -lt 3 ]] && is_transient_gh_api_get_error "$(cat "$error_file")"; then
+      retry_delay=$((attempt * 2))
+      printf \
+        'warning: %s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
+        "$label" "$attempt" "$retry_delay" >&2
+      cat "$error_file" >&2
+      sleep "$retry_delay"
+      continue
+    fi
+
+    cat "$error_file" >&2
+    rm -rf -- "$retry_dir"
+    fail "$label GitHub API GET failed after $attempt attempt(s)."
+  done
+}
+
 verify_uploaded_artifact() {
   if [[ "$#" -ne 6 ]]; then
     fail "usage: $0 verify-upload <label> <artifact-id> <artifact-name> <artifact-digest> <run-id> <run-attempt>"
@@ -84,7 +139,11 @@ verify_uploaded_artifact() {
   command -v jq >/dev/null
 
   local artifact_json attempt_json
-  artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}")"
+  artifact_json="$(
+    gh_api_get_with_retry \
+      "$artifact_label artifact metadata" \
+      "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+  )"
   jq -e \
     --arg digest "sha256:${artifact_digest}" \
     --arg id "$artifact_id" \
@@ -100,7 +159,8 @@ verify_uploaded_artifact() {
     fail "$artifact_label artifact identity does not match the immutable producer tuple."
 
   attempt_json="$(
-    gh api \
+    gh_api_get_with_retry \
+      "$artifact_label producer run attempt metadata" \
       "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}/attempts/${artifact_run_attempt}"
   )"
   jq -e \
