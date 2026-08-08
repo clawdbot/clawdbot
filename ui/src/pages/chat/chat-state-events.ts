@@ -29,6 +29,7 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import {
   chatScopedEventSessionMatches,
+  isChatHistoryAnchorIsolated,
   isHiddenAssistantStreamText,
   loadChatBranches,
   loadChatHistory,
@@ -197,7 +198,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
-    if (state.chatHistoryAnchorActive !== true) {
+    if (!isChatHistoryAnchorIsolated(state)) {
       // A previous run can persist its final after the next local run starts.
       // Admit that sequenced row now so the later unsequenced chat.final replay
       // replaces it in place instead of appending below the newer user turn.
@@ -238,7 +239,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     });
     return;
   }
-  if (matchesChat && state.chatHistoryAnchorActive !== true) {
+  if (matchesChat && !isChatHistoryAnchorIsolated(state)) {
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state).finally(() => state.requestUpdate?.());
   }
@@ -303,7 +304,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   }
   if (
     matchesChat &&
-    state.chatHistoryAnchorActive !== true &&
+    !isChatHistoryAnchorIsolated(state) &&
     source?.phase === "message" &&
     source.message === undefined &&
     source.messageId === undefined &&
@@ -466,7 +467,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
     const isolatesHistoricalAnchor = Boolean(
-      state.chatHistoryAnchorActive === true &&
+      isChatHistoryAnchorIsolated(state) &&
       payload &&
       chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
     );

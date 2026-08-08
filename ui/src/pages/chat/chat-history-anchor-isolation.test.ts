@@ -38,6 +38,54 @@ function createHistoryState(request: ReturnType<typeof vi.fn>): ChatState {
 }
 
 describe("historical transcript anchor isolation", () => {
+  it("keeps a pending anchor through same-session invalidations", async () => {
+    const historical = message("user", "historical hit", "historical-hit", 1);
+    let resolveAnchor: (result: ChatHistoryResult) => void = () => undefined;
+    const anchorResult = new Promise<ChatHistoryResult>((resolve) => {
+      resolveAnchor = resolve;
+    });
+    const request = vi.fn((method: string) =>
+      method === "chat.history" ? anchorResult : Promise.resolve(undefined),
+    );
+    const state = createHistoryState(request) as ChatPageHost;
+    state.sessions = {
+      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ChatPageHost["sessions"];
+    state.requestUpdate = vi.fn();
+
+    const load = loadChatHistory(state, {
+      historyAnchor: { sessionId: "session-history", messageId: "historical-hit" },
+    });
+    expect(state.chatHistoryAnchorPending).toMatchObject({
+      sessionId: "session-history",
+      messageId: "historical-hit",
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: message("user", "new live prompt", "live-user", 10),
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "main", agentId: "main", phase: "message" },
+    });
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(1);
+    resolveAnchor({ messages: [historical], sessionId: "session-history" });
+    await load;
+
+    expect(state.chatHistoryAnchorPending).toBeNull();
+    expect(state.chatHistoryAnchorActive).toBe(true);
+    expect(state.chatMessages).toEqual([historical]);
+  });
+
   it("keeps page events anchored until a terminal chat event restores ordinary history", async () => {
     const current = message("user", "current tail", "current-tail", 9);
     const historical = message("user", "historical hit", "historical-hit", 1);

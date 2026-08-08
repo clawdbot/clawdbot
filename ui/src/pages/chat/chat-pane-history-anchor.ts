@@ -25,8 +25,19 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
     this.historyAnchorRequestKey = requestKey;
     void loadChatHistory(state, { deferBranches: true, historyAnchor: anchor }).then(
       async (result) => {
+        if (!result) {
+          if (
+            this.isConnected &&
+            this.state === state &&
+            this.historyAnchor?.sessionId === anchor.sessionId &&
+            this.historyAnchor.messageId === anchor.messageId &&
+            this.historyAnchorRequestKey === requestKey
+          ) {
+            this.historyAnchorRequestKey = "";
+          }
+          return;
+        }
         if (
-          !result ||
           !this.isConnected ||
           this.historyAnchor?.sessionId !== anchor.sessionId ||
           this.historyAnchor.messageId !== anchor.messageId ||
@@ -38,7 +49,7 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
         this.requestUpdate();
         await this.updateComplete;
         cancelChatScroll(state);
-        if (this.transcript.scrollToMessage(anchor.messageId)) {
+        if (await this.transcript.scrollToMessage(anchor.messageId)) {
           this.onHistoryAnchorConsumed?.();
           return;
         }

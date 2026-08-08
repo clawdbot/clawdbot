@@ -163,6 +163,7 @@ export function createPageState(
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatHistoryAnchorActive: false,
+    chatHistoryAnchorPending: null,
     chatSending: false,
     chatMessage: "",
     chatMessages: [],

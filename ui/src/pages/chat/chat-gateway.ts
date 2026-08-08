@@ -9,6 +9,7 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
   chatScopedEventSessionMatches,
+  isChatHistoryAnchorIsolated,
   isHiddenAssistantStreamText,
   isSilentReplyStream,
   materializeVisibleAssistantStreamMessages,
@@ -495,11 +496,7 @@ function handleChatEvent(
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (
-    state.chatHistoryAnchorActive === true &&
-    payload &&
-    chatEventSessionMatches(state, payload)
-  ) {
+  if (isChatHistoryAnchorIsolated(state) && payload && chatEventSessionMatches(state, payload)) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {

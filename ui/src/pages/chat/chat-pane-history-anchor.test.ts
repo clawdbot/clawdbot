@@ -28,13 +28,13 @@ describe("chat pane history anchor", () => {
       historyAnchor: { messageId: string; sessionId: string };
       loadHistoryAnchorIfNeeded: () => void;
       onHistoryAnchorConsumed: () => void;
-      transcript: { scrollToMessage: (messageId: string) => boolean };
+      transcript: { scrollToMessage: (messageId: string) => Promise<boolean> };
     };
     const order: string[] = [];
     const cancelCommit = vi.fn(() => order.push("cancel"));
     const scrollToMessage = vi
       .spyOn(anchorPane.transcript, "scrollToMessage")
-      .mockImplementation(() => {
+      .mockImplementation(async () => {
         order.push("anchor");
         return true;
       });
@@ -86,7 +86,7 @@ describe("chat pane history anchor", () => {
       historyAnchor?: { messageId: string; sessionId: string };
       loadHistoryAnchorIfNeeded: () => void;
       onHistoryAnchorConsumed: () => void;
-      transcript: { scrollToMessage: (messageId: string) => boolean };
+      transcript: { scrollToMessage: (messageId: string) => Promise<boolean> };
     };
     anchorPane.active = true;
     anchorPane.historyAnchor = {
@@ -98,7 +98,7 @@ describe("chat pane history anchor", () => {
     anchorPane.onHistoryAnchorConsumed = vi.fn(() => {
       anchorPane.historyAnchor = undefined;
     });
-    vi.spyOn(anchorPane.transcript, "scrollToMessage").mockReturnValue(false);
+    vi.spyOn(anchorPane.transcript, "scrollToMessage").mockResolvedValue(false);
     Object.defineProperty(anchorPane, "updateComplete", {
       configurable: true,
       value: Promise.resolve(true),

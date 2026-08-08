@@ -173,6 +173,7 @@ function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   requests.inFlightHistory = undefined;
   state.chatLoading = false;
   state.chatHistoryAnchorActive = false;
+  state.chatHistoryAnchorPending = null;
   const scope = readChatSessionProjectionScope(state, { agentId });
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
@@ -278,6 +279,8 @@ export type ChatState = {
   chatMessagesBySession?: ChatMessageCache;
   /** True while the pane renders a one-shot historical window instead of its canonical tail. */
   chatHistoryAnchorActive?: boolean;
+  /** Owns a one-shot historical request before its projection is rendered. */
+  chatHistoryAnchorPending?: (SessionHistoryAnchor & { requestKey: string }) | null;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
@@ -318,6 +321,12 @@ export type ChatState = {
   chatBranchesConnectionEpoch?: number | null;
   requestUpdate?: () => void;
 };
+
+export function isChatHistoryAnchorIsolated(
+  state: Pick<ChatState, "chatHistoryAnchorActive" | "chatHistoryAnchorPending">,
+): boolean {
+  return state.chatHistoryAnchorActive === true || state.chatHistoryAnchorPending != null;
+}
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -1452,6 +1461,9 @@ export async function loadChatHistory(
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${historyAnchor?.sessionId ?? ""}\u0000${historyAnchor?.messageId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
+  if (historyAnchor) {
+    state.chatHistoryAnchorPending = { ...historyAnchor, requestKey };
+  }
   const requests = getChatHistoryPaneRequests(state);
   const inFlight = requests.inFlightHistory;
   // Live events replace the rendered array while their snapshot is pending;
@@ -1478,6 +1490,7 @@ export async function loadChatHistory(
     requestAgentId,
     method,
     historyAnchor,
+    requestKey,
   ).finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
@@ -1560,6 +1573,7 @@ async function loadChatHistoryUncached(
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
   historyAnchor: SessionHistoryAnchor | undefined,
+  requestKey: string,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1601,7 +1615,6 @@ async function loadChatHistoryUncached(
   state.chatLoading = true;
   setChatError(state, null);
   try {
-    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${historyAnchor?.sessionId ?? ""}\u0000${historyAnchor?.messageId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
     const res = await requestSharedChatHistory(
       client,
       requestKey,
@@ -1695,6 +1708,9 @@ async function loadChatHistoryUncached(
       },
     );
     state.chatHistoryAnchorActive = Boolean(historyAnchor);
+    if (state.chatHistoryAnchorPending?.requestKey === requestKey) {
+      state.chatHistoryAnchorPending = null;
+    }
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
@@ -1893,6 +1909,9 @@ async function loadChatHistoryUncached(
       setChatError(state, String(err));
     }
   } finally {
+    if (historyAnchor && state.chatHistoryAnchorPending?.requestKey === requestKey) {
+      state.chatHistoryAnchorPending = null;
+    }
     if (ownsChatHistoryRequest(state, ownership)) {
       state.chatLoading = false;
     }
