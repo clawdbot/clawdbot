@@ -47,6 +47,15 @@ describe("agent roster resolution", () => {
     expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
   });
 
+  it("resolves defaults only for the rosterless implicit main agent", () => {
+    const defaults = { fastModeDefault: "auto" as const };
+
+    expect(resolveAgentConfig({ agents: { defaults } }, "main")?.fastModeDefault).toBe("auto");
+    expect(resolveAgentConfig({ agents: { defaults } }, "work")).toBeUndefined();
+    expect(resolveAgentConfig({ agents: { defaults, entries: {} } }, "main")).toBeUndefined();
+    expect(resolveAgentConfig({ agents: { defaults, list: [] } }, "main")).toBeUndefined();
+  });
+
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
     expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBeUndefined();
     for (const marker of ["false", 1]) {
