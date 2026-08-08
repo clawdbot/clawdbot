@@ -5229,6 +5229,13 @@ describe("chat model controls", () => {
           contextWindow: 1_000_000,
           agentRuntime: { id: "google-gemini-cli", source: "model" },
         },
+        {
+          id: "gpt-5.6-terra",
+          name: "GPT-5.6 Terra",
+          provider: "openai",
+          contextWindow: 1_000_000,
+          agentRuntime: { id: "openclaw", source: "implicit" },
+        },
       ],
     });
     const container = renderModelControls(state);
@@ -5243,6 +5250,9 @@ describe("chat model controls", () => {
     // Known CLI runtime ids map to their product labels, not capitalized ids.
     expect(metaFor("anthropic/claude-opus-4-5")).toBe("200k · Claude CLI");
     expect(metaFor("google/gemini-3-pro")).toBe("1M · Gemini CLI");
+    // Implicitly resolved runtimes stay unlabeled; only operator-pinned
+    // (source model/provider) rows carry the runtime meta.
+    expect(metaFor("openai/gpt-5.6-terra")).toBe("1M");
   });
 
   it("marks chat-only models in the active control and picker", () => {
