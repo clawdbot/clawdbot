@@ -31,6 +31,7 @@ import {
   assertOpenClawAgentSchemaContains,
   assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
+  ensureSessionKeyContractSchemaInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
@@ -54,19 +55,8 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 type MigratedSessionEntry = Record<string, unknown>;
-const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
-const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
-
-function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent session-key contract schema markers are missing.");
-  }
-  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
-}
 
 function migratedSessionColumn(
   columns: ReadonlySet<string>,
@@ -587,6 +577,7 @@ function ensureAgentSchema(
       }
       if (previousVersion === targetVersion) {
         ensureSessionEntryValidityProjection(db);
+        ensureSessionKeyContractSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
           migrateMemoryChunkMetadataSchema(db);
           db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
@@ -596,7 +587,6 @@ function ensureAgentSchema(
         repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
           verifyPhysicalIntegrity: false,
         });
-        ensureSessionKeyContractSchemaInTransaction(db);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion });
         return;
       } else if (previousVersion === 14) {
@@ -698,7 +688,7 @@ export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
 ): void {
   const targetVersion = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
   const userVersion = readSqliteUserVersion(db);
-  if (userVersion >= targetVersion) {
+  if (userVersion > targetVersion) {
     return;
   }
   const agentId = normalizeAgentId(options.agentId);

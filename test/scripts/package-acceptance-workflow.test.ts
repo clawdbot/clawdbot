@@ -1969,14 +1969,18 @@ describe("package acceptance workflow", () => {
     ["title", { MOCK_GH_RUN_TITLE: "Unrelated workflow run" }],
     ["head branch", { MOCK_GH_RUN_HEAD_BRANCH: "other" }],
     ["event", { MOCK_GH_RUN_EVENT: "push" }],
-  ] as const)("refuses a returned run URL with the wrong %s", (_label, overrides) => {
+  ] as const)("refuses a returned run URL with the wrong %s", (label, overrides) => {
     const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
       MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
       ...overrides,
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Refusing to adopt unvalidated ci.yml run 101");
+    expect(result.stderr).toContain(
+      label === "title"
+        ? "Refusing to adopt ci.yml run 101: display title never matched"
+        : "Refusing to adopt unvalidated ci.yml run 101",
+    );
     expect(
       calls.some(({ args }) =>
         args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),

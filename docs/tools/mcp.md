@@ -111,7 +111,7 @@ Set `auth: "oauth"` plus any required `oauth` metadata, then:
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL and rerun with `--code` when prompted.
+Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
 
 ### Changes do not reach an active agent
 
