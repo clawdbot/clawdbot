@@ -79,8 +79,9 @@ function mockSuccessfulSpawn(stdout = "ok\n") {
 }
 
 function mockSignalSpawn(params: {
+  exitCode?: number | null;
   exitSignal: NodeJS.Signals | number;
-  oomScoreAdjusted: boolean;
+  oomScoreWrapperSelected: boolean;
   reason?: TerminationReason;
 }) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
@@ -89,9 +90,9 @@ function mockSignalSpawn(params: {
     startedAtMs: Date.now(),
     wait: vi.fn(async () => ({
       reason: params.reason ?? ("signal" as const),
-      exitCode: null,
+      exitCode: params.exitCode ?? null,
       exitSignal: params.exitSignal,
-      oomScoreAdjusted: params.oomScoreAdjusted,
+      oomScoreWrapperSelected: params.oomScoreWrapperSelected,
       durationMs: 1,
       stdout: "",
       stderr: "",
@@ -239,7 +240,7 @@ describe("exec foreground failures", () => {
         reason: "overall-timeout" as const,
         exitCode: null,
         exitSignal: "SIGKILL" as NodeJS.Signals,
-        oomScoreAdjusted: true,
+        oomScoreWrapperSelected: true,
         durationMs: input.timeoutMs ?? 50,
         stdout: "",
         stderr: "",
@@ -262,7 +263,7 @@ describe("exec foreground failures", () => {
     expect(text).toContain("Verify the resulting state before retrying");
     expect(text).toContain("Do not automatically rerun non-idempotent commands");
     expect(text).toContain("known to be safe to retry");
-    expect(text).not.toContain("preferred OOM victim");
+    expect(text).not.toContain("OOM-score wrapper");
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.exitSignal).toBe("SIGKILL");
@@ -278,8 +279,12 @@ describe("exec foreground failures", () => {
   it.each([
     { name: "child SIGKILL", pty: false, exitSignal: "SIGKILL" as NodeJS.Signals },
     { name: "PTY signal 9", pty: true, exitSignal: 9 },
-  ])("adds cautious Linux OOM guidance for an adjusted $name", async ({ pty, exitSignal }) => {
-    mockSignalSpawn({ exitSignal, oomScoreAdjusted: true });
+  ])("adds cautious Linux OOM guidance for a wrapped $name", async ({ pty, exitSignal }) => {
+    mockSignalSpawn({
+      exitCode: pty ? 0 : null,
+      exitSignal,
+      oomScoreWrapperSelected: true,
+    });
     const tool = createExecTool({
       security: "full",
       ask: "off",
@@ -295,36 +300,38 @@ describe("exec foreground failures", () => {
     expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
     const text = requireTextContent(result);
     expect(text).toContain(`Command aborted by signal ${exitSignal}`);
-    expect(text).toContain("attempted to configure this Linux child as a preferred OOM victim");
-    expect(text).not.toContain("configured this Linux child as a preferred OOM victim");
-    expect(text).toContain("does not prove memory pressure caused the SIGKILL");
+    expect(text).toContain("OpenClaw selected its Linux OOM-score wrapper");
+    expect(text).toContain("attempts to set this child's oom_score_adj to 1000");
+    expect(text).toContain("SIGKILL alone does not identify whether the Linux OOM killer");
+    expect(text).toContain("Check cgroup memory events or kernel logs");
+    expect(text).toContain("If they show memory pressure, narrow the command");
     expect(text).toContain("adjust memory, concurrency, or resource limits");
-    expect(text).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+    expect(text).toContain("Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to skip this adjustment attempt");
   });
 
   it.each([
     {
-      name: "unadjusted SIGKILL",
+      name: "unwrapped SIGKILL",
       exitSignal: "SIGKILL" as NodeJS.Signals,
-      oomScoreAdjusted: false,
+      oomScoreWrapperSelected: false,
       reason: "signal" as const,
     },
     {
-      name: "adjusted non-SIGKILL signal",
+      name: "wrapped non-SIGKILL signal",
       exitSignal: "SIGTERM" as NodeJS.Signals,
-      oomScoreAdjusted: true,
+      oomScoreWrapperSelected: true,
       reason: "signal" as const,
     },
     {
-      name: "adjusted manual cancellation",
+      name: "wrapped manual cancellation",
       exitSignal: "SIGKILL" as NodeJS.Signals,
-      oomScoreAdjusted: true,
+      oomScoreWrapperSelected: true,
       reason: "manual-cancel" as const,
     },
   ])(
     "preserves the generic signal message for $name",
-    async ({ exitSignal, oomScoreAdjusted, reason }) => {
-      mockSignalSpawn({ exitSignal, oomScoreAdjusted, reason });
+    async ({ exitSignal, oomScoreWrapperSelected, reason }) => {
+      mockSignalSpawn({ exitSignal, oomScoreWrapperSelected, reason });
       const tool = createExecTool({
         security: "full",
         ask: "off",
@@ -338,7 +345,7 @@ describe("exec foreground failures", () => {
 
       const text = requireTextContent(result);
       expect(text).toContain(`Command aborted by signal ${exitSignal}`);
-      expect(text).not.toContain("preferred OOM victim");
+      expect(text).not.toContain("OOM-score wrapper");
       expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
     },
   );

@@ -325,7 +325,7 @@ describe("createPtyAdapter", () => {
         args: ["-lc", "env"],
         env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv", TERM: "dumb" },
       });
-      expect(adapter.oomScoreAdjusted).toBe(true);
+      expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);

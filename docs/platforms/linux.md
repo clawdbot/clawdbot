@@ -242,9 +242,9 @@ sessions and channel connections, so OpenClaw biases transient child
 processes to be killed first when possible.
 
 For eligible Linux child spawns, OpenClaw wraps the command in a short
-`/bin/sh` shim that raises the child's own `oom_score_adj` to `1000`, then
-`exec`s the real command. This is unprivileged: a process may always raise
-its own OOM score.
+`/bin/sh` shim that attempts to raise the child's own `oom_score_adj` to
+`1000`, then `exec`s the real command. This is unprivileged: a process may
+always raise its own OOM score.
 
 Covered child process surfaces:
 
@@ -263,8 +263,9 @@ Verify a child process:
 cat /proc/<child-pid>/oom_score_adj
 ```
 
-Expected value for covered children is `1000`; the Gateway process itself
-keeps its normal score (usually `0`).
+When the write succeeds, the expected value for covered children is `1000`.
+If `/proc` is unavailable or unwritable, the child still runs without the OOM
+bias. The Gateway process itself keeps its normal score (usually `0`).
 
 The systemd unit's `OOMPolicy=continue` keeps the Gateway service alive when
 a transient child is selected by the OOM killer instead of marking the whole

@@ -750,7 +750,7 @@ describe("createChildAdapter", () => {
         pid: 3334,
         argv: ["/usr/bin/node", "-e", "process.exit(0)"],
       });
-      expect(adapter.oomScoreAdjusted).toBe(true);
+      expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
       if (originalBashEnv === undefined) {
         delete process.env.BASH_ENV;

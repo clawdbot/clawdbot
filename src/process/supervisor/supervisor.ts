@@ -393,7 +393,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           reason,
           exitCode: result.code,
           exitSignal: result.signal,
-          oomScoreAdjusted: adapter.oomScoreAdjusted === true,
+          oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
           durationMs: Date.now() - startedAtMs,
           stdout,
           stderr,

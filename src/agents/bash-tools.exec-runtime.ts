@@ -451,7 +451,7 @@ function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitReason: TerminationReason;
   exitSignal: NodeJS.Signals | number | null;
-  oomScoreAdjusted?: boolean;
+  oomScoreWrapperSelected?: boolean;
   timeoutSec: number | null | undefined;
 }): string {
   switch (params.failureKind) {
@@ -475,12 +475,18 @@ function formatExecFailureReason(params: {
       const signalReason = `Command aborted by signal ${params.exitSignal}`;
       if (
         params.exitReason !== "signal" ||
-        !params.oomScoreAdjusted ||
+        !params.oomScoreWrapperSelected ||
         !isSigkillSignal(params.exitSignal)
       ) {
         return signalReason;
       }
-      return `${signalReason}\n\nOpenClaw attempted to configure this Linux child as a preferred OOM victim. This does not prove memory pressure caused the SIGKILL. Narrow the command or adjust memory, concurrency, or resource limits. Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to disable this preference.`;
+      return (
+        `${signalReason}\n\n` +
+        "OpenClaw selected its Linux OOM-score wrapper, which attempts to set this child's oom_score_adj to 1000. " +
+        "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
+        "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits. " +
+        "Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to skip this adjustment attempt."
+      );
     }
     case "aborted":
       return "Command aborted before exit code was captured";
@@ -523,7 +529,7 @@ function buildExecExitOutcome(params: {
     failureKind,
     exitReason: params.exit.reason,
     exitSignal: params.exit.exitSignal,
-    oomScoreAdjusted: params.exit.oomScoreAdjusted,
+    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     timeoutSec: params.timeoutSec,
   });
   return {
