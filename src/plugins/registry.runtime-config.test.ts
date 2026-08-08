@@ -500,6 +500,7 @@ describe("plugin registry runtime config scope", () => {
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
       deleteSession: vi.fn(async () => {}),
+      abortSession: vi.fn(async () => {}),
     } satisfies PluginRuntime["subagent"];
     const runtime = createPluginRuntime({ subagent });
     const session = runtime.agent.session;
@@ -713,10 +714,25 @@ describe("plugin registry runtime config scope", () => {
       otherApi.runtime.subagent.deleteSession({ sessionKey: reservedKey }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
     await expect(
+      otherApi.runtime.subagent.abortSession({ sessionKey: reservedKey }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    // ...and the owner itself may abort it, so the guard rejects the foreign
+    // caller rather than the operation.
+    subagent.abortSession.mockClear();
+    await ownerApi.runtime.subagent.abortSession({ sessionKey: reservedKey });
+    expect(subagent.abortSession).toHaveBeenCalledWith({ sessionKey: reservedKey });
+    await expect(
       otherApi.runtime.gateway.request("sessions.patch", {
         key: reservedKey,
         archived: true,
       }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    // Direct Gateway route, not just the subagent facade: the handler-side guard
+    // must reject a foreign session even when the caller reaches sessions.abort
+    // through runtime.gateway.request, so the facade is not the only thing
+    // standing between a plugin and another plugin's active run.
+    await expect(
+      otherApi.runtime.gateway.request("sessions.abort", { key: reservedKey }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
     await expect(
       otherApi.runtime.gateway.request("sessions.archiveMany", {

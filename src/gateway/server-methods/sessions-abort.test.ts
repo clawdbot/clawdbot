@@ -99,6 +99,66 @@ test("sessions.abort aborts a pre-existing session after its agent is removed fr
   expect(activeRun.controller.signal.aborted).toBe(true);
 });
 
+test("sessions.abort refuses a plugin caller when the session has no stored owner row", async () => {
+  // The no-store active run above is a supported state, and the plugin path
+  // dispatches under a synthetic admin client that chat-abort authorizes without
+  // matching the controller owner. So "no row" must REJECT for a plugin caller —
+  // the shared ownership helper permits an absent entry, which is correct for
+  // delete/patch and a bypass here.
+  const agentId = "active-only";
+  const sessionKey = `agent:${agentId}:running`;
+  const runId = "run-no-row";
+  const activeRun = createActiveRun(sessionKey, { agentId });
+  const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
+    chatAbortControllers: new Map([[runId, activeRun]]),
+  });
+
+  const result = await directSessionReq(
+    "sessions.abort",
+    { key: sessionKey },
+    {
+      context: abortContext,
+      client: { internal: { pluginRuntimeOwnerId: "intruder" } } as never,
+    },
+  );
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+  expect(result.error?.message).toContain("did not create it");
+  // The decisive assertion: the run was NOT cancelled.
+  expect(activeRun.controller.signal.aborted).toBe(false);
+});
+
+test("sessions.abort refuses a plugin caller whose id does not own the stored row", async () => {
+  const agentId = "owned";
+  const sessionKey = `agent:${agentId}:owned-run`;
+  const sessionId = "session-owned";
+  const runId = "run-owned";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await replaceSessionEntry(
+    { agentId, sessionKey, storePath },
+    { sessionId, updatedAt: 42, pluginOwnerId: "owner-plugin" } as never,
+  );
+  const activeRun = createActiveRun(sessionKey, { agentId, sessionId });
+  const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
+    chatAbortControllers: new Map([[runId, activeRun]]),
+  });
+
+  const result = await directSessionReq(
+    "sessions.abort",
+    { key: sessionKey },
+    {
+      context: abortContext,
+      client: { internal: { pluginRuntimeOwnerId: "intruder" } } as never,
+    },
+  );
+
+  expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  expect(activeRun.controller.signal.aborted).toBe(false);
+});
+
 test("sessions.abort aborts an exact active run for an unconfigured agent without a store", async () => {
   const agentId = "active-only";
   const sessionKey = `agent:${agentId}:running`;

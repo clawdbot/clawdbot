@@ -1889,6 +1889,41 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
   });
 
+  // A bare sessions.abort deliberately PRESERVES the followup and lane queues, so
+  // forwarding only { key } would cancel the active run and let queued work
+  // promote itself straight afterwards — the user presses Stop and the session
+  // starts talking again. The boundary is the dispatched payload, which is why
+  // this asserts on it rather than on the facade's return value: abortSession
+  // resolves to undefined either way, so the broken shape is invisible from the
+  // caller's side.
+  test("clears queued session work when a plugin aborts its session", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-plugin-abort-session"));
+
+    let abortParams: Record<string, unknown> | undefined;
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      abortParams = opts.req.params as Record<string, unknown>;
+      opts.respond(true, {});
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+        runtime.abortSession({ sessionKey: "dreaming-narrative-light-workspace-1" }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(abortParams).toMatchObject({
+      key: "dreaming-narrative-light-workspace-1",
+      clearQueued: true,
+    });
+    // Still no runId: the session is what was authorized, and pairing an owned
+    // key with a caller-supplied run id under synthetic admin is the bypass the
+    // ownership check exists to stop.
+    expect(abortParams).not.toHaveProperty("runId");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
+  });
+
   test("can select setup-runtime channel plugins for setup flows", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayPluginsForTest({
