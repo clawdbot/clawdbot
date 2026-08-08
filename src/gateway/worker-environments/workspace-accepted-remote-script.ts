@@ -1,4 +1,4 @@
-import { REMOTE_WORKSPACE_ACCEPTED_LOCK_JS } from "./workspace-manifest-remote-script.js";
+import { REMOTE_WORKSPACE_ACCEPTED_LOCK_JS } from "./workspace-accepted-lock-remote-script.js";
 
 export const REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
