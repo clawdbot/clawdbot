@@ -422,7 +422,9 @@ function createConfig(params: {
         skills: [],
         skipBootstrap: true,
       },
-      list: [{ id: "main", default: true, model: { primary: provider.modelRef }, skills: [] }],
+      entries: {
+        main: { default: true, model: { primary: provider.modelRef }, skills: [] },
+      },
     },
     tools: steeringTools
       ? { profile: "minimal", alsoAllow: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL] }
