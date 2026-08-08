@@ -116,9 +116,7 @@ async function finalizeAcceptedSteer(params: {
   return "continue";
 }
 
-export async function runActiveReplySteer(
-  params: ActiveReplySteerParams,
-): Promise<"handled"> {
+export async function runActiveReplySteer(params: ActiveReplySteerParams): Promise<"handled"> {
   const {
     followupRun,
     queueKey,
@@ -192,9 +190,7 @@ export async function runActiveReplySteer(
         queueIdentity: resolveAcceptedSteerRunId(params),
         abortSignal: resolveFollowupAbortSignal(followupRun),
         onQueueAccepted: parked.accepted,
-        ...(resolvedQueue.debounceMs !== undefined
-          ? { debounceMs: resolvedQueue.debounceMs }
-          : {}),
+        ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode
           ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
           : {}),
@@ -210,9 +206,7 @@ export async function runActiveReplySteer(
         replyOperationRunState.admission = { status: "accepted", mode: "followup" };
       }
       const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
-      logVerbose(
-        `queue: active session ${steerSessionId} rejected steering injection: ${summary}`,
-      );
+      logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
       await touchActiveSessionEntry();
       typing.cleanup();
       return "handled";
