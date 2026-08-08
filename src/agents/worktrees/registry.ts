@@ -401,6 +401,7 @@ export function updateRegistryWorktree(
     provisionedPaths?: readonly string[];
     provisionedState?: readonly ProvisionedFileState[];
   },
+  options: { onlyIfLive?: boolean } = {},
 ): void {
   const db = dbFor(env);
   const values: Partial<WorktreeRow> = {};
@@ -423,29 +424,12 @@ export function updateRegistryWorktree(
     values.provisioned_paths_json = JSON.stringify(patch.provisionedPaths);
   }
   runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(
-      db,
-      kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id),
-    );
-  });
-}
-
-export function recordLiveRegistryWorktreeRunEndCleanup(
-  env: NodeJS.ProcessEnv,
-  id: string,
-  runEndCleanup: ManagedWorktreeRunEndCleanup,
-): void {
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    // Busy is authoritative only while the row is live; this conditional write cannot
+    const update = kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id);
+    // Busy is authoritative only while the row is live; the conditional write cannot
     // overwrite a concurrent remover's terminal cleanup outcome after finalization.
     executeSqliteQuerySync(
       db,
-      kyselyFor(db)
-        .updateTable("worktrees")
-        .set({ run_end_cleanup_json: JSON.stringify(runEndCleanup) })
-        .where("id", "=", id)
-        .where("removed_at", "is", null),
+      options.onlyIfLive ? update.where("removed_at", "is", null) : update,
     );
   });
 }
