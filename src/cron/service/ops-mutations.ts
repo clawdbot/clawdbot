@@ -31,7 +31,11 @@ import {
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
-import { locked } from "./locked.js";
+import {
+  getPendingCronSessionCleanup,
+  locked,
+  registerPendingCronSessionCleanup,
+} from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
 import type {
@@ -247,7 +251,7 @@ export async function add(
     }
     if (normalizedId) {
       normalizeCronTaskRunJobId(normalizedId);
-      pendingSessionCleanup = state.pendingSessionCleanupByJobId.get(normalizedId);
+      pendingSessionCleanup = getPendingCronSessionCleanup(state, normalizedId);
       if (pendingSessionCleanup) {
         throw RETRY_ADD_AFTER_SESSION_CLEANUP;
       }
@@ -470,6 +474,7 @@ export async function remove(
         sessionStorePath: string;
         done: Promise<void>;
         finish: () => void;
+        release: () => void;
       }
     | undefined;
   const result = await locked(state, async () => {
@@ -514,13 +519,14 @@ export async function remove(
         const done = new Promise<void>((resolve) => {
           finish = resolve;
         });
-        state.pendingSessionCleanupByJobId.set(id, done);
+        const release = registerPendingCronSessionCleanup(state, id, done);
         sessionCleanup = {
           activeMarker,
           agentId,
           sessionStorePath,
           done,
           finish,
+          release,
         };
       }
       try {
@@ -540,23 +546,24 @@ export async function remove(
   if (!sessionCleanup) {
     return result;
   }
-  const { activeMarker, agentId, sessionStorePath, done, finish } = sessionCleanup;
+  const { activeMarker, agentId, sessionStorePath, finish, release } = sessionCleanup;
   const cleanup = async () => {
     try {
-      await removeCronJobBaseSession({
-        agentId,
-        jobId: id,
-        sessionStorePath,
-        // Re-check after the session snapshot is loaded. A same-id replacement
-        // keeps its row, while expectedEntry protects writes racing this delete.
-        shouldRemove: () => !state.store?.jobs.some((job) => job.id === id),
+      await locked(state, async () => {
+        await ensureLoaded(state, { skipRecompute: true });
+        if (state.store?.jobs.some((job) => job.id === id)) {
+          return;
+        }
+        await removeCronJobBaseSession({
+          agentId,
+          jobId: id,
+          sessionStorePath,
+        });
       });
     } catch (error) {
       state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
     } finally {
-      if (state.pendingSessionCleanupByJobId.get(id) === done) {
-        state.pendingSessionCleanupByJobId.delete(id);
-      }
+      release();
       finish();
     }
   };

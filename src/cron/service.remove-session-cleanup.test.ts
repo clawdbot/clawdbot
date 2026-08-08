@@ -176,6 +176,71 @@ describe("CronService.remove session cleanup", () => {
     });
   });
 
+  it("fences same-id replacement across services sharing one store", async () => {
+    const { storePath } = await makeStorePath();
+    const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+    const createCron = () =>
+      new CronService({
+        storePath,
+        cronEnabled: true,
+        defaultAgentId: "main",
+        resolveSessionStorePath: () => sessionStorePath,
+        log: logger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+    const removingCron = createCron();
+    const replacementCron = createCron();
+    const original = await removingCron.add({
+      id: "cross-service-reused-id",
+      name: "original job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "original" },
+    });
+    const sessionKey = `agent:main:cron:${original.id}`;
+    const originalMarker = markCronJobActive(original.id);
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey },
+      { sessionId: "original-session", updatedAt: Date.now() },
+    );
+
+    await removingCron.remove(original.id);
+    let replacementAdded = false;
+    const replacementPromise = replacementCron
+      .add({
+        id: original.id,
+        name: "replacement job",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 120_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "replacement" },
+      })
+      .then((job) => {
+        replacementAdded = true;
+        return job;
+      });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(replacementAdded).toBe(false);
+
+    clearCronJobActive(original.id, originalMarker);
+    await replacementPromise;
+    await replaceSessionEntry(
+      { agentId: "main", storePath: sessionStorePath, sessionKey },
+      { sessionId: "replacement-session", updatedAt: Date.now() },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toMatchObject({
+      entry: { sessionId: "replacement-session" },
+    });
+  });
+
   it("does not delete a shared main session", async () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");

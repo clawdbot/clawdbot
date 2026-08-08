@@ -61,7 +61,6 @@ export async function removeCronJobBaseSession(params: {
   agentId: string;
   jobId: string;
   sessionStorePath: string;
-  shouldRemove?: () => boolean;
 }): Promise<boolean> {
   const sessionKey = resolveCronAgentSessionKey({
     agentId: params.agentId,
@@ -71,7 +70,7 @@ export async function removeCronJobBaseSession(params: {
     storePath: params.sessionStorePath,
     sessionKey,
   })?.entry;
-  if (!existing || params.shouldRemove?.() === false) {
+  if (!existing) {
     return false;
   }
   const result = await applySessionEntryLifecycleMutation({
