@@ -421,21 +421,21 @@ On the gateway host, check what is actually listening: `ss -tlnp | grep 18789`.
    - Gateway in a container: the port must be published (`-p 18789:18789`). In-container bind defaults to `auto` (0.0.0.0), but unpublished ports reach nobody.
    - Client in a container reaching a host gateway: `localhost` is the container. Use `host.docker.internal` (macOS/Windows) or host networking (Linux).
    - Container to container: use the service name on a shared network, never `localhost`.
-   - If Tailscale serve/funnel is active, bind is forced back to loopback, which silently defeats a published-port setup. Pick one mechanism.
+   - With managed Tailscale serve/funnel, leave `gateway.bind` unset: it defaults to loopback, which is what serve expects. An explicit incompatible non-loopback bind fails config/startup validation with an error rather than being silently rewritten.
 
 ### Timeout, not refused
 
-The gateway is fine; the path is not. On the same LAN, check the host firewall on the gateway machine. Across the internet, use a sanctioned path from the next section: plaintext `ws://` to remote hosts is refused client-side anyway.
+The gateway is fine; the path is not. On the same LAN, check the host firewall on the gateway machine. Across the internet, use a sanctioned path from the next section (plaintext `ws://` is only allowed to hosts the client can verify as private).
 
 ### curl works, the client still fails
 
 Work down in order; each failure names itself.
 
-1. `SECURITY ERROR: Cannot connect to "<host>" over plaintext ws://`: the client refuses remote plaintext WebSocket by design so credentials cannot ride unencrypted. Options, in order of sanity:
-   - Keep the gateway on loopback and tunnel, then connect to localhost (plaintext to 127.0.0.1 is allowed): `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host`
-   - [Tailscale serve](/gateway/tailscale) (TLS handled for you)
-   - Reverse proxy with TLS, connect via `wss://`
-   - Trusted private LAN only: `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`
+1. `SECURITY ERROR: ... plaintext ws:// to a non-loopback address`: the client only allows plaintext WebSocket to hosts it can verify as private: loopback, private-IP literals, link-local/CGNAT ranges, `.local`, and `.ts.net` names. Public DNS names and bare hostnames are refused even when they resolve to a private address (verified: the same gateway accepts `ws://172.17.0.2:18789` and refuses a DNS alias of that exact IP). In order of preference:
+   - Connect by the private IP literal or a `.local`/`.ts.net` name: on a LAN or tailnet this works with no overrides.
+   - Keep the gateway on loopback and tunnel, then connect to localhost: `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host`
+   - Reverse proxy with TLS, connect via `wss://` ([Tailscale serve](/gateway/tailscale) handles TLS for you)
+   - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` only for a host form the client cannot verify as private (for example an internal DNS name on a trusted network). Do not use it where an IP literal or `.ts.net` name would do.
 2. `unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)`: the error names its own fix. Check both ends; SSH tunnels do not bypass auth.
 3. `pairing required: device is not approved yet` (close code 1008): token auth is only half; new devices also need approval. On the gateway host run `openclaw devices list`, find the request id, then `openclaw devices approve <requestId>` and reconnect. See [pairing](/gateway/pairing).
 4. Diagnostic trap: `openclaw gateway status` prints local service and config summaries first even when probing a remote `--url`, and the CLI keeps working from config when the gateway is down. A calm-looking CLI is not proof of a reachable gateway. Trust `openclaw gateway probe` and `openclaw gateway health --url <url> --token <token>`.
