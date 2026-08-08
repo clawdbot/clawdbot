@@ -101,6 +101,7 @@ type ChatHistoryPaneRequests = {
   branchVersion: number;
   subscriptionGeneration: number;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
+  pendingTerminalRefreshRequestKey?: string;
   inFlightHistory?: InFlightChatHistoryRequest;
 };
 
@@ -171,6 +172,7 @@ function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   requests.inFlightHistory = undefined;
+  requests.pendingTerminalRefreshRequestKey = undefined;
   state.chatLoading = false;
   state.chatHistoryAnchorActive = false;
   state.chatHistoryAnchorPending = null;
@@ -326,6 +328,15 @@ export function isChatHistoryAnchorIsolated(
   state: Pick<ChatState, "chatHistoryAnchorActive" | "chatHistoryAnchorPending">,
 ): boolean {
   return state.chatHistoryAnchorActive === true || state.chatHistoryAnchorPending != null;
+}
+
+export function deferPendingChatHistoryAnchorTerminalRefresh(state: ChatState): boolean {
+  const requestKey = state.chatHistoryAnchorPending?.requestKey;
+  if (!requestKey) {
+    return false;
+  }
+  getChatHistoryPaneRequests(state).pendingTerminalRefreshRequestKey = requestKey;
+  return true;
 }
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -1482,7 +1493,7 @@ export async function loadChatHistory(
   ) {
     void loadChatBranches(state);
   }
-  const promise = loadChatHistoryUncached(
+  const pendingRequest = loadChatHistoryUncached(
     state,
     client,
     connectionEpoch,
@@ -1491,9 +1502,26 @@ export async function loadChatHistory(
     method,
     historyAnchor,
     requestKey,
-  ).finally(() => {
+  );
+  // The async loader acquires its history version before its first await.
+  const requestVersion = requests.historyVersion;
+  const promise = pendingRequest.finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
+    }
+    const ownsPendingTerminalRefresh =
+      historyAnchor !== undefined &&
+      requests.pendingTerminalRefreshRequestKey === requestKey &&
+      requests.historyVersion === requestVersion &&
+      state.client === client &&
+      state.connected &&
+      state.connectionEpoch === connectionEpoch &&
+      visibleSessionMatches(state, sessionKey, requestAgentId);
+    if (requests.pendingTerminalRefreshRequestKey === requestKey) {
+      requests.pendingTerminalRefreshRequestKey = undefined;
+    }
+    if (ownsPendingTerminalRefresh) {
+      void loadChatHistory(state).finally(() => state.requestUpdate?.());
     }
   });
   requests.inFlightHistory = {

@@ -29,6 +29,7 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import {
   chatScopedEventSessionMatches,
+  deferPendingChatHistoryAnchorTerminalRefresh,
   isChatHistoryAnchorIsolated,
   isHiddenAssistantStreamText,
   loadChatBranches,
@@ -501,7 +502,12 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       preserveQueuedUserTurn(state, delivered);
     }
     const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
-    if (isolatesHistoricalAnchor && terminal && !state.chatLoading) {
+    if (
+      isolatesHistoricalAnchor &&
+      terminal &&
+      !deferPendingChatHistoryAnchorTerminalRefresh(state) &&
+      !state.chatLoading
+    ) {
       void loadChatHistory(state).finally(() => state.requestUpdate?.());
     }
     if (shouldCelebrateFirstReply && result === "final") {

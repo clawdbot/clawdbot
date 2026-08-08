@@ -86,6 +86,68 @@ describe("historical transcript anchor isolation", () => {
     expect(state.chatMessages).toEqual([historical]);
   });
 
+  it("replays a terminal refresh after the matching pending anchor settles", async () => {
+    const current = message("user", "current tail", "current-tail", 9);
+    const historical = message("user", "historical hit", "historical-hit", 1);
+    const final = message("assistant", "new live reply", "live-final", 10);
+    let resolveAnchor: (result: ChatHistoryResult) => void = () => undefined;
+    const anchorResult = new Promise<ChatHistoryResult>((resolve) => {
+      resolveAnchor = resolve;
+    });
+    let resolveOrdinary: (result: ChatHistoryResult) => void = () => undefined;
+    const ordinaryResult = new Promise<ChatHistoryResult>((resolve) => {
+      resolveOrdinary = resolve;
+    });
+    let historyRequest = 0;
+    const request = vi.fn((method: string) => {
+      if (method !== "chat.history") {
+        return Promise.resolve(undefined);
+      }
+      historyRequest += 1;
+      return historyRequest === 1 ? anchorResult : ordinaryResult;
+    });
+    const state = createHistoryState(request) as ChatPageHost;
+    state.requestUpdate = vi.fn();
+    state.chatMessages = [current];
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession ?? new Map(),
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: [current],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "session-current",
+      },
+    );
+
+    const load = loadChatHistory(state, {
+      historyAnchor: { sessionId: "session-history", messageId: "historical-hit" },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "main",
+        runId: "live-run",
+        state: "final",
+        message: final,
+      },
+    });
+    expect(historyRequest).toBe(1);
+
+    resolveAnchor({ messages: [historical], sessionId: "session-history" });
+    await load;
+    await vi.waitFor(() => expect(historyRequest).toBe(2));
+    expect(state.chatHistoryAnchorActive).toBe(true);
+    expect(state.chatMessages).toEqual([historical]);
+
+    resolveOrdinary({ messages: [current, final], sessionId: "session-current" });
+    await vi.waitFor(() => expect(state.chatHistoryAnchorActive).toBe(false));
+
+    expect(historyRequest).toBe(2);
+    expect(state.chatMessages).toEqual([current, final]);
+  });
+
   it("keeps page events anchored until a terminal chat event restores ordinary history", async () => {
     const current = message("user", "current tail", "current-tail", 9);
     const historical = message("user", "historical hit", "historical-hit", 1);
