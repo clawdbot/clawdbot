@@ -1,3 +1,4 @@
+import type { LookupAddress } from "node:dns";
 import * as dnsPromises from "node:dns/promises";
 import type { Server } from "node:http";
 import { createServer } from "node:net";
@@ -32,7 +33,9 @@ async function getFreeIpv6Port(): Promise<number | undefined> {
   } catch {
     return undefined;
   } finally {
-    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      probe.close(() => resolve());
+    });
   }
 }
 
@@ -172,7 +175,7 @@ describe("OAuth loopback callback server", () => {
 
   it("observes aborts that arrive while localhost resolution is pending", async () => {
     let releaseLookup!: () => void;
-    const pendingLookup = new Promise<Awaited<ReturnType<typeof dnsPromises.lookup>>>((resolve) => {
+    const pendingLookup = new Promise<LookupAddress[]>((resolve) => {
       releaseLookup = () => resolve([{ address: "127.0.0.1", family: 4 }]);
     });
     const controller = new AbortController();
@@ -182,7 +185,7 @@ describe("OAuth loopback callback server", () => {
       expectedState: "state-1234567890",
       timeoutMs: 5_000,
       signal: controller.signal,
-      lookup: (() => pendingLookup) as typeof dnsPromises.lookup,
+      lookup: () => pendingLookup,
     });
     controller.abort();
     await expect(startPromise).rejects.toThrow("cancelled");
@@ -196,7 +199,7 @@ describe("OAuth loopback callback server", () => {
         bindHostname: "127.0.0.1",
         expectedState: "state-1234567890",
         timeoutMs: 5_000,
-        lookup: (async () => [{ address: "203.0.113.1", family: 4 }]) as typeof dnsPromises.lookup,
+        lookup: async () => [{ address: "203.0.113.1", family: 4 }],
       }),
     ).rejects.toThrow("exclusively to loopback");
   });

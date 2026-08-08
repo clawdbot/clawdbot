@@ -28,7 +28,7 @@ async function startOAuthFixture(port: number) {
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
   let tokenVerifier: string | undefined;
-  const server = createServer(async (request, response) => {
+  const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", issuer);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
       sendJson(response, { resource: `${issuer}/mcp`, authorization_servers: [issuer] });
@@ -95,6 +95,11 @@ async function startOAuthFixture(port: number) {
       return;
     }
     response.writeHead(404).end();
+  };
+  const server = createServer((request, response) => {
+    void handleRequest(request, response).catch((error: unknown) => {
+      response.destroy(error instanceof Error ? error : new Error("OAuth fixture failed"));
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -102,7 +107,10 @@ async function startOAuthFixture(port: number) {
   });
   return {
     issuer,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
     exchange: () => ({ tokenRedirectUri, tokenVerifier }),
   };
 }

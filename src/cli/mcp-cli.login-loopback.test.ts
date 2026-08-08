@@ -148,7 +148,9 @@ describe("mcp login loopback callback", () => {
     await withTempHome("openclaw-cli-mcp-loopback-home-", async () => {
       await configureServer();
       const blocker = createServer();
-      await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        blocker.listen(0, "127.0.0.1", resolve);
+      });
       const address = blocker.address();
       const port = typeof address === "object" && address ? address.port : 0;
       mockRedirectFlow(`http://127.0.0.1:${port}/oauth/callback`);
@@ -161,7 +163,9 @@ describe("mcp login loopback callback", () => {
         true,
       );
       expect(mocks.runMcpOAuthLogin).toHaveBeenCalledOnce();
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
     });
   });
 });
