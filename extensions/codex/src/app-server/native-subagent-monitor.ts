@@ -17,7 +17,6 @@ import {
   claimCodexAppServerLiveThread,
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  unsubscribeCodexAppServerLiveThread,
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -208,8 +207,9 @@ function registerMonitor(params: {
             if (childThreadOwnership.get(threadId) === ownership) {
               childThreadOwnership.delete(threadId);
             }
-          } else if (!(await releaseCodexAppServerLiveThread(params.client, threadId))) {
-            await unsubscribeCodexAppServerLiveThread(params.client, threadId, 5_000);
+          } else {
+            // A bare closeAgent thread id cannot authorize a successor's subscription.
+            await releaseCodexAppServerLiveThread(params.client, threadId);
           }
         }),
     });

@@ -6,9 +6,11 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
+  claimCodexAppServerLiveThread,
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
   isCodexAppServerLiveThreadClaimed,
+  releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
@@ -2027,6 +2029,102 @@ describe("CodexNativeSubagentMonitor", () => {
       { threadId: "child-thread" },
       { timeoutMs: 5_000 },
     );
+    parent.unregister();
+    client.close();
+  });
+
+  it("releases the exact retained completed child when its original parent closes it", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    client.request.mockImplementation(async (method) => {
+      if (method === "thread/unsubscribe") {
+        return {} as never;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
+    const parent = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+    });
+
+    await notifyChildStarted(client);
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true),
+    );
+    await client.notify(nativeCompletionNotification());
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
+    );
+
+    await client.notify(closeAgentNotification({ method: "item/completed" }));
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledExactlyOnceWith(
+        "thread/unsubscribe",
+        { threadId: "child-thread" },
+        { timeoutMs: 5_000 },
+      ),
+    );
+    await expect(
+      consumeCodexAppServerLiveThread(client as never, "child-thread"),
+    ).resolves.toBeUndefined();
+
+    parent.unregister();
+    client.close();
+  });
+
+  it("fences a stale child close after eviction and same-client replacement ownership", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    client.request.mockImplementation(async (method) => {
+      if (method === "thread/unsubscribe" || method === "thread/resume") {
+        return {} as never;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
+    const parent = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+    });
+
+    await notifyChildStarted(client);
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true),
+    );
+    await client.notify(nativeCompletionNotification());
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
+    );
+    await expect(releaseCodexAppServerLiveThread(client as never, "child-thread")).resolves.toBe(
+      true,
+    );
+    expect(client.request).toHaveBeenCalledOnce();
+
+    await client.request("thread/resume", { threadId: "child-thread" });
+    const replacement = await claimCodexAppServerLiveThread(client as never, "child-thread");
+    expect(replacement).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true);
+
+    await client.notify(closeAgentNotification({ method: "item/completed" }));
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
+    expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true);
+
+    await replacement?.release("child-thread");
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/unsubscribe",
+      "thread/resume",
+      "thread/unsubscribe",
+    ]);
     parent.unregister();
     client.close();
   });
