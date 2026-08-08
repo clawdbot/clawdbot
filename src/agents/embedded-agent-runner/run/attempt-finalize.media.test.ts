@@ -50,21 +50,29 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     currentStopReason: AssistantStopReason,
     expectedStopReason: string | undefined,
     expectedFinalStatus: "success" | "error" | "interrupted",
-    options?: TerminalCaseOptions,
+    options: TerminalCaseOptions,
   ];
 
-  const cases: TerminalCase[] = [
+  it.each<TerminalCase>([
     ["current over stale", { kind: "ok" }, "stop", "stop", "success", { last: "aborted" }],
     ["normal completion", { kind: "ok" }, "length", "stop", "success", { completed: "stop" }],
-    ["length truncation", { kind: "ok" }, "length", "length", "error"],
+    ["length truncation", { kind: "ok" }, "length", "length", "error", {}],
     [
       "prompt timeout",
       { kind: "timeout", phase: "prompt", source: "runtime" },
       "stop",
       undefined,
       "interrupted",
+      {},
     ],
-    ["external abort", { kind: "aborted", source: "external" }, "stop", "aborted", "interrupted"],
+    [
+      "external abort",
+      { kind: "aborted", source: "external" },
+      "stop",
+      "aborted",
+      "interrupted",
+      {},
+    ],
     ["partial provider error", { kind: "ok" }, "error", "error", "error", { texts: ["x"] }],
     [
       "prompt error",
@@ -72,6 +80,7 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       "error",
       undefined,
       "error",
+      {},
     ],
     [
       "yield over completed assistant",
@@ -81,11 +90,9 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       "interrupted",
       { last: "aborted", completed: "stop", yielded: true },
     ],
-  ];
-
-  it.each(cases)(
+  ])(
     "%s",
-    (_name, terminal, currentStopReason, expectedStopReason, expectedFinalStatus, options = {}) => {
+    (_name, terminal, currentStopReason, expectedStopReason, expectedFinalStatus, options) => {
       const events = captureTrajectory({
         terminal,
         assistantTexts: options.texts ?? [],
