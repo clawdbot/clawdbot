@@ -1,4 +1,5 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
+import { parseModelRef, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
@@ -110,7 +111,15 @@ describe("qa suite runtime flow", () => {
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
-      cfg: {} as QaSuiteRuntimeEnv["cfg"],
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-5": { alias: "opus" },
+            },
+          },
+        },
+      },
     } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
     const scenario = {
       id: "session-memory-ranking",
@@ -126,7 +135,7 @@ describe("qa suite runtime flow", () => {
       },
     };
     const runScenario = vi.fn();
-    const splitModelRef = vi.fn();
+    const splitModelRef = vi.fn((raw: string) => parseModelRef(raw, "openai"));
     const formatErrorMessage = vi.fn();
     const liveTurnTimeoutMs = vi.fn();
     const resolveQaLiveTurnTimeoutMs = vi.fn();
@@ -202,6 +211,22 @@ describe("qa suite runtime flow", () => {
     for (const [name, helper] of Object.entries(aliasedDependencies)) {
       expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
     }
+    const canonicalOpus = resolveModelRefFromString({
+      cfg: env.cfg,
+      raw: "anthropic/opus",
+      defaultProvider: "anthropic",
+    })?.ref;
+    const normalizeModelRef = call.deps.normalizeModelRef as (
+      raw: string,
+    ) => { provider: string; model: string } | null;
+    expect(canonicalOpus).toEqual({ provider: "anthropic", model: "claude-opus-5" });
+    expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    expect(normalizeModelRef("")).toBeNull();
     expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
     call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);

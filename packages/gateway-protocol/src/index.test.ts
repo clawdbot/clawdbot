@@ -13,7 +13,6 @@ import {
   validateModelsListParams,
   validateModelsProbeParams,
   validateNodePluginToolsUpdateParams,
-  validateNodeProtocolFeaturesUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
   validateSessionsListParams,
@@ -290,24 +289,6 @@ describe("lazy protocol validators", () => {
         })),
       },
     ]);
-  });
-
-  it("validates bounded transient node protocol features", () => {
-    expect(
-      validateNodeProtocolFeaturesUpdateParams({
-        features: [protocol.NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE],
-      }),
-    ).toBe(true);
-    expect(
-      validateNodeProtocolFeaturesUpdateParams({
-        features: ["duplicate", "duplicate"],
-      }),
-    ).toBe(false);
-    expect(
-      validateNodeProtocolFeaturesUpdateParams({
-        features: ["x".repeat(129)],
-      }),
-    ).toBe(false);
   });
 
   it("accepts selected-agent scope on chat send, history, and abort params", () => {

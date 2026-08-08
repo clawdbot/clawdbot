@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAgentExecutionAttribution } from "../../agents/agent-execution-attribution.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -887,15 +886,6 @@ describe("worker turn launcher", () => {
       destroy: vi.fn(async () => attachedEnvironment()),
     };
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-persisted-user",
-      lifecycleGeneration: "worker-generation",
-      sessionKey: SESSION_KEY,
-      sessionId: SESSION_ID,
-      agentId: "main",
-    });
-    const onExecutionStarted = vi.fn();
-    const onExecutionAttributionChanged = vi.fn();
 
     await provider.executeTurn(
       {
@@ -906,22 +896,11 @@ describe("worker turn launcher", () => {
       },
       {
         ...turn("run-persisted-user"),
-        attribution,
-        lifecycleGeneration: "worker-generation",
-        onExecutionStarted,
-        onExecutionAttributionChanged,
         suppressNextUserMessagePersistence: true,
       },
       async () => ({ meta: { durationMs: 1 } }),
     );
 
-    expect(onExecutionStarted).toHaveBeenCalledWith({
-      lifecycleGeneration: "worker-generation",
-    });
-    expect(onExecutionAttributionChanged).toHaveBeenCalledWith({
-      lifecycleGeneration: "worker-generation",
-      attribution,
-    });
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.initialMessages).toMatchObject([
       { role: "user" },

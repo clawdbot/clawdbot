@@ -19,6 +19,7 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import {
   isTransientWebSearchRestriction,
   shouldRecheckRecoverablePluginBinding,
@@ -83,6 +84,7 @@ export async function startOrResumeThread(
       params.bindingStore.read(bindingIdentity),
     );
     const initialBoundThreadId = binding?.threadId;
+    const initialBoundClientId = binding?.clientId;
     const normalizeBindingModelProvider = (
       authProfileId: string | undefined,
       modelProvider: string | undefined,
@@ -95,13 +97,35 @@ export async function startOrResumeThread(
         config: params.params.config,
       });
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
-    const releaseRetainedThread = (threadId: string) =>
-      releaseCodexRetainedLiveThread({
+    const releaseRetainedThread = async (
+      threadId: string,
+      ownerClientId = initialBoundClientId,
+    ) => {
+      if (ownerClientId && ownerClientId !== clientId) {
+        // Auth/runtime rotation selects a new physical client, but its map
+        // cannot release a subscription owned by the previous app-server.
+        const previousClient = retainSharedCodexAppServerClientByInstanceId(ownerClientId);
+        if (!previousClient) {
+          return;
+        }
+        try {
+          await releaseCodexRetainedLiveThread({
+            client: previousClient.client,
+            lifecycleTiming,
+            threadId,
+          });
+        } finally {
+          previousClient.release();
+        }
+        return;
+      }
+      await releaseCodexRetainedLiveThread({
         client: params.client,
         abandonClient: params.abandonClient,
         lifecycleTiming,
         threadId,
       });
+    };
     if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
       // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
       // the authoritative session store may let its successor displace that stale owner.
@@ -621,7 +645,7 @@ export async function startOrResumeThread(
       }
     }
 
-    if (initialBoundThreadId) {
+    if (initialBoundThreadId && !preserveExistingBinding) {
       await releaseRetainedThread(initialBoundThreadId);
     }
     return await startFreshCodexThread(params, {

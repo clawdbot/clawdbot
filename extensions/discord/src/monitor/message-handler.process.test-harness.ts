@@ -172,7 +172,7 @@ export type DispatchInboundParams = {
       summary?: string;
       title?: string;
       name?: string;
-    }) => Promise<false | void> | false | void;
+    }) => Promise<boolean | void> | boolean | void;
     onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
     onProgressNarratorLifecycle?: (lifecycle: {
       beginTurn: () => void;

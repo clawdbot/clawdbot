@@ -71,6 +71,11 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
     if openclaw_system_launchd_entries=$(/usr/bin/mktemp "\${TMPDIR:-/tmp}/openclaw-launchd-scan.XXXXXX" 2>&1); then
       if /usr/bin/find "$openclaw_system_launchd_dir" -mindepth 1 -maxdepth 1 -name '*.plist' -print0 >"$openclaw_system_launchd_entries"; then
         while IFS= read -r -d '' openclaw_system_launchd_plist; do
+          # Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
+          # bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
+          if [ ! -r "$openclaw_system_launchd_plist" ]; then
+            continue
+          fi
           if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist" 2>&1); then
             if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]; then
               continue
@@ -115,6 +120,7 @@ type LaunchDaemonPlistLabelResult =
   | { status: "ok"; label: string }
   | { status: "unlabeled" }
   | { status: "missing" }
+  | { status: "unreadable" }
   | { status: "unverifiable"; detail: string };
 
 /** Reads the top-level Label through the native parser for XML and binary plists. */
@@ -141,10 +147,14 @@ export async function readLaunchDaemonPlistLabel(
     }
   }
   try {
-    await fs.access(plistPath);
+    await fs.access(plistPath, fs.constants.R_OK);
   } catch (error) {
     if (isMissingPathError(error)) {
       return { status: "missing" };
+    }
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EACCES" || code === "EPERM") {
+      return { status: "unreadable" };
     }
     return { status: "unverifiable", detail: formatUnknownError(error) };
   }
@@ -177,6 +187,11 @@ async function findInstalledSystemLaunchDaemon(
     const result = await readLaunchDaemonPlistLabel(plistPath);
     if (result.status === "ok" && result.label === label) {
       return { status: "installed", plistPath };
+    }
+    // Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
+    // bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
+    if (result.status === "unreadable") {
+      continue;
     }
     if (result.status === "unverifiable") {
       return { status: "unverifiable", detail: `${plistPath}: ${result.detail}` };

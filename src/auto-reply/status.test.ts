@@ -164,6 +164,7 @@ function makeFallbackContextStatusArgs({
       },
       totalTokens: 49_000,
       totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
       ...(sessionContextTokens === undefined ? {} : { contextTokens: sessionContextTokens }),
     },
     sessionKey: "agent:main:main",
@@ -209,6 +210,7 @@ describe("buildStatusMessage", () => {
         outputTokens: 800,
         totalTokens: 16_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         contextTokens: 32_000,
         thinkingLevel: "low",
         verboseLevel: "on",
@@ -241,7 +243,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
-    expect(normalized).toContain("Think: medium");
+    expect(normalized).toContain("think medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
@@ -315,15 +317,15 @@ describe("buildStatusMessage", () => {
       unexpectedContext: "Context: 3.8m/1.0m",
     },
     {
-      name: "preserves legacy unknown-freshness totalTokens as context usage",
+      name: "treats legacy unknown-freshness totalTokens as unknown context",
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
         totalTokens: 25_000,
         contextTokens: 1_000_000,
       },
-      expectedContext: "Context: 25k/1.0m",
-      unexpectedContext: "Context: ?/1.0m",
+      expectedContext: "Context: ?/1.0m",
+      unexpectedContext: "Context: 25k/1.0m",
     },
   ])("$name", ({ sessionEntry, expectedContext, unexpectedContext }) => {
     const text = buildStatusMessage({
@@ -381,6 +383,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 36_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         contextTokens: 1_000_000,
         contextBudgetStatus: makeContextBudgetStatus(),
       },
@@ -562,9 +565,9 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Think: high");
+    expect(normalized).toContain("think high");
     expect(normalized).toContain("verbose:full");
-    expect(normalized).toContain("Reasoning: on");
+    expect(normalized).toContain("reasoning on");
   });
 
   it("shows plugin status lines only when verbose is enabled", () => {
@@ -712,14 +715,14 @@ describe("buildStatusMessage", () => {
       model: "openai/gpt-5.4",
       sessionId: "fast",
       fastMode: true,
-      expected: "Fast",
+      expected: "fast",
     },
     {
       name: "shows fast mode when disabled",
       model: "anthropic/claude-opus-4-6",
       sessionId: "fast-off",
       fastMode: false,
-      expected: "Fast: off",
+      expected: "fast off",
     },
   ])("$name", ({ model, sessionId, fastMode, expected }) => {
     const text = buildStatusMessage({
@@ -757,7 +760,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).toContain(expectedRuntime);
     expect(normalized).not.toContain(unexpectedSuffix);
   });
@@ -789,7 +792,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Text: low");
+    expect(normalizeTestText(text)).toContain("text low");
   });
 
   it("shows per-agent text verbosity overrides for the active model", () => {
@@ -828,7 +831,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Text: low");
+    expect(normalizeTestText(text)).toContain("text low");
   });
 
   it("notes channel model overrides in status output", () => {
@@ -893,6 +896,7 @@ describe("buildStatusMessage", () => {
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -929,6 +933,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -948,6 +953,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -968,6 +974,7 @@ describe("buildStatusMessage", () => {
       contextTokens: 4_096,
       totalTokens: 1_024,
       totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
     };
 
     applyModelOverrideToSessionEntry({
@@ -1007,6 +1014,7 @@ describe("buildStatusMessage", () => {
         model: "deepseek-v4-pro",
         totalTokens: 501,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_000_000,
       },
       sessionKey: "agent:main:main",
@@ -1047,6 +1055,7 @@ describe("buildStatusMessage", () => {
         model: "kimi-k2.7-code",
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 262_144,
       },
       sessionKey: "agent:main:main",
@@ -1159,6 +1168,7 @@ describe("buildStatusMessage", () => {
         cacheRead: 3_000_000,
         totalTokens: 36_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_000_000,
       },
       sessionKey: "agent:main:main",
@@ -2187,6 +2197,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 1205,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "google/gemini-2.5-pro",
       },
       sessionKey: "agent:main:main",
@@ -2233,6 +2244,7 @@ describe("buildStatusMessage", () => {
         },
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2269,6 +2281,7 @@ describe("buildStatusMessage", () => {
         model: "openai/gpt-4o",
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2346,6 +2359,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 25_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2374,6 +2388,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 25_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2399,6 +2414,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         totalTokens: 25_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",

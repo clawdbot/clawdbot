@@ -3384,20 +3384,6 @@ public struct NodeSkillsUpdateParams: Codable, Sendable {
     }
 }
 
-public struct NodeProtocolFeaturesUpdateParams: Codable, Sendable {
-    public let features: [String]
-
-    public init(
-        features: [String])
-    {
-        self.features = features
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case features
-    }
-}
-
 public struct NodePendingAckParams: Codable, Sendable {
     public let ids: [String]
 
@@ -3569,7 +3555,6 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
     public let paramsjson: String?
     public let timeoutms: Int?
     public let idempotencykey: String?
-    public let sessionkey: AnyCodable?
 
     public init(
         id: String,
@@ -3577,8 +3562,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         command: String,
         paramsjson: String? = nil,
         timeoutms: Int? = nil,
-        idempotencykey: String? = nil,
-        sessionkey: AnyCodable? = nil)
+        idempotencykey: String? = nil)
     {
         self.id = id
         self.nodeid = nodeid
@@ -3586,7 +3570,6 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         self.paramsjson = paramsjson
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
-        self.sessionkey = sessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3596,31 +3579,6 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         case paramsjson = "paramsJSON"
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
-        case sessionkey = "sessionKey"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decode(String.self, forKey: .id)
-        self.nodeid = try container.decode(String.self, forKey: .nodeid)
-        self.command = try container.decode(String.self, forKey: .command)
-        self.paramsjson = try container.decodeIfPresent(String.self, forKey: .paramsjson)
-        self.timeoutms = try container.decodeIfPresent(Int.self, forKey: .timeoutms)
-        self.idempotencykey = try container.decodeIfPresent(String.self, forKey: .idempotencykey)
-        self.sessionkey = container.contains(.sessionkey)
-            ? try container.decode(AnyCodable.self, forKey: .sessionkey)
-            : nil
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(nodeid, forKey: .nodeid)
-        try container.encode(command, forKey: .command)
-        try container.encodeIfPresent(paramsjson, forKey: .paramsjson)
-        try container.encodeIfPresent(timeoutms, forKey: .timeoutms)
-        try container.encodeIfPresent(idempotencykey, forKey: .idempotencykey)
-        try container.encodeIfPresent(sessionkey, forKey: .sessionkey)
     }
 }
 
@@ -4860,6 +4818,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
     public let reason: AnyCodable
     public let tokensbefore: Int?
     public let tokensafter: Int?
+    public let tokensversion: Double?
     public let summary: String?
     public let firstkeptentryid: String?
     public let precompaction: [String: AnyCodable]
@@ -4873,6 +4832,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
         reason: AnyCodable,
         tokensbefore: Int? = nil,
         tokensafter: Int? = nil,
+        tokensversion: Double? = nil,
         summary: String? = nil,
         firstkeptentryid: String? = nil,
         precompaction: [String: AnyCodable],
@@ -4885,6 +4845,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
         self.reason = reason
         self.tokensbefore = tokensbefore
         self.tokensafter = tokensafter
+        self.tokensversion = tokensversion
         self.summary = summary
         self.firstkeptentryid = firstkeptentryid
         self.precompaction = precompaction
@@ -4899,6 +4860,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
         case reason
         case tokensbefore = "tokensBefore"
         case tokensafter = "tokensAfter"
+        case tokensversion = "tokensVersion"
         case summary
         case firstkeptentryid = "firstKeptEntryId"
         case precompaction = "preCompaction"
@@ -17477,6 +17439,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let systemprovenancereceipt: String?
     public let suppresscommandinterpretation: Bool?
     public let expectedleafentryid: AnyCodable?
+    public let expectedrunid: String?
     public let expectedsessionroutingcontract: String?
     public let idempotencykey: String
 
@@ -17502,6 +17465,7 @@ public struct ChatSendParams: Codable, Sendable {
         systemprovenancereceipt: String? = nil,
         suppresscommandinterpretation: Bool? = nil,
         expectedleafentryid: AnyCodable? = nil,
+        expectedrunid: String? = nil,
         expectedsessionroutingcontract: String? = nil,
         idempotencykey: String)
     {
@@ -17526,6 +17490,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.systemprovenancereceipt = systemprovenancereceipt
         self.suppresscommandinterpretation = suppresscommandinterpretation
         self.expectedleafentryid = expectedleafentryid
+        self.expectedrunid = expectedrunid
         self.expectedsessionroutingcontract = expectedsessionroutingcontract
         self.idempotencykey = idempotencykey
     }
@@ -17551,6 +17516,7 @@ public struct ChatSendParams: Codable, Sendable {
         systemprovenancereceipt: String? = nil,
         suppresscommandinterpretation: Bool? = nil,
         expectedleafentryid: AnyCodable? = nil,
+        expectedrunid: String? = nil,
         expectedsessionroutingcontract: String? = nil,
         idempotencykey: String)
     {
@@ -17576,6 +17542,7 @@ public struct ChatSendParams: Codable, Sendable {
             systemprovenancereceipt: systemprovenancereceipt,
             suppresscommandinterpretation: suppresscommandinterpretation,
             expectedleafentryid: expectedleafentryid,
+            expectedrunid: expectedrunid,
             expectedsessionroutingcontract: expectedsessionroutingcontract,
             idempotencykey: idempotencykey)
     }
@@ -17602,6 +17569,7 @@ public struct ChatSendParams: Codable, Sendable {
         case systemprovenancereceipt = "systemProvenanceReceipt"
         case suppresscommandinterpretation = "suppressCommandInterpretation"
         case expectedleafentryid = "expectedLeafEntryId"
+        case expectedrunid = "expectedRunId"
         case expectedsessionroutingcontract = "expectedSessionRoutingContract"
         case idempotencykey = "idempotencyKey"
     }

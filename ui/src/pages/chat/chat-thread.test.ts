@@ -9,6 +9,7 @@ import * as toolCards from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpansionStateVersion,
@@ -66,6 +67,10 @@ type ChatQueueItem = NonNullable<CachedChatItemsProps["queue"]>[number];
 type WorkGroupItem = Extract<
   ReturnType<typeof collapseCompletedTurnWork>[number],
   { kind: "work-group" }
+>;
+type ActivityRunItem = Extract<
+  ReturnType<typeof coalesceActivityRuns>[number],
+  { kind: "activity-run" }
 >;
 
 // Inbound context blocks are stamped with the provenance marker; strippers key
@@ -786,6 +791,108 @@ describe("collapseCompletedTurnWork", () => {
 
     expect(prependedWork.key).toBe(initialWork.key);
     expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
+  });
+});
+
+describe("coalesceActivityRuns", () => {
+  const toolResult = (id: string, timestamp: number, overrides: Record<string, unknown> = {}) => ({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "bash",
+    content: "ok",
+    timestamp,
+    ...overrides,
+  });
+
+  const projectedToolGroups = () =>
+    buildCachedChatItems(
+      createProps({
+        paneId: "activity-run-projection",
+        messages: [
+          toolResult("call-1", 1_000, {
+            __openclaw: { id: "tool-1", seq: 1, turnBoundary: true },
+          }),
+          toolResult("call-2", 2_000, {
+            __openclaw: { id: "tool-2", seq: 2, turnBoundary: true },
+          }),
+          toolResult("call-3", 3_000, {
+            __openclaw: { id: "tool-3", seq: 3, turnBoundary: true },
+          }),
+        ],
+      }),
+    ).filter((item): item is MessageGroup => item.kind === "group");
+
+  function requireActivityRun(value: unknown): ActivityRunItem {
+    expect(requireRecord(value).kind).toBe("activity-run");
+    return value as ActivityRunItem;
+  }
+
+  it("combines projected-turn tool groups without rewriting their order or messages", () => {
+    const groups = projectedToolGroups();
+    const projected = coalesceActivityRuns(groups.slice(0, 2));
+    const run = requireActivityRun(projected[0]);
+
+    expect(projected).toHaveLength(1);
+    expect(run.groups).toEqual([groups[0], groups[1]]);
+    expect(run.groups[0]).toBe(groups[0]);
+    expect(run.groups[1]).toBe(groups[1]);
+    expect(run.groups.flatMap((group) => group.messages.map((entry) => entry.key))).toEqual(
+      groups.slice(0, 2).flatMap((group) => group.messages.map((entry) => entry.key)),
+    );
+  });
+
+  it("keeps the first-group key stable when live tool groups append", () => {
+    const groups = projectedToolGroups();
+    const initial = requireActivityRun(coalesceActivityRuns(groups.slice(0, 2))[0]);
+    const appended = requireActivityRun(coalesceActivityRuns(groups)[0]);
+
+    expect(initial.key).toBe(`activity:${groups[0]?.key}`);
+    expect(appended.key).toBe(initial.key);
+  });
+
+  it("treats every non-tool item as a hard presentation boundary", () => {
+    const groups = projectedToolGroups();
+    const userBoundary: MessageGroup = {
+      kind: "group",
+      key: "group:user:boundary",
+      role: "user",
+      messages: [{ key: "user:boundary", message: userMessage("stop", 4_000) }],
+      timestamp: 4_000,
+      isStreaming: false,
+    };
+    const divider = {
+      kind: "divider" as const,
+      key: "divider:boundary",
+      label: "Boundary",
+      timestamp: 5_000,
+    };
+    const projected = coalesceActivityRuns([
+      groups[0]!,
+      userBoundary,
+      groups[1]!,
+      divider,
+      groups[2]!,
+    ]);
+
+    expect(projected).toEqual([groups[0], userBoundary, groups[1], divider, groups[2]]);
+  });
+
+  it("leaves a single tool group unchanged and disables projection during search", () => {
+    const groups = projectedToolGroups();
+    const singleton = coalesceActivityRuns([groups[0]!]);
+    const searchInput = groups.slice(0, 2);
+
+    expect(singleton[0]).toBe(groups[0]);
+    expect(coalesceActivityRuns(searchInput, { searchActive: true })).toBe(searchInput);
+  });
+
+  it("retains each member group's recovered or active error outcome", () => {
+    const groups = projectedToolGroups();
+    groups[0]!.turnSucceeded = true;
+    groups[1]!.turnSucceeded = false;
+    const run = requireActivityRun(coalesceActivityRuns(groups.slice(0, 2))[0]);
+
+    expect(run.groups.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
 });
 

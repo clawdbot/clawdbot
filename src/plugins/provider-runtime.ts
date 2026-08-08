@@ -1061,9 +1061,9 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   const env = params.env ?? process.env;
   const config = params.config ?? {};
   const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config,
     env,
-    ...(workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : { workspaceDir }),
+    ...(params.config ? { config } : { requireDefaultDiscoveryContext: true }),
+    ...(workspaceDir ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
   });
   const { manifestRegistry } =
     currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });

@@ -1983,8 +1983,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("waits for asynchronous user persistence before retrying a missing terminal turn", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const persistedMessage = { role: "user" as const, content: "test prompt", timestamp: 1 };
+    const admission = {
+      agentId: "main",
+      sessionId: overflowBaseRunParams.sessionId,
+      sessionKey: overflowBaseRunParams.sessionKey,
+      storePath: "/tmp/openclaw-transcript.jsonl",
+      generation: "generation-1",
+      entryId: "msg-user-delayed",
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 0,
+      logicalTurnId: "run-missing-assistant-delayed-persistence",
+      role: "user" as const,
+    };
     let resolvePersistApproved:
       | ((result: {
+          admission: typeof admission;
           sessionFile: string;
           sessionEntry: undefined;
           messageId: string;
@@ -1995,6 +2009,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const persistApproved = vi.fn(
       () =>
         new Promise<{
+          admission: typeof admission;
           sessionFile: string;
           sessionEntry: undefined;
           messageId: string;
@@ -2020,6 +2035,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         userTurnTranscriptRecorder: {
           message: persistedMessage,
           resolveMessage: vi.fn(async () => persistedMessage),
+          getAdmissionReceipt: () => admission,
           markRuntimePersistencePending: vi.fn((pending) => {
             pendingPersistence = pending;
           }),
@@ -2044,6 +2060,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
 
     resolvePersistApproved?.({
+      admission,
       sessionFile: "/tmp/openclaw-transcript.jsonl",
       sessionEntry: undefined,
       messageId: "msg-user-delayed",

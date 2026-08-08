@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   renderBitmapTextPngBase64,
@@ -61,6 +62,9 @@ const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
 );
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
+);
+const CODEX_HARNESS_MULTI_SESSION_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE,
 );
 const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
@@ -193,7 +197,7 @@ const observedCodexThreadIds = new Map<string, string>();
 const observedCodexClientIds = new Map<string, string>();
 const observedCodexThreadActions = new Map<string, string>();
 
-type GuardianPluginApprovalDecision = "allow-once" | "deny";
+type GuardianPluginApprovalDecision = "allow-once" | "allow-always" | "deny";
 type CodexHarnessThinkingLevel =
   | "off"
   | "minimal"
@@ -485,6 +489,8 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 }
 
 async function writeLiveGatewayConfig(params: {
+  codexApprovalPolicy?: "untrusted";
+  codexApprovalsReviewer?: "user";
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
@@ -511,6 +517,10 @@ async function writeLiveGatewayConfig(params: {
           config: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
+              ...(params.codexApprovalPolicy ? { approvalPolicy: params.codexApprovalPolicy } : {}),
+              ...(params.codexApprovalsReviewer
+                ? { approvalsReviewer: params.codexApprovalsReviewer }
+                : {}),
               ...(appServerArgs ? { args: appServerArgs } : {}),
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
               ...(params.loopDetectionPreToolUseRelay === false
@@ -683,6 +693,99 @@ function recordCodexAttemptIdentity(params: {
   const action = threadReady?.data?.action;
   expect(["started", "resumed", "forked"]).toContain(action);
   observedCodexThreadActions.set(params.sessionKey, action as string);
+}
+
+async function verifyCodexMultiSessionApprovalPersistence(params: {
+  client: GatewayClient;
+  getResolvedPluginApprovalCount: () => number;
+  setPluginApprovalDecision: (decision: GuardianPluginApprovalDecision | undefined) => void;
+  workspace: string;
+}): Promise<void> {
+  const targetName = "codex-session-approval-proof.txt";
+  const targetPath = path.join(params.workspace, targetName);
+  let previousContent = "OPENCLAW-CODEX-SESSION-INITIAL";
+  await fs.writeFile(targetPath, `${previousContent}\n`, "utf8");
+  const sessionKeys = {
+    a: "agent:dev:live-codex-harness-session-a",
+    b: "agent:dev:live-codex-harness-session-b",
+  } as const;
+  const firstThreadIds = new Map<keyof typeof sessionKeys, string>();
+  let physicalClientId: string | undefined;
+  const startingApprovalCount = params.getResolvedPluginApprovalCount();
+  params.setPluginApprovalDecision("allow-always");
+  try {
+    for (const [turn, session] of (["a", "b", "a", "b"] as const).entries()) {
+      const sessionKey = sessionKeys[session];
+      const expectedReply = `CODEX-SESSION-${session.toUpperCase()}-${turn + 1}`;
+      const expectedContent = `OPENCLAW-CODEX-SESSION-${session.toUpperCase()}-${turn + 1}`;
+      const patch = [
+        "*** Begin Patch",
+        `*** Update File: ${targetName}`,
+        "@@",
+        `-${previousContent}`,
+        `+${expectedContent}`,
+        "*** End Patch",
+      ].join("\n");
+      const patchCode = `const result = await tools.apply_patch(${JSON.stringify(patch)});\ntext(result);`;
+      const { text, events } = await requestAgentTextWithEvents({
+        client: params.client,
+        eventPrefixes: ["codex_app_server.", "tool", "approval"],
+        sessionKey,
+        message: [
+          "Use the exec tool exactly once before replying.",
+          "Set its JavaScript source to exactly:",
+          patchCode,
+          "Do not call apply_patch directly or use a shell.",
+          `After the patch succeeds, reply exactly ${expectedReply} and nothing else.`,
+        ].join("\n"),
+      });
+      expect(text).toContain(expectedReply);
+      recordCodexAttemptIdentity({ events, sessionKey });
+      expect(await fs.readFile(targetPath, "utf8")).toBe(`${expectedContent}\n`);
+      expect(
+        events.some(
+          (event) =>
+            event.stream === "tool" &&
+            event.data?.name === "apply_patch" &&
+            event.data?.phase === "result" &&
+            event.data?.status === "completed" &&
+            event.data?.isError === false,
+        ),
+        `expected a completed native file change for session ${session}`,
+      ).toBe(true);
+      previousContent = expectedContent;
+
+      const threadId = observedCodexThreadIds.get(sessionKey);
+      const clientId = observedCodexClientIds.get(sessionKey);
+      expect(threadId).toBeTruthy();
+      expect(clientId).toBeTruthy();
+      const initialThreadId = firstThreadIds.get(session);
+      if (initialThreadId) {
+        expect(threadId).toBe(initialThreadId);
+      } else {
+        if (session === "b") {
+          expect(threadId).not.toBe(firstThreadIds.get("a"));
+        }
+        firstThreadIds.set(session, threadId as string);
+      }
+      if (physicalClientId) {
+        expect(clientId).toBe(physicalClientId);
+      } else {
+        physicalClientId = clientId;
+      }
+      // Exec "always" creates a shared durable rule; file approvals alone
+      // support Codex's per-thread acceptForSession cache for this proof.
+      expect(params.getResolvedPluginApprovalCount()).toBe(
+        startingApprovalCount + Math.min(turn + 1, 2),
+      );
+    }
+    expect(firstThreadIds.get("a")).not.toBe(firstThreadIds.get("b"));
+    console.log(
+      `[codex-session-proof] A=${firstThreadIds.get("a")} B=${firstThreadIds.get("b")} client=${physicalClientId} approvals=2 turns=4`,
+    );
+  } finally {
+    params.setPluginApprovalDecision(undefined);
+  }
 }
 
 async function verifyCodexCodeModeOnlyDynamicToolProbe(params: {
@@ -1705,7 +1808,11 @@ describeLive("gateway live (Codex harness)", () => {
         port,
         token,
         workspace,
-        codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
+        codexAppServerMode:
+          CODEX_HARNESS_GUARDIAN_PROBE || CODEX_HARNESS_MULTI_SESSION_PROBE ? "guardian" : "yolo",
+        ...(CODEX_HARNESS_MULTI_SESSION_PROBE
+          ? { codexApprovalPolicy: "untrusted", codexApprovalsReviewer: "user" }
+          : {}),
         codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
         compactionMode: CODEX_HARNESS_COMPACTION_MODE,
         ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
@@ -1770,6 +1877,10 @@ describeLive("gateway live (Codex harness)", () => {
           timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
           requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           clientDisplayName: "vitest-codex-harness-live",
+          // Approval events require an explicit renderer capability even for admin clients.
+          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
+            ? { caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] }
+            : {}),
           onEvent: (event) => {
             gatewayEvents.push(event);
             maybeResolveGuardianPluginApproval(event);
@@ -1803,6 +1914,18 @@ describeLive("gateway live (Codex harness)", () => {
               modelKey,
               sessionKey,
             });
+
+            if (CODEX_HARNESS_MULTI_SESSION_PROBE) {
+              await verifyCodexMultiSessionApprovalPersistence({
+                client: activeClient,
+                getResolvedPluginApprovalCount: () => resolvedGuardianPluginApprovalIds.size,
+                setPluginApprovalDecision: (decision) => {
+                  guardianPluginApprovalDecision = decision;
+                },
+                workspace,
+              });
+              break;
+            }
 
             if (CODEX_HARNESS_SUBAGENT_PROBE) {
               logCodexLiveStep("subagent-probe:start", { sessionKey });

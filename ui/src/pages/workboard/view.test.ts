@@ -877,7 +877,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [{ id: "main", name: "Main" }],
       },
     });
@@ -907,7 +907,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [{ id: "main" }, { id: "writer" }, { id: "ops" }],
       },
       scopeAgentId: "writer",
@@ -1808,7 +1808,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [
           { id: "main", name: "Main" },
           { id: "writer", name: "Writer" },
@@ -2141,10 +2141,10 @@ describe("renderWorkboard", () => {
   });
 
   it("filters cards by linked agent", () => {
-    const agentsList = {
+    const agentsList: NonNullable<WorkboardRenderProps["agentsList"]> = {
       defaultId: "main",
       mainKey: "agent:main:main",
-      scope: "test",
+      scope: "per-sender",
       agents: [
         { id: "main", name: "Main" },
         { id: "ops", name: "Ops" },
@@ -2228,7 +2228,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [
           { id: "main", name: "Main" },
           { id: "main", name: "Main duplicate" },
@@ -2298,7 +2298,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [{ id: "main", name: "Main", agentRuntime: { id: "codex", source: "agent" } }],
       },
     });

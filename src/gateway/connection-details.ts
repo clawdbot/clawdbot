@@ -14,6 +14,22 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+/** Project raw transport details into the credential-safe CLI/report shape. */
+export function projectGatewayConnectionDetailsForDiagnostics(
+  details: GatewayConnectionDetails,
+): GatewayConnectionDetails {
+  return {
+    ...details,
+    url: redactSensitiveUrlLikeString(details.url),
+    message: redactSensitiveUrlLikeString(details.message),
+  };
+}
+
+/** Redact one Gateway URL before it crosses an operator-visible diagnostic boundary. */
+export function projectGatewayUrlForDiagnostics(url: string): string {
+  return redactSensitiveUrlLikeString(url);
+}
+
 type GatewayConnectionDetailResolvers = {
   getRuntimeConfig?: () => OpenClawConfig;
   resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;

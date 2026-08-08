@@ -212,11 +212,87 @@ describe("directive parsing", () => {
     expect(model.cleaned).toBe("please sync now");
     expect(model.hasModelDirective).toBe(true);
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+    expect(model.modelSessionOnly).toBe(false);
 
     const think = parseInlineDirectives("please sync /think:high now");
     expect(think.cleaned).toBe("please sync now");
     expect(think.hasThinkDirective).toBe(true);
     expect(think.thinkLevel).toBe("high");
+  });
+
+  it("preserves the trailing /model -s session-only scope", () => {
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini -s now");
+    expect(model.cleaned).toBe("please sync now");
+    expect(model.hasModelDirective).toBe(true);
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+    expect(model.modelSessionOnly).toBe(true);
+  });
+
+  it("preserves the trailing /model --session scope for native slash commands", () => {
+    const model = parseInlineDirectives("/model openai/gpt-4.1-mini --session", {
+      nativeCommand: "model",
+    });
+
+    expect(model.cleaned).toBe("");
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+    expect(model.modelSessionOnly).toBe(true);
+    expect(model.nativeCommand).toEqual({ name: "model" });
+  });
+
+  it.each(["--runtime codex -s", "-s --runtime codex", "runtime=codex -s", "-s harness=codex"])(
+    "parses /model runtime and session options from %s",
+    (options) => {
+      const model = parseInlineDirectives(`/model openai/gpt-4.1-mini ${options}`, {
+        nativeCommand: "model",
+      });
+
+      expect(model.cleaned).toBe("");
+      expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+      expect(model.rawModelRuntime).toBe("codex");
+      expect(model.modelSessionOnly).toBe(true);
+      expect(model.nativeCommand).toEqual({ name: "model" });
+    },
+  );
+
+  it.each(["-slow", "--sessional"])(
+    "preserves partial session option %s as ordinary text",
+    (option) => {
+      const model = parseInlineDirectives(`please sync /model openai/gpt-4.1-mini ${option} now`);
+
+      expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+      expect(model.modelSessionOnly).toBe(false);
+      expect(model.cleaned).toBe(`please sync ${option} now`);
+    },
+  );
+
+  it("rejects duplicate native /model options through unconsumed arguments", () => {
+    const model = parseInlineDirectives(
+      "/model openai/gpt-4.1-mini --runtime codex --runtime acp",
+      { nativeCommand: "model" },
+    );
+
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+    expect(model.rawModelRuntime).toBe("codex");
+    expect(model.cleaned).toBe("--runtime acp");
+    expect(model.nativeCommand).toEqual({
+      name: "model",
+      unconsumedArguments: "--runtime acp",
+    });
+  });
+
+  it("preserves duplicate inline /model options as message text", () => {
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini -s -s now");
+
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+    expect(model.modelSessionOnly).toBe(true);
+    expect(model.cleaned).toBe("please sync -s now");
+  });
+
+  it("keeps here as the selected model in mixed commands", () => {
+    const model = parseInlineDirectives("please /model here continue");
+    expect(model.cleaned).toBe("please continue");
+    expect(model.rawModelDirective).toBe("here");
+    expect(model.modelSessionOnly).toBe(false);
   });
 
   it("keeps --persist as ordinary text for inline directives", () => {

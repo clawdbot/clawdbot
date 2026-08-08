@@ -6,6 +6,8 @@
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
 const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
+const RELAY_SECRET_PATTERN = /^[0-9a-f]{64}$/;
+const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token"];
 
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
@@ -18,6 +20,101 @@ const CHROME_GROUP_COLORS = {
   cyan: [0, 188, 212],
   orange: [255, 112, 32],
 };
+
+function isLoopbackHost(hostname) {
+  const normalized = hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.+$/, "");
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+  const ipv4 = /^(\d{1,3})(?:\.\d{1,3}){3}$/.exec(normalized);
+  if (ipv4?.[1] === "127") {
+    return true;
+  }
+  // URL canonicalizes mapped loopback addresses to ::ffff:7fxx:xxxx.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);
+  return mapped ? Number.parseInt(mapped[1], 16) >> 8 === 0x7f : false;
+}
+
+function isAllowedWebSocketUrl(url) {
+  if (url.username || url.password) {
+    return false;
+  }
+  return url.protocol === "wss:" || (url.protocol === "ws:" && isLoopbackHost(url.hostname));
+}
+
+function parseGatewayHint(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const value = raw.trim();
+  if (!value) {
+    return null;
+  }
+  let gateway;
+  try {
+    gateway = new URL(value);
+  } catch {
+    return null;
+  }
+  if (!isAllowedWebSocketUrl(gateway) || gateway.search || gateway.hash) {
+    return null;
+  }
+  return value;
+}
+
+function directGatewayUrlFromRelay(relay) {
+  const suffix = "/browser/extension";
+  if (!relay.pathname.endsWith(suffix)) {
+    return null;
+  }
+  const gateway = new URL(relay.toString());
+  gateway.pathname = gateway.pathname.slice(0, -suffix.length) || "/";
+  return gateway.toString();
+}
+
+function validatePairingFields(relayUrl, token, gatewayUrl) {
+  if (typeof relayUrl !== "string" || typeof token !== "string") {
+    return null;
+  }
+  if (!RELAY_SECRET_PATTERN.test(token)) {
+    return null;
+  }
+  let relay;
+  try {
+    relay = new URL(relayUrl);
+  } catch {
+    return null;
+  }
+  if (
+    !isAllowedWebSocketUrl(relay) ||
+    !relay.pathname.endsWith("/extension") ||
+    relay.search ||
+    relay.hash
+  ) {
+    return null;
+  }
+  const hasGateway = gatewayUrl !== undefined && gatewayUrl !== "";
+  const parsedGateway = hasGateway ? parseGatewayHint(gatewayUrl) : undefined;
+  if (hasGateway && !parsedGateway) {
+    return null;
+  }
+  const directGateway = directGatewayUrlFromRelay(relay);
+  if (directGateway && parsedGateway) {
+    const normalizedGateway = new URL(parsedGateway);
+    normalizedGateway.pathname = normalizedGateway.pathname.replace(/\/+$/, "") || "/";
+    if (normalizedGateway.toString() !== directGateway) {
+      return null;
+    }
+  }
+  return {
+    relayUrl: relay.toString(),
+    token,
+    ...(parsedGateway ? { gatewayUrl: parsedGateway } : {}),
+  };
+}
 
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
@@ -32,31 +129,87 @@ export function parsePairingString(raw) {
     return null;
   }
   const relayUrl = trimmed.slice(0, hashIndex);
-  const token = trimmed.slice(hashIndex + 1).trim();
-  if (!token) {
-    return null;
-  }
+  const token = trimmed.slice(hashIndex + 1);
   let parsed;
   try {
     parsed = new URL(relayUrl);
   } catch {
     return null;
   }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+  const query = [...parsed.searchParams];
+  if (query.length > 1 || (query.length === 1 && query[0]?.[0] !== "gateway")) {
     return null;
   }
-  if (!parsed.pathname.endsWith("/extension")) {
+  const gatewayUrl = query.length === 1 ? query[0]?.[1] : undefined;
+  if (query.length === 1 && !gatewayUrl?.trim()) {
     return null;
   }
-  const gatewayUrl = parsed.searchParams.get("gateway")?.trim() || undefined;
-  parsed.searchParams.delete("gateway");
-  if ([...parsed.searchParams].length > 0) {
+  parsed.search = "";
+  return validatePairingFields(parsed.toString(), token, gatewayUrl);
+}
+
+/** Validate the canonical tuple persisted in chrome.storage.local. */
+function parseStoredPairing(stored) {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
     return null;
   }
+  const parsed = validatePairingFields(stored.relayUrl, stored.token, stored.gatewayUrl);
+  if (
+    !parsed ||
+    parsed.relayUrl !== stored.relayUrl ||
+    parsed.token !== stored.token ||
+    (parsed.gatewayUrl ?? "") !== (stored.gatewayUrl ?? "")
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+/** Own serialized validation and mutation at the extension pairing storage boundary. */
+export function createPairingConfigStore(storage) {
+  let chain = Promise.resolve();
+  let invalidObserved = false;
+  let invalidationRevision = 0;
+  const run = (task) => {
+    const pending = chain.then(task, task);
+    chain = pending.catch(() => undefined);
+    return pending;
+  };
   return {
-    relayUrl: parsed.toString(),
-    token,
-    ...(gatewayUrl ? { gatewayUrl } : {}),
+    get invalidationRevision() {
+      return invalidationRevision;
+    },
+    read: () =>
+      run(async () => {
+        const stored = await storage.get([...PAIRING_STORAGE_KEYS, "groupColor"]);
+        const hasPairing = PAIRING_STORAGE_KEYS.some((key) => Object.hasOwn(stored, key));
+        const pairing = hasPairing ? parseStoredPairing(stored) : null;
+        if (hasPairing && !pairing) {
+          if (!invalidObserved) {
+            invalidationRevision += 1;
+          }
+          invalidObserved = true;
+          await storage.remove(PAIRING_STORAGE_KEYS).catch(() => undefined);
+        } else {
+          invalidObserved = false;
+        }
+        return {
+          relayUrl: pairing?.relayUrl ?? "",
+          token: pairing?.token ?? "",
+          gatewayUrl: pairing?.gatewayUrl ?? "",
+          groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
+        };
+      }),
+    save: (pairing, groupColor) =>
+      run(() =>
+        storage.set({
+          relayUrl: pairing.relayUrl,
+          token: pairing.token,
+          gatewayUrl: pairing.gatewayUrl ?? "",
+          groupColor,
+        }),
+      ),
+    clear: () => run(() => storage.remove(PAIRING_STORAGE_KEYS)),
   };
 }
 

@@ -1,0 +1,26 @@
+title: Managed worktrees Workboard-owner lifecycle
+
+scenario:
+  id: managed-worktrees-workboard-lifecycle
+  surface: runtime
+  category: agent-runtime.agent-turn-execution
+  coverage:
+    primary:
+      - agent-runtime.managed-worktrees-workboard-lifecycle
+  objective: Prove the real child gateway materializes a Workboard card workspace as a managed wb-<card-id> worktree, writes the resolved checkout and branch back to the card, runs its subagent, and removes the clean checkout losslessly at run end.
+  successCriteria:
+    - Dispatch materializes the card's source workspace under the managed state directory as wb-<card-id> on branch openclaw/wb-<card-id>.
+    - The dispatched card persists the resolved managed checkout path and branch while retaining its source workspace metadata.
+    - The real mock-provider subagent run reaches a terminal outcome and run-end cleanup removes the clean checkout losslessly.
+  docsRefs:
+    - docs/concepts/managed-worktrees.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/agents/worktrees/service.ts
+    - extensions/workboard/src/dispatcher.ts
+    - extensions/workboard/src/dispatcher-workspace.ts
+    - test/e2e/qa-lab/runtime/managed-worktrees-workboard-lifecycle-product-proof.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/managed-worktrees-workboard-lifecycle-product-proof.e2e.test.ts
+    summary: Run the real child gateway through Workboard card worktree materialization, workspace writeback, subagent completion, and run-end lossless removal.

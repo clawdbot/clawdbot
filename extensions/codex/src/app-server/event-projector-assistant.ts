@@ -36,6 +36,7 @@ export class CodexAssistantProjection {
   // would drop legitimate verbatim answers ("reply with exactly the command output").
   private readonly rawPromotedAssistantItemIds = new Set<string>();
   private assistantStarted = false;
+  private responseModel: string | undefined;
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
 
@@ -83,6 +84,12 @@ export class CodexAssistantProjection {
       this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
       this.hasLatestTerminalAssistantCandidateText()
     );
+  }
+
+  handleNotification(method: string, params: JsonObject): void {
+    if (method === "model/rerouted") {
+      this.responseModel = readString(params, "toModel") ?? this.responseModel;
+    }
   }
 
   async handleAssistantDelta(params: JsonObject): Promise<void> {
@@ -397,7 +404,8 @@ export class CodexAssistantProjection {
   }
 
   createAssistantMessage(text: string, options: AssistantMessageOptions): AssistantMessage {
-    return buildAssistantMessage(this.params, text, options);
+    const message = buildAssistantMessage(this.params, text, options);
+    return this.responseModel ? { ...message, responseModel: this.responseModel } : message;
   }
 
   createAssistantMirrorMessage(title: string, text: string): AssistantMessage {

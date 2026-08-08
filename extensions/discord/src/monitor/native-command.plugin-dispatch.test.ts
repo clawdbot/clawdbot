@@ -15,6 +15,7 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,6 +23,7 @@ import {
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
+import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import {
@@ -1013,6 +1015,63 @@ describe("Discord native plugin command dispatch", () => {
       ephemeral: true,
     });
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it("warns when the inbound turn is dropped before dispatch", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    nativeCommandRuntime.dispatchChannelInboundTurn = async () => ({
+      admission: { kind: "drop", reason: "ingest-null" },
+      dispatched: false,
+    });
+
+    const result = await dispatchDiscordNativeAgentReply({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      interaction: interaction as never,
+      ctxPayload: { SessionKey: "agent:main:discord:dm:owner" } as never,
+      effectiveRoute: {
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:discord:dm:owner",
+      },
+      channelConfig: null,
+      mediaLocalRoots: [],
+      preferFollowUp: true,
+      log: { error: vi.fn() } as never,
+    });
+
+    expect(result).toEqual({ dispatched: false });
+    expectFollowUpFields(interaction, {
+      content: "⚠️ Command produced no visible reply.",
+      ephemeral: true,
+    });
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it("settles deliberate command silence without an empty warning", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+      deliberateSilentTerminalReply: true,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
   it("warns when a final delivery observer does not report its outcome", async () => {
@@ -1084,6 +1143,116 @@ describe("Discord native plugin command dispatch", () => {
 
     expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a hidden error final and its metadata without sending it to Discord", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.responseState = "deferred";
+    const finalReply = setReplyPayloadMetadata(
+      { text: "scope-aware model selection result", isError: true },
+      { assistantMessageIndex: 3 },
+    );
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
+        throw new Error("expected direct deliverer");
+      }
+      const info = { kind: "final" as const };
+      const deliveryResult = await plan.delivery.deliver(finalReply, info);
+      await plan.delivery.onDelivered?.(finalReply, info, deliveryResult);
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+
+    const result = await dispatchDiscordNativeAgentReply({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      interaction: interaction as never,
+      ctxPayload: { SessionKey: "agent:main:discord:dm:owner" } as never,
+      effectiveRoute: {
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:discord:dm:owner",
+      },
+      channelConfig: null,
+      mediaLocalRoots: [],
+      preferFollowUp: true,
+      suppressReplies: true,
+      log: { error: vi.fn() } as never,
+    });
+
+    expect(result.hiddenFinalReply).toBe(finalReply);
+    expect(result.hiddenFinalReply?.isError).toBe(true);
+    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      label: "hook cancellation",
+      payload: { text: "cancelled core final" },
+      suppression: { reason: "cancelled_by_reply_payload_sending_hook" as const },
+    },
+    {
+      label: "empty final",
+      payload: { text: "  " },
+      suppression: { reason: "no_visible_result" as const },
+    },
+  ])("does not capture a hidden final for $label", async ({ payload, suppression }) => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.responseState = "deferred";
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      await plan.delivery.onDelivered?.(
+        payload,
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression,
+        },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+
+    const result = await dispatchDiscordNativeAgentReply({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      interaction: interaction as never,
+      ctxPayload: { SessionKey: "agent:main:discord:dm:owner" } as never,
+      effectiveRoute: {
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:discord:dm:owner",
+      },
+      channelConfig: null,
+      mediaLocalRoots: [],
+      preferFollowUp: true,
+      suppressReplies: true,
+      log: { error: vi.fn() } as never,
+    });
+
+    expect(result.hiddenFinalReply).toBeUndefined();
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 

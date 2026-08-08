@@ -4,7 +4,7 @@ import path from "node:path";
 
 type MakeTempDir = () => string;
 
-type BundleFixtureFormat = "codex" | "claude" | "cursor";
+type BundleFixtureFormat = "agent" | "codex" | "claude" | "cursor";
 
 export function createBundleInstallFixtureFactory(makeTempDir: MakeTempDir) {
   return function setupBundleInstallFixture(params: {
@@ -16,18 +16,24 @@ export function createBundleInstallFixtureFactory(makeTempDir: MakeTempDir) {
     const pluginDir = path.join(caseDir, "plugin-src");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(path.join(pluginDir, "skills"), { recursive: true });
-    const manifestDir = path.join(
-      pluginDir,
-      params.bundleFormat === "codex"
-        ? ".codex-plugin"
-        : params.bundleFormat === "cursor"
-          ? ".cursor-plugin"
-          : ".claude-plugin",
-    );
-    fs.mkdirSync(manifestDir, { recursive: true });
+    const manifestRelativePath =
+      params.bundleFormat === "agent"
+        ? "plugin.json"
+        : path.join(
+            params.bundleFormat === "codex"
+              ? ".codex-plugin"
+              : params.bundleFormat === "cursor"
+                ? ".cursor-plugin"
+                : ".claude-plugin",
+            "plugin.json",
+          );
+    fs.mkdirSync(path.dirname(path.join(pluginDir, manifestRelativePath)), { recursive: true });
     fs.writeFileSync(
-      path.join(manifestDir, "plugin.json"),
+      path.join(pluginDir, manifestRelativePath),
       JSON.stringify({
+        ...(params.bundleFormat === "agent"
+          ? { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" }
+          : {}),
         name: params.name,
         description: `${params.bundleFormat} bundle fixture`,
         ...(params.bundleFormat === "codex" ? { skills: "skills" } : {}),
@@ -42,11 +48,13 @@ export function createBundleInstallFixtureFactory(makeTempDir: MakeTempDir) {
         "utf-8",
       );
     }
-    fs.writeFileSync(
-      path.join(pluginDir, "skills", "SKILL.md"),
-      "---\ndescription: fixture\n---\n",
-      "utf-8",
+    const skillDir = path.join(
+      pluginDir,
+      "skills",
+      ...(params.bundleFormat === "agent" ? ["fixture"] : []),
     );
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), "---\ndescription: fixture\n---\n", "utf-8");
     return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
   };
 }
