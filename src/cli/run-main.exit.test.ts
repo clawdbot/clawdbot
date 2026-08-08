@@ -2712,7 +2712,9 @@ describe("runCli exit behavior", () => {
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message).toContain(`Unknown command: openclaw ${"🦞".repeat(64)}…`);
+    const displayPrimary = `${"🦞".repeat(63)}…`;
+    expect(displayPrimary.length).toBeLessThanOrEqual(128);
+    expect(message).toContain(`Unknown command: openclaw ${displayPrimary}`);
     expect(message).not.toContain("�");
     expect(message.length).toBeLessThan(500);
     expect(startProxyMock).not.toHaveBeenCalled();

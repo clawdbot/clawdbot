@@ -1036,7 +1036,7 @@ async function resolveUnownedCliPrimaryMessage(params: {
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
-      : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT)}…`;
+      : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
   const suggestion =
     displayPrimary === params.primary ? formatCliCommandSuggestions(params.primary) : "";
   return [
