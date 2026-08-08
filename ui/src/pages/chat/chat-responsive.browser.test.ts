@@ -894,6 +894,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle" type="button">D</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle" type="button">T</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle" type="button">W</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn" data-catalog-terminal type="button">E</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle" type="button">C</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn" data-board-dock-menu type="button">B</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
@@ -925,6 +926,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page
           .locator(selectors.join(","))
           .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).display));
+      const setHeaderContentWidth = async (contentWidth: number) => {
+        await page.locator(".chat-split-view__cell").evaluate((cell, width) => {
+          const header = cell.querySelector<HTMLElement>(".chat-pane__header")!;
+          const style = getComputedStyle(header);
+          const horizontalInsets =
+            Number.parseFloat(style.paddingLeft) +
+            Number.parseFloat(style.paddingRight) +
+            Number.parseFloat(style.borderLeftWidth) +
+            Number.parseFloat(style.borderRightWidth);
+          (cell as HTMLElement).style.width = `${width + horizontalInsets}px`;
+        }, contentWidth);
+      };
 
       const header = await getBoundingBox(page, ".chat-pane__header");
       const close = await getBoundingBox(page, ".chat-pane__close-pane");
@@ -948,6 +961,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(intermediateOverflow.scrollWidth).toBeLessThanOrEqual(
         intermediateOverflow.clientWidth,
       );
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "1000px";
+      });
+      await waitForLayoutSettled(page);
+      const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
+        const header = element as HTMLElement;
+        header.style.containerType = "normal";
+        header.style.width = "0px";
+        const width = header.scrollWidth;
+        header.style.removeProperty("width");
+        header.style.removeProperty("container-type");
+        return width;
+      });
+      await setHeaderContentWidth(721);
+      await waitForLayoutSettled(page);
+      const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      const transitionHeader = await getBoundingBox(page, ".chat-pane__header");
+      const transitionClose = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(transitionClose.x + transitionClose.width).toBeLessThanOrEqual(
+        transitionHeader.x + transitionHeader.width,
+      );
+      expect(await displayValues()).not.toContain("none");
+      expect(
+        await page
+          .locator("[data-catalog-terminal]")
+          .evaluate((element) => getComputedStyle(element).display),
+      ).not.toBe("none");
+      expect(transitionOverflow.scrollWidth).toBeLessThanOrEqual(transitionOverflow.clientWidth);
+      expect(transitionOverflow.clientWidth - fullCompositionWidth).toBeGreaterThanOrEqual(8);
 
       await page.locator(".chat-split-view__cell").evaluate((cell) => {
         (cell as HTMLElement).style.width = "1000px";
