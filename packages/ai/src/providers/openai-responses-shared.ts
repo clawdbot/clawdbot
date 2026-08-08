@@ -16,11 +16,16 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
+  buildOpenAIResponsesReplayContext,
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { createResponsesStreamWithEncryptedContentRetry } from "../transports/openai-responses-replay-internal.js";
+import {
+  createResponsesStreamWithEncryptedContentRetry,
+  prepareOpenAIResponsesReasoningItemForReplay,
+  readOpenAIResponsesReasoningReplayBlockMetadata,
+} from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
@@ -79,19 +84,6 @@ function sanitizeToolResultText(text: string, fallback: string): string {
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
-function normalizeResponsesReasoningReplayItem(params: {
-  item: ReplayableResponseReasoningItem;
-  replayResponsesItemIds: boolean;
-}): ReplayableResponseReasoningItem {
-  const next = { ...(params.item as ReplayableResponseReasoningItem & Record<string, unknown>) };
-  if (!Array.isArray(next.summary)) {
-    next.summary = [];
-  }
-  if (!params.replayResponsesItemIds) {
-    delete next.id;
-  }
-  return next as ReplayableResponseReasoningItem;
-}
 
 function parseTextSignature(
   signature: string | undefined,
@@ -223,6 +215,10 @@ export function convertResponsesMessages<TApi extends Api>(
 ): ResponseInput {
   const messages: ResponseInput = [];
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const replayContext = buildOpenAIResponsesReplayContext(model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+  });
 
   const normalizeIdPart = (part: string): string => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -333,11 +329,24 @@ export function convertResponsesMessages<TApi extends Api>(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
-            const reasoningItem = normalizeResponsesReasoningReplayItem({
-              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
-              replayResponsesItemIds: shouldReplayResponsesItemIds,
-            });
-            output.push(reasoningItem as ResponseInputItem);
+            const reasoningItem = JSON.parse(
+              block.thinkingSignature,
+            ) as ReplayableResponseReasoningItem;
+            const blockMetadata = readOpenAIResponsesReasoningReplayBlockMetadata(
+              block as unknown as Record<string, unknown>,
+            );
+            // Unannotated items retain the shipped public-provider stateless replay contract.
+            // Once capture provenance exists, ciphertext is fenced to that exact route.
+            const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
+              reasoningItem,
+              replayContext,
+              blockMetadata,
+              { preserveUnattributedEncryptedContent: true },
+            );
+            if (!shouldReplayResponsesItemIds) {
+              delete replayableReasoningItem.id;
+            }
+            output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {

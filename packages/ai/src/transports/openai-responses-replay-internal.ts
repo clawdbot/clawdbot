@@ -223,11 +223,14 @@ function encryptedReasoningReplayMetadataMatches(
   );
 }
 
-function readOpenAIResponsesReasoningReplayBlockMetadata(
+export function readOpenAIResponsesReasoningReplayBlockMetadata(
   block: Record<string, unknown>,
-): OpenAIResponsesReasoningReplayMetadata | undefined {
+): OpenAIResponsesReasoningReplayMetadata | null | undefined {
+  if (!Object.hasOwn(block, OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY)) {
+    return undefined;
+  }
   const value = block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY];
-  return isOpenAIResponsesReasoningReplayMetadata(value) ? value : undefined;
+  return isOpenAIResponsesReasoningReplayMetadata(value) ? value : null;
 }
 
 function normalizeOpenAIResponsesReasoningReplayItem(
@@ -243,17 +246,26 @@ function normalizeOpenAIResponsesReasoningReplayItem(
 export function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
-  blockMetadata?: OpenAIResponsesReasoningReplayMetadata,
+  blockMetadata?: OpenAIResponsesReasoningReplayMetadata | null,
+  options?: { preserveUnattributedEncryptedContent?: boolean },
 ): ReplayableResponseReasoningItem {
-  const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } =
-    item as ReplayableResponseReasoningItem & Record<string, unknown>;
+  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
+  const hasRawMetadata = Object.hasOwn(record, OPENAI_RESPONSES_REASONING_REPLAY_META_KEY);
+  const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } = record;
   if (!("encrypted_content" in rest)) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const metadata =
-    blockMetadata ??
-    (isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined);
-  if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
+    blockMetadata !== undefined
+      ? (blockMetadata ?? undefined)
+      : isOpenAIResponsesReasoningReplayMetadata(rawMetadata)
+        ? rawMetadata
+        : undefined;
+  const preserveUnattributed =
+    blockMetadata === undefined &&
+    !hasRawMetadata &&
+    options?.preserveUnattributedEncryptedContent === true;
+  if (preserveUnattributed || encryptedReasoningReplayMetadataMatches(metadata, context)) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedReasoningContentFields(rest);

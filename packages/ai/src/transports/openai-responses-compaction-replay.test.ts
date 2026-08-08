@@ -218,6 +218,122 @@ describe("OpenAI Responses compaction replay", () => {
     });
   });
 
+  it("recovers and replays a terminal-only compaction without an id", async () => {
+    const output = await processEvents([
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_terminal_idless",
+          status: "completed",
+          output: [
+            {
+              type: "compaction",
+              encrypted_content: "opaque-terminal-idless",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction",
+      data: "opaque-terminal-idless",
+      replayIndex: 0,
+    });
+    expect(output.providerReplay).not.toHaveProperty("id");
+    expect(
+      convertResponsesMessages(
+        model,
+        { messages: [output] },
+        new Set(["openai"]),
+        replayIdentity,
+      ).find((item) => item.type === "compaction"),
+    ).toEqual({
+      type: "compaction",
+      encrypted_content: "opaque-terminal-idless",
+    });
+  });
+
+  it("keeps an identical captured idless compaction without replacing its state", async () => {
+    const output = createOutput();
+    const existingReplay = compactionState(model, {
+      id: undefined,
+      data: "opaque-terminal-idless",
+      replayIndex: 7,
+    });
+    delete existingReplay.id;
+    output.providerReplay = existingReplay;
+
+    await processResponsesStream(
+      events([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_terminal_idless_duplicate",
+            status: "completed",
+            output: [
+              {
+                type: "compaction",
+                encrypted_content: "opaque-terminal-idless",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: () => undefined },
+      model,
+      {
+        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      },
+    );
+
+    expect(output.providerReplay).toBe(existingReplay);
+    expect(output.providerReplay.replayIndex).toBe(7);
+  });
+
+  it("replaces an idless compaction when its encrypted payload changes", async () => {
+    const output = createOutput();
+    const existingReplay = compactionState(model, {
+      id: undefined,
+      data: "opaque-terminal-idless-old",
+      replayIndex: 0,
+    });
+    delete existingReplay.id;
+    output.providerReplay = existingReplay;
+
+    await processResponsesStream(
+      events([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_terminal_idless_changed",
+            status: "completed",
+            output: [
+              {
+                type: "compaction",
+                encrypted_content: "opaque-terminal-idless-new",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: () => undefined },
+      model,
+      {
+        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      },
+    );
+
+    expect(output.providerReplay).not.toBe(existingReplay);
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction",
+      data: "opaque-terminal-idless-new",
+      replayIndex: 0,
+    });
+  });
+
   it("orders reasoning, compaction, and message by normalized replay content", async () => {
     const output = await processEvents([
       {
