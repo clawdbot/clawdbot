@@ -23,6 +23,7 @@ import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
 } from "../config/sessions/artifacts.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
@@ -1501,10 +1502,29 @@ export async function noteStateIntegrity(
   // Never offer generic file archival against a live canonical session store.
   if (sqliteEntries.length === 0 && existsDir(sessionsDir)) {
     const referencedTranscriptPaths = new Set<string>();
+    // `sessions.json` maps a session key to its CURRENT session, so the live sessionId alone
+    // describes only a fraction of the transcripts an install legitimately owns. Every other
+    // id the store still points at has to count as referenced, or doctor offers to archive
+    // live history.
+    const referencedSessionIds = new Set<string>();
+    const addReferencedSessionId = (value: unknown): void => {
+      if (typeof value === "string" && value) {
+        referencedSessionIds.add(value);
+      }
+    };
     for (const [, entry] of entries) {
+      // Compaction rotates the transcript and pushes the previous id here.
+      for (const familySessionId of entry?.usageFamilySessionIds ?? []) {
+        addReferencedSessionId(familySessionId);
+      }
+      for (const checkpoint of entry?.compactionCheckpoints ?? []) {
+        addReferencedSessionId(checkpoint?.sessionId);
+      }
+      addReferencedSessionId(entry?.systemPromptReport?.sessionId);
       if (!entry?.sessionId) {
         continue;
       }
+      addReferencedSessionId(entry.sessionId);
       try {
         referencedTranscriptPaths.add(
           resolveComparableTranscriptPath(
@@ -1515,13 +1535,20 @@ export async function noteStateIntegrity(
         // ignore invalid legacy paths
       }
     }
+    const isReferencedTranscript = (fileName: string, filePath: string): boolean => {
+      if (referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath))) {
+        return true;
+      }
+      // Generated names (`<iso-stamp>_<sessionId>.jsonl`) never equal the canonical path.
+      const fileSessionId = extractGeneratedTranscriptSessionId(fileName);
+      return fileSessionId !== undefined && referencedSessionIds.has(fileSessionId);
+    };
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.join(sessionsDir, entry.name))
-      .filter(
-        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
-      );
+      .map((entry) => ({ fileName: entry.name, filePath: path.join(sessionsDir, entry.name) }))
+      .filter(({ fileName, filePath }) => !isReferencedTranscript(fileName, filePath))
+      .map(({ filePath }) => filePath);
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
