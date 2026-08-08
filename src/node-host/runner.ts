@@ -254,6 +254,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     }
     const connectionGeneration = gatewayConnectionGeneration;
     const gatewayProtocol = connectedGatewayProtocol;
+    const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
     let state = optionalPublicationStates.get(method);
     if (!state) {
       state = { status: "unknown", hasPending: false, hasRejectedParams: false };
@@ -274,7 +275,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     }
     const publish = async () => {
       while (state.hasPending && state.status !== "unsupported") {
-        if (connectionGeneration !== gatewayConnectionGeneration) {
+        if (!connectionIsCurrent()) {
           return;
         }
         const nextParams = state.pendingParams;
@@ -282,10 +283,18 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         state.hasPending = false;
         try {
           await client.request(method, nextParams);
+          // Request settlement races reconnect teardown. Stale completions must
+          // not mutate or report against the retired connection.
+          if (!connectionIsCurrent()) {
+            return;
+          }
           state.status = "supported";
           state.hasRejectedParams = false;
           state.rejectedParams = undefined;
         } catch (error) {
+          if (!connectionIsCurrent()) {
+            return;
+          }
           const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
           if (failure === "legacy-unsupported") {
             state.status = "unsupported";
@@ -312,7 +321,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           state.hasPending &&
           state.status !== "unsupported" &&
           gatewayHelloReceived &&
-          connectionGeneration === gatewayConnectionGeneration
+          connectionIsCurrent()
         ) {
           const pendingParams = state.pendingParams;
           state.pendingParams = undefined;

@@ -1,9 +1,10 @@
 # Changelog — @openclaw/gateway-protocol
 
 Wire-protocol and schema contracts for the OpenClaw Gateway (WebSocket JSON-RPC-style
-frames, handshake, and method/event payload schemas). Protocol version is negotiated
-per connection via `minProtocol`/`maxProtocol`. This log covers the wire protocol
-version and the additive schema surface. Dates are authoring dates (2026).
+frames, handshake, and method/event payload schemas). Connection admission checks the
+client's `minProtocol`/`maxProtocol` compatibility range; `hello-ok.protocol` reports
+the Gateway's current wire version. This log covers the wire protocol version and the
+additive schema surface. Dates are authoring dates (2026).
 
 ## Unreleased
 
@@ -53,10 +54,10 @@ Baseline wire version. Present since repo genesis (2026-04-21) as an inline lite
 The first externally-relevant version — there is no 2->3 bump in tracked history.
 
 Established the still-current shape: `req`/`res`/`event` frame envelopes, the
-`ConnectParams` -> `hello-ok` handshake with protocol negotiation, `snapshot` state sync,
-and the founding method/event families: sessions, agent chat, cron, devices, nodes,
-channels, config, commands, logs-chat, exec-approvals, plugin-approvals, secrets, push,
-wizard. (v3 `hello-ok` carried `canvasHostUrl`; v4 replaced it — see above.)
+`ConnectParams` -> `hello-ok` handshake with protocol compatibility admission, `snapshot`
+state sync, and the founding method/event families: sessions, agent chat, cron, devices,
+nodes, channels, config, commands, logs-chat, exec-approvals, plugin-approvals, secrets,
+push, wizard. (v3 `hello-ok` carried `canvasHostUrl`; v4 replaced it — see above.)
 
 ## Schema surface history
 
