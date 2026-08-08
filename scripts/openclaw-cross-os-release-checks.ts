@@ -10,6 +10,7 @@ import {
   isSupportedCrossOsSuite,
   parseArgs,
   readRunnerOverrideEnv,
+  resolveCrossOsReleaseSelection,
   resolveProviderConfig,
   resolveRunnerMatrix,
 } from "./lib/cross-os-release-checks/config.ts";
@@ -49,6 +50,33 @@ function isMainModule() {
 
 async function main(argv: string[]) {
   const args = parseArgs(argv);
+
+  if (args["gateway-node-compat"] === "true") {
+    const { runGatewayNodeCompatProducer } =
+      await import("./lib/cross-os-release-checks/gateway-node-compat.ts");
+    await runGatewayNodeCompatProducer(args);
+    return;
+  }
+
+  if (args["resolve-selection"] === "true") {
+    const mode = args["mode"] ?? "both";
+    const ref = args["ref"]?.trim() || "main";
+    const runnerOverrideEnv = readRunnerOverrideEnv(process.env);
+    process.stdout.write(
+      `${JSON.stringify(
+        resolveCrossOsReleaseSelection({
+          mode,
+          ref,
+          ubuntuRunner: args["ubuntu-runner"],
+          windowsRunner: args["windows-runner"],
+          macosRunner: args["macos-runner"],
+          suiteFilter: args["suite-filter"],
+          ...runnerOverrideEnv,
+        }),
+      )}\n`,
+    );
+    return;
+  }
 
   if (args["resolve-matrix"] === "true") {
     const mode = args["mode"] ?? "both";

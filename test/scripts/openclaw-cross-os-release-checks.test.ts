@@ -77,6 +77,7 @@ import {
   reserveGatewayPortForLane,
   resolveDashboardAssetUrls,
   resolveCrossOsAgentTurnOptional,
+  resolveCrossOsReleaseSelection,
   runCommand,
   resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
@@ -1379,10 +1380,75 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "default selection",
+      suiteFilter: "",
+      expectedEntries: 12,
+      expectedCrossOs: true,
+      expectedGateway: true,
+      expectedPackagedUpgrade: true,
+    },
+    {
+      name: "focused Gateway/node compatibility",
+      suiteFilter: "gateway_node_compat",
+      expectedEntries: 0,
+      expectedCrossOs: false,
+      expectedGateway: true,
+      expectedPackagedUpgrade: false,
+    },
+    {
+      name: "focused packaged-fresh",
+      suiteFilter: "packaged-fresh",
+      expectedEntries: 3,
+      expectedCrossOs: true,
+      expectedGateway: false,
+      expectedPackagedUpgrade: false,
+    },
+    {
+      name: "mixed Windows upgrade and Gateway/node compatibility",
+      suiteFilter: "windows/packaged-upgrade,gateway-node-compat",
+      expectedEntries: 1,
+      expectedCrossOs: true,
+      expectedGateway: true,
+      expectedPackagedUpgrade: true,
+    },
+  ])(
+    "resolves $name before package preparation",
+    ({
+      suiteFilter,
+      expectedEntries,
+      expectedCrossOs,
+      expectedGateway,
+      expectedPackagedUpgrade,
+    }) => {
+      const selection = resolveCrossOsReleaseSelection({
+        mode: "both",
+        ref: "main",
+        suiteFilter,
+      });
+      expect(selection.matrix.include).toHaveLength(expectedEntries);
+      expect(selection.crossOsReleaseChecksEnabled).toBe(expectedCrossOs);
+      expect(selection.gatewayNodeCompatEnabled).toBe(expectedGateway);
+      expect(selection.candidatePreparationEnabled).toBe(expectedCrossOs || expectedGateway);
+      expect(selection.packagedUpgradeEnabled).toBe(expectedPackagedUpgrade);
+    },
+  );
+
   it("rejects unsupported cross-OS suite filter tokens", () => {
     expect(() => parseCrossOsSuiteFilter("windows/nope")).toThrow(
       /Unsupported cross_os_suite_filter/u,
     );
+  });
+
+  it("rejects a mixed filter when its cross-OS suite is unavailable in the selected mode", () => {
+    expect(() =>
+      resolveCrossOsReleaseSelection({
+        mode: "fresh",
+        ref: "main",
+        suiteFilter: "packaged-upgrade,gateway-node-compat",
+      }),
+    ).toThrow(/did not match any fresh suite/u);
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {

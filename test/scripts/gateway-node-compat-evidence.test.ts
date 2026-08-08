@@ -24,6 +24,7 @@ import type {
   GatewayNodeCompatCaseContract,
   GatewayNodeCompatOutcome,
 } from "../../scripts/gateway-node-compat-evidence.mjs";
+import { canonicalizeProducedGatewayNodeCompatEvidence } from "../../scripts/lib/cross-os-release-checks/gateway-node-compat.ts";
 
 const SCRIPT_PATH = "scripts/gateway-node-compat-evidence.mjs";
 const CANDIDATE_PACKAGE_SHA256 = "b".repeat(64);
@@ -314,6 +315,24 @@ describe("gateway node compatibility evidence", () => {
     const evidence = validPassEvidence();
 
     expect(validateGatewayNodeCompatEvidence(evidence)).toBe(evidence);
+  });
+
+  it("canonicalizes producer evidence against both package identities", () => {
+    const evidence = validPassEvidence();
+    const canonical = canonicalizeProducedGatewayNodeCompatEvidence(
+      evidence,
+      { sha256: CANDIDATE_PACKAGE_SHA256 },
+      { sha256: BASELINE_PACKAGE_SHA256 },
+    );
+
+    expect(JSON.parse(canonical)).toEqual(evidence);
+    expect(() =>
+      canonicalizeProducedGatewayNodeCompatEvidence(
+        evidence,
+        { sha256: BASELINE_PACKAGE_SHA256 },
+        { sha256: CANDIDATE_PACKAGE_SHA256 },
+      ),
+    ).toThrow(/gateway artifact identity must match the candidate package/u);
   });
 
   it("accepts observed structured protocol mismatch evidence", () => {
@@ -1438,7 +1457,7 @@ describe("gateway node compatibility evidence", () => {
     const declaration = readFileSync("scripts/gateway-node-compat-evidence.d.mts", "utf8");
     const declaredValueExports = Array.from(
       declaration.matchAll(/export (?:declare )?(?:const|function) ([A-Za-z0-9_]+)/gu),
-      (match) => match[1],
+      (match) => match[1]!,
     ).toSorted(compareStrings);
 
     expect(Object.keys(evidenceModule).toSorted(compareStrings)).toEqual(declaredValueExports);

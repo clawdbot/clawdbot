@@ -1270,8 +1270,46 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/openclaw-cross-os-release-checks.test.ts",
+        "test/scripts/gateway-node-linux-compat.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/test-install-sh-docker.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    );
+  });
+
+  it("routes Gateway/node compatibility producers and helpers to their owner tests", () => {
+    expectChangedTargets(
+      ["scripts/gateway-node-compat-case.ts"],
+      ["test/scripts/gateway-node-linux-compat.test.ts"],
+    );
+    for (const source of [
+      "scripts/openclaw-cross-os-release-checks.ts",
+      "scripts/lib/cross-os-release-checks/managed-container.ts",
+    ]) {
+      expectChangedTargets(
+        [source],
+        [
+          "test/scripts/openclaw-cross-os-release-checks.test.ts",
+          "test/scripts/gateway-node-linux-compat.test.ts",
+        ],
+      );
+    }
+    expectChangedTargets(
+      ["scripts/lib/cross-os-release-checks/gateway-node-compat.ts"],
+      [
+        "test/scripts/openclaw-cross-os-release-checks.test.ts",
+        "test/scripts/gateway-node-linux-compat.test.ts",
+        "test/scripts/gateway-node-compat-evidence.test.ts",
+      ],
+    );
+    expectChangedTargets(
+      [".github/workflows/openclaw-cross-os-release-checks-reusable.yml"],
+      [
+        "test/scripts/openclaw-cross-os-release-checks.test.ts",
+        "test/scripts/gateway-node-linux-compat.test.ts",
+        "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
@@ -1380,6 +1418,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/pnpm-runner.d.mts": ["test/scripts/pnpm-runner.test.ts"],
       "scripts/lib/cross-os-release-checks/runtime.ts": [
         "test/scripts/openclaw-cross-os-release-checks.test.ts",
+        "test/scripts/gateway-node-linux-compat.test.ts",
       ],
       "scripts/install.sh": [
         "test/scripts/install-sh.test.ts",

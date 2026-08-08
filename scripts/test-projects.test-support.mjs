@@ -1834,6 +1834,7 @@ const dockerDigests = "src/docker-image-digests.test.ts";
 const openaiChatToolsE2e = "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts";
 const npmPostpublish = "test/openclaw-npm-postpublish-verify.test.ts";
 const crossOsReleaseChecks = "openclaw-cross-os-release-checks";
+const gatewayNodeLinuxCompat = "gateway-node-linux-compat";
 const runNode = "src/infra/run-node.test.ts";
 const pluginSdkEntryOwners = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
@@ -1851,6 +1852,7 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map([
+  ["scripts/gateway-node-compat-case.ts", [gatewayNodeLinuxCompat]],
   [
     ".github/workflows/mantis-telegram-live.yml",
     ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
@@ -2036,7 +2038,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
-    [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
+    [
+      packageAcceptance,
+      crossOsReleaseChecks,
+      gatewayNodeLinuxCompat,
+      pluginPrerelease,
+      installDocker,
+    ],
   ],
   [/^\.github\/workflows\/docker-release\.yml$/u, ["src/dockerfile.test.ts"]],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
@@ -2045,7 +2053,12 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS = [
   [/^\.github\/workflows\/tui-pty\.yml$/u, [packageAcceptance]],
   [
     /^\.github\/workflows\/openclaw-cross-os-release-checks-reusable\.yml$/u,
-    [crossOsReleaseChecks, "openclaw-cross-os-release-workflow", packageAcceptance],
+    [
+      crossOsReleaseChecks,
+      gatewayNodeLinuxCompat,
+      "openclaw-cross-os-release-workflow",
+      packageAcceptance,
+    ],
   ],
   [
     /^\.github\/workflows\/(?:openclaw-release-publish|package-acceptance)\.yml$/u,
@@ -2718,7 +2731,13 @@ function resolveToolingTestTargets(changedPath, cwd = process.cwd()) {
   const crossOsReleaseTargets =
     implementationPath === "scripts/openclaw-cross-os-release-checks.ts" ||
     implementationPath.startsWith("scripts/lib/cross-os-release-checks/")
-      ? ["test/scripts/openclaw-cross-os-release-checks.test.ts"]
+      ? [
+          "test/scripts/openclaw-cross-os-release-checks.test.ts",
+          "test/scripts/gateway-node-linux-compat.test.ts",
+          ...(implementationPath === "scripts/lib/cross-os-release-checks/gateway-node-compat.ts"
+            ? ["test/scripts/gateway-node-compat-evidence.test.ts"]
+            : []),
+        ]
       : null;
   const explicitTargets =
     (changedPath === "Dockerfile"
