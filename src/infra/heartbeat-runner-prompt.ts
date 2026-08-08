@@ -121,12 +121,30 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   heartbeatScratchContent?: string;
 };
 
+export function shouldPreflightExecEventWake(
+  source: HeartbeatWakeSource,
+  scheduledEveryMs: number | undefined,
+  runScope: HeartbeatRunScope,
+  scheduledTaskCount: number,
+): boolean {
+  return (
+    source === "exec-event" &&
+    !(
+      typeof scheduledEveryMs === "number" &&
+      Number.isSafeInteger(scheduledEveryMs) &&
+      scheduledEveryMs > 0
+    ) &&
+    runScope !== "commitment-only" &&
+    scheduledTaskCount === 0
+  );
+}
+
 export async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
   runScope: HeartbeatRunScope;
-  forcedSessionKey?: string;
+  sessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
   scheduledEveryMs?: number;
@@ -141,7 +159,7 @@ export async function resolveHeartbeatPreflight(params: {
     params.cfg,
     params.agentId,
     params.heartbeat,
-    params.forcedSessionKey,
+    params.sessionKey,
   );
   const pendingEventEntries =
     params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
@@ -230,6 +248,7 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isExecEventWake &&
     !basePreflight.authoritativeScheduledTick &&
     !params.scheduledTasks?.length &&
+    !hasTaggedCronEvents &&
     !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
   ) {
     return {

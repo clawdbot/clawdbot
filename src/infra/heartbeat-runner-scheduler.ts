@@ -130,6 +130,28 @@ export function startHeartbeatRunner(opts: {
     agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
   };
 
+  const applyScheduledCadence = (
+    agent: HeartbeatAgentState,
+    intervalMs: number | undefined,
+    anchorMs: number | undefined,
+  ) => {
+    if (intervalMs === undefined) {
+      return;
+    }
+    agent.intervalMs = intervalMs;
+    agent.phaseMs =
+      anchorMs ??
+      resolveHeartbeatPhaseMs({
+        schedulerSeed: state.schedulerSeed,
+        agentId: agent.agentId,
+        intervalMs,
+      });
+    agent.heartbeat = {
+      ...agent.heartbeat,
+      every: `${intervalMs}ms`,
+    };
+  };
+
   const advanceStaleScheduleAfterDeferral = (
     agent: HeartbeatAgentState,
     now: number,
@@ -454,19 +476,8 @@ export function startHeartbeatRunner(opts: {
       const targetAgent = state.agents.get(targetAgentId);
       // Task intent wins scheduled-task coalescing, so the cadence payload—not
       // the final intent—proves that the persisted monitor tick joined this turn.
-      if (targetAgent && scheduledEveryMs !== undefined && authoritativeScheduledTick) {
-        targetAgent.intervalMs = scheduledEveryMs;
-        targetAgent.phaseMs =
-          scheduledAnchorMs ??
-          resolveHeartbeatPhaseMs({
-            schedulerSeed: state.schedulerSeed,
-            agentId: targetAgent.agentId,
-            intervalMs: scheduledEveryMs,
-          });
-        targetAgent.heartbeat = {
-          ...targetAgent.heartbeat,
-          every: `${scheduledEveryMs}ms`,
-        };
+      if (targetAgent && authoritativeScheduledTick) {
+        applyScheduledCadence(targetAgent, scheduledEveryMs, scheduledAnchorMs);
       }
       // A user-present targeted event may wake an unscheduled agent once. It
       // must not enroll that agent in the recurring heartbeat scheduler.
@@ -572,8 +583,15 @@ export function startHeartbeatRunner(opts: {
       }
     }
 
+    if (authoritativeScheduledTick) {
+      for (const agent of state.agents.values()) {
+        applyScheduledCadence(agent, scheduledEveryMs, scheduledAnchorMs);
+      }
+    }
     const agentOutcomes = await Promise.all(
-      Array.from(state.agents.values()).map((agent) => runOneAgent(agent)),
+      Array.from(state.agents.values()).map((agent) =>
+        runOneAgent(agent, authoritativeScheduledTick),
+      ),
     );
     let firstRetryableBusy: HeartbeatRunResult | undefined;
     for (const outcome of agentOutcomes) {

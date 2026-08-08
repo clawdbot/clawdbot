@@ -250,6 +250,110 @@ describe("stale exec heartbeat wakes", () => {
     });
   });
 
+  it("keeps tagged cron work alive when an exec wake is coalesced", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "telegram" },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-100155462274",
+      });
+      enqueueSystemEvent("Reminder: Check the overnight report", {
+        sessionKey,
+        contextKey: "cron:overnight-report",
+      });
+
+      const getReplyFromConfig = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        deps: { getReplyFromConfig },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplyFromConfig).toHaveBeenCalledOnce();
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    });
+  });
+
+  it("retires a stale exec wake before retryable busy gates", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "telegram" },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "-100155462274",
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        deps: { getQueueSize: () => 1 },
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT });
+    });
+  });
+
+  it("passes persisted cadence through an unscoped coalesced exec wake", async () => {
+    vi.useFakeTimers();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: schedulerSeed,
+    });
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      scheduledEveryMs: 5 * 60_000,
+      coalesceMs: 100,
+    });
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+
+    const [options] = runSpy.mock.calls[0] ?? [];
+    expect(options).toMatchObject({
+      source: "exec-event",
+      scheduledEveryMs: 5 * 60_000,
+      heartbeat: { every: "300000ms" },
+    });
+    runner.stop();
+  });
+
   it("does not move cadence when a stale exec wake defers for min-spacing", async () => {
     vi.useFakeTimers();
     const intervalMs = 5 * 60_000;
