@@ -199,7 +199,8 @@ function createElevenLabsRealtimeTranscriptionSession(
       transport.markReady();
       return;
     }
-    if (!transport.isReady() && event.message_type?.includes("error")) {
+    const isError = typeof event.error === "string" || event.message_type?.includes("error");
+    if (!transport.isReady() && isError) {
       transport.failConnect(new Error(readErrorDetail(event)));
       return;
     }
@@ -216,7 +217,7 @@ function createElevenLabsRealtimeTranscriptionSession(
         }
         return;
       default:
-        if (event.message_type?.includes("error")) {
+        if (isError) {
           config.onError?.(new Error(readErrorDetail(event)));
         }
     }

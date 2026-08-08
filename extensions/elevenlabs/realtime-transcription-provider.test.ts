@@ -18,7 +18,14 @@ import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcr
 
 let cleanup: (() => Promise<void>) | undefined;
 
-async function createRealtimeServer(onRequest: (url: URL) => void) {
+async function createRealtimeServer(
+  onRequest: (url: URL) => void,
+  options?: {
+    initialEvent?: Record<string, unknown>;
+    events?: readonly Record<string, unknown>[];
+    closeAfterEvents?: boolean;
+  },
+) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
@@ -29,7 +36,13 @@ async function createRealtimeServer(onRequest: (url: URL) => void) {
       ws.on("close", () => {
         clients.delete(ws);
       });
-      ws.send(JSON.stringify({ message_type: "session_started" }));
+      ws.send(JSON.stringify(options?.initialEvent ?? { message_type: "session_started" }));
+      for (const event of options?.events ?? []) {
+        ws.send(JSON.stringify(event));
+      }
+      if (options?.closeAfterEvents) {
+        ws.close();
+      }
     });
   });
   await new Promise<void>((resolve) => {
@@ -170,6 +183,88 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("audio_format")).toBe("ulaw_8000");
     expect(requests[0]?.searchParams.get("commit_strategy")).toBe("vad");
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
+  });
+
+  it.each([
+    ["rate_limited", "rate limit exceeded"],
+    ["quota_exceeded", "quota exhausted"],
+    ["queue_overflow", "provider queue is full"],
+    ["commit_throttled", "commit was throttled"],
+  ])("reports the ready-state %s provider error exactly once", async (messageType, message) => {
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [{ message_type: messageType, error: message }],
+    });
+    const onError = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+    });
+    session.close();
+  });
+
+  it("rejects pre-ready provider errors with their original actionable detail", async () => {
+    const message = "rate limit exceeded; retry after account reset";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      initialEvent: { message_type: "rate_limited", error: message },
+      closeAfterEvents: true,
+    });
+    const onError = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+    });
+
+    await expect(session.connect()).rejects.toThrow(message);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+  });
+
+  it("preserves legacy named provider errors without a structured error field", async () => {
+    const message = "legacy provider rejected the input";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [{ message_type: "input_error", message }],
+    });
+    const onError = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+    });
+    session.close();
+  });
+
+  it("keeps ordinary partial and committed transcripts outside error dispatch", async () => {
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [
+        { message_type: "partial_transcript", text: "hello" },
+        { message_type: "committed_transcript", text: "hello there" },
+      ],
+    });
+    const onError = vi.fn();
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onPartial).toHaveBeenCalledExactlyOnceWith("hello");
+      expect(onTranscript).toHaveBeenCalledExactlyOnceWith("hello there");
+    });
+    expect(onError).not.toHaveBeenCalled();
+    session.close();
   });
 
   it("rejects whitespace-only environment keys before session creation", () => {
