@@ -24,7 +24,8 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   laneKey: string;
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>;
   abortController: AbortController;
-  startedAt: number;
+  /** Start of the currently armed dispatch or deferred adoption window. */
+  stallStartedAt: number;
   phase: "dispatching" | "deferred" | "adopted" | "settled";
   occupiesLane: boolean;
   task: Promise<void>;

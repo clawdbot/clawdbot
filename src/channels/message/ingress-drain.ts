@@ -108,6 +108,13 @@ export type CreateChannelIngressDrainOptions<
   ) => boolean;
   ownerId?: string;
   adoptionStallTimeoutMs?: number;
+  /**
+   * Claim→adoption timeout after dispatch explicitly defers to downstream
+   * scheduling. Defaults to adoptionStallTimeoutMs. A longer bound lets healthy
+   * queue waits survive without allowing a lost scheduler lifecycle to retain a
+   * refreshed durable claim forever.
+   */
+  deferredAdoptionStallTimeoutMs?: number;
   claimLeaseMs?: number;
   /**
    * Whether a claimed event keeps occupying its ingress serialization lane after
@@ -172,8 +179,8 @@ export function createChannelIngressDrain<
   // Unique per drain instance so same-process peers do not share claim ownership.
   const ownerId = options.ownerId ?? createIngressDrainOwnerId();
   registerLiveIngressDrainInstance(ownerId);
-  const adoptionStallTimeoutMs =
-    options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS;
+  const adoptionStallMs = options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS;
+  const deferredStallMs = options.deferredAdoptionStallTimeoutMs ?? adoptionStallMs;
   const claimLeaseMs = options.claimLeaseMs ?? INGRESS_CLAIM_LEASE_MS;
   const now = options.now ?? Date.now;
   const formatError = options.formatError ?? formatErrorMessage;
@@ -434,16 +441,18 @@ export function createChannelIngressDrain<
     };
   };
 
-  const armStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>) => {
+  const armStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>, timeoutMs: number) => {
     clearStallTimer(state);
+    state.stallStartedAt = now();
     state.stallTimer = setTimeout(() => {
       // Pre-adoption only (dispatching OR deferred). Timer is not cleared by deferral.
       if (state.phase !== "dispatching" && state.phase !== "deferred") {
         return;
       }
-      const ageMs = now() - state.startedAt;
+      const ageMs = now() - state.stallStartedAt;
       const displayId = state.eventId.replace(/^0+(?=\d)/, "") || state.eventId;
-      const message = `Channel ingress claim→adoption stalled for event ${displayId} on lane ${state.laneKey} after ${ageMs}ms; marking failed (handler-timeout).`;
+      const phaseLabel = state.phase === "deferred" ? "deferred claim→adoption" : "claim→adoption";
+      const message = `Channel ingress ${phaseLabel} stalled for event ${displayId} on lane ${state.laneKey} after ${ageMs}ms; marking failed (handler-timeout).`;
       // Closed guillotine flag — catch must not string-sniff errors.
       state.guillotined = true;
       clearStallTimer(state);
@@ -464,7 +473,7 @@ export function createChannelIngressDrain<
             `ingress drain: failed to dead-letter stalled event ${displayId}; holding claim: ${formatError(err)}`,
           );
         });
-    }, adoptionStallTimeoutMs);
+    }, timeoutMs);
     state.stallTimer.unref?.();
   };
 
@@ -496,8 +505,11 @@ export function createChannelIngressDrain<
         if (state.phase !== "dispatching") {
           return;
         }
-        // Deferred holds the claim; watchdog remains armed until adoption or abandon.
+        // Deferred always holds the durable claim. Reset the watchdog at the
+        // handoff boundary so downstream scheduling gets its own explicit,
+        // bounded adoption window.
         state.phase = "deferred";
+        armStallWatchdog(state, deferredStallMs);
         if (deferredLaneOccupancy === "release") {
           if (laneOwnerByKey.get(state.laneKey) === state) {
             laneOwnerByKey.delete(state.laneKey);
@@ -571,7 +583,7 @@ export function createChannelIngressDrain<
       laneKey,
       claim,
       abortController,
-      startedAt: now(),
+      stallStartedAt: now(),
       phase: "dispatching" as const,
       occupiesLane: true,
       guillotined: false,
@@ -581,7 +593,7 @@ export function createChannelIngressDrain<
     } as ActiveHandlerState<TPayload, TMetadata>;
     state.settleOnce = createSettleOwner(state);
     const lifecycle = createLifecycle(state);
-    armStallWatchdog(state);
+    armStallWatchdog(state, adoptionStallMs);
     armClaimRefresh(state);
 
     state.task = (async () => {
