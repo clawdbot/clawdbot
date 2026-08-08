@@ -38,6 +38,7 @@ type CrabboxInspect = {
   host?: string;
   id?: string;
   slug?: string;
+  sshHost?: string;
   sshKey?: string;
   sshPort?: string;
   sshUser?: string;
@@ -2035,7 +2036,8 @@ async function inspectCrabbox(opts: Options, root: string, leaseId: string) {
 }
 
 function sshArgs(inspect: CrabboxInspect) {
-  if (!inspect.host || !inspect.sshKey || !inspect.sshUser) {
+  const sshHost = inspect.sshHost || inspect.host;
+  if (!sshHost || !inspect.sshKey || !inspect.sshUser) {
     throw new Error("Crabbox inspect output is missing SSH details.");
   }
   return {
@@ -2067,7 +2069,7 @@ function sshArgs(inspect: CrabboxInspect) {
       "-o",
       "ConnectTimeout=15",
     ],
-    target: `${inspect.sshUser}@${inspect.host}`,
+    target: `${inspect.sshUser}@${sshHost}`,
   };
 }
 

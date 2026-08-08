@@ -502,6 +502,7 @@ describe("telegram user Crabbox proof log polling", () => {
         gatewayPort: 19042,
         inspect: {
           host: "proof.example",
+          sshHost: "",
           sshKey: "/tmp/proof-key",
           sshPort: "2222",
           sshUser: "proof",
@@ -519,9 +520,9 @@ describe("telegram user Crabbox proof log polling", () => {
       env,
     });
     expect(allowed.status).toBe(0);
-    expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toContain(
-      "'tailscale' 'funnel' '--bg' '--yes' '19042'",
-    );
+    const fallbackArgv = JSON.parse(fs.readFileSync(argvPath, "utf8"));
+    expect(fallbackArgv).toContain("proof@proof.example");
+    expect(fallbackArgv).toContain("'tailscale' 'funnel' '--bg' '--yes' '19042'");
 
     const rejected = spawnSync(proxyPath, ["serve", "--bg", "19042"], {
       encoding: "utf8",
@@ -529,6 +530,44 @@ describe("telegram user Crabbox proof log polling", () => {
     });
     expect(rejected.status).toBe(64);
     expect(rejected.stderr).toContain("unsupported proof Tailscale command");
+  });
+
+  posixIt("prefers the inspect SSH host over the public host", () => {
+    const root = makeTempDir();
+    const sshPath = path.join(root, "ssh");
+    const argvPath = path.join(root, "ssh-argv.json");
+    const proxyPath = path.join(root, "tailscale");
+    writeExecutable(
+      sshPath,
+      `#!/usr/bin/env node\nimport fs from "node:fs";\nfs.writeFileSync(process.env.ARGV_PATH, JSON.stringify(process.argv.slice(2)));\n`,
+    );
+    writeExecutable(
+      proxyPath,
+      renderTailscaleSshProxy({
+        gatewayPort: 19042,
+        inspect: {
+          host: "public.example",
+          sshHost: "ssh.example",
+          sshKey: "/tmp/proof-key",
+          sshPort: "2222",
+          sshUser: "proof",
+        },
+      }),
+    );
+
+    const result = spawnSync(proxyPath, ["status", "--json"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ARGV_PATH: argvPath,
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const argv = JSON.parse(fs.readFileSync(argvPath, "utf8"));
+    expect(argv).toContain("proof@ssh.example");
+    expect(argv).not.toContain("proof@public.example");
   });
 
   it("reads only the requested log tail", () => {
