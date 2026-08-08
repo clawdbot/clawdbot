@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 
 const execFileAsync = promisify(execFile);
 const tempRoots: string[] = [];
@@ -89,35 +91,63 @@ async function writeHarnessPlugin(stateDir: string): Promise<void> {
     };\n`,
     "utf8",
   );
+  await writePersistedInstalledPluginIndexInstallRecords(
+    {
+      "exec-proof": {
+        source: "path",
+        sourcePath: pluginDir,
+        installPath: pluginDir,
+      },
+    },
+    {
+      stateDir,
+      config: buildExecProofConfig(),
+      candidates: [
+        {
+          idHint: "exec-proof",
+          source: path.join(pluginDir, "index.js"),
+          rootDir: pluginDir,
+          origin: "global",
+        },
+      ],
+    },
+  );
+}
+
+function buildExecProofConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      allow: ["exec-proof"],
+      entries: { "exec-proof": { enabled: true } },
+    },
+    models: {
+      providers: {
+        "exec-proof": {
+          api: "openai-responses",
+          baseUrl: "https://example.invalid/v1",
+          models: [
+            {
+              id: "proof-model",
+              name: "Proof model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 4096,
+              agentRuntime: { id: "exec-proof" },
+            },
+          ],
+        },
+      },
+    },
+    agents: { defaults: { model: { primary: "exec-proof/proof-model" } } },
+  };
 }
 
 async function writeConfig(stateDir: string): Promise<void> {
   await fs.writeFile(
     path.join(stateDir, "openclaw.json"),
-    JSON.stringify({
-      plugins: {
-        allow: ["exec-proof"],
-        entries: { "exec-proof": { enabled: true } },
-      },
-      models: {
-        providers: {
-          "exec-proof": {
-            api: "openai-responses",
-            baseUrl: "https://example.invalid/v1",
-            models: [
-              {
-                id: "proof-model",
-                name: "Proof model",
-                contextWindow: 128000,
-                maxTokens: 4096,
-                agentRuntime: { id: "exec-proof" },
-              },
-            ],
-          },
-        },
-      },
-      agents: { defaults: { model: { primary: "exec-proof/proof-model" } } },
-    }),
+    JSON.stringify(buildExecProofConfig()),
     "utf8",
   );
 }

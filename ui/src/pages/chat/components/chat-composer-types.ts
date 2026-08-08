@@ -21,6 +21,18 @@ import type {
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
 
+export type CapabilityMenuProps = Omit<
+  ChatComposerPlusMenuProps,
+  | "attachments"
+  | "disabled"
+  | "open"
+  | "view"
+  | "toolOverrides"
+  | "onOpenChange"
+  | "onViewChange"
+  | "showCapabilities"
+>;
+
 type ChatComposerDisabledBannerContent = {
   text: string;
   actionLabel: string;
@@ -56,17 +68,7 @@ export type ChatComposerProps = {
   draft: string;
   sessions: SessionsListResult | null;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: Omit<
-    ChatComposerPlusMenuProps,
-    | "attachments"
-    | "disabled"
-    | "open"
-    | "view"
-    | "toolOverrides"
-    | "onOpenChange"
-    | "onViewChange"
-    | "showCapabilities"
-  >;
+  capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;

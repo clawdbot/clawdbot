@@ -223,6 +223,7 @@ export async function finishGatewayStartup(params: {
       loadGatewayModelCatalogSnapshot,
       readPreparedGatewayModelCatalog,
       readChatMetadata: chatMetadataLifecycle.read,
+      readChatStartupProjection: chatMetadataLifecycle.readStartup,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,

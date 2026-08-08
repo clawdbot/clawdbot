@@ -22,6 +22,7 @@ import {
   prepareBeforeToolCallExecutionParams,
 } from "./agent-tools.before-tool-call.wrapper.js";
 import {
+  copyCodeModeControlToolIdentity,
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
@@ -335,7 +336,7 @@ export function toToolDefinitions(
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
-    return {
+    const definition = {
       name,
       label: tool.label ?? name,
       ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
@@ -444,6 +445,8 @@ export function toToolDefinitions(
         }
       },
     } satisfies ToolDefinition;
+    copyCodeModeControlToolIdentity(tool, definition);
+    return definition;
   });
 }
 

@@ -85,17 +85,7 @@ async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
 }
 
-function configWithInstalledPackageTreeBlockPolicy(): OpenClawConfig {
-  return {
-    security: {
-      installPolicy: {
-        enabled: true,
-        exec: {
-          source: "exec",
-          command: process.execPath,
-          args: [
-            "-e",
-            `
+const installedPackageTreePolicySource = `
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
@@ -111,8 +101,30 @@ process.stdin.on("end", () => {
   }
   process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
 });
-`,
-          ],
+`;
+
+async function createInstalledPackageTreePolicyExec(rootDir: string) {
+  if (process.platform === "win32") {
+    return { command: process.execPath, args: ["-e", installedPackageTreePolicySource] };
+  }
+  const command = path.join(rootDir, "install-policy.cjs");
+  await fs.writeFile(command, `#!${process.execPath}\n${installedPackageTreePolicySource}`, "utf8");
+  await fs.chmod(command, 0o700);
+  return { command, args: [] };
+}
+
+function configWithInstalledPackageTreeBlockPolicy(exec: {
+  command: string;
+  args: string[];
+}): OpenClawConfig {
+  return {
+    security: {
+      installPolicy: {
+        enabled: true,
+        exec: {
+          source: "exec",
+          command: exec.command,
+          args: exec.args,
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },
@@ -721,6 +733,7 @@ describe("installPluginFromNpmSpec e2e", () => {
 
   it("rolls back managed peer dependencies added before a failed installed package policy scan", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-peer-rollback-e2e");
+    const policyExec = await createInstalledPackageTreePolicyExec(rootDir);
     const blockedPlugin = uniquePackageName("blocked-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
     await useStaticRegistry([
@@ -735,7 +748,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     ]);
 
     const result = await installNpmPlugin({
-      config: configWithInstalledPackageTreeBlockPolicy(),
+      config: configWithInstalledPackageTreeBlockPolicy(policyExec),
       spec: `${blockedPlugin}@1.0.0`,
       npmRoot,
     });
@@ -799,6 +812,7 @@ describe("installPluginFromNpmSpec e2e", () => {
 
   it("does not take ownership of an existing root dependency observed as a peer", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-peer-existing-root-e2e");
+    const policyExec = await createInstalledPackageTreePolicyExec(rootDir);
     const existingRootDependency = uniquePackageName("existing-root");
     const blockedPlugin = uniquePackageName("blocked-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
@@ -823,7 +837,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     });
 
     const result = await installNpmPlugin({
-      config: configWithInstalledPackageTreeBlockPolicy(),
+      config: configWithInstalledPackageTreeBlockPolicy(policyExec),
       spec: `${blockedPlugin}@1.0.0`,
       npmRoot,
     });

@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 
+SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+
 export npm_config_loglevel=error
 export npm_config_fund=false
 export npm_config_audit=false
@@ -16,7 +18,9 @@ export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
-export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+if [ "$SCENARIO" = "feishu-channel" ]; then
+  export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+fi
 export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
 export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
@@ -43,7 +47,6 @@ PHASE_LOG="$ARTIFACT_ROOT/phases.jsonl"
 BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SURVIVOR_BASELINE}"
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
-SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
@@ -227,6 +230,9 @@ cleanup() {
   if [ -n "${plugin_registry_pid:-}" ]; then
     kill "$plugin_registry_pid" >/dev/null 2>&1 || true
   fi
+  if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+    systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
+  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     local shim_pid
@@ -365,16 +371,49 @@ TS
   echo "Seeded source-only plugin shadow: $shadow_root"
 }
 
-configure_configured_plugin_install_fixture_registry() {
-  configured_plugin_installs_enabled || return 0
-
-  local fixture_root="$ARTIFACT_ROOT/configured-plugin-installs-npm-fixture"
+configure_plugin_registry() {
+  local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
   local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
   local port_file="$fixture_root/npm-registry-port"
   local log_file="$fixture_root/npm-registry.log"
-  mkdir -p "$package_dir"
-  FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
+  local registry_args=()
+
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    local manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
+    local registry_rows
+    registry_rows="$(
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST="$manifest" node <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
+  throw new Error("prepublish plugin registry manifest must contain packages");
+}
+for (const entry of manifest.packages) {
+  if (
+    typeof entry.name !== "string" ||
+    typeof entry.version !== "string" ||
+    typeof entry.tarball !== "string" ||
+    path.basename(entry.tarball) !== entry.tarball
+  ) {
+    throw new Error("invalid prepublish plugin registry package entry");
+  }
+  process.stdout.write(
+    `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
+  );
+}
+NODE
+    )"
+    while IFS=$'\t' read -r package_name package_version package_tarball; do
+      registry_args+=("$package_name" "$package_version" "$package_tarball")
+    done <<<"$registry_rows"
+  fi
+
+  if configured_plugin_installs_enabled; then
+    mkdir -p "$package_dir"
+    FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.FIXTURE_PACKAGE_DIR;
@@ -424,13 +463,19 @@ fs.writeFileSync(
   `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
 );
 NODE
-  tar -czf "$tarball" -C "$fixture_root" package
+    tar -czf "$tarball" -C "$fixture_root" package
+    registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
+  fi
+
+  if [ "${#registry_args[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  mkdir -p "$fixture_root"
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
-    "@openclaw/brave-plugin" \
-    "2026.5.2" \
-    "$tarball" \
+    "${registry_args[@]}" \
     >"$log_file" 2>&1 &
   plugin_registry_pid="$!"
 
@@ -448,7 +493,7 @@ NODE
   done
 
   openclaw_e2e_print_log "$log_file" >&2
-  echo "Timed out waiting for configured plugin install npm fixture registry." >&2
+  echo "Timed out waiting for upgrade survivor npm registry." >&2
   return 1
 }
 
@@ -742,6 +787,7 @@ set -euo pipefail
 log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+supervisor_script="${pid_file}.supervisor.mjs"
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
@@ -773,24 +819,27 @@ command="${filtered[0]:-status}"
 is_running() {
   [ -s "$pid_file" ] || return 1
   local pid
+  local process_state
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  process_state="$(awk '{ print $3 }' "/proc/$pid/stat" 2>/dev/null || true)"
+  [ "$process_state" != "Z" ]
 }
 
 stop_gateway() {
-  [ -s "$pid_file" ] || return 0
-  local pid
+  local pid=""
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
     kill "$pid" >/dev/null 2>&1 || true
-    for _ in $(seq 1 100); do
-      kill -0 "$pid" >/dev/null 2>&1 || break
+    # The supervisor gives its child 30s, so keep this outer deadline comfortably longer.
+    for _ in $(seq 1 350); do
+      is_running || break
       sleep 0.1
     done
     kill -9 "$pid" >/dev/null 2>&1 || true
   fi
-  rm -f "$pid_file"
+  rm -f "$pid_file" "$supervisor_script"
 }
 
 unit_path() {
@@ -831,9 +880,149 @@ start_gateway() {
     echo "systemctl shim could not find ExecStart in $unit" >&2
     return 1
   }
+  rm -f "$pid_file" "$supervisor_script"
+  cat >"$supervisor_script" <<'SUPERVISOR'
+import fs from "node:fs";
+import { spawn } from "node:child_process";
+
+const command = process.env.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
+const daemonLog = process.env.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
+if (!command || !daemonLog) {
+  process.exit(2);
+}
+
+const output = fs.openSync(daemonLog, "a");
+const childEnv = { ...process.env };
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
+// systemd does not pass transient systemctl-caller update state into the service.
+for (const key of Object.keys(childEnv)) {
+  if (key.startsWith("OPENCLAW_UPDATE_")) {
+    delete childEnv[key];
+  }
+}
+delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+const restartDelayMs = 5_000;
+const restartWindowMs = 60_000;
+const restartBurst = 5;
+const stopTimeoutMs = 30_000;
+const starts = [];
+let child;
+let activeGroupPid;
+let drainingGroupPid;
+let stopping = false;
+
+const finish = () => {
+  try {
+    fs.closeSync(output);
+  } catch {}
+  process.exit(0);
+};
+
+const signalProcessGroup = (pid, signal) => {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      fs.writeSync(output, `[systemctl-shim] gateway process group ${signal} failed: ${String(error)}\n`);
+    }
+  }
+};
+
+const isProcessGroupRunning = (pid) => {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+};
+
+const drainProcessGroup = (pid, onStopped) => {
+  if (!pid) return onStopped();
+  if (drainingGroupPid === pid) return;
+  drainingGroupPid = pid;
+  let completed = false;
+  const complete = () => {
+    if (completed) return;
+    completed = true;
+    if (drainingGroupPid === pid) drainingGroupPid = undefined;
+    if (activeGroupPid === pid) activeGroupPid = undefined;
+    onStopped();
+  };
+  signalProcessGroup(pid, "SIGTERM");
+  const forceKill = setTimeout(() => {
+    signalProcessGroup(pid, "SIGKILL");
+    complete();
+  }, stopTimeoutMs);
+  const finishWhenStopped = () => {
+    if (completed) return;
+    if (isProcessGroupRunning(pid)) {
+      setTimeout(finishWhenStopped, 25);
+      return;
+    }
+    clearTimeout(forceKill);
+    complete();
+  };
+  finishWhenStopped();
+};
+
+const stop = () => {
+  if (stopping) return;
+  stopping = true;
+  if (drainingGroupPid) return;
+  if (activeGroupPid) {
+    drainProcessGroup(activeGroupPid, finish);
+    return;
+  }
+  if (child) {
+    child.kill("SIGTERM");
+    return;
+  }
+  finish();
+};
+
+const start = () => {
+  if (stopping) return finish();
+  const now = Date.now();
+  while (starts.length > 0 && starts[0] <= now - restartWindowMs) {
+    starts.shift();
+  }
+  if (starts.length >= restartBurst) {
+    fs.writeSync(output, "[systemctl-shim] gateway restart limit reached\n");
+    return finish();
+  }
+  starts.push(now);
+  child = spawn("bash", ["-lc", `exec ${command}`], {
+    detached: true,
+    env: childEnv,
+    stdio: ["ignore", output, output],
+  });
+  activeGroupPid = child.pid;
+  const childGroupPid = activeGroupPid;
+  child.on("error", (error) => {
+    fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
+  });
+  child.once("close", (code) => {
+    child = undefined;
+    drainProcessGroup(childGroupPid, () => {
+      if (stopping) return finish();
+      // Match the generated systemd unit's RestartPreventExitStatus contract.
+      if (code === 78) return finish();
+      setTimeout(start, restartDelayMs);
+    });
+  });
+};
+
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+start();
+SUPERVISOR
   (
     load_unit_environment "$unit"
-    nohup bash -lc "exec $exec_start" >>"$daemon_log" 2>&1 &
+    OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
+      OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
+      nohup node "$supervisor_script" </dev/null >/dev/null 2>&1 &
     printf '%s\n' "$!" >"$pid_file"
   )
 }
@@ -1270,10 +1459,10 @@ phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase prepare-update-restart-probe prepare_update_restart_probe
+phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-phase configure-configured-plugin-install-fixture-registry configure_configured_plugin_install_fixture_registry
 phase doctor run_doctor
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired

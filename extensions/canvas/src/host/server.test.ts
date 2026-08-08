@@ -672,4 +672,43 @@ describe("canvas host", () => {
       await fs.rm(linkPath, { force: true });
     }
   });
+
+  it("serves Content-Length on A2UI HEAD responses", async () => {
+    const fixtureEntryDir = await createCaseDir();
+    const a2uiRoot = path.join(fixtureEntryDir, "a2ui");
+    const { setA2uiRootRealForTest } = await import("../../test-api.js");
+
+    try {
+      await fs.mkdir(a2uiRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(a2uiRoot, "index.html"),
+        `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(a2uiRoot, "a2ui.bundle.js"),
+        "window.openclawA2UI = {};",
+        "utf8",
+      );
+      setA2uiRootRealForTest(await fs.realpath(a2uiRoot));
+
+      // HTML: HEAD Content-Length must match the injected GET body bytes.
+      const getHtml = await captureA2uiFixtureResponse(`${A2UI_PATH}/`);
+      const headHtml = await captureA2uiFixtureResponse(`${A2UI_PATH}/`, "HEAD");
+      expect(headHtml.status).toBe(200);
+      expect(headHtml.headers["content-length"]).toBe(String(getHtml.bodyBytes.byteLength));
+      expect(headHtml.bodyBytes.byteLength).toBe(0);
+      expect(headHtml.headers["content-type"]).toBe("text/html; charset=utf-8");
+
+      // Static asset: HEAD Content-Length must match the file bytes.
+      const getBundle = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`);
+      const headBundle = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`, "HEAD");
+      expect(headBundle.status).toBe(200);
+      expect(headBundle.headers["content-length"]).toBe(String(getBundle.bodyBytes.byteLength));
+      expect(headBundle.bodyBytes.byteLength).toBe(0);
+    } finally {
+      setA2uiRootRealForTest(undefined);
+    }
+  });
 });

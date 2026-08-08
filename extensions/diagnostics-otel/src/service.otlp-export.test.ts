@@ -6,32 +6,41 @@
 // a parent lookup keyed by one id space and queried with the other.
 //
 // Trace cases use the OPENCLAW_OTEL_PRELOADED seam to retain this file's tracer provider.
-// Collector-boundary cases start the real NodeSDK, so teardown restores every global SDK
-// registration; otherwise a shutdown provider would poison later real-SDK cases.
+// Collector-boundary cases run owned mode, which now composes private providers and never
+// registers global SDK state; teardown still restores the preloaded globals for trace cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
+  parseDiagnosticTraceparent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  runModelCallAndCaptureTraceparent,
+  startLocalOtlpReceiver,
+} from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,
+  emitRealSdkSignals,
   startOtelService,
   stopStartedOtelServices,
 } from "./service.test-helpers.js";
@@ -50,6 +59,9 @@ const ENDPOINT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
   "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TIMEOUT",
+  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_KEY",
@@ -192,6 +204,7 @@ function captureOtelDiagnostics(): string[] {
 async function startOtlpReceiver() {
   const requests: Array<{
     contentType: string | undefined;
+    headers: IncomingHttpHeaders;
     method: string | undefined;
     url: string;
   }> = [];
@@ -200,6 +213,7 @@ async function startOtlpReceiver() {
     request.on("end", () => {
       requests.push({
         contentType: request.headers["content-type"],
+        headers: request.headers,
         method: request.method,
         url: request.url ?? "",
       });
@@ -231,17 +245,6 @@ function releasePreloadedOtelGlobals() {
   propagation.disable();
   trace.disable();
   process.env[PRELOAD_ENV] = "0";
-}
-
-async function emitRealSdkSignals() {
-  trace.getTracer("openclaw-otel-routing-test").startSpan("routing-test").end();
-  metrics.getMeter("openclaw-otel-routing-test").createCounter("openclaw.routing.test").add(1);
-  emit({
-    type: "log.record",
-    level: "INFO",
-    message: "OTLP routing test",
-  });
-  await waitForDiagnosticEventsDrained();
 }
 
 const SHARED_ENDPOINT_ROUTING_CASES = [
@@ -305,6 +308,49 @@ test.each(SHARED_ENDPOINT_ROUTING_CASES)(
   },
   30_000,
 );
+
+test("merges exporter headers with config and required protobuf precedence", async () => {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_HEADERS =
+    "x-env-only=env-value,x-precedence=env-value,content-type=text/plain";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: true,
+    logs: true,
+    configure: (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.headers = {
+        "content-type": "application/json",
+        "x-config-only": "config-value",
+        "x-precedence": "config-value",
+      };
+    },
+  });
+
+  try {
+    await emitRealSdkSignals();
+    await service.stop?.(ctx);
+
+    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
+      new Set(["/v1/traces", "/v1/metrics", "/v1/logs"]),
+    );
+    expect(
+      receiver.requests.every((request) => {
+        return (
+          request.method === "POST" &&
+          request.headers["content-type"] === "application/x-protobuf" &&
+          request.headers["x-config-only"] === "config-value" &&
+          request.headers["x-env-only"] === "env-value" &&
+          request.headers["x-precedence"] === "config-value"
+        );
+      }),
+    ).toBe(true);
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
 
 test("uses real signal-specific exporter endpoints verbatim", async () => {
   const receiver = await startOtlpReceiver();
@@ -405,6 +451,202 @@ test("does not auto-enable rejected traces when metrics start the real SDK", asy
     await service.stop?.(ctx);
     await receiver.close();
   }
+}, 30_000);
+
+test("propagates the exported model span across two OTLP services with one rooted trace", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
+  const endpoint = `http://127.0.0.1:${port}`;
+  releasePreloadedOtelGlobals();
+
+  const peerProvider = new BasicTracerProvider({
+    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: "openclaw-otel-peer" }),
+    spanProcessors: [
+      new SimpleSpanProcessor(
+        new OTLPTraceExporter({
+          url: `${endpoint}/v1/traces`,
+        }),
+      ),
+    ],
+  });
+  const peerTracer = peerProvider.getTracer("openclaw-otel-peer");
+  const peerRoot = peerTracer.startSpan("peer.request");
+  const peerRootContext = peerRoot.spanContext();
+  const inboundParent = createDiagnosticTraceContext({
+    traceId: peerRootContext.traceId,
+    spanId: peerRootContext.spanId,
+    traceFlags: peerRootContext.traceFlags.toString(16).padStart(2, "0"),
+  });
+
+  const { service, ctx } = await startOtelService({
+    endpoint,
+    traces: true,
+    metrics: false,
+    logs: false,
+    configure: (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.serviceName = "openclaw-otel-gateway";
+    },
+  });
+
+  try {
+    const messageTrace = createChildDiagnosticTraceContext(inboundParent);
+    const harnessTrace = createChildDiagnosticTraceContext(messageTrace);
+    const runTrace = createChildDiagnosticTraceContext(harnessTrace);
+    const toolTrace = createChildDiagnosticTraceContext(runTrace);
+    const base = { runId: "run-live-bridge", provider: "openai", model: "gpt-5.6-luna" };
+    const harnessBase = { ...base, harnessId: "openclaw" };
+
+    emit({
+      type: "message.dispatch.started",
+      channel: "web",
+      source: "http",
+      trace: messageTrace,
+    });
+    emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
+    emit({ type: "run.started", ...base, trace: runTrace });
+    const outboundTraceparent = runModelCallAndCaptureTraceparent({
+      ...base,
+      callId: "call-live-bridge",
+      trace: runTrace,
+    });
+    const outboundContext = parseDiagnosticTraceparent(outboundTraceparent);
+    expect(outboundContext).toBeDefined();
+    const peerCallback = peerTracer.startSpan(
+      "peer.callback",
+      {},
+      trace.setSpanContext(context.active(), {
+        traceId: outboundContext!.traceId,
+        spanId: outboundContext!.spanId!,
+        traceFlags: Number.parseInt(outboundContext!.traceFlags ?? "00", 16),
+        isRemote: true,
+      }),
+    );
+    peerCallback.end();
+
+    emit({
+      type: "tool.execution.started",
+      runId: base.runId,
+      toolName: "http",
+      trace: toolTrace,
+    });
+    emit({
+      type: "tool.execution.completed",
+      runId: base.runId,
+      toolName: "http",
+      durationMs: 10,
+      trace: toolTrace,
+    });
+    emit({
+      type: "run.completed",
+      ...base,
+      outcome: "completed",
+      durationMs: 60,
+      trace: runTrace,
+    });
+    emit({
+      type: "harness.run.completed",
+      ...harnessBase,
+      outcome: "completed",
+      durationMs: 70,
+      trace: harnessTrace,
+    });
+    emit({
+      type: "message.processed",
+      channel: "web",
+      outcome: "completed",
+      durationMs: 80,
+      trace: messageTrace,
+    });
+    await waitForDiagnosticEventsDrained();
+    peerRoot.end();
+    await service.stop?.(ctx);
+    await peerProvider.shutdown();
+
+    const spans = receiver.capturedSpans.filter((span) =>
+      [
+        "peer.request",
+        "peer.callback",
+        "openclaw.message.processed",
+        "openclaw.harness.run",
+        "openclaw.run",
+        "openclaw.model.call",
+        "openclaw.tool.execution",
+      ].includes(span.name),
+    );
+    const spanIds = new Set(spans.map((span) => span.spanId));
+    const roots = spans.filter((span) => !span.parentSpanId);
+    const modelSpan = spans.find((span) => span.name === "openclaw.model.call");
+
+    expect(spans).toHaveLength(7);
+    expect(new Set(spans.map((span) => span.traceId)).size).toBe(1);
+    expect(roots.map((span) => span.name)).toEqual(["peer.request"]);
+    expect(spans.every((span) => !span.parentSpanId || spanIds.has(span.parentSpanId))).toBe(true);
+    expect(outboundContext?.traceId).toBe(modelSpan?.traceId);
+    expect(outboundContext?.spanId).toBe(modelSpan?.spanId);
+    expect(spans.find((span) => span.name === "peer.callback")?.parentSpanId).toBe(
+      modelSpan?.spanId,
+    );
+  } finally {
+    peerRoot.end();
+    await service.stop?.(ctx);
+    await peerProvider.shutdown();
+    await receiver.close();
+  }
+}, 30_000);
+
+test("preserves explicit zero model-call usage through OTLP protobuf export", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+  });
+
+  try {
+    emit({
+      type: "model.call.completed",
+      runId: "run-zero-usage",
+      callId: "call-zero-usage",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+
+    expect(
+      receiver.capturedSpans.find((span) => span.name === "openclaw.model.call")?.attributes,
+    ).toMatchObject({
+      "openclaw.model_call.usage.input_tokens": 0,
+      "openclaw.model_call.usage.output_tokens": 0,
+      "openclaw.model_call.usage.prompt_tokens": 0,
+      "gen_ai.usage.input_tokens": 0,
+    });
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
+test("uses the real preloaded model span as the mid-turn propagation root", async () => {
+  const { service, ctx } = await startOtelService({ traces: true });
+  const outboundTraceparent = runModelCallAndCaptureTraceparent({
+    trace: createDiagnosticTraceContext(),
+    runId: "run-mid-turn",
+    callId: "call-mid-turn",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+  });
+  await waitForDiagnosticEventsDrained();
+  await service.stop?.(ctx);
+
+  const modelSpan = spanNamed(exporter.getFinishedSpans(), "openclaw.model.call");
+  expect(modelSpan?.parentSpanContext).toBeUndefined();
+  expect(outboundTraceparent).toBe(
+    `00-${modelSpan?.spanContext().traceId}-${modelSpan?.spanContext().spanId}-01`,
+  );
 }, 30_000);
 
 // Covers all three completeTrackedLifecycleSpan owners: run.completed,

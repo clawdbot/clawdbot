@@ -6,6 +6,7 @@ import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "../sessions/session-lifecycle-admission.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -788,6 +789,59 @@ describe("subagent registry restart recovery", () => {
     expect(mocks.patchSessionEntry).toHaveBeenCalledOnce();
     expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(false);
   });
+
+  it.each([
+    ["during settlement", true, true],
+    ["after settlement", false, false],
+  ])(
+    "preserves accepted recovery when a newer generation wins %s",
+    async (_name, beforeCommit, expectedAborted) => {
+      const entry = run();
+      const runs = new Map([[entry.runId, entry]]);
+      const isCurrent: RecoveryParams["isCurrent"] = (runId, candidate) =>
+        runs.get(runId) === candidate &&
+        getLatestSubagentRunByChildSessionKeyFromRuns(runs, candidate.childSessionKey) ===
+          candidate;
+      replaceRun.mockImplementationOnce((params: ReplaceRunParams) => {
+        runs.delete(params.previousRunId);
+        entry.runId = params.nextRunId;
+        entry.execution.restartRecovery = params.restartRecovery;
+        runs.set(entry.runId, entry);
+        return true;
+      });
+      mocks.patchSessionEntry.mockImplementationOnce(async ({ sessionKey }, update, options) => {
+        const next = update({ ...mocks.entries[sessionKey]! });
+        const advanceOwner = () => {
+          const newer = run({
+            runId: "newer-accepted-run",
+            generation: (entry.generation ?? 0) + 1,
+          });
+          runs.set(newer.runId, newer);
+        };
+        if (beforeCommit) {
+          advanceOwner();
+        }
+        options?.assertCommitAllowed?.();
+        mocks.entries[sessionKey] = next;
+        if (!beforeCommit) {
+          advanceOwner();
+        }
+        return next;
+      });
+
+      await expect(
+        recover(entry, {
+          getRun: (runId) => runs.get(runId),
+          isCurrent,
+        }),
+      ).resolves.toEqual({ status: "deferred" });
+
+      expect(mocks.entries[childSessionKey]!.abortedLastRun).toBe(expectedAborted);
+      expect(entry.execution.restartRecovery).toMatchObject({ phase: "accepted" });
+      expect(clearAcceptedRecovery).not.toHaveBeenCalled();
+      expect(resumeAcceptedRecovery).not.toHaveBeenCalled();
+    },
+  );
 
   it("terminalizes a retired accepted receipt without clearing newer restart evidence", async () => {
     const entry = run({

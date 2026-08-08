@@ -63,14 +63,16 @@ type AgentHarnessDeprecatedAttemptTerminalFields = {
     | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
     | null;
 };
-type AgentHarnessCanonicalAttemptResult =
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult &
-    AgentHarnessDeprecatedAttemptTerminalFields;
+type AgentHarnessCanonicalAttemptResult = Omit<
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
+  "contextEngineTerminalAnchor"
+> &
+  AgentHarnessDeprecatedAttemptTerminalFields;
 
 /** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
 type AgentHarnessLegacyAttemptResult = Omit<
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
-  "terminal"
+  "contextEngineTerminalAnchor" | "terminal"
 > &
   AgentHarnessDeprecatedAttemptTerminalFields & {
     aborted: boolean;
@@ -88,7 +90,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
-  "trajectoryRecorder"
+  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult

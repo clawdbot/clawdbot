@@ -24,6 +24,7 @@ minimumReleaseAgeExclude:
   - "hono"
   - "libopus-wasm@0.2.0"
   - "libsignal@6.0.0"
+  - "nanoid@3.3.18"
   - "openclaw"
   - "protobufjs"
   - "vite"
@@ -114,6 +115,8 @@ minimumReleaseAgeExclude:
   - "clawpdf"
 
 nodeLinker: hoisted
+# GWTs share node_modules; script commands must not reconcile that shared install.
+verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:

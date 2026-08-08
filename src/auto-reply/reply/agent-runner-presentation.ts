@@ -24,8 +24,8 @@ type AgentTurnPresentation = {
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   startPresentationWhileTyping: (
     typingPromise: Promise<void>,
-    startPresentation: () => void | Promise<void>,
-  ) => Promise<void>;
+    startPresentation: () => boolean | void | Promise<boolean | void>,
+  ) => Promise<boolean | void>;
   blockReplyHandler: ReturnType<typeof createBlockReplyDeliveryHandler> | undefined;
 };
 
@@ -93,9 +93,9 @@ export function createAgentTurnPresentation(params: {
 
   const startPresentationWhileTyping = async (
     typingPromise: Promise<void>,
-    startPresentation: () => void | Promise<void>,
+    startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => {
-    let presentationPromise: void | Promise<void>;
+    let presentationPromise: boolean | void | Promise<boolean | void>;
     try {
       presentationPromise = startPresentation();
     } catch (err) {
@@ -103,7 +103,8 @@ export function createAgentTurnPresentation(params: {
       void typingPromise.catch(() => undefined);
       throw err;
     }
-    await Promise.all([typingPromise, presentationPromise]);
+    const [, result] = await Promise.all([typingPromise, presentationPromise]);
+    return result;
   };
 
   const blockReplyPipeline = params.turn.blockReplyPipeline;

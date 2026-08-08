@@ -118,7 +118,7 @@ describe("NodesPage gateway lifecycle", () => {
     expect(page.nodeState.nodes).toBe(preloadedNodes);
 
     page.context = { gateway: gateway(client) } as unknown as ApplicationContext;
-    page.presence = [{ instanceId: "stale" }];
+    page.presence = [{ instanceId: "stale", ts: 1_000 }];
     applyGatewaySnapshot(page, page.context.gateway.snapshot, true);
     expect(page.nodeState.nodes).toEqual([]);
     expect(page.presence).toEqual([]);

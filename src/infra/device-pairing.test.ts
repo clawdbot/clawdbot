@@ -1,4 +1,5 @@
 // Covers device pairing, token, and role lifecycle behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -117,16 +118,7 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(message);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "message");
 
 function expectRecordFields(
   value: unknown,

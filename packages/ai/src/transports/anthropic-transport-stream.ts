@@ -1686,7 +1686,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             flushPendingTextEnds();
           }
         }
-        if (refusalBuffer && !sawMessageStop) {
+        // Anthropic completes every SSE response with message_stop. Compatible
+        // proxy providers are not held to that first-party transport contract.
+        if (isDirectAnthropicModel(model) && !sawMessageStop) {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {

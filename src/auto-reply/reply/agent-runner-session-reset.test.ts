@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
@@ -78,6 +78,7 @@ describe("resetReplyRunSession", () => {
       sessionId: "session",
       updatedAt: 1,
       sessionFile: path.join(rootDir, "session.jsonl"),
+      lifecycleRunId: "run-before-reset",
       agentHarnessId: "codex",
       claudeCliSessionId: "native-before-boundary",
       modelProvider: "qwencode",
@@ -150,6 +151,7 @@ describe("resetReplyRunSession", () => {
     expect(isNewSession).toBe(true);
     expect(activeSessionEntry?.sessionId).toBe("session");
     expect(activeSessionEntry?.lifecycleRevision).toBe("00000000-0000-0000-0000-000000000123");
+    expect(activeSessionEntry?.lifecycleRunId).toBeUndefined();
     expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(activeSessionEntry?.modelProvider).toBeUndefined();
     expect(activeSessionEntry?.agentHarnessId).toBeUndefined();

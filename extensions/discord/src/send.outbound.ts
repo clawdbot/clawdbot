@@ -33,6 +33,7 @@ import {
   normalizeDiscordPollInput,
   normalizeStickerIds,
   resolveDiscordMessageFlags,
+  resolveDiscordSuppressEmbeds,
   resolveChannelId,
   resolveDiscordChannel,
   resolveDiscordSendComponents,
@@ -107,13 +108,6 @@ async function sendDiscordThreadTextChunks(params: {
       onResult: params.onResult,
     });
   }
-}
-
-function resolveDiscordSuppressEmbeds(params: {
-  configured?: boolean;
-  override?: boolean;
-}): boolean {
-  return params.override ?? params.configured ?? true;
 }
 
 /** Discord thread names are capped at 100 characters. */

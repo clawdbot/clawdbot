@@ -1,19 +1,14 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const describeE2e = chromiumAvailable ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
+});
 
 const baseTime = 1_700_000_000_000;
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
@@ -91,9 +86,6 @@ const claudeSubscriptionSessions = {
   ts: Date.now(),
 };
 
-let server: ControlUiE2eServer;
-let browser: Browser;
-
 async function openChat(
   authStatus: unknown,
   extraMethodResponses: Record<string, unknown> = {},
@@ -104,7 +96,7 @@ async function openChat(
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
-    context = await browser.newContext({
+    context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -114,7 +106,7 @@ async function openChat(
     const gateway = await installMockGateway(page, {
       methodResponses: { "models.authStatus": authStatus, ...extraMethodResponses },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("models.authStatus");
     return { context, page };
   } catch (error) {
@@ -129,22 +121,7 @@ async function closeChat(fixture: { context: BrowserContext; page: Page }): Prom
   await fixture.context.close().catch(() => {});
 }
 
-describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close().catch(() => {});
-      throw error;
-    }
-  });
-
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
-  });
-
+suite.define(() => {
   it("renders provider usage inside the desktop context popover", async () => {
     const fixture = await openChat(authStatusWithUsage);
     const { page } = fixture;

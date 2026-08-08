@@ -23,7 +23,7 @@ type CodeModeExecHookMetadata = {
   toolInputKind?: CodeModeExecToolInputKind;
 };
 
-const codeModeControlTools = new WeakSet<AnyAgentTool>();
+const codeModeControlTools = new WeakSet<object>();
 
 /** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
@@ -32,17 +32,14 @@ export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
 }
 
 /** Replicate code-mode identity from an original tool object to a wrapper. */
-export function copyCodeModeControlToolIdentity(
-  original: AnyAgentTool,
-  wrapper: AnyAgentTool,
-): void {
+export function copyCodeModeControlToolIdentity(original: object, wrapper: object): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
   }
 }
 
 /** Return whether a tool was marked as code-mode owned. */
-export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
+export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
 }
 

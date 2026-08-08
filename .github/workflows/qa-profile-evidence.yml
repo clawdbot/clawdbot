@@ -415,6 +415,7 @@ jobs:
           import fs from "node:fs";
           import path from "node:path";
           import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const outputDir = process.env.OUTPUT_DIR;
           if (!outputDir) {
@@ -437,6 +438,16 @@ jobs:
           if (payload.scorecard.categoryReports.length === 0) {
             throw new Error("QA profile qa-evidence.json scorecard has no category reports");
           }
+          if (!payload.profilePlan) {
+            throw new Error("QA profile qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            payload.profilePlan,
+            process.env.QA_EXIT_CODE === "0",
+          );
+          if (profilePlan.profile !== process.env.QA_PROFILE) {
+            throw new Error(`qa-evidence.json profilePlan.profile must be ${process.env.QA_PROFILE}, got ${JSON.stringify(profilePlan.profile)}`);
+          }
 
           const manifest = {
             artifactName: process.env.ARTIFACT_NAME,
@@ -449,6 +460,7 @@ jobs:
             targetSha: process.env.TARGET_SHA,
             trustedReason: process.env.TRUSTED_REASON,
             evidenceMode: payload.evidenceMode,
+            profilePlanSha256,
             qaEvidencePath: "qa-evidence.json",
             scorecard: {
               categories: payload.scorecard.categories,

@@ -137,10 +137,22 @@ export async function resolveCronEditPayloadDeliveryPatch(
     typeof opts.lightContext === "boolean";
   const hasScriptSpecificPayloadField =
     Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
+  if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
+    throw new Error("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+  }
+  if (hasTimeoutSeconds && hasSystemEventPatch) {
+    throw new Error("--timeout-seconds is not supported for systemEvent jobs.");
+  }
   let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
   if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
-    const existing = await loadExistingJob();
-    timeoutOnlyPayloadKind = existing.payload.kind === "command" ? "command" : "agentTurn";
+    const existingKind = (await loadExistingJob()).payload.kind;
+    if (existingKind === "script") {
+      throw new Error("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+    }
+    if (existingKind === "systemEvent" || existingKind === "heartbeat") {
+      throw new Error(`--timeout-seconds is not supported for ${existingKind} jobs.`);
+    }
+    timeoutOnlyPayloadKind = existingKind;
   }
   let toolsOnlyPayloadKind: CronJob["payload"]["kind"] | undefined;
   if (
@@ -157,14 +169,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
   }
   const hasAgentTurnPayloadField =
     hasAgentTurnSpecificPayloadField ||
-    (hasTimeoutSeconds &&
-      !hasCommandSpecificPayloadField &&
-      timeoutOnlyPayloadKind !== "command") ||
+    timeoutOnlyPayloadKind === "agentTurn" ||
     (hasToolsAllowPatch && toolsOnlyPayloadKind === "agentTurn");
   const hasCommandPayloadField =
     hasCommandSpecificPayloadField ||
-    (hasTimeoutSeconds &&
-      (hasCommandSpecificPayloadField || timeoutOnlyPayloadKind === "command")) ||
+    timeoutOnlyPayloadKind === "command" ||
     toolsOnlyPayloadKind === "command";
   const hasAgentTurnPatch = hasAgentTurnPayloadField;
   const hasCommandPatch = hasCommandPayloadField;
