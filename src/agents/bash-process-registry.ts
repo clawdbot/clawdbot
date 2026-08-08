@@ -6,6 +6,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { SystemEvent } from "../infra/system-events.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { readEnvInt } from "./bash-tools.shared.js";
@@ -65,6 +66,11 @@ export interface ProcessSession {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
+  /** Queued exec-completion system event and its queue key, recorded at
+   *  enqueue time so a terminal `process poll` can consume the notification
+   *  and prevent a stale heartbeat relay (see #120488). */
+  notifyEvent?: SystemEvent;
+  notifyEventSessionKey?: string;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;
@@ -109,6 +115,11 @@ interface FinishedSession {
   tail: string;
   truncated: boolean;
   totalOutputChars: number;
+  /** Queued exec-completion system event and its queue key, copied from the
+   *  live session so a terminal `process poll` can consume the notification
+   *  (see #120488). */
+  notifyEvent?: SystemEvent;
+  notifyEventSessionKey?: string;
 }
 
 const runningSessions = new Map<string, ProcessSession>();
@@ -251,6 +262,25 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
+/**
+ * Records the queued exec-completion system event on a session and its
+ * retained finished record, so a terminal `process poll` can consume the
+ * notification and prevent a stale heartbeat relay (see #120488).
+ */
+export function recordExecCompletionNotify(
+  session: ProcessSession,
+  notifyEvent: SystemEvent,
+  notifyEventSessionKey: string,
+): void {
+  session.notifyEvent = notifyEvent;
+  session.notifyEventSessionKey = notifyEventSessionKey;
+  const finished = finishedSessions.get(session.id);
+  if (finished) {
+    finished.notifyEvent = notifyEvent;
+    finished.notifyEventSessionKey = notifyEventSessionKey;
+  }
+}
+
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
   return activeBackgroundExecSessionIds.size;
@@ -314,6 +344,10 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     tail: session.tail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
+    ...(session.notifyEvent ? { notifyEvent: session.notifyEvent } : {}),
+    ...(session.notifyEventSessionKey
+      ? { notifyEventSessionKey: session.notifyEventSessionKey }
+      : {}),
   });
   finishedSessionOutputChars += session.aggregated.length;
   while (

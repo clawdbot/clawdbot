@@ -5,6 +5,7 @@
  */
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { consumeSelectedSystemEventEntries, type SystemEvent } from "../infra/system-events.js";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -345,6 +346,20 @@ export function createProcessTool(
         details: { status: "failed" },
       });
 
+      // Consumes the queued exec-completion notification once the terminal
+      // result has been observed through `process poll`, so the next heartbeat
+      // does not relay the same completion as a stale duplicate (see #120488).
+      const acknowledgeExecCompletionNotification = (record: {
+        notifyEvent?: SystemEvent;
+        notifyEventSessionKey?: string;
+      }) => {
+        if (record.notifyEvent && record.notifyEventSessionKey) {
+          consumeSelectedSystemEventEntries(record.notifyEventSessionKey, [record.notifyEvent]);
+          record.notifyEvent = undefined;
+          record.notifyEventSessionKey = undefined;
+        }
+      };
+
       const resolveBackgroundedWritableStdin = () => {
         if (!scopedSession) {
           return {
@@ -391,6 +406,7 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
+              acknowledgeExecCompletionNotification(scopedFinished);
               return {
                 content: [
                   {
@@ -459,6 +475,7 @@ export function createProcessTool(
               scopedSession.exitReason,
               scopedSession.noOutputTimedOut,
             );
+            acknowledgeExecCompletionNotification(scopedSession);
           }
           const status = exited
             ? exitCode === 0 && exitSignal == null

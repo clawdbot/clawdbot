@@ -31,6 +31,14 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventEntry: (...args: unknown[]) => {
+    enqueueSystemEventMock(...args);
+    return {
+      text: typeof args[0] === "string" ? args[0] : "",
+      ts: Date.now(),
+      contextKey: null,
+    };
+  },
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
