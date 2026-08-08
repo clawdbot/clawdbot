@@ -348,6 +348,9 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
       .filter(Boolean)
       .join(path.delimiter),
     CRABBOX_PROVIDER: "",
+    CRABBOX_TARGET: "",
+    CRABBOX_TARGET_OS: "",
+    CRABBOX_WINDOWS_MODE: "",
     OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "",
     OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
     OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
@@ -1872,7 +1875,17 @@ describe("scripts/crabbox-wrapper", () => {
   it("rejects Blacksmith Testbox for Windows-shaped proof", () => {
     for (const args of [
       ["run", "--provider", "blacksmith-testbox", "--target", "windows", "--", "echo ok"],
-      ["run", "--provider", "blacksmith-testbox", "--windows-mode", "wsl2", "--", "echo ok"],
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--target",
+        "windows",
+        "--windows-mode",
+        "wsl2",
+        "--",
+        "echo ok",
+      ],
     ]) {
       const result = runWrapper(azureProviderHelp, args);
 
@@ -2833,6 +2846,44 @@ describe("scripts/crabbox-wrapper", () => {
       runSuccessfulDefaultWrapper(["run", "--provider", "aws", "--", "echo", "ok"]),
       "echo ok",
     );
+  });
+
+  it("does not add POSIX shell bootstraps for env-selected native Windows", () => {
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
+      ["run", "--provider", "aws", "--", "echo", "ok"],
+      { env: { CRABBOX_TARGET: "windows" } },
+    );
+
+    expect(output.args).not.toContain("--shell");
+    expect(remoteCommand).not.toContain(remotePosixHydratedModulesBootstrap);
+  });
+
+  it("keeps env-selected WSL2 runs on the POSIX bootstrap path", () => {
+    const { output } = runSuccessfulDefaultWrapper(
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        env: {
+          CRABBOX_TARGET: "windows",
+          CRABBOX_WINDOWS_MODE: "wsl2",
+        },
+      },
+    );
+
+    expect(output.args).toContain("--script");
+    expect(output.args).not.toContain("--shell");
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_wsl2_js");
+  });
+
+  it("does not add POSIX shell bootstraps for config-selected native Windows", () => {
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(["run", "--", "echo", "ok"], {
+      configJson: managedBrokerConfig("aws", {
+        target: "windows",
+        windowsMode: "normal",
+      }),
+    });
+
+    expect(output.args).not.toContain("--shell");
+    expect(remoteCommand).not.toContain(remotePosixHydratedModulesBootstrap);
   });
 
   const itWithPosixLinkedWorktreeFixture = process.platform === "win32" ? it.skip : it;
