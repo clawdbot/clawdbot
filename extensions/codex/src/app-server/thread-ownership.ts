@@ -201,11 +201,12 @@ export async function retireCodexConversationThreadBinding(params: {
           });
         }
       } catch (restorationError) {
-        throw new AggregateError(
+        const recoveryError = new AggregateError(
           [error, restorationError],
           `Codex conversation detachment failed and native thread ${current.threadId} could not be restored; run /codex resume ${current.threadId} to recover it`,
           { cause: restorationError },
         );
+        throw recoveryError;
       }
       throw error;
     }
