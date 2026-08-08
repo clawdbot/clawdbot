@@ -38,6 +38,7 @@ import {
   setFileLogQueueMaxRecordsForTests,
 } from "./logger-file-transport.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
+import type { LoggerTestApi } from "./logger.test-api.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -767,7 +768,7 @@ export function resetLogger() {
   cachedHostname = null;
 }
 
-export const testApi = {
+const testApi: LoggerTestApi = {
   drainFileLogQueueSyncForTests: drainFileLogQueueSync,
   flushFileLogQueueForTests: flushFileLogQueue,
   resetFileLogTransportForTests,
@@ -780,7 +781,10 @@ export const testApi = {
   },
   shouldSkipMutatingLoggingConfigRead,
 };
-export { testApi as __test__ };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.loggerTestApi")] = testApi;
+}
 
 function resolveActiveLogFile(file: string): string {
   return resolveActiveLogFileWithMode(file, isLegacyRollingLogFilePath(file));

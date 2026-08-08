@@ -9,7 +9,7 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { testApi } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-cap-");

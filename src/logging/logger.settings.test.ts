@@ -1,6 +1,6 @@
 // Logger settings tests cover normalization of logger configuration values.
 import { describe, expect, it } from "vitest";
-import { testApi } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 
 describe("shouldSkipMutatingLoggingConfigRead", () => {
   it("matches config schema and validate invocations", () => {
