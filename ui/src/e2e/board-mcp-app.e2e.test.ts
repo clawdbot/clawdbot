@@ -6,6 +6,7 @@ import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbo
 import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -49,15 +50,18 @@ function boardSnapshot(count: number) {
 }
 
 async function openDashboard(page: Page): Promise<void> {
-  await page.addInitScript((key) => {
-    const settingsKey = "openclaw.control.settings.v1:ws://127.0.0.1:18789";
-    const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-    localStorage.setItem(settingsKey, JSON.stringify(settings));
-  }, sessionKey);
+  const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
+  await page.addInitScript(
+    ({ key, storageKey }) => {
+      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      settings.boardSessionViews = { [key]: { activeTabId: "main" } };
+      localStorage.setItem(storageKey, JSON.stringify(settings));
+    },
+    { key: sessionKey, storageKey: settingsKey },
+  );
   await page.goto(`${controlUi.baseUrl}dashboard`);
   await page.locator(".board-session-surface").waitFor();
 }

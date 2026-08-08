@@ -10,8 +10,8 @@ import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -38,7 +38,6 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
 } from "./settings.ts";
-import { resolveControlUiRefreshRequiredBanner } from "./update-overlay-helpers.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
@@ -149,6 +148,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     !navDrawerOpen &&
     !settingsTakeover;
   const navigationSurfaceHidden = navigationSurfaceIsHidden({
+    onboarding,
     navCollapsed,
     navDrawerOpen,
     mobileNavLayout,
@@ -160,6 +160,19 @@ export function renderApplicationShell(host: ShellViewHost) {
     host.draftSessionAgentId() ||
       (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
   );
+  const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
+    method: "sessions.create",
+    params: {},
+  });
+  const openNewSession = (agentId: string, target?: NewSessionTarget) => {
+    const access = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.create",
+      params: {},
+    });
+    if (access.allowed) {
+      host.openNewSession(agentId, target);
+    }
+  };
   // One storage read per render; theme.refresh() re-renders on pref changes.
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
@@ -184,6 +197,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
+      preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
       workboardBoards: host.sidebarWorkboardSnapshot.boards,
       workboardBoardsReady: host.sidebarWorkboardSnapshot.ready,
@@ -199,10 +213,11 @@ export function renderApplicationShell(host: ShellViewHost) {
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
       updateRunning: overlaySnapshot.updateRunning,
       onUpdate: () => void context.overlays.runUpdate(),
+      refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
+      onRefresh: () => host.refreshControlUi(),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
-      onOpenNewSession: (agentId: string, target?: NewSessionTarget) =>
-        host.openNewSession(agentId, target),
+      onOpenNewSession: openNewSession,
       draftSessionAgentId: host.draftSessionAgentId(),
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),
@@ -228,6 +243,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateRunning: overlaySnapshot.updateRunning,
         onUpdate: () => void context.overlays.runUpdate(),
+        refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
+        onRefresh: () => host.refreshControlUi(),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -244,6 +261,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           needsApply: runtimeConfig.configNeedsApply,
           applying: runtimeConfig.configApplying,
           applyDisabled:
+            context.runtimeConfig.canApply === false ||
             runtimeConfig.configLoading ||
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
@@ -284,6 +302,9 @@ export function renderApplicationShell(host: ShellViewHost) {
               .historyOnly=${settingsTakeover}
               .canGoBack=${host.nativeHistoryState.canGoBack}
               .canGoForward=${host.nativeHistoryState.canGoForward}
+              .newSessionDisabledReason=${newSessionAccess.allowed
+                ? undefined
+                : newSessionAccess.reason}
               .onToggleSidebar=${() => host.toggleNavigationSurface()}
               .onOpenPalette=${() => host.openPalette()}
               .onOpenNewSession=${() => host.handleNativeNewSession()}
@@ -316,16 +337,16 @@ export function renderApplicationShell(host: ShellViewHost) {
               </openclaw-tooltip>
               ${navCollapsed
                 ? html`<openclaw-tooltip
-                    .content=${gatewaySnapshot.phase === "connected"
+                    .content=${newSessionAccess.allowed
                       ? t("chat.runControls.newSession")
-                      : t("chat.runControls.newSessionDisconnected")}
+                      : newSessionAccess.reason}
                   >
                     <button
                       type="button"
                       class="shell-chrome-controls__button shell-chrome-controls__new-thread"
                       aria-label=${t("chat.runControls.newSession")}
-                      ?disabled=${gatewaySnapshot.phase !== "connected"}
-                      @click=${() => host.openNewSession(selectedAgentId)}
+                      ?disabled=${!newSessionAccess.allowed}
+                      @click=${() => openNewSession(selectedAgentId)}
                     >
                       ${icons.plus}
                     </button>
@@ -381,7 +402,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
       >
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
-          ? customElements.get("openclaw-device-auth-migration-banner")
+          ? // The migration banner is registered by a rare-flow dynamic import after first render.
+            customElements.get("openclaw-device-auth-migration-banner")
             ? html`<openclaw-device-auth-migration-banner
                 .props=${{
                   state: overlaySnapshot.deviceAuthMigration,
@@ -398,16 +420,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   },
                 }}
               ></openclaw-update-banner>`
-          : html`<openclaw-update-banner
-              .props=${{
-                statusBanner: overlaySnapshot.controlUiRefreshRequired
-                  ? resolveControlUiRefreshRequiredBanner()
-                  : null,
-                action: overlaySnapshot.controlUiRefreshRequired
-                  ? { label: t("common.refresh"), onClick: () => host.refreshControlUi() }
-                  : undefined,
-              }}
-            ></openclaw-update-banner>`}
+          : nothing}
         <openclaw-update-banner
           .props=${{
             statusBanner: overlaySnapshot.updateStatusBanner,
@@ -419,6 +432,8 @@ export function renderApplicationShell(host: ShellViewHost) {
           updateAvailable: overlaySnapshot.updateAvailable,
           updateRunning: overlaySnapshot.updateRunning,
           onUpdate: () => void context.overlays.runUpdate(),
+          refreshRequired: overlaySnapshot.controlUiRefreshRequired,
+          onRefresh: () => host.refreshControlUi(),
         })}
         <openclaw-router-outlet
           .router=${runtime.router}
@@ -473,7 +488,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         onRefresh: () => void context.overlays.refreshDevicePairSetup(),
         onAccessChange: (access) => void context.overlays.setDevicePairSetupAccess(access),
         onClose: () => context.overlays.closeDevicePairSetup(),
-        onCopy: (setupCode) => void copyToClipboard(setupCode),
         onManageDevices: () => {
           context.overlays.closeDevicePairSetup();
           host.navigate("nodes");

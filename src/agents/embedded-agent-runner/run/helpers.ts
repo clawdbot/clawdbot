@@ -201,16 +201,27 @@ export function resolveLatestCallUsage(params: {
   };
 }
 
+export function normalizeAssistantUsageForContext(
+  assistant: { api?: string; usage?: unknown } | null | undefined,
+): NormalizedUsage | undefined {
+  if (
+    assistant?.api === "cli" &&
+    assistant.usage &&
+    typeof assistant.usage === "object" &&
+    !Array.isArray(assistant.usage) &&
+    (assistant.usage as { contextUsage?: unknown }).contextUsage === undefined
+  ) {
+    return { contextUsage: { state: "unavailable" } };
+  }
+  return normalizeUsage(assistant?.usage as UsageSnapshot | undefined);
+}
+
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastTurnTotal?: number;
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
-    usage.total = params.lastTurnTotal;
-  }
   const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
   const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
     ? lastAssistantUsage
@@ -218,7 +229,7 @@ export function buildUsageAgentMetaFields(params: {
       ? params.lastRunPromptUsage
       : undefined;
   const promptTokens = deriveContextPromptTokens({
-    lastCallUsage: params.lastRunPromptUsage,
+    lastCallUsage,
   });
   return {
     usage,
@@ -241,14 +252,12 @@ export function buildErrorAgentMeta(params: {
   contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastAssistant?: { usage?: unknown } | null;
-  lastTurnTotal?: number;
+  lastAssistant?: { api?: string; usage?: unknown } | null;
 }): EmbeddedAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
-    lastAssistantUsage: params.lastAssistant?.usage as UsageSnapshot | undefined,
+    lastAssistantUsage: normalizeAssistantUsageForContext(params.lastAssistant),
     lastRunPromptUsage: params.lastRunPromptUsage,
-    lastTurnTotal: params.lastTurnTotal,
   });
   return {
     sessionId: params.sessionId,

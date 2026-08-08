@@ -34,6 +34,11 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+  storeHiddenSessionCatalogIds,
+} from "../../components/app-sidebar-session-types.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
@@ -226,6 +231,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
@@ -353,9 +359,17 @@ export class ConfigPage extends OpenClawLightDomElement {
         );
       },
     );
+  private readonly hiddenSessionCatalogsChanged = () => {
+    this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+  };
 
   override connectedCallback() {
     super.connectedCallback();
+    this.hiddenSessionCatalogsChanged();
+    window.addEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
     this.customThemeImportOwner.connect(
       this.context.gateway.connection.gatewayUrl,
       this.context.theme.serverSelection,
@@ -365,6 +379,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    window.removeEventListener(
+      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+      this.hiddenSessionCatalogsChanged,
+    );
     this.customThemeImportOwner.retireImport();
     this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
@@ -680,24 +698,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     };
   }
 
-  private applySettings(next: UiSettings) {
-    this.settings = patchSettings({
-      theme: next.theme,
-      themeMode: next.themeMode,
-      customTheme: next.customTheme,
-      textScale: next.textScale,
-      sidebarLiveActivity: next.sidebarLiveActivity,
-      chatMessageMaxWidth: next.chatMessageMaxWidth,
-      showAdvancedSettings: next.showAdvancedSettings,
-      chatSendShortcut: next.chatSendShortcut,
-      chatFollowUpMode: next.chatFollowUpMode,
-      catalogOpenTarget: next.catalogOpenTarget,
-      realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
-      realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
-      composerHoldToRecord: next.composerHoldToRecord,
-      lobsterPetVisits: next.lobsterPetVisits,
-      lobsterPetSounds: next.lobsterPetSounds,
-    });
+  private applySettings(patch: Partial<UiSettings>) {
+    this.settings = patchSettings(patch);
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
@@ -719,6 +721,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       "locale",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
@@ -728,6 +731,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       "theme",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
@@ -737,6 +741,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       "themeMode",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
@@ -746,6 +751,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       "chatSendShortcut",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
@@ -755,11 +761,21 @@ export class ConfigPage extends OpenClawLightDomElement {
       "chatFollowUpMode",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
+      { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
+  private serverUiPrefsCanSync(): boolean | null {
+    const runtimeConfig = this.context.runtimeConfig;
+    return runtimeConfig.state.connected ? runtimeConfig.canPatch !== false : null;
+  }
+
   private resetLocale() {
-    this.settings = resetServerUiPref("locale", this.currentLocalePref());
+    this.settings = resetServerUiPref(
+      "locale",
+      this.currentLocalePref(),
+      this.context.gateway.connection.gatewayUrl,
+    );
     if (isSupportedLocale(this.settings.locale)) {
       void i18n.setLocale(this.settings.locale);
     } else {
@@ -773,16 +789,32 @@ export class ConfigPage extends OpenClawLightDomElement {
     switch (key) {
       case "theme":
         this.customThemeImportOwner.recordActivation(null);
-        this.settings = resetServerUiPref("theme", this.currentThemePref());
+        this.settings = resetServerUiPref(
+          "theme",
+          this.currentThemePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
         break;
       case "themeMode":
-        this.settings = resetServerUiPref("themeMode", this.currentThemeModePref());
+        this.settings = resetServerUiPref(
+          "themeMode",
+          this.currentThemeModePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
         break;
       case "chatSendShortcut":
-        this.settings = resetServerUiPref("chatSendShortcut", this.currentChatSendShortcutPref());
+        this.settings = resetServerUiPref(
+          "chatSendShortcut",
+          this.currentChatSendShortcutPref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
         break;
       case "chatFollowUpMode":
-        this.settings = resetServerUiPref("chatFollowUpMode", this.currentChatFollowUpModePref());
+        this.settings = resetServerUiPref(
+          "chatFollowUpMode",
+          this.currentChatFollowUpModePref(),
+          this.context.gateway.connection.gatewayUrl,
+        );
         break;
     }
     this.context.theme.refresh();
@@ -794,12 +826,11 @@ export class ConfigPage extends OpenClawLightDomElement {
   ) {
     this.customThemeImportOwner.recordActivation(theme);
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
-    const next = { ...this.settings, theme };
     startThemeTransition({
       currentTheme,
-      nextTheme: resolveTheme(next.theme, next.themeMode),
+      nextTheme: resolveTheme(theme, this.settings.themeMode),
       context,
-      applyTheme: () => this.applySettings(next),
+      applyTheme: () => this.applySettings({ theme }),
     });
   }
 
@@ -808,22 +839,20 @@ export class ConfigPage extends OpenClawLightDomElement {
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
-    const next = { ...this.settings, themeMode: mode };
     startThemeTransition({
       currentTheme,
-      nextTheme: resolveTheme(next.theme, next.themeMode),
+      nextTheme: resolveTheme(this.settings.theme, mode),
       context,
-      applyTheme: () => this.applySettings(next),
+      applyTheme: () => this.applySettings({ themeMode: mode }),
     });
   }
 
   private setSetting<K extends ConfigPageSetting>(key: K, value: UiSettings[K]) {
-    this.applySettings({ ...this.settings, [key]: value });
+    this.applySettings({ [key]: value });
   }
 
   private selectMicrophone(deviceId: string) {
     this.applySettings({
-      ...this.settings,
       realtimeTalkInputDeviceId: deviceId.trim() || undefined,
     });
   }
@@ -840,7 +869,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       // Persist only a camera the active Talk session accepted. A superseded
       // request must not overwrite the newer confirmed selection.
       this.applySettings({
-        ...this.settings,
         realtimeTalkVideoDeviceId: videoDeviceId,
       });
     } catch (error) {
@@ -857,7 +885,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       load: importCustomThemeFromUrl,
       apply: (customTheme, activate) =>
         this.applySettings({
-          ...this.settings,
           customTheme,
           theme: activate ? "custom" : this.settings.theme,
         }),
@@ -872,7 +899,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.customThemeImportOwner.clear({
       apply: () =>
         this.applySettings({
-          ...this.settings,
           theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
           customTheme: undefined,
         }),
@@ -897,6 +923,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       runtimeState.configSaving ||
       runtimeState.configApplying ||
       this.isUpdateBusy() ||
+      !this.context.runtimeConfig.canSet ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null)
     );
   }
@@ -939,6 +966,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
       connected: configState.connected,
+      mutationAllowed: runtimeConfig.canSet,
+      openFileAllowed: runtimeConfig.canOpenFile,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
@@ -1016,6 +1045,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
+      setSessionCatalogHidden: (catalogId, hidden) => {
+        const next = new Set(this.hiddenSessionCatalogIds);
+        if (hidden) {
+          next.add(catalogId);
+        } else {
+          next.delete(catalogId);
+        }
+        storeHiddenSessionCatalogIds(next);
+      },
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
@@ -1048,11 +1087,9 @@ export class ConfigPage extends OpenClawLightDomElement {
           });
       },
       lobsterPetVisits: this.settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
-      setLobsterPetVisits: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
+      setLobsterPetVisits: (enabled) => this.applySettings({ lobsterPetVisits: enabled }),
       lobsterPetSounds: this.settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
-      setLobsterPetSounds: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
+      setLobsterPetSounds: (enabled) => this.applySettings({ lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
       onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),

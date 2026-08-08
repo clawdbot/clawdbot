@@ -136,9 +136,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return false;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    return (
-      entry.type === "text" && Boolean(parseAssistantTextSignature(entry.textSignature)?.phase)
-    );
+    return entry.type === "text" && Boolean(parseAssistantTextSignature(entry)?.phase);
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
@@ -151,7 +149,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
     if (entry.type !== "text") {
       return true;
     }
-    return parseAssistantTextSignature(entry.textSignature)?.phase === "final_answer";
+    return parseAssistantTextSignature(entry)?.phase === "final_answer";
   });
   return {
     content: filtered,
@@ -159,7 +157,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   };
 }
 
-function projectAssistantTextFromMixedToolContent(
+function projectAssistantMixedToolContent(
   content: unknown[],
   maxChars: number,
 ): { content: unknown[]; changed: boolean } | null {
@@ -173,23 +171,31 @@ function projectAssistantTextFromMixedToolContent(
     return null;
   }
 
-  const textBlocks: unknown[] = [];
+  let hasVisibleText = false;
+  const projectedContent: unknown[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text" || typeof entry.text !== "string" || !entry.text.trim()) {
+    if (!isAssistantTextContentType(entry.type)) {
+      projectedContent.push(block);
+      continue;
+    }
+    if (typeof entry.text !== "string" || !entry.text.trim()) {
       continue;
     }
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     const truncated = truncateChatHistoryText(stripped.text, maxChars);
     if (truncated.text.trim()) {
-      textBlocks.push({ type: "text", text: truncated.text });
+      projectedContent.push({ type: "text", text: truncated.text });
+      hasVisibleText = true;
     }
   }
 
-  return textBlocks.length > 0 ? { content: textBlocks, changed: true } : null;
+  // Mixed messages supply both the visible bubble and its reasoning/tool trace.
+  // Keep structured siblings or a history reload loses activity shown while live.
+  return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
 function toFiniteNumber(x: unknown): number | undefined {
@@ -296,6 +302,19 @@ export function sanitizeChatHistoryMessage(
   }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
+  const openClawMeta = readRecord(entry["__openclaw"]);
+  if (openClawMeta && "upstreamUserText" in openClawMeta) {
+    // Codex retains the decorated upstream prompt for transcript reconstruction.
+    // It is not display data and can otherwise evict the visible row from history.
+    const projectedMeta = { ...openClawMeta };
+    delete projectedMeta.upstreamUserText;
+    if (Object.keys(projectedMeta).length > 0) {
+      entry["__openclaw"] = projectedMeta;
+    } else {
+      delete entry["__openclaw"];
+    }
+    changed = true;
+  }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
   const preserveExactToolPayload =
     role === "toolresult" ||
@@ -396,9 +415,9 @@ export function sanitizeChatHistoryMessage(
       changed = true;
     }
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const mixedToolText = projectAssistantTextFromMixedToolContent(entry.content, maxChars);
-      if (mixedToolText) {
-        entry.content = mixedToolText.content;
+      const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
+      if (mixedToolContent) {
+        entry.content = mixedToolContent.content;
         if (entry.phase === "commentary") {
           delete entry.phase;
         }

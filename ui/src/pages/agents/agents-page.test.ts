@@ -17,8 +17,8 @@ import "./agents-page.ts";
 
 type TestAgentsPage = HTMLElement & {
   context: ApplicationContext;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  readonly client: GatewayBrowserClient | null;
+  readonly connected: boolean;
   agentsList: unknown;
   agentsSelectedId: string | null;
   routeData?: AgentsRouteData;
@@ -27,6 +27,7 @@ type TestAgentsPage = HTMLElement & {
   agentFileActive: string | null;
   agentFileContents: Record<string, string>;
   agentIdentityLoading: boolean;
+  agentSkillsError: string | null;
   readonly agentsPanel: AgentsPanel;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
@@ -42,7 +43,13 @@ type TestAgentsPage = HTMLElement & {
     hostDisconnected: () => void;
   };
   willUpdate: (changed: Map<PropertyKey, unknown>) => void;
-  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) => void;
+  gateway: {
+    applySnapshot: (
+      snapshot: ApplicationGatewaySnapshot,
+      binding: { initial: boolean; sourceChanged: boolean },
+    ) => void;
+    invalidate: () => void;
+  };
   ensureAgentIdentities: () => void;
   loadActivePanelData: () => void;
   refreshCron: () => Promise<void>;
@@ -50,8 +57,19 @@ type TestAgentsPage = HTMLElement & {
   runCronTask: <T>(task: (cronState: CronState) => Promise<T>) => Promise<T>;
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
+  clearAgentSkills: (agentId: string) => void;
   saveAgentConfig: () => void;
+  setDefaultAgent: (agentId: string) => void;
 };
+
+function setPageGateway(
+  page: TestAgentsPage,
+  client: GatewayBrowserClient | null,
+  connected = true,
+  sourceChanged = false,
+) {
+  page.gateway.applySnapshot(snapshot(client, connected), { initial: false, sourceChanged });
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -161,14 +179,102 @@ function pageContext(
 }
 
 describe("AgentsPage gateway lifecycle", () => {
+  it("does not stage a default-agent change after a same-client reconnect", async () => {
+    const loading = deferred<void>();
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const stageDefaultAgent = vi.fn(() => true);
+    const save = vi.fn(async () => true);
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const context = pageContext(currentGateway, agents);
+    page.context = {
+      ...context,
+      runtimeConfig: {
+        state: { configFormDirty: false },
+        ensureLoaded: vi.fn(() => loading.promise),
+        stageDefaultAgent,
+        save,
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    setPageGateway(page, client);
+
+    page.setDefaultAgent("research");
+    setPageGateway(page, client, false);
+    setPageGateway(page, client);
+    loading.resolve();
+    await loading.promise;
+    await Promise.resolve();
+
+    expect(stageDefaultAgent).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a queued agent skills clear across a same-client reconnect", async () => {
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const patch = vi.fn(
+      async (_options: Parameters<ApplicationContext["runtimeConfig"]["patch"]>[0]) => false,
+    );
+    const runtimeConfig = {
+      state: {},
+      agentEntry: vi.fn(() => ({
+        path: ["agents", "entries", "main"],
+        entry: { skills: ["coding-agent"] },
+      })),
+      patch,
+      subscribe: vi.fn(() => () => undefined),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = { ...pageContext(currentGateway, agents), runtimeConfig };
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+
+    page.clearAgentSkills("main");
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    const canDispatch = vi.mocked(patch).mock.calls[0]?.[0]?.canDispatch;
+    expect(canDispatch?.()).toBe(true);
+
+    setPageGateway(page, client, false);
+    setPageGateway(page, client);
+
+    expect(canDispatch?.()).toBe(false);
+  });
+
+  it("surfaces a rejected agent skills clear in the panel", async () => {
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const runtimeConfig = {
+      state: { lastError: "Gateway rejected the patch." },
+      agentEntry: vi.fn(() => ({
+        path: ["agents", "entries", "main"],
+        entry: { skills: ["coding-agent"] },
+      })),
+      patch: vi.fn(async () => false),
+      subscribe: vi.fn(() => () => undefined),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = { ...pageContext(currentGateway, agents), runtimeConfig };
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+
+    page.clearAgentSkills("main");
+
+    await vi.waitFor(() => expect(page.agentSkillsError).toBe("Gateway rejected the patch."));
+  });
+
   it("does not refresh the agent roster after a rejected config save", async () => {
     const client = {} as GatewayBrowserClient;
     const refreshList = vi.fn(async () => agentsList);
     const save = vi.fn(async () => false);
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.client = client;
+    setPageGateway(page, client, false);
     page.agentsSelectedId = "main";
     page.context = {
+      gateway: gateway(snapshot(client)),
       agents: {
         state: { agentsLoading: false, agentsError: null, agentsList },
         refreshList,
@@ -193,8 +299,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const request = vi.fn(async () => ({ models }));
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = { request } as unknown as GatewayBrowserClient;
-    page.connected = true;
+    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
@@ -217,8 +322,7 @@ describe("AgentsPage gateway lifecycle", () => {
     }));
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = { request } as unknown as GatewayBrowserClient;
-    page.connected = true;
+    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
@@ -251,8 +355,7 @@ describe("AgentsPage gateway lifecycle", () => {
     );
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = { request } as unknown as GatewayBrowserClient;
-    page.connected = true;
+    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
@@ -277,13 +380,13 @@ describe("AgentsPage gateway lifecycle", () => {
     const nextRequest = vi.fn(async () => ({ models: nextModels }));
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = { request: oldRequest } as unknown as GatewayBrowserClient;
-    page.connected = true;
+    setPageGateway(page, { request: oldRequest } as unknown as GatewayBrowserClient);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
-    page.requestGeneration += 1;
-    page.client = { request: nextRequest } as unknown as GatewayBrowserClient;
+    page.gateway.invalidate();
+    setPageGateway(page, { request: nextRequest } as unknown as GatewayBrowserClient);
+    page.agentsSelectedId = "main";
     page.loadActivePanelData();
 
     await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(nextModels));
@@ -306,12 +409,11 @@ describe("AgentsPage gateway lifecycle", () => {
       .mockResolvedValueOnce({ models: nextModels });
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = { request } as unknown as GatewayBrowserClient;
-    page.connected = true;
+    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
-    page.requestGeneration += 1;
+    page.gateway.invalidate();
     page.loadActivePanelData();
 
     await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(nextModels));
@@ -334,16 +436,15 @@ describe("AgentsPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
     await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(oldModels));
 
-    page.applyGatewaySnapshot(snapshot(client, false), false);
+    setPageGateway(page, client, false);
     expect(page.chatModelCatalog).toEqual([]);
-    page.applyGatewaySnapshot(snapshot(client), false);
+    setPageGateway(page, client);
     page.loadActivePanelData();
 
     await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(nextModels));
@@ -359,8 +460,7 @@ describe("AgentsPage gateway lifecycle", () => {
       .mockResolvedValueOnce({ models });
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
-    page.client = { request } as unknown as GatewayBrowserClient;
-    page.connected = true;
+    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
     page.agentsSelectedId = "main";
 
     page.loadActivePanelData();
@@ -406,8 +506,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "cron" } as AgentsRouteData;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.cron = { ...page.cron, client, connected: true };
 
@@ -453,8 +552,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "cron" } as AgentsRouteData;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.cron = { ...page.cron, client, connected: true };
 
@@ -492,8 +590,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "cron" } as AgentsRouteData;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.cron = { ...page.cron, client, connected: true };
 
@@ -526,8 +623,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "cron" } as AgentsRouteData;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.cron = { ...page.cron, client, connected: true };
 
@@ -535,7 +631,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await vi.waitFor(() => expect(page.cron.cronLoading).toBe(true));
     const inFlightState = page.cron;
 
-    page.applyGatewaySnapshot(snapshot(client), false);
+    setPageGateway(page, client);
     expect(page.cron).toBe(inFlightState);
 
     pendingJobs.resolve({ jobs: [job], total: 1 });
@@ -559,8 +655,7 @@ describe("AgentsPage gateway lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.cron = { ...page.cron, client, connected: true, cronAgentId: "main" };
     const requestUpdate = vi.spyOn(page, "requestUpdate");
 
@@ -585,7 +680,7 @@ describe("AgentsPage gateway lifecycle", () => {
   it("preserves matching initial route data, then resets it on provider replacement", () => {
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client, false));
-    const preloadedAgents = {
+    const preloadedAgents: AgentsListResult = {
       defaultId: "main",
       mainKey: "main",
       scope: "per-sender",
@@ -603,6 +698,7 @@ describe("AgentsPage gateway lifecycle", () => {
       error: null,
     };
     page.context = { gateway: currentGateway } as unknown as ApplicationContext;
+    setPageGateway(page, client, false);
     page.willUpdate(new Map([["routeData", undefined]]));
 
     page.subscriptions.hostConnected();
@@ -614,7 +710,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const boundGeneration = page.requestGeneration;
 
     page.context = { gateway: gateway(snapshot(client, false)) } as unknown as ApplicationContext;
-    page.subscriptions.hostUpdate();
+    setPageGateway(page, client, false, true);
     expect(page.agentsList).toBeNull();
     expect(page.agentsSelectedId).toBeNull();
     expect(page.requestGeneration).toBeGreaterThan(boundGeneration);
@@ -628,8 +724,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const currentGateway = gateway(preloadedSnapshot);
     const ensureList = vi.fn(async () => null);
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.routeData = {
       gateway: preloadedGateway,
       gatewaySnapshot: preloadedSnapshot,
@@ -671,8 +766,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const oldClient = {} as GatewayBrowserClient;
     const nextClient = {} as GatewayBrowserClient;
-    page.client = oldClient;
-    page.connected = true;
+    setPageGateway(page, oldClient);
     page.agentsSelectedId = "main";
     page.context = {
       agents: {
@@ -685,7 +779,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const oldLoad = page.loadAgentFiles("main");
     expect(page.agentFilesLoading).toBe(true);
 
-    page.applyGatewaySnapshot(snapshot(nextClient), false);
+    setPageGateway(page, nextClient);
     page.agentsSelectedId = "main";
     const replacementLoad = page.loadAgentFiles("main");
     expect(page.agentFilesLoading).toBe(true);
@@ -726,8 +820,7 @@ describe("AgentsPage gateway lifecycle", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsSelectedId = "main";
     page.context = {
       agents: {
@@ -759,8 +852,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const ensureFiles = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
     const client = {} as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
-    page.client = client;
-    page.connected = true;
+    setPageGateway(page, client);
     page.agentsList = {
       defaultId: "main",
       mainKey: "main",
@@ -783,11 +875,11 @@ describe("AgentsPage gateway lifecycle", () => {
     const oldLoad = page.loadAgentFiles("main");
     expect(page.agentFilesLoading).toBe(true);
 
-    page.applyGatewaySnapshot(snapshot(client, false), false);
+    setPageGateway(page, client, false);
     expect(page.agentFilesLoading).toBe(false);
     expect(page.agentFileContents).toEqual({ "cached.md": "keep" });
 
-    page.applyGatewaySnapshot(snapshot(client), false);
+    setPageGateway(page, client);
     expect(ensureFiles).toHaveBeenCalledTimes(2);
     expect(page.agentFilesLoading).toBe(true);
 
@@ -811,6 +903,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const context = pageContext(currentGateway, oldAgents);
     page.context = context;
+    setPageGateway(page, client);
     page.subscriptions.hostConnected();
 
     const oldLoad = page.loadAgentFiles("main");
@@ -851,6 +944,7 @@ describe("AgentsPage gateway lifecycle", () => {
       agentIdentity: identity(() => oldEnsure.promise),
     });
     page.context = context;
+    setPageGateway(page, client);
     page.subscriptions.hostConnected();
     page.ensureAgentIdentities();
     expect(page.agentIdentityLoading).toBe(true);
@@ -894,6 +988,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const context = pageContext(currentGateway, agents, { sessions: oldSessions });
     page.context = context;
+    setPageGateway(page, client);
     page.subscriptions.hostConnected();
     page.loadEffectiveToolsForAgent("main");
     expect(page.toolsEffectiveLoading).toBe(true);

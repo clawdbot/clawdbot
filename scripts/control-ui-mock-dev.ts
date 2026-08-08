@@ -1463,6 +1463,8 @@ async function createChatPickerScenario(
       "openclaw.chat.history",
       "sessions.diff",
       "sessions.files.set",
+      "sessions.catalog.list",
+      "sessions.catalog.read",
       "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
@@ -1540,6 +1542,127 @@ async function createChatPickerScenario(
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
+      // Coding session catalogs so the sidebar's catalog sections (header
+      // right-click menu, hide/restore preference) are exercised in the mock.
+      "sessions.catalog.list": {
+        catalogs: [
+          {
+            id: "codex",
+            label: "Codex",
+            capabilities: { continueSession: true, archive: false },
+            hosts: [
+              {
+                hostId: "gateway",
+                label: "This Mac",
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: "codex-thread-1",
+                    name: "Release checklist sweep",
+                    cwd: "/Users/demo/projects/openclaw",
+                    status: "idle",
+                    updatedAt: baseTime - 10 * 60_000,
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                  },
+                  {
+                    threadId: "codex-thread-2",
+                    name: "Sidebar context-menu proof",
+                    cwd: "/Users/demo/projects/openclaw",
+                    status: "idle",
+                    updatedAt: baseTime - 45 * 60_000,
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            id: "claude-code",
+            label: "Claude Code",
+            capabilities: { continueSession: true, archive: false },
+            hosts: [
+              {
+                hostId: "gateway",
+                label: "This Mac",
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: "claude-thread-1",
+                    name: "Docs refresh",
+                    cwd: "/Users/demo/projects/peekaboo",
+                    status: "idle",
+                    updatedAt: baseTime - 30 * 60_000,
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      "sessions.catalog.read": {
+        cases: [
+          {
+            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-1" },
+            response: {
+              hostId: "gateway",
+              threadId: "codex-thread-1",
+              items: [
+                {
+                  id: "release-checklist-answer",
+                  type: "agentMessage",
+                  text: "The release checklist is complete and ready for review.",
+                },
+                {
+                  id: "release-checklist-request",
+                  type: "userMessage",
+                  text: "Please sweep the release checklist for anything we missed.",
+                },
+              ],
+            },
+          },
+          {
+            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-2" },
+            response: {
+              hostId: "gateway",
+              threadId: "codex-thread-2",
+              items: [
+                {
+                  id: "sidebar-context-menu-answer",
+                  type: "agentMessage",
+                  text: "The sidebar context menu behaves as expected.",
+                },
+              ],
+            },
+          },
+          {
+            match: {
+              catalogId: "claude-code",
+              hostId: "gateway",
+              threadId: "claude-thread-1",
+            },
+            response: {
+              hostId: "gateway",
+              threadId: "claude-thread-1",
+              items: [
+                {
+                  id: "docs-refresh-answer",
+                  type: "agentMessage",
+                  text: "The documentation refresh is ready for review.",
+                },
+              ],
+            },
+          },
+        ],
+      },
       "system.info": {
         machineName: "Peters-Mac-Studio",
         hostname: "peters-mac-studio.local",

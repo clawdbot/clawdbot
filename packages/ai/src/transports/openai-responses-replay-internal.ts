@@ -26,6 +26,7 @@ import {
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { log } from "./openai-transport-shared.js";
 import {
@@ -221,8 +222,13 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   request: OpenAIResponsesRequestParams;
   requestOptions: unknown;
   model: Model;
+  observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
   try {
+    params.observePrompt?.(params.request, {
+      egress: "responses-sdk",
+      payloadVariant: "initial",
+    });
     const { data, response } = await params.client.responses
       .create(params.request as never, params.requestOptions as never)
       .withResponse();
@@ -236,6 +242,10 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
         `api=${params.model.api} model=${params.model.id}`,
     );
+    params.observePrompt?.(retryRequest, {
+      egress: "responses-sdk",
+      payloadVariant: "encrypted-content-retry",
+    });
     const { data, response } = await params.client.responses
       .create(retryRequest as never, params.requestOptions as never)
       .withResponse();

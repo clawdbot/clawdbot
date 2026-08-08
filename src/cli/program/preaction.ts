@@ -137,11 +137,18 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (
-      startupPolicy.skipConfigGuard ||
-      isGuidedConfigAction(actionCommand) ||
-      isGuidedConfigCommandPath(commandPath)
-    ) {
+    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+      return;
+    }
+    if (startupPolicy.skipConfigGuard) {
+      // Config validation and plugin activation are independent startup policies.
+      // A cold config read must not suppress a plugin runtime explicitly required by the command.
+      await ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        skipConfigGuard: true,
+      });
       return;
     }
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;

@@ -145,6 +145,7 @@ export type ExecProcessOutcome =
       timedOut: boolean;
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
       reason: string;
     };
 
@@ -519,6 +520,7 @@ function buildExecExitOutcome(params: {
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
+    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
 }

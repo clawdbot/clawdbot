@@ -58,7 +58,11 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  createThinkingTagStreamState,
+  stripDowngradedToolCallText,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -219,6 +223,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
+    thinkingTagStream: createThinkingTagStreamState(),
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
@@ -451,6 +456,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
+    state.thinkingTagStream = createThinkingTagStreamState();
     state.blockBuffer = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();

@@ -16,7 +16,10 @@ import {
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
-import { filterLegacyNodeProtocolFeatures } from "./node-legacy-protocol-filter.js";
+import {
+  filterLegacyNodeProtocolFeatures,
+  normalizeLegacyNodeHostClientMetadata,
+} from "./node-legacy-protocol-filter.js";
 
 describe("gateway/node-command-policy", () => {
   afterEach(() => {
@@ -171,6 +174,39 @@ describe("gateway/node-command-policy", () => {
         "device.info",
       ],
     });
+  });
+
+  it.each([
+    ["darwin", "macos", "Mac"],
+    ["linux", "linux", "Linux"],
+    ["win32", "windows", "Windows"],
+  ])("normalizes shipped protocol-v3 node-host metadata for %s", (platform, expected, family) => {
+    expect(
+      normalizeLegacyNodeHostClientMetadata({
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "2026.5.7",
+        platform,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      }),
+    ).toMatchObject({ platform: expected, deviceFamily: family });
+  });
+
+  it("does not normalize non-node-host or conflicting legacy metadata", () => {
+    const conflicting = {
+      id: GATEWAY_CLIENT_IDS.NODE_HOST,
+      version: "2026.5.7",
+      platform: "linux",
+      deviceFamily: "iPhone",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    } as const;
+    expect(normalizeLegacyNodeHostClientMetadata(conflicting)).toBe(conflicting);
+
+    const otherClient = {
+      ...conflicting,
+      id: GATEWAY_CLIENT_IDS.LINUX_APP,
+      deviceFamily: undefined,
+    };
+    expect(normalizeLegacyNodeHostClientMetadata(otherClient)).toBe(otherClient);
   });
 
   it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {
@@ -581,6 +617,59 @@ describe("gateway/node-command-policy", () => {
     const macNode = { platform: "macos", deviceFamily: "Mac", commands: ["computer.act"] };
     expect(resolveNodePairingCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
     expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
+  });
+
+  it("requires an explicit allow for the dangerous cua-computer plugin command", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      command: {
+        command: "computer.act",
+        cap: "computer",
+        dangerous: true,
+        handle: async () => "{}",
+      },
+    });
+    registry.nodeInvokePolicies.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      pluginConfig: {},
+      policy: {
+        commands: ["computer.act"],
+        dangerous: true,
+        handle: async (ctx) => await ctx.invokeNode(),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const node = {
+      platform: "windows",
+      deviceFamily: "Windows",
+      commands: ["computer.act"],
+      approvedCommands: ["computer.act"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("computer.act")).toBe(false);
+
+    const allowlist = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: { commands: { allow: ["computer.act"] } },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(
+      isNodeCommandAllowed({
+        command: "computer.act",
+        declaredCommands: node.commands,
+        allowlist,
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {

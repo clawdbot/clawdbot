@@ -87,7 +87,9 @@ agent decides whether a user-facing update is needed.
     - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
     - A successful parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies stay owned by the parent/requester agent's normal delivery policy.
-    - If direct handoff cannot be used, delivery falls back to queue routing, then to a short exponential-backoff retry of the announce before final give-up.
+    - If direct handoff cannot be used, delivery falls back to queue routing. A queued completion remains `session_queued`, rather than delivered, until the durable queue settles.
+    - Automatic completion delivery retries for up to 30 minutes, starting around 15 seconds and capping the backoff at 5 minutes. Permanent failure or deadline expiry leaves the successful child task visibly blocked instead of discarding its result.
+    - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
     - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
 
   </Accordion>
@@ -255,7 +257,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. Visible spawning is rejected when the requester was itself spawned with an inherited tool allowlist or denylist; that restriction is fixed at spawn time and has no config override. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this mode when the user asks to create or open a thread that should appear in the sidebar. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 
@@ -571,14 +573,16 @@ Sub-agents use the same profile and tool-policy pipeline as the parent or
 target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
-Sub-agents always lose `gateway`, `agents_list`, `session_status`, and
-`cron` regardless of depth or role (system-level/interactive tools, or
-tools the main agent should coordinate). Leaf sub-agents (default depth-1
-behavior, and always at depth 2) additionally lose `subagents`,
-`sessions_list`, `sessions_history`, and `sessions_spawn`. Sub-agents never
-get the `message` tool — it is disabled at spawn time, not filtered by
-this deny list — and `sessions_send` stays denied so sub-agents
-communicate only through the announce chain.
+Sub-agents always lose `gateway`, `agents_list`, `session_status`, `cron`,
+`message`, `sessions_send`, and the `conversations_*` tools regardless of
+depth or role (system-level/interactive tools, direct delivery surfaces, or
+tools the main agent should coordinate). This hard-deny layer is derived from
+the persisted sub-agent session envelope on every turn, including resumed and
+visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override
+it. Hidden launches also disable `message` before tool construction as defense in
+depth. Leaf sub-agents (default depth-1 behavior, and always at depth 2)
+additionally lose `subagents`, `sessions_list`, `sessions_history`, and
+`sessions_spawn`, so sub-agent communication stays on the announce chain.
 
 `sessions_history` remains a bounded, sanitized recall view here too — it
 is not a raw transcript dump.
@@ -637,6 +641,11 @@ Sub-agents use a dedicated in-process queue lane:
 - **Lane name:** `subagent`
 - **Concurrency:** `agents.defaults.subagents.maxConcurrent` (default `8`)
 
+Retained blocked completions also protect the gateway from unbounded fan-out.
+OpenClaw warns when the delivery backlog reaches 25 and blocks new subagent
+spawns at 50 until operators retry or dismiss enough retained deliveries. It
+does not prune results to make room.
+
 ## Liveness and recovery
 
 OpenClaw does not treat `endedAt` absence as permanent proof that a
@@ -679,7 +688,7 @@ still need normal device approval for scope upgrades.
 
 ## Limitations
 
-- Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
+- Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.

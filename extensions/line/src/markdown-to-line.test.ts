@@ -224,6 +224,32 @@ That's it.`;
     expect(result.text).not.toContain("```");
   });
 
+  it.each([
+    {
+      name: "space-indented code",
+      source: "    first()\n    second()",
+      expected: "    first()\n    second()",
+    },
+    {
+      name: "tab-indented Unicode code",
+      source: "\t😀 first()\n\t界 second()",
+      expected: "\t😀 first()\n\t界 second()",
+    },
+    {
+      name: "existing terminal-newline behavior",
+      source: "    first()\n\n",
+      expected: "    first()",
+    },
+  ])("preserves $name in code cards", ({ source, expected }) => {
+    const result = processLineMessage(`\`\`\`python\n${source}\n\`\`\``);
+    const bubble = requireEntry(result.flexMessages, 0, "code flex message").contents as {
+      body: { contents: Array<{ contents?: Array<{ text: string }> }> };
+    };
+    const codeContent = requireEntry(bubble.body.contents, 1, "code flex body content");
+
+    expect(requireEntry(codeContent.contents ?? [], 0, "code flex text").text).toBe(expected);
+  });
+
   it("handles mixed content", () => {
     const text = `# Summary
 

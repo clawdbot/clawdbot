@@ -707,9 +707,10 @@ export async function prepareSlackMessage(params: {
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const slackClient = opts.eventScope?.client ?? ctx.app.client;
-  const threadStarterWorkspaceScope = opts.eventScope
-    ? { accountId: account.accountId, teamId: opts.eventScope.teamId }
-    : undefined;
+  const threadStarterWorkspaceScope = {
+    accountId: account.accountId,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
+  };
   const cfg = ctx.cfg;
   const conversation = await resolveSlackConversationContext({
     ctx,

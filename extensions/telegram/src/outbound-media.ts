@@ -8,7 +8,7 @@ import type { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import type { TelegramOutboundPromptContextMessage } from "./outbound-message-context.js";
-import { isTelegramHtmlParseError } from "./rich-plain-fallback.js";
+import { isTelegramEmptyContentError, isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import type { TelegramApi } from "./send-context.js";
 import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
@@ -200,17 +200,36 @@ export async function sendTelegramCaptionedMediaWithFallback<T>(params: {
     requestParams: Record<string, unknown>,
     shouldLog?: (err: unknown) => boolean,
   ) => Promise<T>;
-}): Promise<T> {
-  if (!params.plainCaption) {
-    return await params.send(params.requestParams, params.shouldLog);
-  }
+}): Promise<{ result: T; deliveredCaption?: string; captionRemoved?: true }> {
+  const requestCaption =
+    typeof params.requestParams.caption === "string" ? params.requestParams.caption : undefined;
+  const sendCaptionless = async () => {
+    const captionlessParams = { ...params.requestParams };
+    delete captionlessParams.caption;
+    delete captionlessParams.parse_mode;
+    return {
+      result: await params.send(captionlessParams, params.shouldLog),
+      ...(requestCaption !== undefined ? { captionRemoved: true as const } : {}),
+    };
+  };
   try {
-    return await params.send(
-      params.requestParams,
-      (err) => !isTelegramHtmlParseError(err) && (params.shouldLog?.(err) ?? true),
-    );
+    return {
+      result: await params.send(
+        params.requestParams,
+        (err) =>
+          !isTelegramHtmlParseError(err) &&
+          !isTelegramEmptyContentError(err) &&
+          (params.shouldLog?.(err) ?? true),
+      ),
+      ...(requestCaption !== undefined
+        ? { deliveredCaption: params.plainCaption ?? requestCaption }
+        : {}),
+    };
   } catch (err) {
-    if (!isTelegramHtmlParseError(err)) {
+    if (isTelegramEmptyContentError(err) && requestCaption !== undefined) {
+      return await sendCaptionless();
+    }
+    if (!isTelegramHtmlParseError(err) || !params.plainCaption) {
       throw err;
     }
     // Captions share the text-send contract: retain visible content after an
@@ -225,7 +244,21 @@ export async function sendTelegramCaptionedMediaWithFallback<T>(params: {
       caption: params.plainCaption,
     };
     delete plainParams.parse_mode;
-    return await params.send(plainParams, params.shouldLog);
+    try {
+      return {
+        result: await params.send(
+          plainParams,
+          (plainError) =>
+            !isTelegramEmptyContentError(plainError) && (params.shouldLog?.(plainError) ?? true),
+        ),
+        deliveredCaption: params.plainCaption,
+      };
+    } catch (plainError) {
+      if (!isTelegramEmptyContentError(plainError)) {
+        throw plainError;
+      }
+      return await sendCaptionless();
+    }
   }
 }
 

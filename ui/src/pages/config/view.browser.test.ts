@@ -84,6 +84,8 @@ describe("config view", () => {
     resetTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    hiddenSessionCatalogIds: new Set<string>(),
+    setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
     showAdvancedSettings: false,
@@ -2106,6 +2108,28 @@ describe("config view", () => {
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
+  it("lists hidden session sections and offers to show them", () => {
+    const setSessionCatalogHidden = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hiddenSessionCatalogIds: new Set(["codex"]),
+      setSessionCatalogHidden,
+    });
+
+    const heading = Array.from(container.querySelectorAll("h3")).find(
+      (candidate) => candidate.textContent?.trim() === "Hidden session sections",
+    );
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "codex",
+    );
+    expect(heading).toBeDefined();
+    expect(row).toBeDefined();
+    row?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(setSessionCatalogHidden).toHaveBeenCalledWith("codex", false);
+  });
+
   it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
     const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
     vi.stubGlobal("localStorage", window.localStorage);
@@ -2145,7 +2169,15 @@ describe("config view", () => {
         unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
       ).toContain("Ripe when thumped.");
 
-      container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
+      const openLink = container.querySelector<HTMLAnchorElement>(".lobsterdex__open");
+      openLink?.addEventListener("click", (event) => event.preventDefault(), {
+        capture: true,
+        once: true,
+      });
+      openLink?.click();
+      expect(onOpenLobsterdex).not.toHaveBeenCalled();
+
+      openLink?.click();
       expect(onOpenLobsterdex).toHaveBeenCalledOnce();
     } finally {
       localStorage.removeItem("openclaw.control.lobsterdex.v1");

@@ -62,6 +62,7 @@ const HealthSnapshotSchema = closedObject({
   eventLoop: Type.Optional(
     closedObject({
       degraded: Type.Boolean(),
+      degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
       reasons: Type.Array(
         Type.Union([
           Type.Literal("event_loop_delay"),

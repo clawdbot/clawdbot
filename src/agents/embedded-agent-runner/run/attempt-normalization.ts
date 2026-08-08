@@ -18,6 +18,7 @@ import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
   isAssistantForModelRef,
+  normalizeAssistantUsageForContext,
   resolveActiveErrorContext,
   resolveLatestCallUsage,
 } from "./helpers.js";
@@ -27,6 +28,7 @@ import {
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
+import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -57,7 +59,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  lastTurnTotal: number | undefined;
   idleTimeoutBreakerState: ReturnType<typeof createIdleTimeoutBreakerState>;
   contextRecoveryState: ReturnType<typeof createEmbeddedRunContextRecoveryState>;
   replayState: ReplayState;
@@ -66,16 +67,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
   | { action: "complete"; result: EmbeddedAgentRunResult }
   | {
       action: "retry";
+      retryKind: RunRetryKind;
       bootstrapPromptWarningSignaturesSeen: string[];
       lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      lastTurnTotal: number | undefined;
       replayState: ReplayState;
     }
   | {
       action: "proceed";
       bootstrapPromptWarningSignaturesSeen: string[];
       lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-      lastTurnTotal: number | undefined;
       replayState: ReplayState;
       attempt: ReturnType<typeof normalizeEmbeddedRunAttemptResult>;
       sessionIdUsed: string;
@@ -159,18 +159,19 @@ export async function normalizeEmbeddedRunAttempt(input: {
           ]),
         )
       : input.bootstrapPromptWarningSignaturesSeen);
-  const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-  const currentAttemptAssistantUsage = normalizeUsage(currentAttemptAssistant?.usage as UsageLike);
+  const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
+  const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
   const callUsage = resolveLatestCallUsage({
     currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
-    carriedCandidates: [input.lastRunPromptUsage, lastAssistantUsage],
+    // The latest assistant sentinel must invalidate stale carried usage; reversing this order
+    // would resurrect a prior exact value after the runtime reports context as unavailable.
+    carriedCandidates: [lastAssistantUsage, input.lastRunPromptUsage],
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
   const lastRunPromptUsage = callUsage.latest;
-  const lastTurnTotal = callUsage.latest?.total;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {
     idleTimedOut: terminalTimedOut && idleTimedOut,
     completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
@@ -207,7 +208,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
           ...runtime.outerContextTokenMeta,
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage,
-          lastTurnTotal,
         }),
         replayInvalid: input.replayState.replayInvalid ? true : undefined,
         livenessState: "blocked",
@@ -264,11 +264,16 @@ export async function normalizeEmbeddedRunAttempt(input: {
     if (retryingFromTranscript) {
       sessionPromptState.continueFromCurrentTranscript();
     }
+    const retryKind = resolveRunRetryKind({
+      preflightRecovery,
+      retryingFromTranscript,
+      toolMetas: attempt.toolMetas,
+    });
     return {
       action: "retry",
+      retryKind,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
-      lastTurnTotal,
       replayState,
     };
   }
@@ -276,7 +281,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
     action: "proceed",
     bootstrapPromptWarningSignaturesSeen,
     lastRunPromptUsage,
-    lastTurnTotal,
     replayState,
     attempt,
     sessionIdUsed,

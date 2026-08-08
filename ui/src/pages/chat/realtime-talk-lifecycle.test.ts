@@ -755,6 +755,72 @@ describe("RealtimeTalkSession lifecycle", () => {
     closes[2]?.resolve();
   });
 
+  it("bounds stalled detached owners across browser session keys", async () => {
+    vi.useFakeTimers();
+    try {
+      let createCount = 0;
+      const closeSignals: AbortSignal[] = [];
+      const request = vi.fn(
+        async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+          if (method === "talk.client.create") {
+            createCount += 1;
+            return {
+              provider: "openai",
+              transport: "webrtc",
+              voiceSessionId: `voice-${createCount}`,
+              clientSecret: "secret",
+            };
+          }
+          if (method === "talk.client.close") {
+            const signal = options?.signal;
+            if (!signal) {
+              throw new Error("expected close abort signal");
+            }
+            closeSignals.push(signal);
+            await new Promise<void>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+            });
+          }
+          return { ok: true };
+        },
+      );
+      const client = { request } as never;
+      const draining = Array.from(
+        { length: 16 },
+        (_, index) => new RealtimeTalkSession(client, `agent:main:session-${index}`),
+      );
+
+      for (const session of draining) {
+        await session.start();
+        session.stop();
+        await Promise.resolve();
+      }
+      expect(closeSignals).toHaveLength(16);
+
+      const recovered = new RealtimeTalkSession(client, "agent:main:session-recovered");
+      await expect(recovered.start()).rejects.toThrow(
+        "Too many active or closing realtime Talk voice sessions",
+      );
+      expect(createCount).toBe(16);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(closeSignals.every((signal) => !signal.aborted)).toBe(true);
+      await expect(recovered.start()).rejects.toThrow(
+        "Too many active or closing realtime Talk voice sessions",
+      );
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(closeSignals.every((signal) => signal.aborted)).toBe(true);
+
+      await recovered.start();
+      expect(createCount).toBe(17);
+      recovered.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releases bounded startup owners after request deadlines", async () => {
     vi.useFakeTimers();
     let failCreate = true;

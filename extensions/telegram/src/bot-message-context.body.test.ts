@@ -361,15 +361,17 @@ describe("resolveTelegramInboundBody", () => {
   privateBodyTest(
     "renders Telegram text entities before building the agent body",
     {
-      text: "Hello world docs",
+      text: "Hello world\nquoted\nordinary docs",
       entities: [
         { type: "bold", offset: 6, length: 5 },
-        { type: "text_link", offset: 12, length: 4, url: "https://docs.example" },
+        { type: "blockquote", offset: 12, length: 6 },
+        { type: "text_link", offset: 28, length: 4, url: "https://docs.example" },
       ],
     },
     (result) => {
-      expect(result?.rawBody).toBe("Hello **world** [docs](https://docs.example)");
-      expect(result?.bodyText).toBe("Hello **world** [docs](https://docs.example)");
+      const expected = "Hello **world**\n> quoted\n\nordinary [docs](https://docs.example)";
+      expect(result?.rawBody).toBe(expected);
+      expect(result?.bodyText).toBe(expected);
     },
   );
 
@@ -492,6 +494,51 @@ describe("resolveTelegramInboundBody", () => {
     expect(logger.info).not.toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
     expect(result?.rawBody).toBe(text);
     expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("ignores leading commands addressed to another bot when mentions are optional", async () => {
+    const logger = createLogger();
+    const command = "/status@other_bot";
+    const result = await resolveGroup({
+      logger,
+      message: {
+        text: command,
+        entities: [{ type: "bot_command", offset: 0, length: command.length }],
+      },
+      overrides: {
+        groupConfig: { requireMention: false } as never,
+        requireMention: false,
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps this bot's leading command when a later command targets another bot", async () => {
+    const logger = createLogger();
+    const ownCommand = "/inspect@bot";
+    const otherCommand = "/weather@other_bot";
+    const text = `${ownCommand} ${otherCommand}`;
+    const result = await resolveGroup({
+      logger,
+      message: {
+        text,
+        entities: [
+          { type: "bot_command", offset: 0, length: ownCommand.length },
+          {
+            type: "bot_command",
+            offset: ownCommand.length + 1,
+            length: otherCommand.length,
+          },
+        ],
+      },
+      overrides: {
+        groupConfig: { requireMention: false } as never,
+        requireMention: false,
+      },
+    });
+
+    expect(result?.rawBody).toBe(text);
   });
 
   it("does not transcribe group audio for unauthorized senders", async () => {

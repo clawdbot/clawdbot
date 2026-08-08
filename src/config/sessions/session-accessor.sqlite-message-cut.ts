@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
@@ -45,7 +46,7 @@ import {
   selectSessionTranscriptTreePathNodes,
   type SessionTranscriptTree,
 } from "./transcript-tree.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type MessageCut = {
   editorText?: string;
@@ -122,12 +123,7 @@ function loadSessionBranchSummaries(
   );
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, { ...watermark, branches });
-  if (sessionBranchCache.size > SESSION_BRANCH_CACHE_MAX_ENTRIES) {
-    const oldestKey = sessionBranchCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      sessionBranchCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
   return cloneSessionBranchSummaries(branches);
 }
 
@@ -479,6 +475,7 @@ function cloneMessageCutSessionEntry(params: {
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
@@ -490,6 +487,7 @@ function cloneMessageCutSessionEntry(params: {
     estimatedCostUsd: undefined,
     totalTokens: undefined,
     totalTokensFresh: undefined,
+    totalTokensVersion: undefined,
     // A rotated transcript cannot resume provider/runtime identity from the old tail.
     // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
     contextTokens: undefined,

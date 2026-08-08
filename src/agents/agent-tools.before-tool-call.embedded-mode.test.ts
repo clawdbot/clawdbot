@@ -5,6 +5,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -50,12 +51,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireApprovalRequestCall(label: string): {
   timeoutParams: Record<string, unknown>;

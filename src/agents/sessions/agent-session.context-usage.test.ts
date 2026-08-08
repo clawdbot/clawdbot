@@ -1,8 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
 import { AgentSession } from "./agent-session.js";
 
 describe("AgentSession context usage", () => {
+  it("does not compact an unavailable marker when current context is below threshold", async () => {
+    const runAutoCompaction = vi.fn();
+    const checkCompaction = (
+      AgentSession.prototype as unknown as {
+        checkCompaction: (message: AgentMessage, skipAbortedCheck: boolean) => Promise<boolean>;
+      }
+    ).checkCompaction;
+
+    const compacted = await checkCompaction.call(
+      {
+        settingsManager: {
+          getCompactionSettings: () => ({
+            enabled: true,
+            reserveTokens: 100,
+            keepRecentTokens: 20,
+          }),
+        },
+        model: { provider: "test", id: "model", contextWindow: 1_000 },
+        sessionManager: { getBranch: () => [] },
+        getContextUsage: () => ({ tokens: 100 }),
+        runAutoCompaction,
+      },
+      {
+        role: "assistant",
+        provider: "test",
+        model: "model",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { contextUsage: { state: "unavailable" } },
+      } as AgentMessage,
+      false,
+    );
+
+    expect(compacted).toBe(false);
+    expect(runAutoCompaction).not.toHaveBeenCalled();
+  });
+
   it("preserves an earlier exact snapshot when unavailable usage precedes any compaction", () => {
     const messages = [
       {

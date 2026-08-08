@@ -11,6 +11,7 @@ import type { PluginChannelRegistration } from "../../plugins/registry-types.js"
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
+import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
 let bootstrapRegistryGeneration: string | undefined;
@@ -40,12 +41,7 @@ function resolveBootstrapRegistries(
   }
   // Agent-scoped configs may interleave within one registry generation. Keep a
   // bounded LRU so one caller cannot evict another on every delivery attempt.
-  if (bootstrapRegistriesByConfig.size >= MAX_BOOTSTRAP_CONFIG_GENERATIONS) {
-    const oldestConfigKey = bootstrapRegistriesByConfig.keys().next().value;
-    if (oldestConfigKey !== undefined) {
-      bootstrapRegistriesByConfig.delete(oldestConfigKey);
-    }
-  }
+  pruneMapToMaxSize(bootstrapRegistriesByConfig, MAX_BOOTSTRAP_CONFIG_GENERATIONS - 1);
   const registries = new Map<DeliverableMessageChannel, PluginRegistry | null>();
   bootstrapRegistriesByConfig.set(configKey, registries);
   return registries;

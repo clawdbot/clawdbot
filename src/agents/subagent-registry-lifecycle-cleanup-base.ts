@@ -129,7 +129,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
-    reason: "retry-limit" | "expiry";
+    reason: "expiry" | "permanent_failure";
     error?: string;
   }) => {
     const previousEntry = structuredClone(args.entry);
@@ -214,7 +214,6 @@ export function createSubagentRegistryLifecycleCleanupBase(
     // Cleanup can yield to attachment, mirror, or announce work. A successor
     // registered while it was suspended owns every session-scoped side effect.
     await params.retireSupersededRun(runId, entry);
-    params.persist(runId);
     return true;
   };
 

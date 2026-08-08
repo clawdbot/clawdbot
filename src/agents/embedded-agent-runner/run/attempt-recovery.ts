@@ -53,7 +53,6 @@ export async function recoverEmbeddedRunAttempt(input: {
   armPostCompactionGuard: () => void;
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
-  lastTurnTotal: number | undefined;
   runtimeAuthRetry: boolean;
   codexAppServerRecoveryRetryAvailable: boolean;
   codexAppServerRecoveryRetries: number;
@@ -245,7 +244,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
         attempt,
         replayInvalid,
@@ -273,7 +271,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
         attempt,
         replayInvalid,
@@ -345,7 +342,6 @@ export async function recoverEmbeddedRunAttempt(input: {
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage: input.lastRunPromptUsage,
           lastAssistant: attemptAssistant,
-          lastTurnTotal: input.lastTurnTotal,
         }),
       startedAtMs: runInput.startedAtMs,
       fallbackConfigured: runInput.fallbackConfigured,

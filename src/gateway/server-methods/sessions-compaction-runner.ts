@@ -8,6 +8,7 @@ import type { SessionEntry as AgentSessionEntry } from "../../agents/sessions/se
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import {
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
@@ -110,13 +111,7 @@ export async function runGatewaySessionCompaction(
     provider: resolvedModel.provider,
     model: resolvedModel.model,
     authProfileId: params.entry.authProfileOverride,
-    authProfileIdSource:
-      params.entry.authProfileOverrideSource ??
-      (params.entry.authProfileOverride
-        ? typeof params.entry.authProfileOverrideCompactionCount === "number"
-          ? "auto"
-          : "user"
-        : undefined),
+    authProfileIdSource: resolveSessionAuthProfileOverrideSource(params.entry),
     agentHarnessId:
       params.entry.modelSelectionLocked === true
         ? resolvePersistedSessionRuntimeId(params.entry)

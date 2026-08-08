@@ -294,13 +294,6 @@ function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
 }
 
-export function tokenEstimate(draft: string): string | null {
-  if (draft.length < 100) {
-    return null;
-  }
-  return `~${Math.ceil(draft.length / 4)} tokens`;
-}
-
 export function exportMarkdown(props: Pick<ChatComposerProps, "messages" | "assistantName">): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }

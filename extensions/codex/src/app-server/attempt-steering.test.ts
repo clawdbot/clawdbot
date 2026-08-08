@@ -1,6 +1,9 @@
 // Codex tests cover attempt steering plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexSteeringQueue } from "./attempt-steering.js";
+import {
+  CodexSteeringAcceptedUnconfirmedError,
+  createCodexSteeringQueue,
+} from "./attempt-steering.js";
 import { createClientHarness } from "./test-support.js";
 
 const PNG_1X1 =
@@ -78,10 +81,10 @@ describe("Codex app-server steering queue", () => {
       signal: new AbortController().signal,
     });
 
-    const outcomes: string[] = [];
+    const outcomes: unknown[] = [];
     void queue.queue("steer me", { debounceMs: 0 }).then(
       () => outcomes.push("resolved"),
-      (error: unknown) => outcomes.push(`rejected: ${(error as Error).message}`),
+      (error: unknown) => outcomes.push(error),
     );
     await vi.advanceTimersByTimeAsync(0);
     expect((JSON.parse(harness.writes[0] ?? "{}") as { method?: string }).method).toBe(
@@ -91,7 +94,10 @@ describe("Codex app-server steering queue", () => {
     // Codex accepted the frame but never responds: the caller must not wait forever.
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(outcomes).toEqual(["rejected: turn/steer timed out"]);
+    expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    expect((outcomes[0] as Error & { cause?: unknown }).cause).toMatchObject({
+      message: "turn/steer timed out",
+    });
     harness.client.close();
   });
 
@@ -221,7 +227,7 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request);
 
     const queued = queue.queue("completion wake", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue cancelled");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -239,7 +245,7 @@ describe("Codex app-server steering queue", () => {
     const queue = createQueue(request, { signal: controller.signal });
 
     const queued = queue.queue("completion wake", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 

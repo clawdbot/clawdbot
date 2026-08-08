@@ -25,7 +25,9 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -826,12 +828,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (decision.kind === "drop") {
       // Record echo/reflection drops so the rate limiter can detect sustained loops.
       // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate.
+      // are normal and should not escalate. "from me" is excluded: every own-send
+      // (agent replies, multi-chunk sends, operator phone traffic) produces a
+      // from-me row, so counting it lets a normal outbound burst trip the limiter
+      // and silently suppress the next legitimate inbound message.
       const isLoopDrop =
         decision.reason === "echo" ||
         decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content" ||
-        decision.reason === "from me";
+        decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
@@ -867,7 +871,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // remaining messages as a safety net against amplification that slips
     // through the primary guards.
     if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
-      logVerbose(`imessage: rate-limited conversation ${conversationKey} (echo loop detected)`);
+      // A tripped limiter silently eats real user messages — surface it at
+      // default log level (once per conversation) instead of verbose-only.
+      if (!loggedThrottledDropDiagnostics.check(`${rateLimitKey}:rate-limited`)) {
+        const conversationKind = chatId != null ? "group" : "dm";
+        const diagnosticConversationKey = `${conversationKind}:${redactIdentifier(conversationKey)}`;
+        runtime.log?.(
+          warn(
+            `[imessage:${accountInfo.accountId}] Suppressing inbound from ${diagnosticConversationKey}: echo loop detected (rate limiter tripped)`,
+          ),
+        );
+      }
       return;
     }
 
@@ -1213,11 +1227,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // instead of falling back to a durable iMessage bubble.
           onToolResult: async () => {
             await directTypingController?.startTypingLoop();
+            return false;
           },
           ...(supportsTyping
             ? {
                 onToolStart: async () => {
                   await directTypingController?.startTypingLoop();
+                  return false;
                 },
               }
             : {}),
@@ -1552,6 +1568,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         { timeoutMs: probeTimeoutMs },
       );
       attemptSubscriptionId = result?.subscription ?? null;
+      opts.statusSink?.(channelReadyPatch());
       client = attemptClient;
       detachAbortHandler = attemptDetachAbortHandler;
       keepAttemptClient = true;
@@ -1560,9 +1577,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (abort?.aborted) {
         return;
       }
-      const shouldRetry =
-        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      const retriable = isRetriableWatchSubscribeStartupError(err);
+      const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
       if (!shouldRetry) {
+        opts.statusSink?.({
+          connected: false,
+          lifecycle: retriable ? "recovering" : "blocked",
+          terminalDisconnect: retriable ? undefined : true,
+          lastError: String(err),
+        });
         runtime.error?.(
           danger(
             `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
@@ -1581,6 +1604,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         );
         throw err;
       }
+      opts.statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: String(err),
+      });
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({

@@ -1085,10 +1085,8 @@ async function persistManagedSourceInstall(params: {
       snapshot: params.snapshot,
       pluginId: params.pluginId,
       install: params.install,
-      invalidateRuntimeCache: params.cleanupOnPersistenceFailure
-        ? false
-        : params.invalidateRuntimeCache,
-      runtime: params.cleanupOnPersistenceFailure ? createSilentRuntime() : params.runtime,
+      invalidateRuntimeCache: params.invalidateRuntimeCache,
+      runtime: params.runtime,
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
   if (!params.cleanupOnPersistenceFailure) {
@@ -1163,8 +1161,15 @@ export async function installManagedPluginSource(params: {
       };
     }
     const targetDir = completed.targetDir ?? installed.targetDir;
+    // Links point at operator-owned source directories. Every published managed
+    // payload defaults to compensation, but link persistence never deletes source.
+    const cleanupOnPersistenceFailure =
+      request.source === "local" && request.link
+        ? false
+        : (params.cleanupOnPersistenceFailure ?? true);
     const config = await persistManagedSourceInstall({
       ...params,
+      cleanupOnPersistenceFailure,
       env,
       snapshot: completed.snapshot ?? params.snapshot,
       pluginId: installed.pluginId,
@@ -1413,6 +1418,8 @@ export async function installManagedPlugin(params: {
       env,
       logger: createInstallLogger(warnings),
       cleanupOnPersistenceFailure: true,
+      invalidateRuntimeCache: false,
+      runtime: createSilentRuntime(),
     });
     if (!installed.ok) {
       return throwInstallFailure(installed);
@@ -1532,10 +1539,8 @@ export async function uninstallManagedPlugin(params: {
         `bundled plugin cannot be uninstalled: ${pluginId}; disable it instead`,
       );
     }
-    const manifest = metadata.byPluginId.get(pluginId);
-    // Mirror the CLI cold path: pass channel ownership only when declared so
-    // planPluginUninstall keeps its plugin-id fallback for channel config keys.
-    const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
+    // Preserve manifest ownership exactly; only missing metadata uses the plugin-id fallback.
+    const channelIds = metadata.byPluginId.get(pluginId)?.channels;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
     const initialPlan = planPluginUninstall({
       config: configWithRecords,

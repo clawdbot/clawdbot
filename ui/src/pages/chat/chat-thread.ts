@@ -23,6 +23,7 @@ import {
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";

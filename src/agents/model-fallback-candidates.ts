@@ -5,6 +5,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -158,13 +159,7 @@ export function resolveModelCandidateChain(
   const candidates = resolveFallbackCandidatesUncached(params);
   if (cacheKey) {
     fallbackCandidateCache.set(cacheKey, candidates.map(cloneModelCandidate));
-    while (fallbackCandidateCache.size > MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES) {
-      const oldest = fallbackCandidateCache.keys().next();
-      if (oldest.done) {
-        break;
-      }
-      fallbackCandidateCache.delete(oldest.value);
-    }
+    pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
   }
   return candidates;
 }

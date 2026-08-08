@@ -15,10 +15,12 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "./test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",

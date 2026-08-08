@@ -1,6 +1,7 @@
 // Coverage for deferred context-engine maintenance and transcript rewrite hooks.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -80,12 +81,7 @@ async function waitForAssertion(
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");

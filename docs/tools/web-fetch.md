@@ -106,6 +106,8 @@ progress line is channel UI state only and never contains fetched page content.
           "X-Routing-Target": "staging",
         },
         ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false, // broad private-network opt-in; keep false by default
+          allowedHostnames: ["internal.example"], // narrow exact host exception
           allowRfc2544BenchmarkRange: true, // opt-in for trusted fake-IP proxies using 198.18.0.0/15
           allowIpv6UniqueLocalRange: true, // opt-in for trusted fake-IP proxies using fc00::/7
         },
@@ -256,6 +258,8 @@ outbound policy after DNS resolution.
 - Response body is capped at `maxResponseBytes` (default `750000`, clamped to
   32000-10000000) before parsing; oversized responses are truncated with a warning
 - Private/internal hostnames are blocked
+- `tools.web.fetch.ssrfPolicy.allowedHostnames` allows exact trusted hosts while leaving other private/internal targets blocked
+- `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork` broadly permits private-network targets; enable it only when model-selected URLs are trusted in this deployment
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
   for trusted fake-IP proxy stacks; leave them unset unless your proxy owns

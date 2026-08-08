@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
   GatewayEventFrame,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
@@ -70,6 +72,7 @@ function createStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
+    basePath?: string;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -82,7 +85,10 @@ function createStore(
       clients.push(client);
       return client as unknown as GatewayBrowserClient;
     },
-    { persistDefaultConnectionSettings: params.persistDefaultConnectionSettings },
+    {
+      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+      basePath: params.basePath,
+    },
   );
   const current = () => {
     const client = clients.at(-1);
@@ -103,14 +109,30 @@ describe("createApplicationGateway connection phase", () => {
       protocol: "http:",
       host: "127.0.0.1:18789",
       hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:18789",
       pathname: "/",
     } as Location);
   });
 
   afterEach(() => {
+    setAvatarGatewayOrigin(null);
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("passes the explicit same-origin base path to avatar resolution", () => {
+    const settings = { ...loadSettings(), gatewayUrl: "ws://127.0.0.1:18789/ws" };
+    const { gateway } = createStore({ settings, basePath: "/wilfred" });
+
+    gateway.start();
+
+    expect(
+      resolveAvatar({ id: "a@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
+    ).toEqual({
+      kind: "profile",
+      url: "http://127.0.0.1:18789/wilfred/api/users/p1/avatar",
+    });
   });
 
   it("follows stopped -> connecting -> connected -> reconnecting -> offline", () => {
@@ -131,6 +153,53 @@ describe("createApplicationGateway connection phase", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it.each([
+    {
+      name: "missing-token auth detail",
+      outerCode: "INVALID_REQUEST",
+      detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+      message: "token missing",
+    },
+    {
+      name: "pairing-required detail",
+      outerCode: "NOT_PAIRED",
+      detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      message: "device is not approved",
+    },
+  ])("preserves the structured $name in the login snapshot", (fixture) => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: fixture.outerCode,
+        message: fixture.message,
+        details: { code: fixture.detailCode },
+      },
+      willRetry: false,
+    });
+
+    expect(gateway.snapshot.lastError).toBe(fixture.message);
+    expect(gateway.snapshot.lastErrorCode).toBe(fixture.detailCode);
+  });
+
+  it("preserves an outer code when a transport failure has no structured detail", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1006,
+      reason: "websocket error",
+      error: { code: "UNAVAILABLE", message: "WebSocket connection failed" },
+      willRetry: false,
+    });
+
+    expect(gateway.snapshot.lastError).toBe("WebSocket connection failed");
+    expect(gateway.snapshot.lastErrorCode).toBe("UNAVAILABLE");
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {

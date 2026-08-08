@@ -25,9 +25,9 @@ import type {
 import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
-  runMatrixQaE2eeClientOperation,
   type MatrixQaE2eeActorId,
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
@@ -335,10 +335,22 @@ export async function createMatrixQaE2eeScenarioClient(
   };
   client.on("verification.summary", recordVerificationSummary);
 
+  const shutdownTimeoutMs = Math.max(1, Math.min(10_000, params.timeoutMs));
+  const lifecycle = createMatrixQaE2eeClientLifecycle({
+    detachListeners: () => {
+      client.off("room.message", recordEvent);
+      client.off("verification.summary", recordVerificationSummary);
+    },
+    drainPendingDecryptions: () => client.drainPendingDecryptions(),
+    shutdownTimeoutMs,
+    stopAndPersist: () => client.stopAndPersist(),
+    stopWithoutPersist: () => client.stopWithoutPersist(),
+  });
+
   try {
     await client.start({ readyTimeoutMs: Math.min(45_000, Math.max(15_000, params.timeoutMs)) });
   } catch (error) {
-    await client.stopAndPersist().catch(() => undefined);
+    await lifecycle.stop().catch(() => undefined);
     throw error;
   }
 
@@ -387,10 +399,9 @@ export async function createMatrixQaE2eeScenarioClient(
     return client.crypto;
   };
   const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
-    runMatrixQaE2eeClientOperation({
+    lifecycle.runOperation({
       label,
       run,
-      stop: () => client.stopWithoutPersist(),
       timeoutMs: params.timeoutMs,
     });
 
@@ -493,12 +504,7 @@ export async function createMatrixQaE2eeScenarioClient(
     async startVerification(id, method) {
       return await requireCrypto().startVerification(id, method);
     },
-    async stop() {
-      await client.drainPendingDecryptions().catch(() => undefined);
-      client.off("room.message", recordEvent);
-      client.off("verification.summary", recordVerificationSummary);
-      await client.stopAndPersist();
-    },
+    stop: lifecycle.stop,
     waitForOptionalRoomEvent,
     async waitForRoomEvent(waitParams) {
       const result = await waitForOptionalRoomEvent(waitParams);

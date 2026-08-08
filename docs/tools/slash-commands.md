@@ -42,6 +42,9 @@ command handling is enabled for the surface.
       persist to the session and reply with an acknowledgement.
     - In **normal chat** messages with other text, they act as inline hints and
       do **not** persist session settings.
+      Model selection is the exception: an authorized inline `/model` or
+      configured `/<alias>` persists the session selection, and an owner/admin
+      selection without `-s` may also request a configured-default update.
     - Directives only apply for **authorized senders**. If `commands.allowFrom`
       is set, it is the only allowlist used; otherwise authorization comes from
       channel allowlists, pairing, and always-on access-group enforcement. Unauthorized
@@ -202,7 +205,7 @@ plugins.
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
     | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
-    | `/model [name\|#\|status]` | Show or set the model |
+    | `/model [name\|#\|status] [-s\|--session]` | Show or select a model. Direct owner/admin selections request a configured-default update; `-s` changes only this session |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
@@ -217,7 +220,18 @@ plugins.
 
       </Accordion>
       <Accordion title="Model switching details">
-        - `/model` persists the new model immediately to the session.
+        **Scope in one line:** a direct owner/admin `/model <model>` changes the session and requests a best-effort configured-default update; `-s` changes only the current session. When an agent inherits `agents.defaults.model`, the update target is that shared global fallback.
+
+        Configured `/<alias>` shorthands accept the same trailing `--runtime`, `-s`, and `--session` options as `/model <alias>`.
+
+        | Goal | Command | Effect |
+        | --- | --- | --- |
+        | Request a configured-default change | `/model <model>` as owner/admin | Changes this session and starts a best-effort update of the agent's effective configured default. If the agent has no explicit primary, the target is the shared `agents.defaults.model` fallback |
+        | Change only this session | `/model <model> -s` (or `--session`) | Changes this session; configured defaults remain unchanged |
+        | Use the configured default again | `/model default` (with or without `-s`) | Clears this session's model selection so it inherits the current configured default; compatible auth pins remain and incompatible pins clear |
+
+        A non-owner `/model <model>` selection is also session-only because it cannot write configured defaults. Immutable configuration stays unchanged, and asynchronous write failures are logged without reverting the session selection. Valid explicit user model/profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows; automatic profile pins may rotate or clear. Resetting with `/model default -s` clears the session model selection, retains a compatible auth pin, and clears an incompatible pin. It does not recover a configured default that an earlier owner/admin selection replaced.
+
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
 
@@ -362,18 +376,24 @@ use the Control UI Tools panel or config surfaces.
 
 ## `/model`: model selection
 
+Direct owner/admin `/model <model>` requests **default scope**: it changes this session and starts a best-effort configured-default update. Adding `-s` uses **session scope**: only this session changes. For agents without an explicit primary model, the update target is the shared global `agents.defaults.model` fallback.
+
 ```text
 /model             # show model picker
 /model list        # same
 /model 3           # select by number from picker
-/model openai/gpt-5.4
-/model opus@anthropic:default
-/model default     # clear the session model selection
+/model openai/gpt-5.4    # direct owner/admin: session + default update request
+/model openai/gpt-5.4 -s # this session only; configured default unchanged
+/model default -s        # clear this session's model selection; use configured default
+/model opus@anthropic:default -s # pin this profile for the current session
+/model default     # same reset; does not restore an older configured default
 /model status      # detailed view with endpoint and API mode
 ```
 
 On Discord, `/model` and `/models` open an interactive picker with provider and
-model dropdowns. The picker respects `agents.defaults.modelPolicy.allow`,
+model dropdowns and follow the direct command flow. Owner/admin submissions
+request a best-effort configured-default update. Telegram callback-picker
+selections are session-only. The picker respects `agents.defaults.modelPolicy.allow`,
 including `provider/*` entries. Without an explicit allowlist, model entries and
 aliases do not restrict selection.
 

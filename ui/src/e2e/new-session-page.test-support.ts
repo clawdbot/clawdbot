@@ -5,12 +5,31 @@ import { expect } from "vitest";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
-  installMockGateway,
+  installMockGateway as installControlUiMockGateway,
+  type ControlUiMockGatewayScenario,
+  type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export { controlUiSessionPath, controlUiSessionUrl, installMockGateway };
+export { controlUiSessionPath, controlUiSessionUrl };
+
+const NEW_SESSION_FEATURE_METHODS = [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.create",
+  "sessions.dispatch",
+] as const;
+
+export function installMockGateway(
+  page: Page,
+  scenario: ControlUiMockGatewayScenario = {},
+): Promise<MockGatewayControls> {
+  return installControlUiMockGateway(page, {
+    ...scenario,
+    featureMethods: scenario.featureMethods ?? [...NEW_SESSION_FEATURE_METHODS],
+  });
+}
 
 export const WORKSPACE = "/home/peter/openclaw";
 export const PICKED = "/home/peter/openclaw/packages";

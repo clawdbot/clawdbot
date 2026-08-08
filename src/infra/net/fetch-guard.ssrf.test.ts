@@ -1,5 +1,6 @@
 // Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
 // trusted proxy modes, and safe header retention.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
@@ -120,12 +121,7 @@ function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
   return new Headers(secondInit.headers);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
   const [call] = fetchImpl.mock.calls;
@@ -807,61 +803,30 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(blockedFetchImpl).not.toHaveBeenCalled();
   });
 
-  it("blocks exact-origin private DNS when it resolves to link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "169.254.169.254", family: 4 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "64:ff9b::a9fe:a9fe", family: 6 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to non-link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "100.100.100.200", family: 4 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "fd00:ec2::254", family: 6 },
-    ]) as unknown as LookupFn;
+  it.each([
+    {
+      title: "blocks exact-origin private DNS when it resolves to link-local metadata IPs",
+      address: "169.254.169.254",
+      family: 4,
+    },
+    {
+      title:
+        "blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs",
+      address: "64:ff9b::a9fe:a9fe",
+      family: 6,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to non-link-local metadata IPs",
+      address: "100.100.100.200",
+      family: 4,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs",
+      address: "fd00:ec2::254",
+      family: 6,
+    },
+  ])("$title", async ({ address, family }) => {
+    const lookupFn: LookupFn = vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
     const fetchImpl = vi.fn(async () => okResponse());
 
     await expect(
@@ -1636,6 +1601,67 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it.each([
+    { name: "the default loopback policy", mode: undefined, routing: "direct" },
+    { name: "gateway-only loopback policy", mode: "gateway-only", routing: "direct" },
+    { name: "explicit proxy loopback policy", mode: "proxy", routing: "proxy" },
+    { name: "explicit blocked loopback policy", mode: "block", routing: "blocked" },
+  ] satisfies Array<{
+    name: string;
+    mode: ManagedProxyLoopbackMode | undefined;
+    routing: "direct" | "proxy" | "blocked";
+  }>)(
+    "applies $name to the real dashboard document-readiness consumer",
+    async ({ mode, routing }) => {
+      vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "");
+      installManagedProxyRuntime(mode);
+      vi.stubEnv("NO_PROXY", "127.0.0.1");
+      vi.stubEnv("no_proxy", "127.0.0.1");
+      const fetchImpl = vi.fn(
+        async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }),
+      );
+      const lookupFn = createLoopbackLookup();
+      const { waitForControlUiDocument } = await import("../../commands/control-ui-handoff.js");
+
+      const readiness = await waitForControlUiDocument({
+        url: "http://127.0.0.1:18789/dashboard/",
+        deps: {
+          fetch: async (request) =>
+            await fetchConfiguredLocalOriginWithSsrFGuard({ ...request, fetchImpl, lookupFn }),
+        },
+      });
+
+      expect(lookupFn).toHaveBeenCalledWith("127.0.0.1", { all: true });
+      if (routing === "blocked") {
+        expect(readiness).toEqual({
+          ready: false,
+          reason: expect.stringContaining("blocked by proxy.loopbackMode"),
+        });
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(agentCtor).not.toHaveBeenCalled();
+        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(readiness).toEqual({ ready: true });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(getFirstRequestInit(fetchImpl).method).toBe("HEAD");
+      if (routing === "direct") {
+        expect(agentCtor).toHaveBeenCalledOnce();
+        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(agentCtor).not.toHaveBeenCalled();
+      expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+      const options = requireRecord(
+        firstMockCall(envHttpProxyAgentCtor)?.[0],
+        "managed proxy options",
+      );
+      expect(options.noProxy).toBe("");
+    },
+  );
+
+  it.each([
     {
       name: "localhost when any resolved address is public",
       url: "http://localhost:11434/api/embed",
@@ -1708,6 +1734,39 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectedEnvProxyCalls: 1,
       expectedFinalUrl: testCase.expectedFinalUrl,
     });
+  });
+
+  it("forces managed loopback proxy routing despite NO_PROXY while preserving target TLS", async () => {
+    installManagedProxyRuntime("proxy");
+    vi.stubEnv("NO_PROXY", "127.0.0.1");
+    vi.stubEnv("no_proxy", "127.0.0.1");
+    const checkServerIdentity = vi.fn();
+    const fetchImpl = vi.fn(async () => okResponse());
+    const baseUrl = "https://127.0.0.1:18789";
+
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
+      url: `${baseUrl}/dashboard/`,
+      configuredLocalOriginBaseUrl: baseUrl,
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: { allowedOrigins: [baseUrl] },
+      dispatcherPolicy: {
+        mode: "direct",
+        connect: { ca: "gateway-certificate", checkServerIdentity },
+      },
+    });
+
+    expect(agentCtor).not.toHaveBeenCalled();
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+    const options = requireRecord(
+      firstMockCall(envHttpProxyAgentCtor)?.[0],
+      "managed proxy options",
+    );
+    expect(options.noProxy).toBe("");
+    expect(options.requestTls).toEqual({ ca: "gateway-certificate", checkServerIdentity });
+    expect(requireRecord(options.proxyTls, "managed proxy TLS options")).not.toHaveProperty("ca");
+    expect(process.env.http_proxy).toBe("http://127.0.0.1:7890");
+    await result.release();
   });
 
   it("ignores hidden managed-proxy bypass markers on the public guarded fetch helper", async () => {

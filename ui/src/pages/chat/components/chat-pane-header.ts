@@ -43,7 +43,7 @@ type ChatPaneHeaderProps = {
   platform: string | null;
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
-  canRename: boolean;
+  renameDisabledReason?: string;
   terminalAction: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
@@ -52,7 +52,6 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
-  boardDockAction?: TemplateResult | typeof nothing;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -299,8 +298,12 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             }}
             @blur=${props.onCommitRename}
           />`
-        : props.catalog || !props.session || !props.canRename
-          ? html`<span class="chat-pane__session-title" title=${props.title}>${props.title}</span>`
+        : props.catalog || !props.session || props.renameDisabledReason
+          ? html`<span
+              class="chat-pane__session-title"
+              title=${props.renameDisabledReason ?? props.title}
+              >${props.title}</span
+            >`
           : html`<button
               class="chat-pane__session-title chat-pane__session-title-button"
               type="button"
@@ -428,7 +431,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
+        ${props.terminalAction} ${props.discussionAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}

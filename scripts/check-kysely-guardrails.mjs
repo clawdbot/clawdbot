@@ -4,10 +4,10 @@
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
   unwrapExpression,
@@ -74,6 +74,7 @@ const rawSqliteAllowPathGroups = {
   ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only shared state database access": [
+    "src/claws/package-resume.ts",
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],
@@ -493,7 +494,7 @@ async function collectKyselyGuardrails() {
 /**
  * Runs the Kysely guardrail check.
  */
-export async function main() {
+async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {
     console.log("Kysely guardrails OK");

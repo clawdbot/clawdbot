@@ -53,6 +53,8 @@ export type SessionMenuAction =
   | { kind: "stop-cloud-worker" }
   | { kind: "delete" };
 
+export type SessionMenuActionKind = SessionMenuAction["kind"];
+
 const EMPTY_SESSION: SessionMenuData = {
   label: "",
   pinned: false,
@@ -72,6 +74,9 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) anchor: { x: number; y: number } = { x: 0, y: 0 };
   @property({ attribute: false }) trigger: HTMLElement | null = null;
   @property({ attribute: false }) disabled = false;
+  @property({ attribute: false }) actionDisabledReasons: Partial<
+    Record<SessionMenuActionKind, string>
+  > = {};
   @property({ attribute: false }) forkDisabled = false;
   // Guards both Archive and Delete: hosts pass canArchiveSessionRow() so agent
   // main sessions and active runs stay protected from casual retirement.
@@ -100,8 +105,19 @@ class SessionMenu extends OpenClawLightDomElement {
   }
 
   private runAction(action: SessionMenuAction) {
+    if (this.actionDisabledReasons[action.kind]) {
+      return;
+    }
     this.onClose();
     this.onAction(action);
+  }
+
+  private actionDisabled(kind: SessionMenuActionKind, extra = false): boolean {
+    return this.disabled || extra || Boolean(this.actionDisabledReasons[kind]);
+  }
+
+  private actionTitle(kind: SessionMenuActionKind): string | typeof nothing {
+    return this.actionDisabledReasons[kind] ?? nothing;
   }
 
   private readonly handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
@@ -217,6 +233,7 @@ class SessionMenu extends OpenClawLightDomElement {
     const takeDigit = () => (nextDigit <= 9 ? String(nextDigit++) : null);
     const entry = (label: string, checked: boolean, value: string, radio = true) => {
       const digit = takeDigit();
+      const actionKind = value === "new-group" ? "new-group" : "move-to-group";
       return html`
         <wa-dropdown-item
           slot="submenu"
@@ -227,7 +244,8 @@ class SessionMenu extends OpenClawLightDomElement {
           ${radio ? ref((element) => syncDropdownItemRadio(element, checked)) : nothing}
           data-shortcut=${digit ?? nothing}
           aria-keyshortcuts=${digit ?? nothing}
-          ?disabled=${this.disabled}
+          ?disabled=${this.actionDisabled(actionKind)}
+          title=${this.actionTitle(actionKind)}
         >
           <span class="session-menu__text">${label}</span>
           ${radio && checked
@@ -324,7 +342,7 @@ class SessionMenu extends OpenClawLightDomElement {
               aria-label=${id}
               aria-checked=${String(selected)}
               title=${id}
-              ?disabled=${this.disabled}
+              ?disabled=${this.actionDisabled("set-icon")}
               @click=${() => this.runAction({ kind: "set-icon", icon: value })}
             >
               ${resolveSessionIcon(value)}
@@ -339,7 +357,7 @@ class SessionMenu extends OpenClawLightDomElement {
             maxlength="16"
             aria-label=${t("sessionsView.customEmoji")}
             placeholder="🦞"
-            ?disabled=${this.disabled}
+            ?disabled=${this.actionDisabled("set-icon")}
             @keydown=${(event: KeyboardEvent) => {
               if (event.key !== "Enter") {
                 return;
@@ -361,7 +379,7 @@ class SessionMenu extends OpenClawLightDomElement {
         <button
           type="button"
           class="session-menu__remove-icon"
-          ?disabled=${this.disabled || !currentIcon}
+          ?disabled=${this.actionDisabled("set-icon", !currentIcon)}
           @click=${() => this.runAction({ kind: "set-icon", icon: null })}
         >
           ${t("sessionsView.removeIcon")}
@@ -433,7 +451,8 @@ class SessionMenu extends OpenClawLightDomElement {
                       value="toggle-pin"
                       data-shortcut="p"
                       aria-keyshortcuts="P"
-                      ?disabled=${this.disabled || session.archived}
+                      ?disabled=${this.actionDisabled("toggle-pin", session.archived)}
+                      title=${this.actionTitle("toggle-pin")}
                     >
                       <span slot="icon" class="session-menu__icon" aria-hidden="true"
                         >${session.pinned ? icons.pinOff : icons.pin}</span
@@ -448,7 +467,8 @@ class SessionMenu extends OpenClawLightDomElement {
                     <wa-dropdown-item
                       class="session-menu__item"
                       value="change-icon"
-                      ?disabled=${this.disabled}
+                      ?disabled=${this.actionDisabled("set-icon")}
+                      title=${this.actionTitle("set-icon")}
                     >
                       <span slot="icon" class="session-menu__icon" aria-hidden="true"
                         >${icons.spark}</span
@@ -461,7 +481,8 @@ class SessionMenu extends OpenClawLightDomElement {
                 value="toggle-unread"
                 data-shortcut="u"
                 aria-keyshortcuts="U"
-                ?disabled=${this.disabled}
+                ?disabled=${this.actionDisabled("toggle-unread")}
+                title=${this.actionTitle("toggle-unread")}
               >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
                   >${session.unread ? icons.eye : icons.circle}</span
@@ -485,7 +506,8 @@ class SessionMenu extends OpenClawLightDomElement {
                       value="rename"
                       data-shortcut="r"
                       aria-keyshortcuts="R"
-                      ?disabled=${this.disabled}
+                      ?disabled=${this.actionDisabled("rename")}
+                      title=${this.actionTitle("rename")}
                     >
                       <span slot="icon" class="session-menu__icon" aria-hidden="true"
                         >${icons.edit}</span
@@ -498,7 +520,8 @@ class SessionMenu extends OpenClawLightDomElement {
                       value="fork"
                       data-shortcut="f"
                       aria-keyshortcuts="F"
-                      ?disabled=${this.disabled || this.forkDisabled}
+                      ?disabled=${this.actionDisabled("fork", this.forkDisabled)}
+                      title=${this.actionTitle("fork")}
                     >
                       <span slot="icon" class="session-menu__icon" aria-hidden="true"
                         >${icons.copy}</span
@@ -528,7 +551,11 @@ class SessionMenu extends OpenClawLightDomElement {
                     </wa-dropdown-item>
                   `
                 : nothing}
-              <wa-dropdown-item class="session-menu__item" ?disabled=${this.disabled}>
+              <wa-dropdown-item
+                class="session-menu__item"
+                ?disabled=${this.actionDisabled("move-to-group")}
+                title=${this.actionTitle("move-to-group")}
+              >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
                   >${icons.folder}</span
                 >
@@ -546,7 +573,8 @@ class SessionMenu extends OpenClawLightDomElement {
                       class="session-menu__item session-menu__item--destructive"
                       value="stop-cloud-worker"
                       variant="danger"
-                      ?disabled=${this.disabled}
+                      ?disabled=${this.actionDisabled("stop-cloud-worker")}
+                      title=${this.actionTitle("stop-cloud-worker")}
                     >
                       <span slot="icon" class="session-menu__icon" aria-hidden="true"
                         >${icons.stop}</span
@@ -560,7 +588,11 @@ class SessionMenu extends OpenClawLightDomElement {
                 value="toggle-archived"
                 data-shortcut="a"
                 aria-keyshortcuts="A"
-                ?disabled=${this.disabled || (!session.archived && !this.archiveAllowed)}
+                ?disabled=${this.actionDisabled(
+                  "toggle-archived",
+                  !session.archived && !this.archiveAllowed,
+                )}
+                title=${this.actionTitle("toggle-archived")}
               >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
                   >${session.archived ? icons.archiveRestore : icons.archive}</span
@@ -580,7 +612,11 @@ class SessionMenu extends OpenClawLightDomElement {
                 variant="danger"
                 data-shortcut="d"
                 aria-keyshortcuts="D"
-                ?disabled=${this.disabled || !(session.archived || this.archiveAllowed)}
+                ?disabled=${this.actionDisabled(
+                  "delete",
+                  !(session.archived || this.archiveAllowed),
+                )}
+                title=${this.actionTitle("delete")}
               >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"
                   >${icons.trash}</span

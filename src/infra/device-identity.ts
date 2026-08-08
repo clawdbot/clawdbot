@@ -21,6 +21,7 @@ import {
   signEd25519Payload,
   verifyEd25519Signature,
 } from "./ed25519-signature.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
 
@@ -99,7 +100,10 @@ function withDeviceIdentityCoordinator<T>(
     path: resolved.databasePath,
     identityKey: resolved.identityKey,
   };
-  const coordinator = acquireDeviceIdentityCoordinator({ databasePath: resolved.databasePath });
+  const coordinator = acquireDeviceIdentityCoordinator({
+    databasePath: resolved.databasePath,
+    env: options.env,
+  });
   let result: T;
   try {
     result = operation(resolved, resolvedOptions);
@@ -157,12 +161,7 @@ export function loadOrCreateProcessDeviceIdentity(
       return cached;
     }
     const identity = loadOrCreateDeviceIdentityOwned(resolvedOptions);
-    if (processDeviceIdentities.size >= MAX_PROCESS_DEVICE_IDENTITIES) {
-      const oldestKey = processDeviceIdentities.keys().next().value;
-      if (oldestKey !== undefined) {
-        processDeviceIdentities.delete(oldestKey);
-      }
-    }
+    pruneMapToMaxSize(processDeviceIdentities, MAX_PROCESS_DEVICE_IDENTITIES - 1);
     processDeviceIdentities.set(cacheKey, identity);
     return identity;
   });

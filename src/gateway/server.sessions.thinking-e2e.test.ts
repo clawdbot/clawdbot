@@ -12,13 +12,13 @@ import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 /**
  * Simulates the consumer-side resolution from session-controls.ts and
@@ -91,7 +91,7 @@ async function listMainSessionWithThinking(params: {
   primaryModel: string;
   sessionModelProvider: string;
   sessionModel: string;
-  loadGatewayModelCatalog?: () => Promise<
+  readPreparedGatewayModelCatalog?: () => Promise<
     Array<{
       provider: string;
       id: string;
@@ -128,7 +128,7 @@ async function listMainSessionWithThinking(params: {
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      loadGatewayModelCatalog: params.loadGatewayModelCatalog ?? (async () => []),
+      readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog ?? (async () => []),
     } as never,
   });
 
@@ -145,7 +145,7 @@ test("e2e #76482: session with different model gets its own thinking levels thro
     primaryModel: "openai/gpt-5.5",
     sessionModelProvider: "test-extended",
     sessionModel: "extended-reasoner",
-    loadGatewayModelCatalog: async () => [
+    readPreparedGatewayModelCatalog: async () => [
       // Provide a catalog with xhigh support — simulates what a real gateway
       // resolves for models like DeepSeek V4 Pro
       {

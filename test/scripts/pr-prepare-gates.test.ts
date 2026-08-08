@@ -1,7 +1,15 @@
 // Covers the scripts/pr prepare-gates remote testbox mode and the
 // cross-worktree gate lock that serializes whole gate blocks.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -257,7 +265,9 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boo
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   return predicate();
 }
@@ -391,6 +401,37 @@ describe("prepare gate changed-file plan", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("true");
+  });
+
+  it("scans changed files without temporary input storage", () => {
+    const workDir = makeTempDir("openclaw-pr-gates-no-tmp-");
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(join(workDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
+    const result = runGatesBash(
+      [
+        "enter_worktree() { :; }",
+        "checkout_prep_branch() { :; }",
+        "derive_prepare_gate_change_plan() {",
+        "  PREPARE_GATE_CHANGED_FILES=$'CHANGELOG.md\\nchangelog/fragments/stale.md'",
+        "  PREPARE_GATE_DOCS_ONLY=true",
+        "  PREPARE_GATE_CHANGELOG_ONLY=false",
+        "  PREPARE_GATE_CHANGELOG_REQUIRED=false",
+        "}",
+        "prepare_gates 4242",
+      ].join("\n"),
+      {
+        cwd: workDir,
+        env: { TMPDIR: join(workDir, "missing-tmp") },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Unsupported changelog fragment files detected:");
+    expect(result.stdout).toContain("changelog/fragments/stale.md");
+    expect(result.stderr).not.toContain("cannot create temp file");
+    expect(readFileSync(join(repoRoot, "scripts/pr-lib/gates.sh"), "utf8")).not.toMatch(
+      /done\s+(?:<<<|<\s*<\()/u,
+    );
   });
 });
 
@@ -669,7 +710,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        'gh() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
+        'gh_plain() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
         `graphql_push_to_fork example/repo topic ${headSha}`,
         'test "$(jq -r .variables.input.message.headline .local/graphql-payload.json)" = "reviewed fixup"',
         'test "$(jq -r .variables.input.message.body .local/graphql-payload.json)" = "Co-authored-by: Helper <helper@example.com>"',
@@ -699,7 +740,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -738,7 +779,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },

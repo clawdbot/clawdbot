@@ -1728,6 +1728,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
     const pcm24k = Buffer.alloc(480);
+    pcm24k.set([0xfb, 0xff]);
 
     await bridge.connect();
     lastConnectParams().callbacks.onmessage({
@@ -1738,7 +1739,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
             {
               inlineData: {
                 mimeType: "audio/L16;codec=pcm;rate=24000",
-                data: pcm24k.toString("base64"),
+                data: pcm24k.toString("base64url"),
               },
             },
           ],
@@ -1787,6 +1788,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
+    ["mixed alphabet", "aGVsbG8+_"],
   ])("terminates the session for %s in output audio", async (_scenario, data) => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onAudio = vi.fn();

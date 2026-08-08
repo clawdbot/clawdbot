@@ -222,6 +222,7 @@ describe("refreshGatewayHealthSnapshot", () => {
     const healthState = await loadHealthState();
     const eventLoop = {
       degraded: true,
+      degradedSinceMs: 61_000,
       reasons: ["event_loop_delay" as const],
       intervalMs: 2_000,
       delayP99Ms: 1_500,

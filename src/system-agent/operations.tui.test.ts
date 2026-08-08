@@ -4,7 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 describe("system-agent TUI operations", () => {
   it("refuses doctor repairs before any write or audit", async () => {

@@ -17,12 +17,12 @@ export const discordChannelConfigUiHints = {
     },
     nativeCommands: true,
     streaming: {
-      "": 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
-      mode: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress".',
+      "": 'Discord preview streaming is off by default. Set mode to "partial", "block", or "progress" to opt in. Run openclaw doctor --fix to migrate legacy keys.',
+      mode: 'Discord preview mode: "off" | "partial" | "block" | "progress". Default: "off".',
       chunkMode:
         'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
       "block.enabled":
-        'Enable chunked block-style Discord preview delivery when channels.discord.streaming.mode="block".',
+        "Enable normal Discord block replies. This takes precedence over editable preview delivery.",
       "block.coalesce": "Merge streamed Discord block replies before final delivery.",
       "preview.chunk.minChars":
         'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode="block" (default: 200).',

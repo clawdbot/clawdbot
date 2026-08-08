@@ -1,165 +1,32 @@
 // MCP CLI tests cover MCP command registration and server configuration behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { createDeferred } from "../shared/deferred.js";
-import { registerMcpCli } from "./mcp-cli.js";
-
-const mocks = vi.hoisted(() => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-  };
-  return {
-    runtime,
-    serveOpenClawChannelMcp: vi.fn(),
-    clearMcpOAuthCredentials: vi.fn(),
-    readMcpOAuthCredentialsStatus: vi.fn(),
-    runMcpOAuthLogin: vi.fn(),
-  };
-});
-
-const defaultRuntime = mocks.runtime;
-const mockLog = defaultRuntime.log;
-const mockError = defaultRuntime.error;
-const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
-const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
-const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
-const runMcpOAuthLogin = mocks.runMcpOAuthLogin;
-
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
-}));
-
-vi.mock("../mcp/channel-server.js", () => ({
-  serveOpenClawChannelMcp: mocks.serveOpenClawChannelMcp,
-}));
-
-vi.mock("../agents/mcp-oauth.js", () => ({
-  clearMcpOAuthCredentials: mocks.clearMcpOAuthCredentials,
-  readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
-  runMcpOAuthLogin: mocks.runMcpOAuthLogin,
-}));
-
-const tempDirs: string[] = [];
-
-async function createWorkspace(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-async function writeProbeMcpServer(filePath: string): Promise<void> {
-  await fs.writeFile(
-    filePath,
-    `let buffer = "";
-const mode = process.env.MCP_MODE ?? "normal";
-if (mode === "crash") {
-  process.exit(1);
-}
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (message.method === "initialize") {
-    if (mode === "hang-start") {
-      return;
-    }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: {} },
-        serverInfo: { name: "cli-probe-test", version: "1.0.0" },
-      },
-    });
-    return;
-  }
-  if (message.method === "tools/list") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { tools: [{ name: "ping", inputSchema: { type: "object" } }] },
-    });
-  }
-}
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
-  }
-});
-process.stdin.on("end", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
-`,
-    "utf8",
-  );
-}
-
-let sharedProgram: Command;
-
-async function runMcpCommand(args: string[]) {
-  await sharedProgram.parseAsync(args, { from: "user" });
-}
-
-function lastLogLine(): string {
-  return lastRuntimeLine(mockLog);
-}
-
-function lastErrorLine(): string {
-  return lastRuntimeLine(mockError);
-}
-
-function lastRuntimeLine(mock: typeof mockLog): string {
-  const call = mock.mock.calls[mock.mock.calls.length - 1];
-  return String(call?.[0] ?? "");
-}
+import {
+  cleanupMcpCliTestState,
+  clearMcpOAuthCredentials,
+  createWorkspace,
+  lastErrorLine,
+  lastLogLine,
+  mockError,
+  mockLog,
+  readMcpOAuthCredentialsStatus,
+  resetMcpCliTestState,
+  runMcpCommand,
+  setCreateSessionMcpRuntimeOverride,
+  serveOpenClawChannelMcp,
+} from "./mcp-cli.test-harness.js";
+import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 
 describe("mcp cli", () => {
-  if (!sharedProgram) {
-    sharedProgram = new Command();
-    sharedProgram.exitOverride();
-    registerMcpCli(sharedProgram);
-  }
-
   beforeEach(() => {
-    vi.clearAllMocks();
-    readMcpOAuthCredentialsStatus.mockResolvedValue({
-      hasTokens: false,
-      requiresAuthorization: false,
-      hasClientInformation: false,
-      hasCodeVerifier: false,
-      hasDiscoveryState: false,
-      hasLastAuthorizationUrl: false,
-    });
+    resetMcpCliTestState();
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await cleanupMcpCliTestState();
   });
 
   it("sets and shows a configured MCP server", async () => {
@@ -336,42 +203,53 @@ describe("mcp cli", () => {
     },
   );
 
-  it(
-    "bounds initialize with a five-second probe timeout when no flag is supplied",
-    { timeout: 8_000 },
-    async () => {
-      await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-        const workspaceDir = await createWorkspace();
-        const serverPath = path.join(workspaceDir, "probe-server.mjs");
-        const configPath = path.join(home, ".openclaw", "openclaw.json");
-        await writeProbeMcpServer(serverPath);
-        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-        const startedAt = performance.now();
-        await expect(
-          runMcpCommand([
-            "mcp",
-            "add",
-            "hung-default",
-            "--command",
-            process.execPath,
-            "--arg",
-            serverPath,
-            "--env",
-            "MCP_MODE=hang-start",
-          ]),
-        ).rejects.toThrow("__exit__:1");
-        const elapsedMs = performance.now() - startedAt;
-
-        expect(elapsedMs).toBeGreaterThanOrEqual(4_500);
-        expect(elapsedMs).toBeLessThan(6_500);
-        expect(lastErrorLine()).toContain(
-          'MCP server "hung-default" timed out: did not complete initialize within 5s',
-        );
-        await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  it("passes a five-second default initialize timeout to the probe runtime", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      let probeTimeoutMs: unknown;
+      setCreateSessionMcpRuntimeOverride((params) => {
+        probeTimeoutMs = params.cfg?.mcp?.servers?.["hung-default"]?.connectionTimeoutMs;
+        return {
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: "cli-probe-test",
+          createdAt: 0,
+          lastUsedAt: 0,
+          getCatalog: async () => ({
+            version: 1,
+            generatedAt: Date.now(),
+            servers: {},
+            tools: [],
+            diagnostics: [
+              {
+                serverName: "hung-default",
+                safeServerName: "hung-default",
+                launchSummary: process.execPath,
+                message:
+                  'MCP server "hung-default" timed out: did not complete initialize within 5s',
+              },
+            ],
+          }),
+          peekCatalog: () => null,
+          markUsed: () => {},
+          callTool: async () => ({ content: [] }),
+          dispose: async () => {},
+        };
       });
-    },
-  );
+
+      await expect(
+        runMcpCommand(["mcp", "add", "hung-default", "--command", process.execPath]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(probeTimeoutMs).toBe(5_000);
+      expect(lastErrorLine()).toContain(
+        'MCP server "hung-default" timed out: did not complete initialize within 5s',
+      );
+      await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 
   it("labels listed MCP servers as OpenClaw-managed", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
@@ -504,188 +382,6 @@ describe("mcp cli", () => {
       expect(verboseOutput).toContain("launch: node server.mjs --api-key *** --token=***");
       expect(verboseOutput).not.toContain("test-api-key");
       expect(verboseOutput).not.toContain("test-token");
-    });
-  });
-
-  it("includes OAuth credential status in MCP status output", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      readMcpOAuthCredentialsStatus.mockResolvedValueOnce({
-        hasTokens: true,
-        requiresAuthorization: false,
-        hasClientInformation: true,
-        hasCodeVerifier: false,
-        hasDiscoveryState: true,
-        hasLastAuthorizationUrl: true,
-      });
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      mockLog.mockClear();
-
-      await runMcpCommand(["mcp", "status", "--json"]);
-
-      expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
-        name: "docs",
-        auth: "oauth",
-        authStatus: {
-          hasTokens: true,
-          requiresAuthorization: false,
-          hasClientInformation: true,
-          hasCodeVerifier: false,
-          hasDiscoveryState: true,
-          hasLastAuthorizationUrl: true,
-        },
-      });
-    });
-  });
-
-  it("surfaces required OAuth authorization in status and doctor", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      readMcpOAuthCredentialsStatus.mockResolvedValue({
-        hasTokens: true,
-        requiresAuthorization: true,
-        hasClientInformation: true,
-        hasCodeVerifier: false,
-        hasDiscoveryState: true,
-        hasLastAuthorizationUrl: true,
-      });
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      mockLog.mockClear();
-
-      await runMcpCommand(["mcp", "status", "--verbose"]);
-
-      const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
-      expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
-      expect(statusLines).toContain("  oauth: tokens=yes authorization=required client=yes");
-
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "doctor", "--json"]);
-
-      expect(JSON.parse(lastLogLine())).toMatchObject({
-        ok: true,
-        servers: [
-          {
-            name: "docs",
-            ok: true,
-            issues: [
-              {
-                level: "warning",
-                message:
-                  "OAuth credentials require additional authorization; run openclaw mcp login docs",
-              },
-            ],
-          },
-        ],
-      });
-    });
-  });
-
-  it("configures enablement, timeouts, and OAuth login", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
-      runMcpOAuthLogin.mockResolvedValueOnce("authorized");
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
-      ]);
-      await runMcpCommand([
-        "mcp",
-        "configure",
-        "docs",
-        "--disable",
-        "--timeout",
-        "9",
-        "--auth",
-        "oauth",
-      ]);
-      await runMcpCommand(["mcp", "login", "docs", "--code", "abc123"]);
-
-      expect(buildMcpHttpFetch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          resourceUrl: "https://mcp.example.com",
-          timeoutMs: 9_000,
-        }),
-      );
-      expect(runMcpOAuthLogin).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-        config: undefined,
-        fetchFn: expect.any(Function),
-        authorizationCode: "abc123",
-        onAuthorizationUrl: expect.any(Function),
-      });
-
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "status", "--json"]);
-      expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
-        name: "docs",
-        enabled: false,
-        ok: false,
-        requestTimeoutMs: 9_000,
-        auth: "oauth",
-      });
-    });
-  });
-
-  it("clears stored OAuth credentials on logout", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      clearMcpOAuthCredentials.mockClear();
-      await runMcpCommand(["mcp", "logout", "docs"]);
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
-      expect(lastLogLine()).toBe('MCP OAuth credentials cleared for "docs".');
-    });
-  });
-
-  it("clears stored OAuth credentials after auth is removed", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
-      ]);
-      clearMcpOAuthCredentials.mockClear();
-      await runMcpCommand(["mcp", "logout", "docs"]);
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
     });
   });
 

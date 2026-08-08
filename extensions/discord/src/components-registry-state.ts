@@ -1,4 +1,4 @@
-import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 type PersistedDiscordRegistryEntry<T extends { id: string }> = {
@@ -17,21 +17,20 @@ export type DiscordRegistryStore<T extends { id: string }> = DiscordPersistentSt
   PersistedDiscordRegistryEntry<T>
 >;
 
-export const discordComponentRegistryState = {
-  componentEntries: resolveGlobalMap<string, DiscordComponentEntry>(
-    Symbol.for("openclaw.discord.componentEntries"),
-  ),
-  modalEntries: resolveGlobalMap<string, DiscordModalEntry>(
-    Symbol.for("openclaw.discord.modalEntries"),
-  ),
-  persistentComponentStore: undefined as DiscordRegistryStore<DiscordComponentEntry> | undefined,
-  persistentModalStore: undefined as DiscordRegistryStore<DiscordModalEntry> | undefined,
-  persistentRegistryDisabled: false,
-  reset(): void {
-    this.componentEntries.clear();
-    this.modalEntries.clear();
-    this.persistentComponentStore = undefined;
-    this.persistentModalStore = undefined;
-    this.persistentRegistryDisabled = false;
+export const discordComponentRegistryState = resolveGlobalSingleton(
+  Symbol.for("openclaw.discord.componentRegistryState"),
+  () => ({
+    componentEntries: new Map<string, DiscordComponentEntry>(),
+    modalEntries: new Map<string, DiscordModalEntry>(),
+    persistentComponentStore: undefined as DiscordRegistryStore<DiscordComponentEntry> | undefined,
+    persistentModalStore: undefined as DiscordRegistryStore<DiscordModalEntry> | undefined,
+    persistentRegistryDisabled: false,
+  }),
+  (state) => {
+    state.componentEntries.clear();
+    state.modalEntries.clear();
+    state.persistentComponentStore = undefined;
+    state.persistentModalStore = undefined;
+    state.persistentRegistryDisabled = false;
   },
-};
+);

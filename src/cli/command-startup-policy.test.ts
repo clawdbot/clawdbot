@@ -42,6 +42,9 @@ describe("command-startup-policy", () => {
       ["skills", "info"],
       ["skills", "search"],
       ["hooks"],
+      ["hooks", "list"],
+      ["hooks", "info"],
+      ["hooks", "check"],
       ["memory", "search"],
       ["memory", "status"],
       ["gateway", "stability"],
@@ -69,6 +72,69 @@ describe("command-startup-policy", () => {
           commandPath: ["memory", "status"],
         }).skipConfigGuard,
       ).toBe(false);
+    }
+  });
+
+  it("skips the config guard for exact root update dry-runs", () => {
+    for (const argv of [
+      ["node", "openclaw", "update", "--dry-run"],
+      ["node", "openclaw", "--profile", "work", "update", "--dry-run"],
+      ["node", "openclaw", "--update", "--dry-run"],
+    ]) {
+      expect(
+        resolvePolicy({
+          argv,
+          commandPath: ["update"],
+        }).skipConfigGuard,
+        argv.join(" "),
+      ).toBe(true);
+    }
+  });
+
+  it("keeps the config guard for non-dry-run and descendant update invocations", () => {
+    for (const testCase of [
+      {
+        argv: ["node", "openclaw", "update"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--tag", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--channel", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--timeout", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--tag=--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "--", "--dry-run"],
+        commandPath: ["update"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "status", "--dry-run"],
+        commandPath: ["update", "status"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "repair", "--dry-run"],
+        commandPath: ["update", "repair"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "finalize", "--dry-run"],
+        commandPath: ["update", "finalize"],
+      },
+      {
+        argv: ["node", "openclaw", "update", "wizard", "--dry-run"],
+        commandPath: ["update", "wizard"],
+      },
+    ]) {
+      expect(resolvePolicy(testCase).skipConfigGuard, testCase.argv.join(" ")).toBe(false);
     }
   });
 
@@ -119,6 +185,15 @@ describe("command-startup-policy", () => {
   });
 
   it("matches plugin preload policy", () => {
+    for (const commandPath of [
+      ["memory", "index"],
+      ["memory", "search"],
+      ["memory", "status"],
+    ]) {
+      const policy = resolvePolicy({ commandPath });
+      expect(policy.loadPlugins, commandPath.join(" ")).toBe(true);
+      expect(policy.pluginRegistry, commandPath.join(" ")).toEqual({ scope: "memory" });
+    }
     expect(
       resolvePolicy({
         commandPath: ["status"],

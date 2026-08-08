@@ -1,13 +1,16 @@
 // Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { createDeferred } from "../../../shared/deferred.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
 import {
+  clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
@@ -19,7 +22,12 @@ import {
   recordRecentQueueMessageId,
   resetRecentQueuedMessageIdDedupe,
 } from "./recent-message-ids.js";
-import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
+import {
+  FOLLOWUP_QUEUES,
+  getExistingFollowupQueue,
+  getFollowupQueue,
+  trimSummaryElisionsToCap,
+} from "./state.js";
 import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
@@ -89,6 +97,30 @@ function isRunAlreadyQueued(
   );
 }
 
+function appendQueueItem(params: {
+  key: string;
+  queue: ReturnType<typeof getFollowupQueue>;
+  run: FollowupRun;
+  recentMessageIdKey?: string;
+  runFollowup?: (run: FollowupRun) => Promise<void>;
+  restartIfIdle: boolean;
+  front: boolean;
+}): void {
+  params.queue.lastEnqueuedAt = Date.now();
+  params.queue.lastRun = params.run.run;
+  params.run.queueAbortSignal = params.queue.abortController.signal;
+  params.queue.items[params.front ? "unshift" : "push"](params.run);
+  if (params.recentMessageIdKey) {
+    recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
+  }
+  if (params.runFollowup) {
+    rememberFollowupDrainCallback(params.key, params.runFollowup);
+  }
+  if (params.restartIfIdle && !params.queue.draining) {
+    kickFollowupDrainIfIdle(params.key);
+  }
+}
+
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -103,6 +135,9 @@ export function enqueueFollowupRun(
   }
   if (options.position === "front") {
     run.protectFromQueueOverflow = true;
+  }
+  if (options.steerCandidate) {
+    run.steerAnchor = true;
   }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -120,10 +155,52 @@ export function enqueueFollowupRun(
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
+  if (options.steerCandidate) {
+    if (!markFollowupRunEnqueued(run)) {
+      return false;
+    }
+    const { promise: acceptance, resolve: settle } = createDeferred<boolean>();
+    run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
+    queue.steerAcceptanceTail = acceptance;
+    appendQueueItem({
+      key,
+      queue,
+      run,
+      recentMessageIdKey,
+      runFollowup,
+      restartIfIdle,
+      front: options.position === "front",
+    });
+    return true;
+  }
+  // A later normal/interrupt prompt cannot be dropped while an older steer is
+  // deciding between same-turn delivery and fallback. Append it behind the
+  // anchor; ordinary overflow policy resumes as soon as the gate resolves.
+  if (queue.items.some((item) => item.steerPending)) {
+    if (!markFollowupRunEnqueued(run)) {
+      return false;
+    }
+    appendQueueItem({
+      key,
+      queue,
+      run,
+      recentMessageIdKey,
+      runFollowup,
+      restartIfIdle,
+      front: false,
+    });
+    return true;
+  }
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
-  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
+  if (
+    !options.steerCandidate &&
+    queue.dropPolicy === "new" &&
+    queue.cap > 0 &&
+    pendingCount >= queue.cap
+  ) {
+    run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
     return false;
   }
@@ -131,32 +208,40 @@ export function enqueueFollowupRun(
     return false;
   }
 
+  const elidedSummaryLines: string[] = [];
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     inFlight: queue.inFlight,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    onSummaryElide: (lines) => elidedSummaryLines.push(...lines),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
         queue.summarySources.push(...dropped);
         return;
       }
       for (const item of dropped) {
+        item.onQueueDisposition?.("queue-cap-old");
         completeFollowupRunLifecycle(item);
       }
     },
-    isProtected: (item) => item.protectFromQueueOverflow === true,
+    isProtected: (item) => item.protectFromQueueOverflow === true || item.steerAnchor === true,
   });
   if (queue.dropPolicy === "summarize") {
     const overflow = queue.summarySources.length - queue.summaryLines.length;
     if (overflow > 0) {
       const removed = queue.summarySources.splice(0, overflow);
-      for (const item of removed) {
+      for (const [index, item] of removed.entries()) {
+        const summaryLine = elidedSummaryLines[index];
+        if (summaryLine === undefined) {
+          throw new Error("followup queue summary source lost its elided line");
+        }
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         if (lastElision?.contextKey === contextKey) {
           const compactSource = createOverflowSummaryRetrySource(item);
           lastElision.count += 1;
           lastElision.sources.push(compactSource);
+          lastElision.summaryLines.push(summaryLine);
           lastElision.sourceRefs.set(item, compactSource);
           if (queue.activeSummarySources.has(item)) {
             queue.activeSummarySources.add(compactSource);
@@ -167,6 +252,7 @@ export function enqueueFollowupRun(
             contextKey,
             count: 1,
             sources: [compactSource],
+            summaryLines: [summaryLine],
             sourceRefs: new WeakMap([[item, compactSource]]),
           });
           if (queue.activeSummarySources.has(item)) {
@@ -178,32 +264,19 @@ export function enqueueFollowupRun(
     }
   }
   if (!shouldEnqueue) {
+    run.onQueueDisposition?.("queue-cap");
     completeFollowupRunLifecycle(run);
     return false;
   }
-  // Only admitted items refresh debounce; rejected overflow must not starve
-  // protected stranded-reply retries waiting for the quiet window.
-  queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
-
-  run.queueAbortSignal = queue.abortController.signal;
-  if (options.position === "front") {
-    queue.items.unshift(run);
-  } else {
-    queue.items.push(run);
-  }
-  if (recentMessageIdKey) {
-    recordRecentQueueMessageId(run, recentMessageIdKey);
-  }
-  if (runFollowup) {
-    rememberFollowupDrainCallback(key, runFollowup);
-  }
-  // If drain finished and deleted the queue before this item arrived, a new queue
-  // object was created (draining: false) but nobody scheduled a drain for it.
-  // Use the cached callback to restart the drain now.
-  if (restartIfIdle && !queue.draining) {
-    kickFollowupDrainIfIdle(key);
-  }
+  appendQueueItem({
+    key,
+    queue,
+    run,
+    recentMessageIdKey,
+    runFollowup,
+    restartIfIdle,
+    front: options.position === "front",
+  });
   return true;
 }
 
@@ -213,6 +286,122 @@ export function getFollowupQueueDepth(key: string): number {
     return 0;
   }
   return countPendingQueueItems(queue.items, queue.inFlight);
+}
+
+function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: boolean): boolean {
+  const queue = getExistingFollowupQueue(key);
+  const pending = run.steerPending;
+  if (!queue?.items.includes(run) || !pending) {
+    return false;
+  }
+  pending.settle(accepted);
+  if (!accepted) {
+    delete run.steerPending;
+    reapplyDeferredOverflow(key);
+    kickFollowupDrainIfIdle(key);
+  }
+  return true;
+}
+
+function isParkedFollowupRunOwned(key: string, run: FollowupRun): boolean {
+  return getExistingFollowupQueue(key)?.items.includes(run) === true;
+}
+
+function reapplyDeferredOverflow(key: string): void {
+  const queue = getExistingFollowupQueue(key);
+  if (!queue || queue.items.some((item) => item.steerPending)) {
+    return;
+  }
+  const lastAnchor = queue.items.findLastIndex((item) => item.steerAnchor === true);
+  const suffix = queue.items.splice(lastAnchor + 1);
+  if (suffix.length === 0) {
+    return;
+  }
+  const originalCap = queue.cap;
+  const settings: QueueSettings = {
+    mode: queue.mode,
+    debounceMs: queue.debounceMs,
+    cap: originalCap + lastAnchor + 1,
+    dropPolicy: queue.dropPolicy,
+  };
+  for (const item of suffix) {
+    if (!enqueueFollowupRun(key, item, settings, "none", undefined, false)) {
+      completeFollowupRunLifecycle(item);
+    }
+  }
+  queue.cap = originalCap;
+}
+
+/** Remove an exactly committed steer while preserving every sibling's FIFO position. */
+function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
+  const queue = getExistingFollowupQueue(key);
+  const index = queue?.items.indexOf(run) ?? -1;
+  if (!queue || index < 0) {
+    return false;
+  }
+  queue.items.splice(index, 1);
+  run.steerPending?.settle(true);
+  delete run.steerPending;
+  delete run.protectFromQueueOverflow;
+  delete run.steerAnchor;
+  reapplyDeferredOverflow(key);
+  completeFollowupRunLifecycle(run);
+  if (
+    !queue.draining &&
+    queue.items.length === 0 &&
+    queue.inFlight.size === 0 &&
+    queue.droppedCount === 0 &&
+    FOLLOWUP_QUEUES.get(key) === queue
+  ) {
+    FOLLOWUP_QUEUES.delete(key);
+    clearFollowupDrainCallback(key);
+  } else {
+    kickFollowupDrainIfIdle(key);
+  }
+  return true;
+}
+
+type ParkedSteerReservation = {
+  admit: () => Promise<"steer" | "fallback" | "cancelled">;
+  accepted: (accepted: boolean) => void;
+  fallback: () => void;
+  consume: () => void;
+};
+
+export function parkSteerCandidate(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): ParkedSteerReservation | undefined {
+  if (
+    !enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false, {
+      steerCandidate: true,
+    })
+  ) {
+    return undefined;
+  }
+  logMessageQueuedWithBacklogPolicy(
+    {
+      sessionId: run.run.sessionId,
+      sessionKey: key,
+      channel: run.originatingChannel ?? run.run.messageProvider,
+      source: "followup-queue-steer",
+    },
+    false,
+  );
+  return {
+    async admit() {
+      const predecessorAccepted = (await run.steerPending?.predecessor) ?? true;
+      if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) {
+        return "cancelled";
+      }
+      return predecessorAccepted ? "steer" : "fallback";
+    },
+    accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
+    fallback: () => settleParkedSteerAcceptance(key, run, false),
+    consume: () => consumeParkedFollowupRun(key, run),
+  };
 }
 
 if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {

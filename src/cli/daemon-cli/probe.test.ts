@@ -432,6 +432,43 @@ describe("probeGatewayStatus", () => {
     expect(result.error).toBe("scope upgrade pending approval (requestId: req-123)");
   });
 
+  it("redacts credential-bearing URLs echoed in probe failure text", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "connect failed to ws://user:secret@gw.example.com:18789?token=abc123",
+      close: null,
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).not.toContain("secret");
+    expect(result.error).not.toContain("abc123");
+    expect(result.error).toContain("ws://***:***@gw.example.com:18789?token=***");
+  });
+
+  it("redacts credential-bearing URLs in thrown probe errors", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockRejectedValueOnce(
+      new Error("dial ws://user:secret@gw.example.com:18789 refused"),
+    );
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).not.toContain("secret");
+    expect(result.error).toContain("ws://***:***@gw.example.com:18789");
+  });
+
   it("surfaces status RPC errors when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

@@ -50,6 +50,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolPolicyVersion",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "lifecycleRunId",
   "mainRestartRecovery",
   "subagentRecovery",
   "pluginOwnerId",
@@ -58,8 +59,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRuns",
   "restartRecoveryForceSafeTools",
   "goal",
-  "pendingSkillSuggestion",
-  "skillCaptureSignalHashes",
   "sessionStartedAt",
   "ambientTranscriptWatermarks",
   "lastInteractionAt",
@@ -131,6 +130,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryTerminalDeliveryEvidence",
   "restartRecoveryTerminalRunIds",
   "totalTokensFresh",
+  "totalTokensVersion",
   "estimatedCostUsd",
   "cacheRead",
   "cacheWrite",
@@ -163,6 +163,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "hookExternalContentSource",
   "acp",
   "quotaSuspension",
+  "pendingTranscriptRepair",
   "visibility",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"

@@ -15,6 +15,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
@@ -172,13 +173,7 @@ function shouldDropDuplicateVoiceTranscript(params: {
         break;
       }
     }
-    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
-      const oldestKey = recentVoiceTranscripts.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentVoiceTranscripts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentVoiceTranscripts, MAX_RECENT_VOICE_TRANSCRIPTS);
   }
 
   return false;
@@ -328,13 +323,7 @@ function shouldDropDuplicateExecFinished(params: {
         break;
       }
     }
-    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-      const oldestKey = recentExecFinishedRuns.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentExecFinishedRuns.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
   }
 
   return false;
@@ -356,13 +345,7 @@ function pruneBoundedTimestampMap(
       return;
     }
   }
-  while (map.size > params.maxEntries) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }
 
 function compactExecEventOutput(raw: string) {

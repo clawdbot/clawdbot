@@ -2,8 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
+import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -24,8 +26,9 @@ function createSessionCapability(client: GatewayBrowserClient): SessionCapabilit
     list: (options = {}) => request("sessions.list", options),
     refresh: async () => undefined,
     create: async () => null,
-    patch: (key: string, patch: SessionPatch, options: { agentId?: string | null } = {}) =>
-      request("sessions.patch", { key, ...options, ...patch }),
+    patch: (key: string, patch: SessionPatch, options: SessionPatchOptions = {}) =>
+      request("sessions.patch", { key, agentId: options.agentId, ...patch }),
+    setModelOverride: () => undefined,
     delete: async () => false,
     deleteMany: async () => ({ deleted: [], errors: [], preservedWorktrees: [] }),
     reset: async () => true,
@@ -45,21 +48,67 @@ function executeSlashCommand(
   sessionKey: string,
   commandName: string,
   args: string,
-  context: Omit<Parameters<typeof executeSlashCommandImpl>[4], "sessions"> = {},
+  context: Omit<
+    Parameters<typeof executeSlashCommandImpl>[4],
+    "sessionAccessSnapshot" | "sessions"
+  > & {
+    sessionAccessSnapshot?: Parameters<typeof executeSlashCommandImpl>[4]["sessionAccessSnapshot"];
+  } = {},
 ) {
+  const {
+    sessionAccessSnapshot = {
+      client,
+      hello: null,
+      phase: "connected",
+    },
+    ...rest
+  } = context;
   return executeSlashCommandImpl(client, sessionKey, commandName, args, {
     sessions: createSessionCapability(client),
-    ...context,
+    ...rest,
+    sessionAccessSnapshot,
   });
 }
 
+function restrictedSnapshot(
+  client: GatewayBrowserClient,
+  methods: string[],
+): Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> {
+  return {
+    client,
+    phase: "connected",
+    hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods },
+    } as ApplicationGatewaySnapshot["hello"],
+  };
+}
+
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
+  const active = overrides?.status === "running" || overrides?.hasActiveRun === true;
   return {
     key,
     spawnedBy: overrides?.spawnedBy,
     kind: "direct",
     updatedAt: null,
+    ...(active
+      ? {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+        }
+      : {}),
     ...overrides,
+  };
+}
+
+function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
+  return {
+    ts: 0,
+    path: "",
+    count: sessions.length,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions,
   };
 }
 
@@ -79,6 +128,177 @@ function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) 
 }
 
 describe("executeSlashCommand directives", () => {
+  it("does not compact a session without operator.admin", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const result = await executeSlashCommand(client, "main", "compact", "", {
+      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.compact"]),
+    });
+
+    expect(result.failed).toBe(true);
+    expectNoRequestCall(request, "sessions.compact");
+  });
+
+  it("does not patch session settings without operator.admin", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const result = await executeSlashCommand(client, "main", "model", "gpt-5-mini", {
+      sessionAccessSnapshot: restrictedSnapshot(client, ["sessions.patch"]),
+      chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+    });
+
+    expect(result.failed).toBe(true);
+    expectNoRequestCall(request, "sessions.patch");
+  });
+
+  it("defers slash-command model cache publication to the captured chat owner", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const patch = vi
+      .fn()
+      .mockResolvedValue(
+        createResolvedModelPatch(OPENAI_GPT5_MINI_MODEL.id, OPENAI_GPT5_MINI_MODEL.provider),
+      );
+    const setModelOverride = vi.fn();
+    const ownsModelOverride = vi.fn(() => true);
+    const sessions = {
+      ...createSessionCapability(client),
+      patch,
+      setModelOverride,
+    } as SessionCapability;
+
+    const result = await executeSlashCommandImpl(client, "global", "model", "gpt-5-mini", {
+      sessions,
+      sessionAccessSnapshot: {
+        client,
+        hello: null,
+        phase: "connected",
+      },
+      agentId: "work",
+      ownsModelOverride,
+      chatModelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL),
+    });
+
+    expect(result.failed).not.toBe(true);
+    expect(patch).toHaveBeenCalledWith(
+      "global",
+      { model: "gpt-5-mini" },
+      expect.objectContaining({
+        agentId: "work",
+        deferModelOverride: true,
+        ownsModelOverride,
+      }),
+    );
+    expect(setModelOverride).toHaveBeenCalledWith("global", "openai/gpt-5-mini");
+  });
+
+  it("does not publish a slash-command model cache value after its owner retires", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const setModelOverride = vi.fn();
+    const sessions = {
+      ...createSessionCapability(client),
+      patch: vi
+        .fn()
+        .mockResolvedValue(
+          createResolvedModelPatch(OPENAI_GPT5_MINI_MODEL.id, OPENAI_GPT5_MINI_MODEL.provider),
+        ),
+      setModelOverride,
+    } as SessionCapability;
+
+    const result = await executeSlashCommandImpl(client, "global", "model", "gpt-5-mini", {
+      sessions,
+      sessionAccessSnapshot: {
+        client,
+        hello: null,
+        phase: "connected",
+      },
+      agentId: "work",
+      ownsModelOverride: () => false,
+      chatModelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL),
+    });
+
+    expect(result.failed).not.toBe(true);
+    expect(setModelOverride).not.toHaveBeenCalled();
+  });
+
+  it("does not patch through a replacement connection after loading session state", async () => {
+    let resolveList: ((value: SessionsListResult) => void) | undefined;
+    const listResult = new Promise<SessionsListResult>((resolve) => {
+      resolveList = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return await listResult;
+      }
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    let current = true;
+
+    const pending = executeSlashCommand(client, "agent:main:main", "think", "high", {
+      isCurrent: () => current,
+    });
+    current = false;
+    resolveList?.(
+      createSessionsResult([
+        row("agent:main:main", {
+          thinkingOptions: ["off", "low", "high"],
+        }),
+      ]),
+    );
+
+    const result = await pending;
+    expect(result.failed).toBe(true);
+    expectNoRequestCall(request, "sessions.patch");
+  });
+
+  it("rechecks live scopes before patching after loading session state", async () => {
+    let resolveList: ((value: SessionsListResult) => void) | undefined;
+    const listResult = new Promise<SessionsListResult>((resolve) => {
+      resolveList = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return await listResult;
+      }
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    let snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> = {
+      client,
+      phase: "connected" as const,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["sessions.patch"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    };
+
+    const pending = executeSlashCommand(client, "agent:main:main", "think", "high", {
+      sessionAccessSnapshot: snapshot,
+      readSessionAccessSnapshot: () => snapshot,
+      isCurrent: () => true,
+    });
+    snapshot = restrictedSnapshot(client, ["sessions.patch"]);
+    resolveList?.(
+      createSessionsResult([
+        row("agent:main:main", {
+          thinkingOptions: ["off", "low", "high"],
+        }),
+      ]),
+    );
+
+    const result = await pending;
+    expect(result.failed).toBe(true);
+    expectNoRequestCall(request, "sessions.patch");
+  });
+
   it("resolves the legacy main alias for bare /model", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
@@ -1390,10 +1610,18 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.queueMode).toBe("steer");
   });
 
-  it("uses canonical active-run state when the session row only reports hasActiveRun", async () => {
+  it("uses a unique run id when a real session row omits active leaf context", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { hasActiveRun: true })] };
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: ["active-run"],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
       }
       if (method === "chat.send") {
         return { status: "started", runId: "run-active-flag", messageSeq: 2 };
@@ -1415,7 +1643,39 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       sessionKey: "agent:main:main",
       message: "continue with the smaller fix",
       deliver: false,
+      expectedRunId: "active-run",
     });
+    expect(chatSend.payload).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it.each([
+    ["zero", []],
+    ["multiple", ["run-a", "run-b"]],
+  ] as const)("refuses %s authoritative active run ids", async (_label, activeRunIds) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: [...activeRunIds],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "continue safely",
+    );
+
+    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
+    expectNoRequestCall(request, "chat.send");
   });
 
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {

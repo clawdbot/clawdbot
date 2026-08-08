@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -40,6 +42,7 @@ import {
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
@@ -49,10 +52,6 @@ const RESTART_RECOVERY_RESUME_MESSAGE =
   "transcript and finish the interrupted response.";
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
-
-function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
   const authority = resolveRestartRecoveryChannelAuthority(entry);
@@ -138,7 +137,7 @@ export function resolveRestartRecoveryDeliveryContext(params: {
   entry: SessionEntry;
   includeSessionDeliveryFallback?: boolean;
   sessionKey: string;
-}): DeliveryContext | undefined {
+}): (DeliveryContext & { channel: string; to: string }) | undefined {
   const activeRunDeliveryContext = normalizeDeliveryContext(
     params.entry.restartRecoveryDeliveryContext,
   );
@@ -421,6 +420,7 @@ export async function resumeMainSession(params: {
   }
   const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
+  const executionIdentityCollectionEnabled = isExecutionIdentityCollectionEnabled(params.cfg);
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   let reservation: MainSessionRecoveryReservation | undefined;
@@ -448,6 +448,12 @@ export async function resumeMainSession(params: {
         now: Date.now(),
         observation: params.observation,
         runId: recoveryRunId,
+        executionIdentity: executionIdentityCollectionEnabled
+          ? {
+              state: "enabled",
+              token: createExecutionIdentityAdmissionToken(recoveryRunId),
+            }
+          : { state: "disabled" },
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
@@ -513,6 +519,12 @@ export async function resumeMainSession(params: {
       expectedExistingSessionId: params.entry.sessionId,
       ...(params.sessionWorkAdmissionHandoffId
         ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
+        : {}),
+      ...(reservation.executionIdentityAdmission
+        ? {
+            internalExecutionIdentityRetry:
+              reservation.executionIdentityAdmission.kind === "retry-reference",
+          }
         : {}),
       idempotencyKey: recoveryRunId,
       deliver:

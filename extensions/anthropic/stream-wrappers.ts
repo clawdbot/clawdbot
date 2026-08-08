@@ -16,8 +16,8 @@ import {
   applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
+  createPayloadPatchStreamWrapper,
   resolveAnthropicPayloadPolicy,
-  streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -186,6 +186,10 @@ export function createAnthropicFastModeWrapper(
   enabled: DynamicFastMode,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
+  const fastPayloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload }) => {
+    delete payload.service_tier;
+    payload.speed = "fast";
+  });
   return (model, context, options) => {
     const resolved = typeof enabled === "function" ? enabled() : enabled;
     if (resolved === undefined) {
@@ -199,19 +203,10 @@ export function createAnthropicFastModeWrapper(
       ) {
         return underlying(model, context, options);
       }
-      return streamWithPayloadPatch(
-        underlying,
-        applyAnthropicFastModePricing(model),
-        context,
-        {
-          ...options,
-          headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_FAST_MODE_BETA]),
-        },
-        (payloadObj) => {
-          delete payloadObj.service_tier;
-          payloadObj.speed = "fast";
-        },
-      );
+      return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, {
+        ...options,
+        headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_FAST_MODE_BETA]),
+      });
     }
     return createAnthropicServiceTierWrapper(underlying, resolveAnthropicFastServiceTier(resolved))(
       model,
@@ -226,31 +221,36 @@ export function createAnthropicServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
   serviceTier: AnthropicServiceTier,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    // Opus 5 and Sonnet 5 do not support Priority Tier; omit service_tier entirely.
-    if (
-      isAnthropicOAuthApiKey(options?.apiKey) ||
-      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
-      resolveClaudeSonnet5ModelIdentity(model) !== undefined
-    ) {
-      return underlying(model, context, options);
-    }
-
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      serviceTier,
-    });
-    if (!payloadPolicy.allowsServiceTier) {
-      return underlying(model, context, options);
-    }
-
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
-      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy, new Set()),
-    );
-  };
+  return createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload, model }) => {
+      const payloadPolicy = resolveAnthropicPayloadPolicy({
+        provider: readStringValue(model.provider),
+        api: readStringValue(model.api),
+        baseUrl: readStringValue(model.baseUrl),
+        serviceTier,
+      });
+      applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
+    },
+    {
+      shouldPatch: ({ model, options }) => {
+        // Opus 5 and Sonnet 5 do not support Priority Tier; omit service_tier entirely.
+        if (
+          isAnthropicOAuthApiKey(options?.apiKey) ||
+          resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+          resolveClaudeSonnet5ModelIdentity(model) !== undefined
+        ) {
+          return false;
+        }
+        return resolveAnthropicPayloadPolicy({
+          provider: readStringValue(model.provider),
+          api: readStringValue(model.api),
+          baseUrl: readStringValue(model.baseUrl),
+          serviceTier,
+        }).allowsServiceTier;
+      },
+    },
+  );
 }
 
 /** Wrap a stream function to strip trailing assistant prefill before thinking requests. */

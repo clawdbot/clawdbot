@@ -48,6 +48,26 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
           repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
         }
       : null,
+  resolveMissingOfficialExternalChannelPluginRepairHints: ({
+    channelIds,
+  }: {
+    channelIds: string[];
+  }) =>
+    channelIds.flatMap((channelId) =>
+      mocks.missingOfficialExternalChannels.has(channelId)
+        ? [
+            {
+              pluginId: channelId,
+              channelId,
+              label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
+              installSpec: `@openclaw/${channelId}`,
+              installCommand: `openclaw plugins install @openclaw/${channelId}`,
+              doctorFixCommand: "openclaw doctor --fix",
+              repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
+            },
+          ]
+        : [],
+    ),
 }));
 
 type ChannelSelectionModule = typeof import("./channel-selection.js");
