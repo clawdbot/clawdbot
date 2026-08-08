@@ -771,75 +771,118 @@ describe("codex command", () => {
     }
   });
 
-  it("refuses manual resume ownership while the same native thread has an active claim", async () => {
-    const harness = createClientHarness();
-    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    const parent = codexNativeSubagentMonitorRuntime.register({
-      client: harness.client,
-      parentThreadId: "thread-parent",
-    });
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "session-1",
-    };
-    await writeTestBinding(identity, {
-      threadId: "thread-active-resume",
-      clientId: harness.client.getInstanceId(),
-      cwd: "/repo",
-    });
-    harness.send({
-      method: "thread/started",
-      params: {
-        thread: {
-          id: "thread-active-resume",
-          parentThreadId: "thread-parent",
-          source: {
-            subAgent: {
-              thread_spawn: {
-                parent_thread_id: "thread-parent",
-                depth: 1,
-                agent_path: "thread-active-resume",
+  it.each([
+    { label: "the same", existingThreadId: "thread-active-resume" },
+    { label: "a different", existingThreadId: "thread-existing-resume" },
+  ])(
+    "refuses an active native child while the source session owns $label thread",
+    async ({ existingThreadId }) => {
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const response = createThreadResumeResponse({ threadId: "thread-active-resume" });
+      const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
+        if (method === "thread/resume") {
+          return response as never;
+        }
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        throw new Error(`unexpected Codex method ${method}`);
+      });
+      const parent = codexNativeSubagentMonitorRuntime.register({
+        client: harness.client,
+        parentThreadId: "thread-parent",
+      });
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+      };
+      await writeTestBinding(identity, {
+        threadId: existingThreadId,
+        clientId: harness.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      if (existingThreadId !== "thread-active-resume") {
+        await retainCodexAppServerLiveThread(harness.client, existingThreadId);
+      }
+      harness.send({
+        method: "thread/started",
+        params: {
+          thread: {
+            id: "thread-active-resume",
+            parentThreadId: "thread-parent",
+            source: {
+              subAgent: {
+                thread_spawn: {
+                  parent_thread_id: "thread-parent",
+                  depth: 1,
+                  agent_path: "thread-active-resume",
+                },
               },
             },
           },
         },
-      },
-    });
-    await vi.waitFor(() =>
-      expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true),
-    );
-    const response = createThreadResumeResponse({ threadId: "thread-active-resume" });
-    const codexControlRequest = vi.fn(
-      async (
-        _pluginConfig: unknown,
-        _method: string,
-        _params: unknown,
-        options?: {
-          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
-        },
-      ) => {
-        await options?.onResponse?.(response, harness.client);
-        return response;
-      },
-    );
-
-    try {
-      const result = await runCommand("resume thread-active-resume", { codexControlRequest });
-
-      expect(result.text).toContain("lost its native subscription owner");
-      expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true);
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-        threadId: "thread-active-resume",
       });
-      await expect(
-        retainCodexAppServerLiveThread(harness.client, "thread-active-resume"),
-      ).resolves.toBe(false);
-    } finally {
-      parent.unregister();
-      harness.client.close();
-    }
-  });
+      await vi.waitFor(() =>
+        expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(
+          true,
+        ),
+      );
+      const codexControlRequest = vi.fn(
+        async (
+          _pluginConfig: unknown,
+          _method: string,
+          _params: unknown,
+          options?: {
+            onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+          },
+        ) => {
+          const resumed = await harness.client.request("thread/resume", {
+            threadId: "thread-active-resume",
+            excludeTurns: true,
+          });
+          await options?.onResponse?.(resumed, harness.client);
+          return resumed;
+        },
+      );
+
+      try {
+        const result = await runCommand("resume thread-active-resume", { codexControlRequest });
+
+        expect(result.text).toContain("lost its native subscription owner");
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+        expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(
+          true,
+        );
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+          threadId: existingThreadId,
+        });
+        await expect(
+          retainCodexAppServerLiveThread(harness.client, "thread-active-resume"),
+        ).resolves.toBe(false);
+        if (existingThreadId !== "thread-active-resume") {
+          const previousOwnership = await consumeCodexAppServerLiveThread(
+            harness.client,
+            existingThreadId,
+          );
+          expect(previousOwnership).toEqual(
+            expect.objectContaining({ release: expect.any(Function) }),
+          );
+          await expect(
+            retainCodexAppServerLiveThread(
+              harness.client,
+              existingThreadId,
+              previousOwnership?.release,
+            ),
+          ).resolves.toBe(true);
+        }
+      } finally {
+        parent.unregister();
+        harness.client.close();
+      }
+    },
+  );
 
   it("serializes manual resume with other session binding owners", async () => {
     const identity = {

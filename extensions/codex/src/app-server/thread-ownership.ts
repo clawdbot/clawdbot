@@ -95,6 +95,11 @@ export async function rollbackCodexAppServerBindingSubscription(
   if (retained && (await releaseCodexAppServerLiveThread(client, threadId))) {
     return;
   }
+  // Failed retention can mean another generation already owns this exact
+  // subscription; resume did not create a second connection-scoped listener.
+  if (isCodexAppServerLiveThreadClaimed(client, threadId)) {
+    return;
+  }
   // Start/resume subscribes before its response; failed retention has no
   // registry owner, so the responding physical client must unsubscribe it.
   if (
