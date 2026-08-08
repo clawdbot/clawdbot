@@ -14,6 +14,13 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import {
+  consumeCodexAppServerLiveThread,
+  ensureCodexAppServerClientRuntime,
+  isCodexAppServerLiveThreadClaimed,
+  retainCodexAppServerLiveThread,
+} from "./app-server/client-runtime.js";
+import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { JsonValue } from "./app-server/protocol.js";
@@ -24,6 +31,7 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { createClientHarness } from "./app-server/test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
 import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
@@ -503,6 +511,223 @@ describe("codex command", () => {
     });
   });
 
+  it("publishes manual resume ownership on its responding physical client before returning", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const response = createThreadResumeResponse({ threadId: "thread-owned-resume" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      const result = await runCommand("resume thread-owned-resume", { codexControlRequest });
+
+      expect(result.text).toContain("Attached this OpenClaw session");
+      await expect(
+        testCodexAppServerBindingStore.read({
+          kind: "session",
+          agentId: "main",
+          sessionId: "session-1",
+        }),
+      ).resolves.toMatchObject({
+        threadId: "thread-owned-resume",
+        clientId: harness.client.getInstanceId(),
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-owned-resume"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      harness.client.close();
+    }
+  });
+
+  it("unsubscribes a manually resumed thread when its idle owner cannot be published", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const request = vi.spyOn(harness.client, "request").mockResolvedValue({} as never);
+    const oldestRelease = vi.fn(async () => {
+      throw new Error("oldest thread could not be unsubscribed");
+    });
+    await retainCodexAppServerLiveThread(harness.client, "thread-oldest", oldestRelease);
+    for (let index = 1; index < 63; index += 1) {
+      await retainCodexAppServerLiveThread(harness.client, `thread-idle-${index}`);
+    }
+    await retainCodexAppServerLiveThread(harness.client, "thread-existing");
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
+    await writeTestBinding(identity, {
+      threadId: "thread-existing",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+    });
+    const response = createThreadResumeResponse({ threadId: "thread-overflow" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      const result = await runCommand("resume thread-overflow", { codexControlRequest });
+
+      expect(result.text).toContain("lost its native subscription owner");
+      expect(oldestRelease).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "thread/unsubscribe",
+        { threadId: "thread-overflow" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: "thread-existing",
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-existing"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      harness.client.close();
+    }
+  });
+
+  it("preserves known native config ownership when manually resuming the same thread", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
+    await writeTestBinding(identity, {
+      threadId: "thread-known-resume",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+      dynamicToolsFingerprint: "known-dynamic-tools",
+      pluginAppsFingerprint: "known-plugin-apps",
+    });
+    const release = vi.fn(async () => undefined);
+    await retainCodexAppServerLiveThread(
+      harness.client,
+      "thread-known-resume",
+      release,
+      "known-native-config",
+      "priority",
+    );
+    const response = createThreadResumeResponse({ threadId: "thread-known-resume" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      await expect(
+        runCommand("resume thread-known-resume", { codexControlRequest }),
+      ).resolves.toMatchObject({
+        text: "Attached this OpenClaw session to Codex thread thread-known-resume.",
+      });
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        dynamicToolsFingerprint: "known-dynamic-tools",
+        pluginAppsFingerprint: "known-plugin-apps",
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(
+          harness.client,
+          "thread-known-resume",
+          "known-native-config",
+        ),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          configFingerprint: "known-native-config",
+          serviceTier: "priority",
+        }),
+      );
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      harness.client.close();
+    }
+  });
+
+  it("refuses manual resume ownership while the same native thread has an active claim", async () => {
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+    };
+    await writeTestBinding(identity, {
+      threadId: "thread-active-resume",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
+    });
+    await retainCodexAppServerLiveThread(harness.client, "thread-active-resume");
+    const activeOwnership = await consumeCodexAppServerLiveThread(
+      harness.client,
+      "thread-active-resume",
+    );
+    const response = createThreadResumeResponse({ threadId: "thread-active-resume" });
+    const codexControlRequest = vi.fn(
+      async (
+        _pluginConfig: unknown,
+        _method: string,
+        _params: unknown,
+        options?: {
+          onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+        },
+      ) => {
+        await options?.onResponse?.(response, harness.client);
+        return response;
+      },
+    );
+
+    try {
+      const result = await runCommand("resume thread-active-resume", { codexControlRequest });
+
+      expect(result.text).toContain("lost its native subscription owner");
+      expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true);
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: "thread-active-resume",
+      });
+      await expect(
+        retainCodexAppServerLiveThread(
+          harness.client,
+          "thread-active-resume",
+          activeOwnership?.release,
+        ),
+      ).resolves.toBe(true);
+    } finally {
+      harness.client.close();
+    }
+  });
+
   it("serializes manual resume with other session binding owners", async () => {
     const identity = {
       kind: "session" as const,
@@ -538,6 +763,26 @@ describe("codex command", () => {
     });
     await competingOwner;
     expect(order).toEqual(["resume-start", "resume-done", "competing-owner"]);
+  });
+
+  it("rejects manual resume of a thread owned by another OpenClaw session", async () => {
+    const otherIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-other",
+    };
+    await writeTestBinding(otherIdentity, { threadId: "thread-owned", cwd: "/other" });
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-owned" }),
+    );
+
+    const result = await runCommand("resume thread-owned", { codexControlRequest });
+
+    expect(result.text).toContain("owned by another OpenClaw session");
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    await expect(testCodexAppServerBindingStore.read(otherIdentity)).resolves.toMatchObject({
+      threadId: "thread-owned",
+    });
   });
 
   it("reclaims an unloaded plugin's stale generation before attaching a thread", async () => {
@@ -4661,8 +4906,19 @@ describe("codex command", () => {
 
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const clearBinding = vi.fn(async () => true);
-    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+    const ownershipOrder: string[] = [];
+    const clearBinding = vi.fn(async () => {
+      ownershipOrder.push("native");
+      return true;
+    });
+    const detachConversationBinding = vi.fn(async () => {
+      ownershipOrder.push("public");
+      return { removed: true };
+    });
+    await writeTestBinding(
+      { kind: "conversation", bindingId: "binding-data-1" },
+      { threadId: "thread-detached", cwd: "/repo" },
+    );
 
     await expect(
       handleCodexCommand(
@@ -4696,8 +4952,143 @@ describe("codex command", () => {
     expect(detachConversationBinding).toHaveBeenCalled();
     expect(clearBinding).toHaveBeenCalledWith(
       { kind: "conversation", bindingId: "binding-data-1" },
-      { kind: "clear" },
+      { kind: "clear", threadId: "thread-detached" },
     );
+    expect(ownershipOrder).toEqual(["native", "public"]);
+  });
+
+  it.each([
+    {
+      label: "an incognito source bound into an ordinary destination",
+      sourceSessionKey: "agent:main:dashboard:incognito-source",
+      destinationSessionKey: "agent:main:discord:ordinary-destination",
+      unsubscribes: true,
+    },
+    {
+      label: "an ordinary source bound into an incognito destination",
+      sourceSessionKey: "agent:main:discord:ordinary-source",
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      unsubscribes: false,
+    },
+    {
+      label: "a missing source bound into an incognito destination",
+      sourceSessionKey: undefined,
+      destinationSessionKey: "agent:main:dashboard:incognito-destination",
+      unsubscribes: false,
+    },
+  ])(
+    "retires untracked detach ownership from $label using its source session",
+    async ({ sourceSessionKey, destinationSessionKey, unsubscribes }) => {
+      const identity = { kind: "conversation" as const, bindingId: "binding-mixed-session" };
+      await writeTestBinding(identity, {
+        threadId: "thread-mixed-session",
+        clientId: "client-mixed-session",
+        cwd: "/repo",
+      });
+      const request = vi.fn(async () => ({}));
+      const releaseClient = vi.fn();
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockReturnValue({
+          client: { request } as unknown as CodexAppServerClient,
+          release: releaseClient,
+        });
+      const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+
+      try {
+        await expect(
+          handleCodexCommand(
+            createContext("detach", undefined, {
+              sessionKey: destinationSessionKey,
+              detachConversationBinding,
+              getCurrentConversationBinding: async () => ({
+                bindingId: "binding-public",
+                pluginId: "codex",
+                pluginRoot: "/plugin",
+                channel: "test",
+                accountId: "default",
+                conversationId: "conversation",
+                boundAt: 1,
+                data: {
+                  kind: "codex-app-server-session",
+                  version: 2,
+                  bindingId: identity.bindingId,
+                  workspaceDir: "/repo",
+                  ...(sourceSessionKey
+                    ? {
+                        source: {
+                          agentId: "main",
+                          sessionId: "session-source",
+                          sessionKey: sourceSessionKey,
+                          threadId: "thread-source",
+                        },
+                      }
+                    : {}),
+                },
+              }),
+            }),
+            { deps: createDeps() },
+          ),
+        ).resolves.toEqual({ text: "Detached this conversation from Codex." });
+
+        if (unsubscribes) {
+          expect(request).toHaveBeenCalledExactlyOnceWith(
+            "thread/unsubscribe",
+            { threadId: "thread-mixed-session" },
+            expect.objectContaining({ timeoutMs: expect.any(Number) }),
+          );
+        } else {
+          expect(request).not.toHaveBeenCalled();
+        }
+        expect(releaseClient).toHaveBeenCalledOnce();
+        expect(detachConversationBinding).toHaveBeenCalledOnce();
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+      } finally {
+        retainClient.mockRestore();
+      }
+    },
+  );
+
+  it("preserves the public conversation binding when native retirement fails", async () => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
+    await writeTestBinding(identity, { threadId: "thread-detached", cwd: "/repo" });
+    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+    const mutate = vi.fn(async () => {
+      throw new Error("Codex native thread subscription could not be released");
+    });
+
+    const result = await handleCodexCommand(
+      createContext("detach", undefined, {
+        detachConversationBinding,
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: identity.bindingId,
+            workspaceDir: "/repo",
+          },
+        }),
+      }),
+      {
+        deps: createDeps({
+          bindingStore: { ...testCodexAppServerBindingStore, mutate },
+        }),
+      },
+    );
+
+    expect(result.text).toContain("native thread subscription could not be released");
+    expect(detachConversationBinding).not.toHaveBeenCalled();
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-detached",
+    });
   });
 
   it("rejects malformed detach commands before clearing bindings", async () => {

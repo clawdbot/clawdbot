@@ -538,6 +538,70 @@ describe("maybeCompactCodexAppServerSession", () => {
     ).toBeUndefined();
   });
 
+  it("clears bootstrap projection before manual native compaction rewrites thread history", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "fingerprint-1",
+        },
+      },
+    });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: true,
+      compacted: true,
+    });
+    expect(
+      (await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection,
+    ).toBeUndefined();
+  });
+
+  it("preserves projected context and warm ownership when native compaction is rejected", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32_600, message: "compaction temporarily unavailable" },
+        "thread/compact/start",
+      ),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const projection = {
+      schemaVersion: 1 as const,
+      mode: "thread_bootstrap" as const,
+      epoch: "epoch-1",
+      fingerprint: "fingerprint-1",
+    };
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection,
+      },
+    });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "compaction temporarily unavailable",
+    });
+    expect((await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection).toEqual(
+      projection,
+    );
+    expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
+    await expect(consumeCodexAppServerLiveThread(fake.client, "thread-1")).resolves.toEqual(
+      expect.objectContaining({ release: expect.any(Function) }),
+    );
+  });
+
   it("preserves projection when aborted before guarded native compaction", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -1715,31 +1779,39 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     async function runWithIgnoredOverrides(index: number): Promise<void> {
       const agentId = `cap-${index}`;
-      await maybeCompactCodexAppServerSession({
-        sessionId: `session-${index}`,
-        sessionKey: `agent:${agentId}:session-${index}`,
-        sessionFile: path.join(tempDir, `${agentId}.jsonl`),
-        workspaceDir: tempDir,
-        trigger: "budget",
-        config: {
-          agents: {
-            list: [
-              {
-                id: agentId,
-                compaction: {
-                  model: "openai/gpt-5.4-mini",
-                  provider: "custom-summary",
+      await maybeCompactCodexAppServerSessionImpl(
+        {
+          sessionId: `session-${index}`,
+          sessionKey: `agent:${agentId}:session-${index}`,
+          sessionFile: path.join(tempDir, `${agentId}.jsonl`),
+          workspaceDir: tempDir,
+          trigger: "budget",
+          config: {
+            agents: {
+              list: [
+                {
+                  id: agentId,
+                  compaction: {
+                    model: "openai/gpt-5.4-mini",
+                    provider: "custom-summary",
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         },
-      });
+        { bindingStore: testCodexAppServerBindingStore },
+      );
     }
 
     // Fill exactly the advertised 4,096-entry cap: every distinct key warns once.
     for (let index = 0; index < 4_096; index += 1) {
       await runWithIgnoredOverrides(index);
+      if ((index + 1) % 256 === 0) {
+        // Thousands of resolved promises otherwise starve Vitest timeout and
+        // progress callbacks without increasing real LRU-cap coverage.
+        await flushAsyncTasks(1);
+      }
     }
     expect(warn).toHaveBeenCalledTimes(4_096);
 
