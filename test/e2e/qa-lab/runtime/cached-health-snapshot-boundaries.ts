@@ -165,14 +165,16 @@ export async function runHandlerBoundaryProof() {
   return {
     cacheHitSameTimestamp:
       (firstResponse?.payload as { ts?: unknown } | undefined)?.ts === cached.ts,
-    cachedMeta: Boolean(firstResponse?.meta?.cached),
+    // meta is wire-typed Record<string, unknown>: assert the literal boolean so a
+    // truthy non-boolean (e.g. "true") cannot satisfy the cached contract.
+    cachedMeta: firstResponse?.meta?.cached === true,
     passiveRefreshBounded:
       sharedRefreshCalls.length === 1 && second.responses[0]?.meta?.cached === true,
     staleRefresh: stale.refreshCalls.length === 1 && stale.responses[0]?.meta === undefined,
     explicitProbeRefresh:
       probe.refreshCalls.length === 1 &&
-      Boolean(probe.refreshCalls[0]?.probe) &&
-      Boolean(probe.refreshCalls[0]?.includeSensitive),
+      (probe.refreshCalls[0]?.probe ?? false) &&
+      (probe.refreshCalls[0]?.includeSensitive ?? false),
     lifecycleMismatchRefresh:
       lifecycle.refreshCalls.length === 1 && lifecycle.responses[0]?.meta === undefined,
     liveOverlayMerged:
@@ -280,7 +282,7 @@ async function runPluginToolProof(repoRoot: string) {
     });
     const after = (await gateway.call("health", { probe: true })) as HealthSummary;
     return {
-      pluginLoaded: Boolean(before.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
+      pluginLoaded: before.plugins?.loaded.includes(FIXTURE_PLUGIN_ID) ?? false,
       pluginToolCataloged: containsString(catalog, FIXTURE_TOOL_NAME),
       pluginToolInvoked: containsString(invoked, FIXTURE_RESULT),
       healthAfterTool: after.ok && Boolean(after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
