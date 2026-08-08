@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   generateStoredDeviceIdentity,
@@ -55,20 +54,18 @@ function pathMayExist(filePath: string): boolean {
   }
 }
 
-function resolveLegacyStateDir(options: DeviceIdentityStoreOptions): string {
-  if (options.env?.OPENCLAW_STATE_DIR?.trim()) {
-    return resolveStateDir(options.env);
-  }
-  if (options.path) {
-    const databaseDir = path.dirname(path.resolve(options.path));
-    return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
-  }
-  return resolveStateDir(options.env ?? process.env);
+function resolveDeviceIdentityStateDir(databasePath: string): string {
+  const databaseDir = path.dirname(databasePath);
+  return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
 }
 
 /** Exact retired file owned by Doctor migration code. */
 function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
-  return path.join(resolveLegacyStateDir(options), LEGACY_DEVICE_IDENTITY_RELATIVE_PATH);
+  const { databasePath } = resolveDeviceIdentityStore(options);
+  return path.join(
+    resolveDeviceIdentityStateDir(databasePath),
+    LEGACY_DEVICE_IDENTITY_RELATIVE_PATH,
+  );
 }
 
 function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
@@ -102,7 +99,7 @@ function withDeviceIdentityCoordinator<T>(
   };
   const coordinator = acquireDeviceIdentityCoordinator({
     databasePath: resolved.databasePath,
-    env: options.env,
+    stateDir: resolveDeviceIdentityStateDir(resolved.databasePath),
   });
   let result: T;
   try {

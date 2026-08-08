@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import SQLite3
 import Testing
@@ -442,6 +443,22 @@ struct DeviceIdentityStoreTests {
             FileManager.default.attributesOfItem(atPath: fixture.databaseURL.path)[.posixPermissions] as? NSNumber)
         #expect(directoryMode.intValue & 0o777 == 0o700)
         #expect(databaseMode.intValue & 0o777 == 0o600)
+
+        let coordinatorURLs = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
+            databaseURL: fixture.databaseURL,
+            destinationStateDirURL: fixture.destination,
+            temporaryDirectory: FileManager.default.temporaryDirectory,
+            uid: getuid())
+        #expect(coordinatorURLs.count == 2)
+        for coordinatorURL in coordinatorURLs {
+            let coordinatorDirectoryMode = try #require(
+                FileManager.default.attributesOfItem(
+                    atPath: coordinatorURL.deletingLastPathComponent().path)[.posixPermissions] as? NSNumber)
+            let coordinatorFileMode = try #require(
+                FileManager.default.attributesOfItem(atPath: coordinatorURL.path)[.posixPermissions] as? NSNumber)
+            #expect(coordinatorDirectoryMode.intValue & 0o777 == 0o700)
+            #expect(coordinatorFileMode.intValue & 0o777 == 0o600)
+        }
     }
 
     @Test
