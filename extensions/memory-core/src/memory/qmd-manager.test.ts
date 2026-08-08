@@ -269,6 +269,8 @@ const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = process.env.Path;
+const originalMcporterConfig = process.env.MCPORTER_CONFIG;
+const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function expectedQmdProvenance(originClass: "agent" | "untrusted") {
@@ -1208,6 +1210,16 @@ describe("QmdMemoryManager", () => {
       delete process.env.Path;
     } else {
       process.env.Path = originalWindowsPath;
+    }
+    if (originalMcporterConfig === undefined) {
+      delete process.env.MCPORTER_CONFIG;
+    } else {
+      process.env.MCPORTER_CONFIG = originalMcporterConfig;
+    }
+    if (originalXdgConfigHome === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
