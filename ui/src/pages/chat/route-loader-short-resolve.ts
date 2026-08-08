@@ -1,16 +1,28 @@
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import {
+  resolveShortSessionReferenceWithListFallback,
+  type ShortSessionListFallbackResolution,
+} from "./route-loader-short-list-fallback.ts";
 
-export type SessionReferenceResolution =
-  | { kind: "not-found" }
-  | { kind: "unique"; session: GatewaySessionRow }
-  | { kind: "ambiguous"; sessions: GatewaySessionRow[]; truncated: boolean };
+export type SessionReferenceResolution = ShortSessionListFallbackResolution;
 
 type SessionsResolveWireResult =
   | { ok: true; key: string }
   | { ok: false; candidates?: Array<{ key: string; displayName?: string }> };
+
+function isPriorGatewayShortIdRejection(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    error.gatewayCode === ErrorCodes.INVALID_REQUEST &&
+    error.message.includes("invalid sessions.resolve params:") &&
+    error.message.includes("unexpected property 'shortId'")
+  );
+}
 
 export async function resolveShortSessionReference(
   context: ApplicationContext,
@@ -19,12 +31,20 @@ export async function resolveShortSessionReference(
 ): Promise<SessionReferenceResolution> {
   const client = await waitForGatewayClient(context.gateway, signal);
   signal.throwIfAborted();
-  const result = await client.request<SessionsResolveWireResult>("sessions.resolve", {
-    shortId: target.shortId,
-    ...(target.slugHint ? { slugHint: target.slugHint } : {}),
-    agentId: target.agentId,
-    allowMissing: true,
-  });
+  let result: SessionsResolveWireResult;
+  try {
+    result = await client.request<SessionsResolveWireResult>("sessions.resolve", {
+      shortId: target.shortId,
+      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
+      agentId: target.agentId,
+      allowMissing: true,
+    });
+  } catch (error) {
+    if (!isPriorGatewayShortIdRejection(error)) {
+      throw error;
+    }
+    return resolveShortSessionReferenceWithListFallback(context, target, signal);
+  }
   signal.throwIfAborted();
   const candidates = result.ok ? [{ key: result.key }] : result.candidates;
   if (!candidates?.length) {

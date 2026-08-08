@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -472,6 +473,79 @@ describe("gateway-backed session route resolution", () => {
       allowMissing: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: rows[1]?.key });
+  });
+
+  it("falls back to the prior list resolver when an older gateway rejects shortId", async () => {
+    const storedRow = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const { context, list } = contextFor(({ search }) =>
+      search === "12345678" ? result([storedRow]) : result([]),
+    );
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "invalid sessions.resolve params: at root: unexpected property 'shortId'",
+      });
+    });
+    (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-123456780a", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
+    expect(request).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledWith({
+      agentId: "roboclaw",
+      archivedFilter: "all",
+      includeDerivedTitles: true,
+      limit: 20,
+      search: "12345678",
+    });
+  });
+
+  it("does not invoke the list fallback when the gateway resolver succeeds", async () => {
+    const storedRow = row({ displayName: "Deploy monitor" });
+    const { context, list } = contextFor(() => result([storedRow]));
+    const request = installShortResolver(context, [storedRow]);
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("does not mask unrelated sessions.resolve validation errors", async () => {
+    const { context, list } = contextFor(() => result([]));
+    const rejection = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "invalid sessions.resolve params: shortId must be hexadecimal",
+    });
+    const request = vi.fn(async () => {
+      throw rejection;
+    });
+    (context.gateway.snapshot.client as unknown as { request: typeof request }).request = request;
+
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).rejects.toBe(rejection);
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("uses the sidebar-carried full key without issuing a session search", async () => {
