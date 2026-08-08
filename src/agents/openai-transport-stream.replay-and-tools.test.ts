@@ -730,8 +730,9 @@ describe("openai transport stream", () => {
     });
 
     await expect(async () => {
-      for await (const _event of result.stream) {
+      for await (const event of result.stream) {
         // Consume until the provider stream rejects.
+        void event;
       }
     }).rejects.toBe(streamFailure);
     expect(create).toHaveBeenCalledOnce();

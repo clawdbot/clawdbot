@@ -23,6 +23,7 @@ import {
 import {
   applyServiceTierPricing,
   logResponsesFailedNoDetails,
+  ResponsesStreamFailure,
   safeDebugValue,
   summarizeOpenAITransportError,
   summarizeResponsesPayload,
@@ -37,10 +38,7 @@ import {
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
-import {
-  processResponsesStream,
-  ResponsesStreamFailure,
-} from "./openai-responses-stream-internal.js";
+import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   assertCodeModeResponsesToolSurface,

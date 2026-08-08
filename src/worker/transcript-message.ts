@@ -30,7 +30,7 @@ export function cloneImageContent(part: { type: "image"; data: string; mimeType:
   return { type: "image" as const, data: part.data, mimeType: part.mimeType };
 }
 
-export function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
+function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
   return {
     v: state.v,
     type: state.type,

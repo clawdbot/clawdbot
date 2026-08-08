@@ -484,6 +484,20 @@ export function normalizeResponsesFailedEvent(
   );
 }
 
+export class ResponsesStreamFailure extends Error {
+  readonly responseId?: string;
+  readonly response: unknown;
+  readonly observation: ReturnType<typeof normalizeResponsesFailedEvent>["observation"];
+
+  constructor(failure: ReturnType<typeof normalizeResponsesFailedEvent>, response: unknown) {
+    super(failure.message);
+    this.name = "ResponsesStreamFailure";
+    this.responseId = failure.responseId;
+    this.response = response;
+    this.observation = failure.observation;
+  }
+}
+
 export function logResponsesFailedNoDetails(
   observation: ResponsesFailedNoDetailsObservation,
 ): void {

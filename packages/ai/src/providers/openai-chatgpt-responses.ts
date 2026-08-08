@@ -38,12 +38,10 @@ import { sleepWithAbort } from "../internal/retry-sleep.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
+import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "../transports/openai-responses-replay-internal.js";
-import {
-  processResponsesStream,
-  ResponsesStreamFailure,
-} from "../transports/openai-responses-stream-internal.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
