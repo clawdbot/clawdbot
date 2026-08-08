@@ -25,7 +25,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { validateAgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
@@ -325,12 +325,19 @@ describe("gateway aux handlers", () => {
       },
     });
     const authority = { kind: "worker" as const, ...runAuthority, turnClaim };
+    const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
     const lifecycle = vi.fn();
     const gatewayAux = createSecretsReloadHarness({
       activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
       onApprovalLifecycle: lifecycle,
       validateAgentRuntimeDelegatedAuthority: (candidate) =>
-        validateAgentRuntimeDelegatedAuthority(candidate, placements),
+        validateAuthority({
+          kind: "agentRuntime",
+          agentId: identity.agentId,
+          sessionKey: identity.sessionKey,
+          operationalRunInstance: candidate.operationalRunInstance,
+          delegatedAuthority: candidate,
+        }),
       registerWorkerTurnClaimClosedHandler: (handler) =>
         placements.registerTurnClaimClosedHandler(handler),
     });

@@ -48,6 +48,19 @@ async function importRuntimeTokenModule(): Promise<
   return await import("./agent-runtime-identity-token.js");
 }
 
+function validateDelegatedAuthority(
+  runtimeToken: typeof import("./agent-runtime-identity-token.js"),
+  authority: import("./agent-runtime-identity-token.js").AgentRuntimeDelegatedAuthority,
+): boolean {
+  return runtimeToken.createAgentRuntimeApprovalAuthorityValidator()({
+    kind: "agentRuntime",
+    agentId: "test",
+    sessionKey: "agent:test:test",
+    operationalRunInstance: authority.operationalRunInstance,
+    delegatedAuthority: authority,
+  });
+}
+
 afterEach(() => {
   resetAgentRunRegistryForTest();
   closeOpenClawStateDatabaseForTest();
@@ -72,20 +85,20 @@ describe("agent runtime identity token", () => {
     });
     const copied = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
     expect(copied).toBeDefined();
-    expect(
-      copied && runtimeToken.validateAgentRuntimeDelegatedAuthority(copied.delegatedAuthority),
-    ).toBe(true);
+    expect(copied && validateDelegatedAuthority(runtimeToken, copied.delegatedAuthority)).toBe(
+      true,
+    );
 
     releaseAgentRunDelegatedAuthority(first.delegatedAuthority);
-    expect(
-      copied && runtimeToken.validateAgentRuntimeDelegatedAuthority(copied.delegatedAuthority),
-    ).toBe(false);
+    expect(copied && validateDelegatedAuthority(runtimeToken, copied.delegatedAuthority)).toBe(
+      false,
+    );
 
     const replacement = { instanceId: "instance-replacement", runId: firstRun.runId };
     claimAgentRunDelegatedAuthority(replacement);
-    expect(
-      copied && runtimeToken.validateAgentRuntimeDelegatedAuthority(copied.delegatedAuthority),
-    ).toBe(false);
+    expect(copied && validateDelegatedAuthority(runtimeToken, copied.delegatedAuthority)).toBe(
+      false,
+    );
 
     const replacementToken = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
@@ -96,13 +109,13 @@ describe("agent runtime identity token", () => {
       await runtimeToken.verifyAgentRuntimeIdentityToken(replacementToken);
     expect(
       replacementIdentity &&
-        runtimeToken.validateAgentRuntimeDelegatedAuthority(replacementIdentity.delegatedAuthority),
+        validateDelegatedAuthority(runtimeToken, replacementIdentity.delegatedAuthority),
     ).toBe(true);
 
     rotateAgentRunRegistryLifecycleGeneration();
     expect(
       replacementIdentity &&
-        runtimeToken.validateAgentRuntimeDelegatedAuthority(replacementIdentity.delegatedAuthority),
+        validateDelegatedAuthority(runtimeToken, replacementIdentity.delegatedAuthority),
     ).toBe(false);
   });
 
