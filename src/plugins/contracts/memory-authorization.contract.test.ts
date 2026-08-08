@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
   LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
@@ -12,6 +12,10 @@ import {
   referenceMemoryAuthorizationConformanceAdapter,
   runMemoryAuthorizationConformanceSuite,
   type MemoryAccessContext,
+  type AuthorizedMemoryMutation,
+  type AuthorizedMemoryRuntime,
+  type AuthorizedMemorySearchResult,
+  type AuthorizedResourceHandle,
   type MemoryAuthorizationConformanceAdapter,
   type MemoryAuthorizationConformanceDecision,
 } from "../../plugin-sdk/memory-authorization.js";
@@ -110,6 +114,29 @@ describe("memory authorization SDK contract", () => {
     expect(Object.isFrozen(COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES)).toBe(true);
     expect(Object.isFrozen(LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES)).toBe(true);
   });
+
+  it("makes authorized search results the exact-read continuation input", () => {
+    type SearchResult = Awaited<ReturnType<AuthorizedMemoryRuntime["searchAuthorized"]>>[
+      "value"
+    ][number];
+    type ReadHandle = Parameters<AuthorizedMemoryRuntime["readAuthorized"]>[0]["handle"];
+
+    expectTypeOf<SearchResult>().toEqualTypeOf<AuthorizedMemorySearchResult>();
+    expectTypeOf<SearchResult["resourceHandle"]>().toEqualTypeOf<AuthorizedResourceHandle>();
+    expectTypeOf<SearchResult["resourceHandle"]>().toEqualTypeOf<ReadHandle>();
+  });
+
+  it("keeps placement selection inside the authorized plan", () => {
+    type HasRawPlacementOrDestination<T> = T extends unknown
+      ? "placementHandle" extends keyof T
+        ? true
+        : "destinationHandle" extends keyof T
+          ? true
+          : false
+      : never;
+
+    expectTypeOf<HasRawPlacementOrDestination<AuthorizedMemoryMutation>>().toEqualTypeOf<false>();
+  });
 });
 
 describe("memory authorization conformance suite", () => {
@@ -127,6 +154,8 @@ describe("memory authorization conformance suite", () => {
       "permission-complete",
       "cross-agent-cell",
       "plan-context-revision",
+      "plan-run-binding",
+      "plan-session-binding",
       "plan-expiry",
       "delivery-audience-intersection",
       "delegation-intersection",
@@ -135,25 +164,19 @@ describe("memory authorization conformance suite", () => {
     ]);
     expect(
       Object.fromEntries(cases.map((entry) => [entry.id, entry.expected["resource-a"]])),
-    ).toEqual({
+    ).toMatchObject({
       "deny-precedence": { allowed: false, reasonCode: "explicit-deny" },
       "permission-implication": { allowed: false, reasonCode: "default-deny" },
-      "permission-complete": {
-        allowed: true,
-        reasonCode: "allowed",
-        handle: "authorized:resource-a:resource-revision-1",
-      },
+      "permission-complete": { allowed: true, reasonCode: "allowed" },
       "cross-agent-cell": { allowed: false, reasonCode: "outside-view" },
       "plan-context-revision": { allowed: false, reasonCode: "revision-stale" },
+      "plan-run-binding": { allowed: false, reasonCode: "invalid-context" },
+      "plan-session-binding": { allowed: false, reasonCode: "session-rebound" },
       "plan-expiry": { allowed: false, reasonCode: "plan-expired" },
       "delivery-audience-intersection": { allowed: false, reasonCode: "outside-view" },
       "delegation-intersection": { allowed: false, reasonCode: "default-deny" },
       "lineage-requirements": { allowed: false, reasonCode: "lineage-deny" },
-      "prefilter-superset": {
-        allowed: true,
-        reasonCode: "allowed",
-        handle: "authorized:resource-a:resource-revision-1",
-      },
+      "prefilter-superset": { allowed: true, reasonCode: "allowed" },
     });
     expect(cases.at(-1)?.expected["resource-denied"]).toEqual({
       allowed: false,
@@ -211,6 +234,36 @@ describe("memory authorization conformance suite", () => {
     expect(report.failures).toContainEqual(expect.objectContaining({ invariant: "decision" }));
   });
 
+  it("accepts backend-issued opaque handles without prescribing their encoding", async () => {
+    const adapter: MemoryAuthorizationConformanceAdapter = {
+      evaluate: (params) => {
+        const decision = evaluateMemoryAuthorizationConformanceScenario(params);
+        return decision.allowed ? { ...decision, handle: "backend-issued-handle" } : decision;
+      },
+      prefilter: (scenario) => scenario.resources.map((resource) => resource.resourceId),
+    };
+
+    await expect(runMemoryAuthorizationConformanceSuite(adapter)).resolves.toEqual({
+      ok: true,
+      failures: [],
+    });
+  });
+
+  it("rejects an empty allowed-handle token", async () => {
+    const adapter: MemoryAuthorizationConformanceAdapter = {
+      evaluate: (params) => {
+        const decision = evaluateMemoryAuthorizationConformanceScenario(params);
+        return decision.allowed ? { ...decision, handle: "" } : decision;
+      },
+      prefilter: (scenario) => scenario.resources.map((resource) => resource.resourceId),
+    };
+
+    const report = await runMemoryAuthorizationConformanceSuite(adapter);
+    expect(report.failures).toContainEqual(
+      expect.objectContaining({ invariant: "authorized-handle" }),
+    );
+  });
+
   it("rejects denial metadata that reveals counts, scores, paths, or citations", async () => {
     const adapter: MemoryAuthorizationConformanceAdapter = {
       evaluate: (params) => {
@@ -227,6 +280,7 @@ describe("memory authorization conformance suite", () => {
           citation: "private/other-user.md#L1",
           cursor: "next-secret",
           denialDetail: "principal-owner",
+          handle: "unauthorized-handle",
         } as unknown as MemoryAuthorizationConformanceDecision;
       },
       prefilter: (scenario) => scenario.resources.map((resource) => resource.resourceId),
@@ -237,6 +291,62 @@ describe("memory authorization conformance suite", () => {
     expect(report.failures).toContainEqual(
       expect.objectContaining({ invariant: "denial-non-disclosure" }),
     );
+  });
+
+  it("rejects non-enumerable, symbolic, or inherited denial metadata", async () => {
+    const privateMetadata = Symbol("private-metadata");
+    const decorateDenied: Array<
+      (
+        decision: Extract<MemoryAuthorizationConformanceDecision, { allowed: false }>,
+      ) => MemoryAuthorizationConformanceDecision
+    > = [
+      (decision) => {
+        const decorated = { ...decision };
+        Object.defineProperty(decorated, "privateMetadata", {
+          enumerable: false,
+          value: "hidden",
+        });
+        return decorated;
+      },
+      (decision) => ({ ...decision, [privateMetadata]: "hidden" }),
+      (decision) =>
+        Object.assign(
+          Object.create({ privateMetadata: "hidden" }),
+          decision,
+        ) as MemoryAuthorizationConformanceDecision,
+    ];
+
+    for (const decorate of decorateDenied) {
+      const adapter: MemoryAuthorizationConformanceAdapter = {
+        evaluate: (params) => {
+          const decision = evaluateMemoryAuthorizationConformanceScenario(params);
+          return decision.allowed ? decision : decorate(decision);
+        },
+        prefilter: (scenario) => scenario.resources.map((resource) => resource.resourceId),
+      };
+
+      const report = await runMemoryAuthorizationConformanceSuite(adapter);
+      expect(report.failures).toContainEqual(
+        expect.objectContaining({ invariant: "denial-non-disclosure" }),
+      );
+    }
+  });
+
+  it("accepts a null-prototype denied decision with no metadata", async () => {
+    const adapter: MemoryAuthorizationConformanceAdapter = {
+      evaluate: (params) => {
+        const decision = evaluateMemoryAuthorizationConformanceScenario(params);
+        return decision.allowed
+          ? decision
+          : (Object.assign(Object.create(null), decision) as MemoryAuthorizationConformanceDecision);
+      },
+      prefilter: (scenario) => scenario.resources.map((resource) => resource.resourceId),
+    };
+
+    await expect(runMemoryAuthorizationConformanceSuite(adapter)).resolves.toEqual({
+      ok: true,
+      failures: [],
+    });
   });
 
   it("rejects prefilter false negatives and duplicate candidates", async () => {

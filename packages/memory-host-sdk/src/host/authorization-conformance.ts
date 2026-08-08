@@ -34,7 +34,9 @@ export type MemoryAuthorizationConformancePolicyEntry = Readonly<{
 
 export type MemoryAuthorizationConformancePlanBinding = Readonly<{
   contextFingerprint: string;
+  runId: string;
   agentId: string;
+  sessionId: string;
   sessionIdentityRevision: string;
   subjectRevision: string;
   deliveryRevision: string;
@@ -53,7 +55,9 @@ export type MemoryAuthorizationConformanceScenario = Readonly<{
   viewStoreIds: readonly string[];
   context: Readonly<{
     contextFingerprint: string;
+    runId: string;
     agentId: string;
+    sessionId: string;
     sessionIdentityRevision: string;
     subjectRevision: string;
     deliveryRevision: string;
@@ -103,6 +107,7 @@ export type MemoryAuthorizationConformanceReport = Readonly<{
     caseId: string;
     invariant:
       | "decision"
+      | "authorized-handle"
       | "denial-non-disclosure"
       | "prefilter-superset"
       | "duplicate-prefilter-candidate";
@@ -163,6 +168,12 @@ function planBindingFailure(
   }
   if (plan.contextFingerprint !== context.contextFingerprint) {
     return "invalid-context";
+  }
+  if (plan.runId !== context.runId) {
+    return "invalid-context";
+  }
+  if (plan.sessionId !== context.sessionId) {
+    return "session-rebound";
   }
   if (plan.agentId !== context.agentId || plan.operation !== context.operation) {
     return "outside-view";
@@ -258,7 +269,7 @@ export function evaluateMemoryAuthorizationConformanceScenario(params: {
   return {
     allowed: true,
     reasonCode: "allowed",
-    handle: `authorized:${resource.resourceId}:${resource.revision}`,
+    handle: "reference-issued-handle",
   };
 }
 
@@ -270,7 +281,9 @@ function baseScenario(
   const userAudience = { kind: "user", id: "principal-owner" } as const;
   const context = {
     contextFingerprint: "context-revision-1",
+    runId: "run-1",
     agentId: "agent-a",
+    sessionId: "session-1",
     sessionIdentityRevision: "session-revision-1",
     subjectRevision: "subject-revision-1",
     deliveryRevision: "delivery-revision-1",
@@ -318,7 +331,9 @@ function baseScenario(
     context,
     plan: {
       contextFingerprint: context.contextFingerprint,
+      runId: context.runId,
       agentId: context.agentId,
+      sessionId: context.sessionId,
       sessionIdentityRevision: context.sessionIdentityRevision,
       subjectRevision: context.subjectRevision,
       deliveryRevision: context.deliveryRevision,
@@ -382,6 +397,18 @@ export function createMemoryAuthorizationConformanceCases(): MemoryAuthorization
   cases.push({
     ...staleContext,
     context: { ...staleContext.context, subjectRevision: "subject-revision-2" },
+  });
+
+  const staleRun = baseScenario("plan-run-binding");
+  cases.push({
+    ...staleRun,
+    context: { ...staleRun.context, runId: "run-2" },
+  });
+
+  const staleSession = baseScenario("plan-session-binding");
+  cases.push({
+    ...staleSession,
+    context: { ...staleSession.context, sessionId: "session-2" },
   });
 
   const expiredPlan = baseScenario("plan-expiry");
@@ -450,11 +477,23 @@ function decisionsMatch(
   if (actual.allowed !== expected.allowed || actual.reasonCode !== expected.reasonCode) {
     return false;
   }
-  return !actual.allowed || actual.handle === (expected as { handle: string }).handle;
+  return true;
+}
+
+function hasOpaqueAuthorizedHandle(decision: MemoryAuthorizationConformanceDecision): boolean {
+  return decision.allowed && typeof decision.handle === "string" && decision.handle.length > 0;
 }
 
 function isSafeDeniedDecision(decision: MemoryAuthorizationConformanceDecision): boolean {
-  return !decision.allowed && Object.keys(decision).toSorted().join("\0") === "allowed\0reasonCode";
+  const prototype = Object.getPrototypeOf(decision);
+  const ownKeys = Reflect.ownKeys(decision);
+  return (
+    (prototype === Object.prototype || prototype === null) &&
+    ownKeys.length === 2 &&
+    ownKeys.includes("allowed") &&
+    ownKeys.includes("reasonCode") &&
+    !decision.allowed
+  );
 }
 
 /** Runs the reusable suite without taking a dependency on a specific test framework. */
@@ -475,6 +514,9 @@ export async function runMemoryAuthorizationConformanceSuite(
       const expected = testCase.expected[resource.resourceId];
       if (!expected || !decisionsMatch(decision, expected)) {
         failures.push({ caseId: testCase.id, invariant: "decision" });
+      }
+      if (decision.allowed && !hasOpaqueAuthorizedHandle(decision)) {
+        failures.push({ caseId: testCase.id, invariant: "authorized-handle" });
       }
       if (!decision.allowed && !isSafeDeniedDecision(decision)) {
         failures.push({ caseId: testCase.id, invariant: "denial-non-disclosure" });

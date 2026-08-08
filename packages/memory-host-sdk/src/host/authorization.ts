@@ -8,7 +8,7 @@ import type {
 /** Version shared by every serializable multiplayer-memory authorization shape. */
 export const MEMORY_AUTHORIZATION_CONTRACT_VERSION = 1 as const;
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
   : T extends readonly (infer U)[]
     ? readonly DeepReadonly<U>[]
@@ -248,6 +248,13 @@ export type AuthorizedResourceHandle = DeepReadonly<{
   expiresAt: string;
 }>;
 
+/** Search hit whose exact-read continuation is bound to the current plan and revision. */
+export type AuthorizedMemorySearchResult = DeepReadonly<
+  MemorySearchResult & {
+    resourceHandle: AuthorizedResourceHandle;
+  }
+>;
+
 export type AuthorizedMemoryPlan = DeepReadonly<{
   version: 1;
   planId: string;
@@ -283,23 +290,18 @@ export type AuthorizedMemoryMutation =
   | (AuthorizedMemoryContentMutation &
       Readonly<{
         kind: "import" | "deposit";
-        placementHandle: string;
       }>)
   | (AuthorizedMemoryContentMutation &
       Readonly<{
         kind: "derive";
-        placementHandle: string;
         sourceHandles: readonly AuthorizedResourceHandle[];
         sourcePolicySetId: string;
       }>)
-  | Readonly<{
-      version: 1;
-      kind: "project" | "publish";
-      mutationId: string;
-      idempotencyKey: string;
-      sourceHandles: readonly AuthorizedResourceHandle[];
-      destinationHandle: string;
-    }>
+  | (AuthorizedMemoryContentMutation &
+      Readonly<{
+        kind: "project" | "publish";
+        sourceHandles: readonly AuthorizedResourceHandle[];
+      }>)
   | Readonly<{
       version: 1;
       kind: "delete";
@@ -376,7 +378,7 @@ export interface AuthorizedMemoryRuntime {
     sources?: readonly MemorySource[];
     limit: number;
     signal?: AbortSignal;
-  }): Promise<AuthorizedMemoryResultEnvelope<readonly MemorySearchResult[]>>;
+  }): Promise<AuthorizedMemoryResultEnvelope<readonly AuthorizedMemorySearchResult[]>>;
   readAuthorized(params: {
     context: MemoryAccessContext;
     plan: AuthorizedMemoryPlan;
