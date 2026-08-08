@@ -217,6 +217,10 @@ const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
 // Route-first parsing accepts JSON before Commander registration is reached.
 const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
 
+// These commands carry no --json flag because a JSON document on stdout is
+// their only output mode, so the flag would be a no-op rather than a choice.
+const JSON_OUTPUT_ALWAYS = new Set(["mcp call"]);
+
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");
   const ctx = createProgramContext();
@@ -253,7 +257,8 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   return (
     hasOwnJsonOption(command) ||
     (JSON_OUTPUT_INHERITED_FROM_PARENT.has(path) && hasAncestorJsonOption(command)) ||
-    JSON_OUTPUT_ROUTE_FIRST.has(path)
+    JSON_OUTPUT_ROUTE_FIRST.has(path) ||
+    JSON_OUTPUT_ALWAYS.has(path)
   );
 }
 
