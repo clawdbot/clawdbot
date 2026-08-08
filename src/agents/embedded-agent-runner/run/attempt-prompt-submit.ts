@@ -89,13 +89,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
   }
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
 
-  const installProviderPromptHistoryTransform = (): (() => void) => {
+  const installProviderPromptAdmission = (): (() => void) => {
     let providerCalls = 0;
-    let pendingDispatchCommit: (() => void) | undefined;
+    let pendingAdmissionCommit: (() => void) | undefined;
     const providerPromptState = getProviderPromptState(attempt.runId);
     const cleanup = installProviderPromptContextAdmission(
       providerPromptState,
-      (_model, context, accountingContext) => {
+      (context, accountingContext) => {
         const admission = admitProviderPrompt({
           context,
           accountingContext,
@@ -120,14 +120,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
         const admittedProjectionState = admission.projectionState;
         // Adopt the admitted candidate only once the provider response arrives,
         // so a failed request cannot record an unsent prompt as sent.
-        pendingDispatchCommit = () => {
+        pendingAdmissionCommit = () => {
           replaceToolResultPromptProjectionState(
             input.toolResultPromptProjectionState,
             admittedProjectionState,
           );
           providerCalls += 1;
-          // Mark the current turn sent at provider dispatch so late media appends
-          // instead of rewriting its prompt-cache slot (#99495).
+          // Late media must append after the provider accepts the original turn (#99495).
           markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
           const recorder = attempt.userTurnTranscriptRecorder;
           if (
@@ -140,9 +139,13 @@ export async function submitEmbeddedAttemptPrompt(input: {
         return admission.context;
       },
       () => {
-        const commit = pendingDispatchCommit;
-        pendingDispatchCommit = undefined;
-        commit?.();
+        const commit = pendingAdmissionCommit;
+        pendingAdmissionCommit = undefined;
+        if (!commit) {
+          return false;
+        }
+        commit();
+        return true;
       },
     );
     return cleanup;
@@ -175,7 +178,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       captureCurrentPromptForModel = true;
     }
   };
-  const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
+  const cleanupProviderPromptAdmission = installProviderPromptAdmission();
   try {
     if (input.runtimeOnly) {
       await input.promptActiveSession(input.transcriptPrompt, {
@@ -207,7 +210,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       input.onSteeringAcknowledged();
     }
   } finally {
-    cleanupProviderPromptHistoryTransform();
+    cleanupProviderPromptAdmission();
     cleanupModelPromptTransform();
   }
 }

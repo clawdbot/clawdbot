@@ -364,7 +364,7 @@ describe("provider prompt state", () => {
     });
     const removeAdmission = installProviderPromptContextAdmission(
       state,
-      (_model, providerContext, accountingContext) => {
+      (providerContext, accountingContext) => {
         const admission = admitProviderPrompt({
           context: providerContext,
           accountingContext,
@@ -459,11 +459,11 @@ describe("provider prompt state", () => {
     clearProviderPromptState(runId);
   });
 
-  it("runs the installed dispatch hook only after the provider responds", async () => {
-    const runId = "dispatch-hook-boundary";
+  it("runs the acknowledgement hook only after the provider responds", async () => {
+    const runId = "acknowledgement-hook-boundary";
     const state = getProviderPromptState(runId);
     const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
-    const dispatch = vi.fn();
+    const acknowledged = vi.fn(() => true);
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.({ input: "raw", model: model.id }, model);
       await options?.onResponse?.({ status: 200, headers: {} }, model);
@@ -478,13 +478,13 @@ describe("provider prompt state", () => {
     });
     const removeHooks = installProviderPromptContextAdmission(
       state,
-      (_model, providerContext) => providerContext,
-      dispatch,
+      (providerContext) => providerContext,
+      acknowledged,
     );
 
     const first = await wrapped(model, context);
     await first.result();
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(acknowledged).toHaveBeenCalledTimes(1);
     expect(recordEvent).toHaveBeenCalledWith(
       "provider.prompt.admitted",
       expect.objectContaining({ byteWeight: expect.any(Number) }),
@@ -492,23 +492,23 @@ describe("provider prompt state", () => {
 
     await expect(
       wrapped(model, context, {
-        onPayload: () => {
-          throw new Error("payload hook failed");
+        onResponse: () => {
+          throw new Error("response observer failed");
         },
       }),
-    ).rejects.toThrow("payload hook failed");
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(recordEvent).toHaveBeenCalledTimes(1);
+    ).rejects.toThrow("response observer failed");
+    expect(acknowledged).toHaveBeenCalledTimes(2);
+    expect(recordEvent).toHaveBeenCalledTimes(2);
 
     removeHooks();
     clearProviderPromptState(runId);
   });
 
-  it("does not run the dispatch hook when request setup fails after the payload hook", async () => {
-    const runId = "dispatch-hook-setup-failure";
+  it("does not acknowledge a request that fails after the payload hook", async () => {
+    const runId = "acknowledgement-hook-setup-failure";
     const state = getProviderPromptState(runId);
     const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
-    const dispatch = vi.fn();
+    const acknowledged = vi.fn(() => true);
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.({ input: "raw", model: model.id }, model);
       throw new Error("connection refused");
@@ -522,51 +522,15 @@ describe("provider prompt state", () => {
     });
     const removeHooks = installProviderPromptContextAdmission(
       state,
-      (_model, providerContext) => providerContext,
-      dispatch,
+      (providerContext) => providerContext,
+      acknowledged,
     );
 
     await expect(wrapped(model, context)).rejects.toThrow("connection refused");
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(acknowledged).not.toHaveBeenCalled();
     expect(recordEvent).not.toHaveBeenCalledWith("provider.prompt.admitted", expect.anything());
 
     removeHooks();
-    clearProviderPromptState(runId);
-  });
-
-  it("flat-rates base64 media blobs in the final payload instead of counting serialized bytes", async () => {
-    const runId = "final-payload-media";
-    const state = getProviderPromptState(runId);
-    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
-    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
-      await options?.onPayload?.({ input: [] }, model);
-      return createResultStream("stop");
-    });
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 8_000,
-    });
-
-    const dataUrlImage = `data:image/png;base64,${"A".repeat(2_000_000)}`;
-    const first = await wrapped(model, context, {
-      onPayload: () => ({
-        input: [{ type: "input_image", image_url: dataUrlImage }],
-        model: model.id,
-      }),
-    });
-    await first.result();
-
-    const second = await wrapped(model, context, {
-      onPayload: () => ({
-        contents: [
-          { parts: [{ inline_data: { mime_type: "image/png", data: "B".repeat(2_000_000) } }] },
-        ],
-      }),
-    });
-    await second.result();
-
-    expect(transport).toHaveBeenCalledTimes(2);
     clearProviderPromptState(runId);
   });
 
@@ -620,36 +584,6 @@ describe("provider prompt state", () => {
     const result = await wrapped(model, context, {
       onPayload: () => ({
         messages: [{ role: "user", content: "x".repeat(100_000) }],
-        model: model.id,
-      }),
-    });
-    await result.result();
-
-    expect(transport).toHaveBeenCalledTimes(1);
-    clearProviderPromptState(runId);
-  });
-
-  it("admits a final payload whose raw estimate stays below the context window", async () => {
-    const runId = "final-payload-within-window";
-    const state = getProviderPromptState(runId);
-    const context = {
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "q".repeat(100_000), timestamp: 1 }],
-      tools: [],
-    } as Context;
-    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
-      await options?.onPayload?.({ input: "raw", model: model.id }, model);
-      return createResultStream("stop");
-    });
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 40_000,
-    });
-
-    const result = await wrapped(model, context, {
-      onPayload: () => ({
-        messages: [{ role: "user", content: "q".repeat(100_000) }],
         model: model.id,
       }),
     });

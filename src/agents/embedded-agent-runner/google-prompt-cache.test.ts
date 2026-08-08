@@ -368,7 +368,7 @@ describe("google prompt cache", () => {
     const runId = "google-cache-admission-accounting";
     const state = getProviderPromptState(runId);
     const innerStreamFn = vi.fn(() => "stream" as never);
-    const admission = vi.fn((_model, context, accountingContext) => {
+    const admission = vi.fn((context, accountingContext) => {
       expect(accountingContext).toEqual({
         systemPrompt: "Follow policy.",
         tools: [

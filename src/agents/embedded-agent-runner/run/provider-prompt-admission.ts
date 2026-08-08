@@ -20,12 +20,18 @@ type ProviderPromptAdmission =
       status: "ready";
       context: ProviderContext;
       projectionState: ToolResultPromptProjectionState;
-      truncatedCount: number;
     }
   | {
       status: "recovery_required";
       request: MidTurnPrecheckRequest;
     };
+
+function ready(
+  context: ProviderContext,
+  projectionState: ToolResultPromptProjectionState,
+): ProviderPromptAdmission {
+  return { status: "ready", context, projectionState };
+}
 
 function projectProviderContext(params: {
   context: ProviderContext;
@@ -34,7 +40,7 @@ function projectProviderContext(params: {
   toolResultAggregateMaxChars: number;
   projectionState: ToolResultPromptProjectionState;
   protectTrailingToolResults?: boolean;
-}) {
+}): ProviderContext {
   const messages = params.context.messages as AgentMessage[];
   const projected = truncateOversizedToolResultsInMessages(
     messages,
@@ -44,13 +50,9 @@ function projectProviderContext(params: {
     params.projectionState,
     params.protectTrailingToolResults,
   );
-  return {
-    context:
-      projected.messages === messages
-        ? params.context
-        : ({ ...params.context, messages: projected.messages } as ProviderContext),
-    truncatedCount: projected.truncatedCount,
-  };
+  return projected.messages === messages
+    ? params.context
+    : ({ ...params.context, messages: projected.messages } as ProviderContext);
 }
 
 function measureProviderContext(params: {
@@ -109,7 +111,7 @@ function toRecoveryRequest(
 
 /**
  * Projects and measures the exact context passed to a provider. Projection state is returned as a
- * candidate and must only be adopted when the caller dispatches the admitted context.
+ * candidate and must only be adopted after the provider accepts that context.
  */
 export function admitProviderPrompt(params: {
   context: ProviderContext;
@@ -122,7 +124,7 @@ export function admitProviderPrompt(params: {
   projectionState: ToolResultPromptProjectionState;
 }): ProviderPromptAdmission {
   const defaultProjectionState = cloneToolResultPromptProjectionState(params.projectionState);
-  const defaultProjection = projectProviderContext({
+  const defaultContext = projectProviderContext({
     context: params.context,
     contextTokenBudget: params.contextTokenBudget,
     toolResultMaxChars: params.toolResultMaxChars,
@@ -130,56 +132,36 @@ export function admitProviderPrompt(params: {
     projectionState: defaultProjectionState,
   });
   if (!params.midTurnPrecheckEnabled) {
-    return {
-      status: "ready",
-      context: defaultProjection.context,
-      projectionState: defaultProjectionState,
-      truncatedCount: defaultProjection.truncatedCount,
-    };
+    return ready(defaultContext, defaultProjectionState);
   }
 
   const defaultPressure = measureProviderContext({
-    context: defaultProjection.context,
+    context: defaultContext,
     accountingContext: params.accountingContext,
     contextTokenBudget: params.contextTokenBudget,
     reserveTokens: params.reserveTokens,
     toolResultMaxChars: params.toolResultMaxChars,
   });
   if (defaultPressure.route === "fits") {
-    return {
-      status: "ready",
-      context: defaultProjection.context,
-      projectionState: defaultProjectionState,
-      truncatedCount: defaultProjection.truncatedCount,
-    };
+    return ready(defaultContext, defaultProjectionState);
   }
 
   const aggregateBudget = defaultPressure.toolResultAggregateBudgetChars;
   if (aggregateBudget === undefined || defaultPressure.toolResultReducibleChars <= 0) {
-    // Transcript compaction cannot reduce system instructions or tool schemas. Let the provider's
-    // authoritative tokenizer decide instead of entering a synthetic compaction loop that cannot
-    // make this context smaller.
-    if (
-      isProviderPressureIndependentOfTranscript({
-        context: defaultProjection.context,
-        accountingContext: params.accountingContext,
-        promptBudgetBeforeReserve: defaultPressure.promptBudgetBeforeReserve,
-      })
-    ) {
-      return {
-        status: "ready",
-        context: defaultProjection.context,
-        projectionState: defaultProjectionState,
-        truncatedCount: defaultProjection.truncatedCount,
-      };
-    }
-    return { status: "recovery_required", request: toRecoveryRequest(defaultPressure) };
+    // Compaction cannot reduce system instructions or tool schemas. Avoid a retry loop that cannot
+    // change them; the final-payload guard still rejects a clear raw overage before transport.
+    return isProviderPressureIndependentOfTranscript({
+      context: defaultContext,
+      accountingContext: params.accountingContext,
+      promptBudgetBeforeReserve: defaultPressure.promptBudgetBeforeReserve,
+    })
+      ? ready(defaultContext, defaultProjectionState)
+      : { status: "recovery_required", request: toRecoveryRequest(defaultPressure) };
   }
 
-  // Reproject from the original context and state. A rejected candidate must not poison the
-  // session's prompt-cache projection state or become the input to the next candidate.
+  // Reproject from the original state so a rejected candidate cannot affect the next attempt.
   const pressureProjectionState = cloneToolResultPromptProjectionState(params.projectionState);
-  const pressureProjection = projectProviderContext({
+  const pressureContext = projectProviderContext({
     context: params.context,
     contextTokenBudget: params.contextTokenBudget,
     toolResultMaxChars: params.toolResultMaxChars,
@@ -188,33 +170,21 @@ export function admitProviderPrompt(params: {
     protectTrailingToolResults: false,
   });
   const projectedPressure = measureProviderContext({
-    context: pressureProjection.context,
+    context: pressureContext,
     accountingContext: params.accountingContext,
     contextTokenBudget: params.contextTokenBudget,
     reserveTokens: params.reserveTokens,
     toolResultMaxChars: params.toolResultMaxChars,
   });
-  if (projectedPressure.route === "fits") {
-    return {
-      status: "ready",
-      context: pressureProjection.context,
-      projectionState: pressureProjectionState,
-      truncatedCount: pressureProjection.truncatedCount,
-    };
-  }
   if (
+    projectedPressure.route === "fits" ||
     isProviderPressureIndependentOfTranscript({
-      context: pressureProjection.context,
+      context: pressureContext,
       accountingContext: params.accountingContext,
       promptBudgetBeforeReserve: projectedPressure.promptBudgetBeforeReserve,
     })
   ) {
-    return {
-      status: "ready",
-      context: pressureProjection.context,
-      projectionState: pressureProjectionState,
-      truncatedCount: pressureProjection.truncatedCount,
-    };
+    return ready(pressureContext, pressureProjectionState);
   }
   return { status: "recovery_required", request: toRecoveryRequest(projectedPressure) };
 }

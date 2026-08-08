@@ -13,7 +13,6 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { estimateProviderPayloadTokenPressure } from "./provider-payload-pressure.js";
 
 type ProviderPromptSnapshot = {
-  scopeDigest: string;
   digest: string;
   byteWeight: number;
 };
@@ -22,16 +21,11 @@ export type ProviderPromptState = {
   lastAttempt?: ProviderPromptSnapshot;
   lastRejected?: ProviderPromptSnapshot;
   contextAdmission?: (
-    model: Model,
     context: Context,
     accountingContext?: ProviderPromptAccountingContext,
   ) => Context;
-  /** Runs once the final payload passed every pre-dispatch check, right before transport send. */
-  promptDispatch?: () => void;
-  /** Set when the current attempt's transport invoked its payload hook at least once. */
-  attemptPayloadObserved?: boolean;
-  /** Observation result of the previous attempt; lets admission settle silent transports. */
-  previousAttemptPayloadObserved?: boolean;
+  /** Commits the admitted candidate and reports whether one was pending. */
+  promptAcknowledged?: () => boolean;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
@@ -61,8 +55,6 @@ class ProviderPromptFinalPayloadOverflowError extends Error {
   }
 }
 
-const digest = (serialized: string) => crypto.createHash("sha256").update(serialized).digest("hex");
-
 /** Returns run-local retry state; restarts and new run ids intentionally have no baseline. */
 export function getProviderPromptState(runId: string): ProviderPromptState {
   const state = providerPromptStates.get(runId) ?? {};
@@ -74,22 +66,22 @@ export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
 }
 
-/** Installs run-scoped admission and dispatch hooks at the innermost provider boundary. */
+/** Installs run-scoped admission and acknowledgement hooks at the provider boundary. */
 export function installProviderPromptContextAdmission(
   state: ProviderPromptState,
   admission: NonNullable<ProviderPromptState["contextAdmission"]>,
-  dispatch?: ProviderPromptState["promptDispatch"],
+  acknowledged?: ProviderPromptState["promptAcknowledged"],
 ): () => void {
   const previousAdmission = state.contextAdmission;
-  const previousDispatch = state.promptDispatch;
+  const previousAcknowledged = state.promptAcknowledged;
   state.contextAdmission = admission;
-  state.promptDispatch = dispatch;
+  state.promptAcknowledged = acknowledged;
   return () => {
     if (state.contextAdmission === admission) {
       state.contextAdmission = previousAdmission;
     }
-    if (state.promptDispatch === dispatch) {
-      state.promptDispatch = previousDispatch;
+    if (state.promptAcknowledged === acknowledged) {
+      state.promptAcknowledged = previousAcknowledged;
     }
   };
 }
@@ -109,8 +101,7 @@ function snapshotProviderPrompt(params: {
   });
   const serialized = stableStringify(params.payload);
   return {
-    scopeDigest: digest(scope),
-    digest: digest(serialized),
+    digest: crypto.createHash("sha256").update(scope).update("\0").update(serialized).digest("hex"),
     byteWeight: Buffer.byteLength(serialized),
   };
 }
@@ -121,7 +112,7 @@ function assertProviderPromptRetryProgress(
   candidate: ProviderPromptSnapshot,
 ): void {
   const rejected = state.lastRejected;
-  if (rejected?.scopeDigest === candidate.scopeDigest && rejected.digest === candidate.digest) {
+  if (rejected?.digest === candidate.digest) {
     throw new ProviderPromptRetryNoProgressError(candidate.byteWeight);
   }
 }
@@ -171,19 +162,16 @@ export function wrapStreamFnWithProviderPromptState(params: {
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
-    params.state.previousAttemptPayloadObserved = params.state.attemptPayloadObserved;
-    params.state.attemptPayloadObserved = false;
     const accountingContext = readProviderPromptAccountingContext(options);
     const admittedContext =
       context && typeof context === "object" && params.state.contextAdmission
-        ? params.state.contextAdmission(model, context, accountingContext)
+        ? params.state.contextAdmission(context, accountingContext)
         : context;
     const originalOnPayload = options?.onPayload;
     const originalOnResponse = options?.onResponse;
     const observedOptions = withoutProviderPromptAccountingContext({
       ...options,
       onPayload: async (payload, payloadModel) => {
-        params.state.attemptPayloadObserved = true;
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
         const snapshot = snapshotProviderPrompt({
@@ -201,13 +189,13 @@ export function wrapStreamFnWithProviderPromptState(params: {
         return finalPayload;
       },
       onResponse: async (response, responseModel) => {
+        // The provider accepted the request, so this candidate is no longer speculative.
+        if (params.state.promptAcknowledged?.()) {
+          params.recordEvent?.("provider.prompt.admitted", {
+            byteWeight: params.state.lastAttempt?.byteWeight,
+          });
+        }
         await originalOnResponse?.(response, responseModel);
-        // The provider answered, so the request provably left the process. Admitted
-        // candidates may only be adopted from this point on.
-        params.state.promptDispatch?.();
-        params.recordEvent?.("provider.prompt.admitted", {
-          byteWeight: params.state.lastAttempt?.byteWeight,
-        });
       },
     });
     if (params.recordEvent) {

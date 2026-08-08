@@ -191,7 +191,6 @@ describe("provider prompt admission", () => {
       expect(result.context.systemPrompt).toBe(context.systemPrompt);
       expect(result.context.tools).toBe(context.tools);
       expect(result.context.messages).not.toBe(messages);
-      expect(result.truncatedCount).toBeGreaterThan(0);
       expect(result.projectionState.replacements.size).toBeGreaterThan(0);
     }
     expect(

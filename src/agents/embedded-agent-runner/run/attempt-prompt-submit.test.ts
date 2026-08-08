@@ -401,7 +401,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
   });
 
-  it("does not record the prompt as sent when request setup fails after the payload is accepted", async () => {
+  it("does not record the prompt as sent when setup fails after payload preparation", async () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     activeSession.agent.state.messages = [
@@ -436,85 +436,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
             } as never,
           ),
         ).rejects.toThrow("connection refused");
-      },
-    });
-
-    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(false);
-  });
-
-  it("does not record an unsent prompt as sent when a payload hook fails before dispatch", async () => {
-    const { activeSession } = createSession();
-    const input = createBaseInput();
-    activeSession.agent.state.messages = [
-      {
-        role: "user",
-        content: "first turn",
-        idempotencyKey: "turn-1",
-        timestamp: 1,
-      } as AgentMessage,
-    ] as AgentMessage[];
-    const dispatchSettled = vi.fn();
-    activeSession.agent.streamFn = wrapProviderBoundary((async (
-      _model: unknown,
-      _context: unknown,
-      options: unknown,
-    ) => {
-      await (
-        options as { onPayload?: (payload: unknown, model: unknown) => Promise<unknown> }
-      ).onPayload?.({ input: "raw" }, {});
-      dispatchSettled();
-      return undefined as never;
-    }) as unknown as StreamFn);
-
-    await submitEmbeddedAttemptPrompt({
-      ...input,
-      activeSession,
-      promptActiveSession: async () => {
-        await expect(
-          activeSession.agent.streamFn(
-            {} as never,
-            { messages: activeSession.messages } as never,
-            {
-              onPayload: () => {
-                throw new Error("payload hook failed");
-              },
-            } as never,
-          ),
-        ).rejects.toThrow("payload hook failed");
-      },
-    });
-
-    expect(dispatchSettled).not.toHaveBeenCalled();
-    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(false);
-  });
-
-  it("does not record an unsent prompt as sent when the provider fails before payload creation", async () => {
-    const { activeSession } = createSession();
-    const input = createBaseInput();
-    activeSession.agent.state.messages = [
-      {
-        role: "user",
-        content: "failed turn",
-        idempotencyKey: "turn-1",
-        timestamp: 1,
-      } as AgentMessage,
-    ] as AgentMessage[];
-    activeSession.agent.streamFn = wrapProviderBoundary((async () => {
-      throw new Error("provider failed before payload");
-    }) as unknown as StreamFn);
-
-    await submitEmbeddedAttemptPrompt({
-      ...input,
-      activeSession,
-      promptActiveSession: async () => {
-        // AgentCore turns executor failures into an assistant error and completes the turn.
-        await Promise.resolve(
-          activeSession.agent.streamFn(
-            {} as never,
-            { messages: activeSession.messages } as never,
-            {} as never,
-          ),
-        ).catch(() => undefined);
       },
     });
 
