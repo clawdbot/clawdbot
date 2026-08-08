@@ -281,7 +281,9 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
     `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` selects the Telegram QA scenario to
     sample; the supported RTT target is `channel-canary`. The package runner
-    appends that portable canary once after taxonomy-backed release selection.
+    promotes that portable canary once to the first position, making
+    canary+RTT the preflight before the remaining taxonomy-backed fail-fast
+    release scenarios.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus

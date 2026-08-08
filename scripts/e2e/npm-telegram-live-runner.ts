@@ -98,14 +98,17 @@ function createRoundTripProbe(
   };
 }
 
-function includeRoundTripProbeScenario(
+function prioritizeRoundTripProbeScenario(
   scenarioIds: readonly string[],
   options: ReturnType<typeof resolveRttOptions>,
 ) {
-  if (!options || scenarioIds.includes(options.scenarioId)) {
+  if (!options) {
     return [...scenarioIds];
   }
-  return [...scenarioIds, options.scenarioId];
+  return [
+    options.scenarioId,
+    ...scenarioIds.filter((scenarioId) => scenarioId !== options.scenarioId),
+  ];
 }
 
 async function shouldFailPackageTelegramRun(
@@ -190,7 +193,7 @@ async function main() {
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds,
-    resolvedScenarioIds: includeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
+    resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
     roundTripProbe: createRoundTripProbe(rttOptions),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
@@ -237,7 +240,7 @@ export const testing = {
   resolveCredentialRole,
   resolveCredentialSource,
   createRoundTripProbe,
-  includeRoundTripProbeScenario,
+  prioritizeRoundTripProbeScenario,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,

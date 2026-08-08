@@ -1,14 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard }));
+
 import {
   buildTelegramQaConfig,
+  callTelegramApi,
   isRecoverableTelegramQaPollError,
   normalizeTelegramObservedMessage,
   parseTelegramQaCredentialPayload,
+  resolveTelegramPollRetryDelayMs,
   resolveTelegramQaRuntimeEnv,
+  TelegramQaApiError,
+  waitForTelegramPollRetryDelay,
   waitForTelegramChannelRunning,
 } from "./telegram-api.runtime.js";
 
 describe("Telegram QA API boundary", () => {
+  beforeEach(() => {
+    fetchWithSsrFGuard.mockReset();
+  });
+
   it("parses env and leased credential payloads", () => {
     expect(
       resolveTelegramQaRuntimeEnv({
@@ -144,5 +157,118 @@ describe("Telegram QA API boundary", () => {
   it("classifies transient polling failures", () => {
     expect(isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);
     expect(isRecoverableTelegramQaPollError(new Error("Telegram unauthorized"))).toBe(false);
+  });
+
+  it.each([
+    { errorCode: 400, description: "Bad Request" },
+    { errorCode: 401, description: "Unauthorized" },
+    { errorCode: 404, description: "Not Found" },
+    {
+      errorCode: 409,
+      description:
+        "Conflict: terminated by other getUpdates request; make sure that only one bot instance is running",
+    },
+  ])("preserves typed terminal Telegram $errorCode errors", async ({ errorCode, description }) => {
+    const release = vi.fn();
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          ok: false,
+          error_code: errorCode,
+          description,
+          parameters: { retry_after: 3 },
+        }),
+        { status: errorCode },
+      ),
+      release,
+    });
+
+    const error = await callTelegramApi("placeholder", "getUpdates").catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(TelegramQaApiError);
+    expect(error).toMatchObject({
+      method: "getUpdates",
+      error_code: errorCode,
+      description,
+      parameters: { retry_after: 3 },
+      status: errorCode,
+    });
+    expect(isRecoverableTelegramQaPollError(error)).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([429, 500, 502])("retries typed transient Telegram %s errors", (errorCode) => {
+    expect(
+      isRecoverableTelegramQaPollError(
+        new TelegramQaApiError(
+          "getUpdates",
+          errorCode,
+          "transient Telegram failure",
+          undefined,
+          errorCode,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("honors retry_after and caps exponential poll backoff", () => {
+    const rateLimit = new TelegramQaApiError(
+      "getUpdates",
+      429,
+      "Too Many Requests",
+      { retry_after: 3 },
+      429,
+    );
+    const serverError = new TelegramQaApiError("getUpdates", 502, "Bad Gateway", undefined, 502);
+
+    expect(resolveTelegramPollRetryDelayMs(rateLimit, 7)).toBe(3_000);
+    expect(
+      [1, 2, 3, 4, 5].map((attempt) => resolveTelegramPollRetryDelayMs(serverError, attempt)),
+    ).toEqual([250, 500, 1_000, 2_000, 2_000]);
+    expect(
+      [1, 2, 3, 4, 5].map((attempt) =>
+        resolveTelegramPollRetryDelayMs(new Error("fetch failed"), attempt),
+      ),
+    ).toEqual([250, 500, 1_000, 2_000, 2_000]);
+  });
+
+  it("aborts an in-flight Telegram poll retry delay", async () => {
+    const controller = new AbortController();
+    const waiting = waitForTelegramPollRetryDelay(
+      new TelegramQaApiError("getUpdates", 429, "Too Many Requests", { retry_after: 60 }, 429),
+      1,
+      controller.signal,
+    );
+
+    controller.abort(new Error("observer cleanup"));
+
+    await expect(waiting).rejects.toThrow("aborted");
+  });
+
+  it("preserves a non-JSON HTTP error as a typed Telegram status and releases transport", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("<html>bad gateway</html>", {
+        headers: { "content-type": "text/html" },
+        status: 502,
+      }),
+      release,
+    });
+
+    const error = await callTelegramApi("placeholder", "getUpdates").catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(TelegramQaApiError);
+    expect(error).toMatchObject({
+      method: "getUpdates",
+      error_code: 502,
+      description: "getUpdates failed with status 502",
+      status: 502,
+    });
+    expect(isRecoverableTelegramQaPollError(error)).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 });

@@ -408,11 +408,11 @@ describe("package Telegram live Docker E2E", () => {
 
   it.each([
     {
-      name: "appends the default canary after taxonomy-backed release selection",
+      name: "promotes the default canary before taxonomy-backed release selection",
       env: {},
       requested: [],
       resolved: ["telegram-status-command"],
-      expected: ["telegram-status-command", "channel-canary"],
+      expected: ["channel-canary", "telegram-status-command"],
     },
     {
       name: "keeps focused non-RTT selections unchanged",
@@ -422,23 +422,23 @@ describe("package Telegram live Docker E2E", () => {
       expected: ["telegram-status-command"],
     },
     {
-      name: "appends an explicitly requested RTT canary",
+      name: "promotes an explicitly requested RTT canary",
       env: { OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "channel-canary" },
       requested: ["telegram-status-command"],
       resolved: ["telegram-status-command"],
-      expected: ["telegram-status-command", "channel-canary"],
+      expected: ["channel-canary", "telegram-status-command"],
     },
     {
       name: "does not duplicate an already selected RTT canary",
       env: {},
-      requested: ["channel-canary", "telegram-status-command"],
-      resolved: ["channel-canary", "telegram-status-command"],
+      requested: ["telegram-status-command", "channel-canary"],
+      resolved: ["telegram-status-command", "channel-canary"],
       expected: ["channel-canary", "telegram-status-command"],
     },
   ])("$name", ({ env, requested, resolved, expected }) => {
     const options = testing.resolveRttOptions(env, requested);
 
-    expect(testing.includeRoundTripProbeScenario(resolved, options)).toEqual(expected);
+    expect(testing.prioritizeRoundTripProbeScenario(resolved, options)).toEqual(expected);
   });
 
   it("rejects retired RTT scenario ids", () => {
