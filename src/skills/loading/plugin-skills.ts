@@ -100,11 +100,15 @@ export function resolvePluginSkillDirs(params: {
         log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
-      if (seen.has(candidate)) {
-        continue;
+      const candidates =
+        record.bundleFormat === "agent" ? collectAgentSkillTargets(candidate) : [candidate];
+      for (const resolvedCandidate of candidates) {
+        if (seen.has(resolvedCandidate)) {
+          continue;
+        }
+        seen.add(resolvedCandidate);
+        resolved.push(resolvedCandidate);
       }
-      seen.add(candidate);
-      resolved.push(candidate);
     }
   }
 
@@ -113,6 +117,23 @@ export function resolvePluginSkillDirs(params: {
   });
 
   return resolved;
+}
+
+function collectAgentSkillTargets(skillsRoot: string): string[] {
+  const targets: string[] = [];
+  const entries = walkDirectorySync(skillsRoot, {
+    maxDepth: 1,
+    symlinks: "skip",
+    include: (entry) => entry.kind === "directory",
+  }).entries;
+  for (const entry of entries) {
+    if (hasPublishableSkillFile({ skillDir: entry.path, rootDir: skillsRoot })) {
+      targets.push(entry.path);
+      continue;
+    }
+    log.warn(`agent plugin skill skipped because SKILL.md is missing or invalid: ${entry.path}`);
+  }
+  return targets;
 }
 
 function resolveDefaultPluginSkillsDir(): string {

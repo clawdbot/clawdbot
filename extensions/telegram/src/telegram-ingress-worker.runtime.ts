@@ -1,5 +1,6 @@
 // Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   computeBackoff,
@@ -69,13 +70,6 @@ type TelegramIngressRuntimeDeps = {
 type TelegramIngressWorkerRuntimeData = TelegramIngressWorkerOptions & {
   runtime: typeof TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER;
 };
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || err.name;
-  }
-  return String(err);
-}
 
 function readTelegramErrorCode(err: unknown): number | undefined {
   if (err && typeof err === "object" && "error_code" in err) {

@@ -6,6 +6,7 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { readDraftCloudProfiles } from "./discovery.ts";
@@ -45,10 +46,6 @@ const PENDING_PLACEMENT_STATES = new Set([
   "reconciling",
 ]);
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isAmbiguousDispatchError(error: unknown): boolean {
   if (error instanceof GatewayRequestError) {
     return error.retryable || error.gatewayCode === "UNAVAILABLE";
@@ -70,7 +67,10 @@ async function readPlacement(
     return { status: "read", placement: described?.session?.placement };
   } catch (error) {
     if (!isAmbiguousDispatchError(error)) {
-      return { status: "rejected", error: errorMessage(error) };
+      return {
+        status: "rejected",
+        error: formatUiError(error),
+      };
     }
     return { status: "unavailable" };
   }
@@ -95,7 +95,7 @@ async function cancelActivePlacement(
     await client.request("environments.destroy", { environmentId });
     return undefined;
   } catch (error) {
-    return errorMessage(error);
+    return formatUiError(error);
   }
 }
 
@@ -231,7 +231,7 @@ export async function deleteCloudDraftSession(
     await client.request("sessions.delete", { key, agentId, deleteTranscript: true });
     return undefined;
   } catch (error) {
-    return errorMessage(error);
+    return formatUiError(error);
   }
 }
 
@@ -333,7 +333,7 @@ export async function startCloudInitialTurn(
         isCurrent,
       );
     } catch (error) {
-      dispatchError = errorMessage(error);
+      dispatchError = formatUiError(error);
       if (!isAmbiguousDispatchError(error)) {
         return { status: "dispatch-rejected", error: dispatchError };
       }
@@ -430,9 +430,17 @@ export async function startCloudInitialTurn(
       });
       return cleanupError
         ? { status: "cleanup-rejected", error: cleanupError, messageId }
-        : { status: "send-definitive-rejected", error: errorMessage(error), messageId };
+        : {
+            status: "send-definitive-rejected",
+            error: formatUiError(error),
+            messageId,
+          };
     }
-    return { status: "send-rejected", error: errorMessage(error), messageId };
+    return {
+      status: "send-rejected",
+      error: formatUiError(error),
+      messageId,
+    };
   }
 }
 

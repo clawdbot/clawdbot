@@ -28,6 +28,12 @@ export function resolveRuntimePackEnvironment(
   now?: () => Date,
   readGitCommit?: () => string | null,
 ): NodeJS.ProcessEnv & { OPENCLAW_BUILD_TIMESTAMP: string; GIT_COMMIT?: string };
+export function runPreparedRuntimePack<T>(
+  prepare: () => void,
+  pack: () => T,
+  restore: () => void,
+): T;
+export function restoreRuntimePack(env: NodeJS.ProcessEnv, cwd?: string): void;
 export function rewriteWorkspaceDependencyVersions(
   packageJson: unknown,
   workspacePackages: unknown,

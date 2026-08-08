@@ -3,9 +3,16 @@
  * JSONL streaming, Claude stream-json dialects, usage metadata, and tool event
  * reconstruction.
  */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  createReasoningTagTextPartitioner,
+  scanReasoningTags,
+  type ReasoningTagTextDelta,
+} from "../../packages/markdown-core/src/reasoning-tags.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
@@ -14,7 +21,6 @@ import type {
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import { isRecord } from "../utils.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -277,14 +283,15 @@ function unwrapCliErrorText(raw: string): string {
 }
 
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
-  const readNestedCached = (key: "input_tokens_details" | "prompt_tokens_details") => {
+  const readNestedCached = (
+    key: "input_tokens_details" | "prompt_tokens_details",
+    field: "cached_tokens" | "cache_write_tokens" = "cached_tokens",
+  ) => {
     const nested = raw[key];
     if (!isRecord(nested)) {
       return undefined;
     }
-    return typeof nested.cached_tokens === "number" && nested.cached_tokens > 0
-      ? nested.cached_tokens
-      : undefined;
+    return typeof nested[field] === "number" && nested[field] > 0 ? nested[field] : undefined;
   };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
@@ -304,13 +311,24 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
     pick("cacheRead") ??
     pick("cached") ??
     nestedCached;
+  const nestedCacheWrite =
+    readNestedCached("input_tokens_details", "cache_write_tokens") ??
+    readNestedCached("prompt_tokens_details", "cache_write_tokens");
+  const cacheWrite =
+    pick("cache_creation_input_tokens") ??
+    pick("cache_write_input_tokens") ??
+    pick("cacheWrite") ??
+    nestedCacheWrite;
   const input =
     pick("input") ??
-    ((Object.hasOwn(raw, "cached") || nestedCached !== undefined) && typeof totalInput === "number"
-      ? Math.max(0, totalInput - (cacheRead ?? 0))
+    ((Object.hasOwn(raw, "cached") ||
+      Object.hasOwn(raw, "cached_input_tokens") ||
+      Object.hasOwn(raw, "cache_write_input_tokens") ||
+      nestedCached !== undefined ||
+      nestedCacheWrite !== undefined) &&
+    typeof totalInput === "number"
+      ? Math.max(0, totalInput - (cacheRead ?? 0) - (cacheWrite ?? 0))
       : totalInput);
-  const cacheWrite =
-    pick("cache_creation_input_tokens") ?? pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
@@ -548,6 +566,73 @@ export function resolveCliStreamJsonOutputLimits(
     maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
     maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
   };
+}
+
+/** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
+export function frameBoundedCliJsonlChunk(
+  state: { pending: string },
+  chunk: string,
+  maxLineChars: number,
+  onLine: (line: string) => boolean | void,
+): boolean {
+  for (let offset = 0; offset < chunk.length;) {
+    const newlineIndex = chunk.indexOf("\n", offset);
+    const lineEnd = newlineIndex === -1 ? chunk.length : newlineIndex;
+    if (state.pending.length + (lineEnd - offset) > maxLineChars) {
+      state.pending = "";
+      return false;
+    }
+    state.pending += chunk.slice(offset, lineEnd);
+    if (newlineIndex === -1) {
+      return true;
+    }
+    const line = state.pending;
+    // Control-response writes can synchronously reenter stdout framing.
+    state.pending = "";
+    offset = newlineIndex + 1;
+    if (onLine(line) === false) {
+      return true;
+    }
+  }
+  return true;
+}
+
+/** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
+export function normalizeClaudeCliStreamJsonRecord(
+  parsed: Record<string, unknown>,
+): { line: string; omittedRawChars: number } | undefined {
+  if (parsed.type !== "user" || !isRecord(parsed.message)) {
+    return undefined;
+  }
+  const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+  let normalized = false;
+  let omittedRawChars = 0;
+  for (const result of content) {
+    if (!isRecord(result) || result.type !== "tool_result" || !Array.isArray(result.content)) {
+      continue;
+    }
+    for (const block of result.content) {
+      if (!isRecord(block) || !isRecord(block.source) || block.source.type !== "base64") {
+        continue;
+      }
+      if (
+        block.type !== "image" &&
+        !(block.type === "document" && block.source.media_type === "application/pdf")
+      ) {
+        continue;
+      }
+      const { data, ...source } = block.source;
+      if (typeof data !== "string") {
+        continue;
+      }
+      block.source = source;
+      block.omitted = true;
+      block.bytes = estimateBase64DecodedBytes(data);
+      omittedRawChars += data.length;
+      normalized = true;
+    }
+  }
+  return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
 }
 
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
@@ -1232,6 +1317,87 @@ function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): string |
   return undefined;
 }
 
+// A possible leading block stays buffered until visible prose or the message
+// boundary proves where private reasoning ends. Later tags remain literal.
+function partitionLeadingTaggedReasoning(
+  text: string,
+  final: boolean,
+): { pending: true } | { pending: false; reasoningText: string; visibleText: string } {
+  const first = text.search(/\S/u);
+  if (first === -1) {
+    return final ? { pending: false, reasoningText: "", visibleText: text } : { pending: true };
+  }
+  if (text.charAt(first) !== "<") {
+    return { pending: false, reasoningText: "", visibleText: text };
+  }
+
+  const scan = scanReasoningTags(text, final);
+  let depth = 0;
+  let end = -1;
+  for (const tag of scan.tags) {
+    if (depth === 0) {
+      const expectedStart = end === -1 ? first : end;
+      if (text.slice(expectedStart, tag.index).trim() || tag.isClose || tag.isSelfClosing) {
+        break;
+      }
+    }
+    depth += tag.isClose ? -1 : tag.isSelfClosing ? 0 : 1;
+    if (depth === 0 && tag.isClose) {
+      end = tag.index + tag.text.length;
+    }
+  }
+
+  const pendingTagAfterBlock =
+    end !== -1 && scan.pendingStart !== undefined && !text.slice(end, scan.pendingStart).trim();
+  if (end === -1) {
+    const pendingLeadingTag =
+      scan.pendingStart !== undefined && !text.slice(first, scan.pendingStart).trim();
+    return !final && (depth > 0 || pendingLeadingTag)
+      ? { pending: true }
+      : { pending: false, reasoningText: "", visibleText: text };
+  }
+  if (!final && (depth > 0 || pendingTagAfterBlock || !text.slice(end).trim())) {
+    return { pending: true };
+  }
+
+  const partitioner = createReasoningTagTextPartitioner();
+  const deltas = [...partitioner.pushVisible(text.slice(0, end)), ...partitioner.flush()];
+  const reasoningText = deltas
+    .filter((delta) => delta.kind === "thinking")
+    .map((delta) => delta.text)
+    .join("");
+  return reasoningText
+    ? { pending: false, reasoningText, visibleText: text.slice(end) }
+    : { pending: false, reasoningText: "", visibleText: text };
+}
+
+function createLeadingTaggedReasoningRouter() {
+  let pending = "";
+  let settled = false;
+  const consume = (chunk: string, final: boolean): ReasoningTagTextDelta[] => {
+    if (settled) {
+      return chunk ? [{ kind: "text", text: chunk }] : [];
+    }
+    pending += chunk;
+    const result = partitionLeadingTaggedReasoning(pending, final);
+    if (result.pending) {
+      return [];
+    }
+    settled = true;
+    pending = "";
+    return [
+      ...(result.reasoningText
+        ? ([{ kind: "thinking", text: result.reasoningText }] as const)
+        : []),
+      ...(result.visibleText ? ([{ kind: "text", text: result.visibleText }] as const) : []),
+    ];
+  };
+  return {
+    push: (chunk: string) => consume(chunk, false),
+    finish: () => consume("", true),
+  };
+}
+
 /** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
@@ -1250,7 +1416,7 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
 }) {
-  let lineBuffer = "";
+  const lineBuffer = { pending: "" };
   let assistantText = "";
   let customThinkingText = "";
   let pendingClaudeText = "";
@@ -1280,6 +1446,9 @@ export function createCliJsonlStreamingParser(params: {
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
   const thinkingTracker = createThinkingTracker();
+  const claudeStreamJson = isClaudeStreamJsonDialect(params);
+  let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
+  let currentTaggedReasoningText = "";
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -1305,6 +1474,78 @@ export function createCliJsonlStreamingParser(params: {
     if (text) {
       params.onCommentaryText?.(text);
     }
+  };
+
+  const emitClaudeVisibleText = (delta: string) => {
+    if (!delta) {
+      return;
+    }
+    if (classifyClaudeCommentary) {
+      pendingClaudeText = `${pendingClaudeText}${delta}`;
+      return;
+    }
+    // A tool_use block starts a new post-tool segment even inside one assistant
+    // message; only tool-split boundaries may later outrank the result envelope.
+    // A message boundary is a tool split only when the PREVIOUS message used a
+    // tool: a tool-first fresh message must not connect an earlier draft, while
+    // a tool-using message keeps its text connected across its own boundary.
+    const boundaryPending = pendingMessageSeparator || sawToolUseSinceText;
+    const isToolSplitBoundary = pendingMessageSeparator
+      ? previousMessageHadToolUse
+      : sawToolUseSinceText;
+    const separator =
+      boundaryPending && assistantText ? missingMessageBoundarySeparator(assistantText, delta) : "";
+    if (boundaryPending && assistantText) {
+      currentMessageStart = assistantText.length + separator.length;
+      // Text before a non-tool boundary may be a superseded draft; only text
+      // connected to the result through tool splits stays a candidate.
+      if (!isToolSplitBoundary) {
+        preserveFrom = currentMessageStart;
+      }
+    }
+    pendingMessageSeparator = false;
+    sawToolUseSinceText = false;
+    const deltaText = `${separator}${delta}`;
+    assistantText = `${assistantText}${deltaText}`;
+    params.onAssistantDelta({ text: assistantText, delta: deltaText, sessionId, usage });
+  };
+
+  const emitTaggedReasoning = (delta: string) => {
+    if (!delta) {
+      return;
+    }
+    currentTaggedReasoningText = `${currentTaggedReasoningText}${delta}`;
+    // Native thinking is the provider-authored shape and remains authoritative
+    // when a text block mirrors it with tags.
+    if (!thinkingTracker.emittedText) {
+      params.onThinkingDelta?.({
+        text: currentTaggedReasoningText,
+        delta,
+        isReasoningSnapshot: true,
+      });
+    }
+  };
+
+  const routeTaggedReasoningDeltas = (deltas: readonly ReasoningTagTextDelta[]) => {
+    for (const delta of deltas) {
+      if (delta.kind === "thinking") {
+        emitTaggedReasoning(delta.text);
+      } else {
+        emitClaudeVisibleText(delta.text);
+      }
+    }
+  };
+
+  const finishTaggedReasoningMessage = () => {
+    if (claudeStreamJson) {
+      routeTaggedReasoningDeltas(taggedReasoningRouter.finish());
+    }
+  };
+
+  const beginTaggedReasoningMessage = () => {
+    finishTaggedReasoningMessage();
+    taggedReasoningRouter = createLeadingTaggedReasoningRouter();
+    currentTaggedReasoningText = "";
   };
 
   const updateSessionId = (nextSessionId: string | undefined) => {
@@ -1400,7 +1641,17 @@ export function createCliJsonlStreamingParser(params: {
     };
   };
 
-  const handleCustomJsonlLine = (line: string): boolean => {
+  const accountClaudeJsonlLine = (lineChars: number): boolean => {
+    rawChars += lineChars + 1;
+    if (rawChars <= outputLimits.maxTurnRawChars) {
+      return true;
+    }
+    parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
+    lineBuffer.pending = "";
+    return false;
+  };
+
+  const handleCustomJsonlLine = (line: string, rawLine: string): boolean => {
     if (parseErrorText) {
       return true;
     }
@@ -1422,6 +1673,9 @@ export function createCliJsonlStreamingParser(params: {
     }
     if (parsed == null) {
       return false;
+    }
+    if (claudeStreamJson && !accountClaudeJsonlLine(rawLine.length)) {
+      return true;
     }
     for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
       handleCustomJsonlEvent(event);
@@ -1479,10 +1733,13 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     if (classifyClaudeCommentary && parsed.type === "result") {
+      finishTaggedReasoningMessage();
       flushPendingClaudeAssistantText();
+    } else if (parsed.type === "result") {
+      finishTaggedReasoningMessage();
     }
 
-    const result = parseClaudeCliJsonlResult({
+    let result = parseClaudeCliJsonlResult({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -1493,6 +1750,19 @@ export function createCliJsonlStreamingParser(params: {
       if (result.errorText) {
         output = result;
         return;
+      }
+      if (claudeStreamJson && result.text) {
+        const taggedResult = partitionLeadingTaggedReasoning(result.text, true);
+        if (!taggedResult.pending && taggedResult.reasoningText) {
+          if (
+            !thinkingTracker.emittedText &&
+            taggedResult.reasoningText !== currentTaggedReasoningText
+          ) {
+            currentTaggedReasoningText = "";
+            emitTaggedReasoning(taggedResult.reasoningText);
+          }
+          result = { ...result, text: taggedResult.visibleText.trim() };
+        }
       }
       // Empty terminal result can follow already-streamed text; keep that text.
       const streamedText = assistantText.slice(segmentStart).trim();
@@ -1569,9 +1839,12 @@ export function createCliJsonlStreamingParser(params: {
       // boundary so accumulated text joins with a paragraph break instead of
       // gluing the pre-tool text to the next message's first delta.
       if (evt.type === "message_start") {
+        beginTaggedReasoningMessage();
         pendingMessageSeparator = true;
         previousMessageHadToolUse = currentMessageHadToolUse;
         currentMessageHadToolUse = false;
+      } else if (evt.type === "message_stop") {
+        finishTaggedReasoningMessage();
       }
       const isToolUseBlockStart =
         evt.type === "content_block_start" &&
@@ -1658,77 +1931,49 @@ export function createCliJsonlStreamingParser(params: {
       }
       return;
     }
-    if (classifyClaudeCommentary) {
-      pendingClaudeText = `${pendingClaudeText}${delta.delta}`;
+    if (claudeStreamJson) {
+      routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta.delta));
       return;
     }
-    // A tool_use block starts a new post-tool segment even inside one assistant
-    // message; only tool-split boundaries may later outrank the result envelope.
-    // A message boundary is a tool split only when the PREVIOUS message used a
-    // tool: a tool-first fresh message must not connect an earlier draft, while
-    // a tool-using message keeps its text connected across its own boundary.
-    const boundaryPending = pendingMessageSeparator || sawToolUseSinceText;
-    const isToolSplitBoundary = pendingMessageSeparator
-      ? previousMessageHadToolUse
-      : sawToolUseSinceText;
-    const separator =
-      boundaryPending && assistantText
-        ? missingMessageBoundarySeparator(assistantText, delta.delta)
-        : "";
-    if (boundaryPending && assistantText) {
-      currentMessageStart = assistantText.length + separator.length;
-      // Text before a non-tool boundary may be a superseded draft; only text
-      // connected to the result through tool splits stays a candidate.
-      if (!isToolSplitBoundary) {
-        preserveFrom = currentMessageStart;
-      }
-    }
-    pendingMessageSeparator = false;
-    sawToolUseSinceText = false;
-    const deltaText = `${separator}${delta.delta}`;
-    assistantText = `${assistantText}${deltaText}`;
-    params.onAssistantDelta({ ...delta, text: assistantText, delta: deltaText });
+    emitClaudeVisibleText(delta.delta);
   };
 
-  const flushLines = (flushPartial: boolean) => {
-    while (true) {
-      if (parseErrorText) {
+  const handleJsonlLine = (rawLine: string) => {
+    if (parseErrorText) {
+      return;
+    }
+    const line = rawLine.trim();
+    if (!line && !claudeStreamJson) {
+      return;
+    }
+    rawLines += 1;
+    if (rawLines > outputLimits.maxTurnLines) {
+      parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
+      lineBuffer.pending = "";
+      return;
+    }
+    if (!line) {
+      accountClaudeJsonlLine(rawLine.length);
+      return;
+    }
+    if (handleCustomJsonlLine(line, rawLine)) {
+      return;
+    }
+    const parsedRecords = parseJsonRecordCandidates(line);
+    if (claudeStreamJson) {
+      const normalized =
+        parsedRecords.length === 1
+          ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
+          : undefined;
+      // Exempt actual media bytes only; JSON serialization must not erase wire whitespace.
+      const retainedChars = normalized
+        ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+        : rawLine.length;
+      if (!accountClaudeJsonlLine(retainedChars)) {
         return;
       }
-      const newlineIndex = lineBuffer.indexOf("\n");
-      if (newlineIndex < 0) {
-        break;
-      }
-      const line = lineBuffer.slice(0, newlineIndex).trim();
-      lineBuffer = lineBuffer.slice(newlineIndex + 1);
-      if (!line) {
-        continue;
-      }
-      rawLines += 1;
-      if (rawLines > outputLimits.maxTurnLines) {
-        parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
-        lineBuffer = "";
-        return;
-      }
-      if (handleCustomJsonlLine(line)) {
-        continue;
-      }
-      for (const parsed of parseJsonRecordCandidates(line)) {
-        handleParsedRecord(parsed);
-      }
     }
-    if (!flushPartial) {
-      return;
-    }
-    const tail = lineBuffer.trim();
-    lineBuffer = "";
-    if (!tail) {
-      return;
-    }
-    if (handleCustomJsonlLine(tail)) {
-      return;
-    }
-    for (const parsed of parseJsonRecordCandidates(tail)) {
+    for (const parsed of parsedRecords) {
       handleParsedRecord(parsed);
     }
   };
@@ -1738,25 +1983,33 @@ export function createCliJsonlStreamingParser(params: {
       if (!chunk || parseErrorText) {
         return;
       }
-      rawChars += chunk.length;
-      if (rawChars > outputLimits.maxTurnRawChars) {
-        parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
-        lineBuffer = "";
-        return;
+      if (!claudeStreamJson) {
+        rawChars += chunk.length;
+        if (rawChars > outputLimits.maxTurnRawChars) {
+          parseErrorText = streamJsonOutputLimitErrorText("raw", outputLimits.maxTurnRawChars);
+          lineBuffer.pending = "";
+          return;
+        }
       }
-      if (lineBuffer.length + chunk.length > outputLimits.maxPendingLineChars) {
+      if (
+        !frameBoundedCliJsonlChunk(lineBuffer, chunk, outputLimits.maxPendingLineChars, (line) => {
+          handleJsonlLine(line);
+          return !parseErrorText;
+        })
+      ) {
         parseErrorText = streamJsonOutputLimitErrorText("line", outputLimits.maxPendingLineChars);
-        lineBuffer = "";
-        return;
       }
-      lineBuffer += chunk;
-      flushLines(false);
     },
     finish() {
       if (parseErrorText) {
         return;
       }
-      flushLines(true);
+      const tail = lineBuffer.pending;
+      lineBuffer.pending = "";
+      if (tail) {
+        handleJsonlLine(tail);
+      }
+      finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeAssistantText();
       }
@@ -1810,6 +2063,7 @@ function parseCliJsonl(
   let sessionId: string | undefined;
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
+  let diagnosticUsage: CliUsage | undefined;
   const texts: string[] = [];
   let streamJsonText = "";
   let pendingMessageSeparator = false;
@@ -1832,6 +2086,11 @@ function parseCliJsonl(
       resumeCheckpointId =
         pickCliResumeCheckpointId({ backend, providerId, parsed }) ?? resumeCheckpointId;
       const nextUsage = readCliUsage(parsed);
+      const isClaudeTerminalResult =
+        isClaudeStreamJsonDialect({ backend, providerId }) && parsed.type === "result";
+      if (isClaudeTerminalResult && nextUsage && usage) {
+        diagnosticUsage = nextUsage;
+      }
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
         usage = nextUsage ?? usage;
@@ -1908,6 +2167,7 @@ function parseCliJsonl(
           ...claudeResult,
           text,
           ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          ...(diagnosticUsage ? { diagnosticUsage } : {}),
         };
         segmentStart = streamJsonText.length;
         currentMessageStart = segmentStart;

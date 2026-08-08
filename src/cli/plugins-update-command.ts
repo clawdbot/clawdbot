@@ -184,10 +184,10 @@ type RunPluginUpdateCommandParams = {
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
   if (params.opts.dryRun) {
     return await runPluginUpdateCommandUnlocked(params);
   }
+  assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
     async () => await runPluginUpdateCommandUnlocked(params),
@@ -195,7 +195,9 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
 }
 
 async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
+  if (!params.opts.dryRun) {
+    assertConfigWriteAllowedInCurrentMode();
+  }
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
     .then((prepared) => ({
@@ -224,6 +226,10 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     pluginInstallRecords,
   );
   const configuredUpdateChannel = normalizeUpdateChannel(cfg.update?.channel) ?? undefined;
+  const officialPluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: configuredUpdateChannel,
+    currentVersion: VERSION,
+  });
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
@@ -248,7 +254,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
       defaultRuntime.log("No tracked plugins or hook packs to update.");
       return;
     }
-    defaultRuntime.error("Provide a plugin or hook-pack id, or use --all.");
+    defaultRuntime.error(
+      params.id
+        ? `No tracked plugin or hook pack found for "${params.id}". Run "openclaw plugins list" or "openclaw hooks list" to inspect installed packages.`
+        : "Provide a plugin or hook-pack id, or use --all.",
+    );
     return defaultRuntime.exit(1);
   }
 
@@ -344,12 +354,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
           updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
-          officialPluginUpdateChannel: params.opts.all
-            ? resolveRegistryUpdateChannel({
-                configChannel: normalizeUpdateChannel(cfg.update?.channel),
-                currentVersion: VERSION,
-              })
-            : undefined,
+          officialPluginUpdateChannel,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           coreVersion: VERSION,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
@@ -431,6 +436,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         await commitPluginInstallRecordsOnly({
           previousInstallRecords: persistedPluginInstallRecords,
           nextInstallRecords: nextPluginInstallRecords,
+          nextConfig,
           verifyConfigFresh: async () => {
             await assertRecordsOnlyUpdateConfigFresh({
               baseHash: sourceSnapshot?.snapshot.hash,

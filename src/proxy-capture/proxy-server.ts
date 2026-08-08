@@ -6,17 +6,19 @@ import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
 
-const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
   "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
 const CAPTURE_BODY_PREVIEW_BYTES = 8192;
 const BAD_GATEWAY_BODY = "Bad Gateway\n";
+const DEBUG_PROXY_CONNECT_TIMEOUT_MS = 30_000;
+const GATEWAY_TIMEOUT_BODY = "Gateway Timeout\n";
 
 type BodyPreviewCapture = {
   chunks: Buffer[];
@@ -24,10 +26,6 @@ type BodyPreviewCapture = {
   totalBytes: number;
   truncated: boolean;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return TRUTHY_ENV.has((value ?? "").trim().toLowerCase());
-}
 
 function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
   return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
@@ -412,6 +410,10 @@ export async function startDebugProxyServer(params: {
       return;
     }
     const upstreamSocket = net.connect(port, hostname, () => {
+      // This inactivity timeout only protects opening the upstream socket. CONNECT
+      // tunnels are intentionally long-lived and must not inherit it.
+      upstreamSocket.setTimeout(0);
+      upstreamSocket.off("timeout", onUpstreamConnectTimeout);
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) {
         upstreamSocket.write(head);
@@ -419,6 +421,24 @@ export async function startDebugProxyServer(params: {
       clientSocket.pipe(upstreamSocket);
       upstreamSocket.pipe(clientSocket);
     });
+    function onUpstreamConnectTimeout() {
+      const message = `CONNECT upstream opening timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms of inactivity`;
+      recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      upstreamSocket.destroy();
+      clientSocket.end(
+        `HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(GATEWAY_TIMEOUT_BODY)}\r\n\r\n${GATEWAY_TIMEOUT_BODY}`,
+        () => clientSocket.destroy(),
+      );
+    }
+    upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
     clientSocket.on("error", (error) => {
       recordProxyEvent({
         protocol: "connect",

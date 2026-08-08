@@ -49,7 +49,10 @@ import {
   cancelDeliveryQueueMediaRecoveryLease,
   createDeliveryQueueMediaRecoveryLease,
 } from "./delivery-queue-media-staging.js";
-import { reconcileUnknownQueuedDelivery } from "./delivery-queue-reconciliation.js";
+import {
+  buildUnknownSendContext,
+  reconcileUnknownQueuedDelivery,
+} from "./delivery-queue-reconciliation.js";
 import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
@@ -80,6 +83,7 @@ export type DeliverFn = (
       deliveryQueueId?: string;
       deliveryQueueStateDir?: string;
       deliveryProducerClaimId?: string;
+      deliveryProducerLeaseRequired?: boolean;
       skipQueue?: boolean;
       deferredDeliveryAdmissionPassed?: true;
       deferCommitHooks?: boolean;
@@ -251,13 +255,15 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
   );
 }
 
-function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
+function hasActiveDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
   return (
     (typeof entry.completionRetention === "object" ||
       entry.completionRetention === "permanent" ||
       entry.requiresProducerClaim === true) &&
     (entry.recoveryState === "producer_claimed" ||
-      (entry.recoveryState === "send_attempt_started" && entry.requiresProducerClaim === true)) &&
+      ((entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+        entry.requiresProducerClaim === true)) &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
   );
@@ -325,6 +331,7 @@ function buildRecoveryDeliverParams(
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     ...(producerClaimId ? { deliveryProducerClaimId: producerClaimId } : {}),
+    ...(entry.requiresProducerClaim === true ? { deliveryProducerLeaseRequired: true } : {}),
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
@@ -359,6 +366,11 @@ async function applyRecoveryDeliveryAdmission(params: {
     params.stateDir,
   );
   if (result.status === "failed") {
+    await runUnknownSendTerminalCleanup({
+      entry: params.entry,
+      cfg: params.cfg,
+      log: params.log,
+    });
     emitRecoveredTerminalFailure(params.entry, admission.reason);
     emitQueuedAuditTerminals(params.entry, () => queuedDeadLetterAuditTerminals(params.entry));
     params.log.warn(
@@ -370,6 +382,53 @@ async function applyRecoveryDeliveryAdmission(params: {
     `${params.logLabel}: entry ${params.entry.id} changed status before admission failure was persisted`,
   );
   return "not_pending";
+}
+
+async function runUnknownSendTerminalCleanup(params: {
+  entry: QueuedDelivery;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+}): Promise<void> {
+  if (!needsUnknownSendReconciliation(params.entry)) {
+    return;
+  }
+  const adapter = resolveOutboundChannelMessageAdapter({
+    channel: params.entry.channel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+  });
+  const cleanup = adapter?.durableFinal?.afterUnknownSendTerminal;
+  if (!cleanup) {
+    return;
+  }
+  try {
+    await cleanup(
+      buildUnknownSendContext({
+        entry: params.entry,
+        payloads: queuedPayloads(params.entry),
+        cfg: params.cfg,
+      }),
+    );
+  } catch (error) {
+    params.log.warn(
+      `Delivery entry ${params.entry.id} unknown-send terminal cleanup failed: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+async function moveEntryToFailedAndCleanup(params: {
+  entry: QueuedDelivery;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+  stateDir?: string;
+  attemptId?: string | null;
+}): Promise<void> {
+  await (params.attemptId !== undefined
+    ? moveToFailed(params.entry.id, params.stateDir, params.attemptId)
+    : moveToFailed(params.entry.id, params.stateDir));
+  // Cleanup follows the authoritative queue transition. Deleting provider
+  // evidence first could strand a still-pending ambiguous send without proof.
+  await runUnknownSendTerminalCleanup(params);
 }
 
 function buildReconciledSentResult(
@@ -404,6 +463,7 @@ function buildReconciledCommitContext(params: {
   const base = {
     cfg: params.cfg,
     to: params.entry.to,
+    deliveryQueueId: params.entry.id,
     accountId: params.entry.accountId,
     replyToId:
       params.entry.effectiveReplyToId !== undefined
@@ -483,15 +543,14 @@ async function runReconciledSentCommitHooks(params: {
 
 async function moveEntryToFailedWithLogging(
   entry: QueuedDelivery,
+  cfg: OpenClawConfig,
   log: RecoveryLogger,
   stateDir?: string,
 ): Promise<boolean> {
   markDurableDeliveryFailedBestEffort(entry, log);
   try {
     const attemptId = recoveryPlatformAttemptId(entry);
-    await (attemptId !== undefined
-      ? moveToFailed(entry.id, stateDir, attemptId)
-      : moveToFailed(entry.id, stateDir));
+    await moveEntryToFailedAndCleanup({ entry, cfg, log, stateDir, attemptId });
     emitRecoveredTerminalFailure(entry, "delivery retry budget exhausted");
     return true;
   } catch (err) {
@@ -506,9 +565,11 @@ function recoveryPlatformAttemptId(
 ): string | null | undefined {
   return claimedAttemptId !== undefined
     ? claimedAttemptId
-    : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
-      ? null
-      : undefined;
+    : typeof entry.platformSendAttemptId === "string"
+      ? entry.platformSendAttemptId
+      : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+        ? null
+        : undefined;
 }
 
 async function ackRecoveredDelivery(
@@ -555,6 +616,7 @@ function markDurableDeliveryFailedBestEffort(entry: QueuedDelivery, log: Recover
 
 async function resolveCompletedOwnerBeforeRecovery(opts: {
   entry: QueuedDelivery;
+  cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
   onRecovered?: (entry: QueuedDelivery) => void;
@@ -645,7 +707,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     return "failed";
   }
   if (operation.status === "unknown") {
-    const moved = await moveEntryToFailedWithLogging(opts.entry, opts.log, opts.stateDir);
+    const moved = await moveEntryToFailedWithLogging(opts.entry, opts.cfg, opts.log, opts.stateDir);
     return moved ? "moved-to-failed" : "failed";
   }
   return "continue";
@@ -790,9 +852,13 @@ async function drainQueuedEntry(opts: {
       try {
         markDurableDeliveryFailedBestEffort(entry, opts.log);
         const attemptId = recoveryPlatformAttemptId(entry);
-        await (attemptId !== undefined
-          ? moveToFailed(entry.id, opts.stateDir, attemptId)
-          : moveToFailed(entry.id, opts.stateDir));
+        await moveEntryToFailedAndCleanup({
+          entry,
+          cfg: opts.cfg,
+          log: opts.log,
+          stateDir: opts.stateDir,
+          attemptId,
+        });
         emitRecoveredTerminalFailure(entry, errMsg);
         emitQueuedAuditTerminals(entry, () => queuedUnknownAuditTerminals(entry));
         return "moved-to-failed";
@@ -836,9 +902,9 @@ async function drainQueuedEntry(opts: {
       await runOutboundDeliveryCommitHooks(deliveredResults);
     }
   };
-  // Stable producer rows can be observed between enqueue and live ownership.
-  // Fence recovery at the same SQLite claim before consuming an attempt or
-  // crossing provider I/O; an active live producer keeps its original lease.
+  // Live producer rows can be observed between enqueue and platform I/O.
+  // Fence recovery at the same SQLite claim before consuming an attempt;
+  // an active live producer keeps its original renewable lease.
   const requiresProducerClaim =
     typeof entry.completionRetention === "object" ||
     entry.requiresProducerClaim === true ||
@@ -863,9 +929,13 @@ async function drainQueuedEntry(opts: {
     const errMsg = `delivery retry budget exhausted (${reservation.attemptCount}/${maxRetries})`;
     markDurableDeliveryFailedBestEffort(entry, opts.log);
     try {
-      await (producerClaimId
-        ? moveToFailed(entry.id, opts.stateDir, producerClaimId)
-        : moveToFailed(entry.id, opts.stateDir));
+      await moveEntryToFailedAndCleanup({
+        entry,
+        cfg: opts.cfg,
+        log: opts.log,
+        stateDir: opts.stateDir,
+        attemptId: producerClaimId,
+      });
       emitRecoveredTerminalFailure(entry, errMsg);
     } catch (moveErr) {
       if (getErrnoCode(moveErr) === "ENOENT") {
@@ -1089,9 +1159,13 @@ async function drainQueuedEntry(opts: {
         } else {
           markDurableDeliveryFailedBestEffort(entry, opts.log);
         }
-        await (producerClaimId
-          ? moveToFailed(entry.id, opts.stateDir, producerClaimId)
-          : moveToFailed(entry.id, opts.stateDir));
+        await moveEntryToFailedAndCleanup({
+          entry,
+          cfg: opts.cfg,
+          log: opts.log,
+          stateDir: opts.stateDir,
+          attemptId: producerClaimId,
+        });
         emitRecoveredTerminalFailure(entry, errMsg, messageSentEvents);
         emitQueuedAuditTerminals(entry, () =>
           failedOutboundAuditTerminals({
@@ -1156,7 +1230,7 @@ export async function drainPendingDeliveries(opts: {
       // Poll-driven reconnect drains can repeat while a live send owns its
       // claim. Leave conflicts silent so reconnect polling cannot starve it.
       onEntry: async (currentEntry) => {
-        if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
+        if (hasActiveDeliveryOwner(currentEntry, Date.now())) {
           return;
         }
         const admission = await applyRecoveryDeliveryAdmission({
@@ -1184,9 +1258,13 @@ export async function drainPendingDeliveries(opts: {
           try {
             markDurableDeliveryFailedBestEffort(currentEntry, opts.log);
             const attemptId = recoveryPlatformAttemptId(currentEntry);
-            await (attemptId !== undefined
-              ? moveToFailed(currentEntry.id, opts.stateDir, attemptId)
-              : moveToFailed(currentEntry.id, opts.stateDir));
+            await moveEntryToFailedAndCleanup({
+              entry: currentEntry,
+              cfg: opts.cfg,
+              log: opts.log,
+              stateDir: opts.stateDir,
+              attemptId,
+            });
             emitRecoveredTerminalFailure(currentEntry, "delivery retry budget exhausted");
           } catch (err) {
             if (getErrnoCode(err) === "ENOENT") {
@@ -1288,7 +1366,7 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
     },
     onEntry: async (currentEntry) => {
-      if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
+      if (hasActiveDeliveryOwner(currentEntry, Date.now())) {
         opts.log.info(`Recovery skipped for delivery ${currentEntry.id}: active platform owner`);
         return "continue";
       }
@@ -1314,6 +1392,7 @@ export async function recoverPendingDeliveries(opts: {
         );
         const movedToFailed = await moveEntryToFailedWithLogging(
           currentEntry,
+          opts.cfg,
           opts.log,
           opts.stateDir,
         );

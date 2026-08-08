@@ -112,7 +112,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "audit",
-    description: "Inspect metadata-only run, tool, and message lifecycle records",
+    description: "Inspect activity records and exact-run identity context",
     hasSubcommands: false,
   },
   {

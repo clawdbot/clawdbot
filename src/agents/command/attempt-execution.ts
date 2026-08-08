@@ -20,6 +20,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
@@ -50,6 +51,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import {
@@ -73,11 +75,14 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
+import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { resolveAgentRunSessionTarget, type AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -90,9 +95,11 @@ import {
   resolveSessionWriteLockTargetKey,
 } from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
-import { isToolAllowedByPolicies } from "../tool-policy-match.js";
-import { readToolAllowlistIntersection } from "../tool-policy.js";
+import {
+  isSubagentAnnounceCompletionHandoff,
+  isTrustedSubagentCompletionHandoffForRun,
+} from "../subagent-announce-handoff.js";
+import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -381,7 +388,7 @@ async function persistTextTurnTranscript(
   return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
-function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -482,6 +489,7 @@ export async function persistCliTurnTranscript(params: {
   const sessionTarget = await resolveAgentRunSessionTarget({
     agentId: params.sessionAgentId,
     config: params.config,
+    missingSessionKey: "resolve-existing",
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -562,11 +570,13 @@ export function runAgentAttempt(params: {
   fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
-  const sessionAuthProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
   // bound to the configured model replaces a stale automatic session choice.
   const selectedAuthProfile =
@@ -578,17 +588,38 @@ export function runAgentAttempt(params: {
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
-  // A completion handoff relays frozen child output; letting it act with the
-  // requester's tools would turn child text into a new privileged instruction.
+  // A completion handoff relays frozen child output, so only a verified private
+  // capability plus persisted requester lineage may restore its tool surface.
   const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
     inputProvenance: params.opts.inputProvenance,
     internalEvents: params.opts.internalEvents,
   });
-  const completionRequestsMessageDelivery =
+  const exactSubagentAnnounceHandoff =
     isSubagentAnnounceHandoff &&
+    isTrustedSubagentCompletionHandoffForRun({
+      handoff: params.opts.trustedInternalHandoff,
+      inputProvenance: params.opts.inputProvenance,
+      internalEvents: params.opts.internalEvents,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      provider: params.providerOverride,
+      model: params.modelOverride,
+    });
+  const trustedSubagentAnnounceHandoff =
+    exactSubagentAnnounceHandoff &&
+    hasVerifiedRequesterCompletionHandoff({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      inputProvenance: params.opts.inputProvenance,
+      trustedInternalHandoff: params.opts.trustedInternalHandoff,
+      sessionId: params.sessionId,
+      modelProvider: params.providerOverride,
+      modelId: params.modelOverride,
+    });
+  const completionRequestsMessageDelivery =
+    trustedSubagentAnnounceHandoff &&
     !isRawModelRun &&
     params.opts.disableMessageTool !== true &&
-    params.opts.trustedInternalHandoff === true &&
     messageToolOwnsVisibleReply(params.opts);
   const completionSandboxStatus = completionRequestsMessageDelivery
     ? resolveSandboxRuntimeStatus({
@@ -601,16 +632,9 @@ export function runAgentAttempt(params: {
     ? resolveConversationCapabilityProfile({
         config: params.cfg,
         sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
         agentId: params.sessionAgentId,
-        agentAccountId: params.runContext.accountId,
-        messageProvider: params.opts.messageProvider ?? params.messageChannel,
-        messageChannel: params.messageChannel,
-        groupId: params.runContext.groupId,
-        groupChannel: params.runContext.groupChannel,
-        groupSpace: params.runContext.groupSpace,
-        spawnedBy: params.spawnedBy,
         senderId: params.runContext.senderId,
-        senderIsOwner: params.opts.senderIsOwner,
         modelProvider: params.providerOverride,
         modelId: params.modelOverride,
         sandboxToolPolicy: completionSandboxStatus?.sandboxed
@@ -618,17 +642,17 @@ export function runAgentAttempt(params: {
           : undefined,
         inputProvenance: params.opts.inputProvenance,
         trustedInternalHandoff: params.opts.trustedInternalHandoff,
-        scheduledToolPolicy: params.opts.scheduledToolPolicy,
       })
     : undefined;
   const completionToolPolicies = completionCapabilityProfile
     ? resolveConversationToolPolicies({
         capabilityProfile: completionCapabilityProfile,
         additionalProfileAllow: ["message"],
+        // The source-bound delivery grant extends restrictive allowlists only;
+        // explicit denies still win at every policy layer.
+        additionalPolicyAllow: ["message"],
+        additionalInheritedAllow: ["message"],
       })
-    : undefined;
-  const completionRuntimeRestrictions = params.opts.toolsAllow
-    ? (readToolAllowlistIntersection(params.opts.toolsAllow) ?? [params.opts.toolsAllow])
     : undefined;
   // Forced private delivery is not authority: retain every parent/operator cap
   // and mint only the source-bound message capability from a verified envelope.
@@ -636,20 +660,7 @@ export function runAgentAttempt(params: {
     completionCapabilityProfile?.policy.requesterPolicySource === "completion-handoff" &&
     completionToolPolicies !== undefined &&
     isToolAllowedByPolicies("message", Object.values(completionToolPolicies)) &&
-    (params.opts.toolsAllow === undefined ||
-      (completionRuntimeRestrictions?.every(
-        (allow) => allow.length > 0 && isToolAllowedByPolicies("message", [{ allow }]),
-      ) ??
-        false));
-  // An explicit cap is enforced even when tools are disabled; clear it so a
-  // denied completion can finish tool-free and its owner can relay frozen text.
-  const runtimeToolsAllow = isSubagentAnnounceHandoff
-    ? completionNeedsMessageDelivery
-      ? ["message"]
-      : undefined
-    : params.opts.toolsAllow;
-  const disableTools =
-    params.opts.modelRun === true || (isSubagentAnnounceHandoff && !completionNeedsMessageDelivery);
+    isRuntimeToolAllowed("message", params.opts.toolsAllow);
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -710,6 +721,28 @@ export function runAgentAttempt(params: {
   const isCliExecutionProvider = sessionRuntimeOverride
     ? sessionCliRuntime !== undefined
     : isCliProvider(cliExecutionProvider, params.cfg);
+  const completionRetainsRequesterTools =
+    trustedSubagentAnnounceHandoff &&
+    !isRawModelRun &&
+    !isCliExecutionProvider &&
+    (!messageToolOwnsVisibleReply(params.opts) || completionNeedsMessageDelivery);
+  // Message-tool-only delivery constrains the visible reply, not the parent
+  // continuation's verified authority. Keep the inherited cap while requiring
+  // message to survive every applicable policy before enabling any tools.
+  // An explicit cap is enforced even when tools are disabled; clear it so a
+  // denied completion can finish tool-free and its owner can relay frozen text.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionRetainsRequesterTools
+      ? params.opts.toolsAllow
+      : completionNeedsMessageDelivery
+        ? ["message"]
+        : undefined
+    : params.opts.toolsAllow;
+  const disableTools =
+    params.opts.modelRun === true ||
+    (isSubagentAnnounceHandoff &&
+      !completionRetainsRequesterTools &&
+      !completionNeedsMessageDelivery);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -909,10 +942,13 @@ export function runAgentAttempt(params: {
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionEntry: params.sessionEntry,
+            chatType: params.sessionEntry?.chatType,
             agentId: params.sessionAgentId,
             trigger: "user",
             sessionFile: params.sessionFile,
             storePath: params.storePath,
+            persistAssistantTranscript:
+              params.storePath !== undefined && params.sessionStore !== undefined,
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
             config: params.cfg,
@@ -926,6 +962,7 @@ export function runAgentAttempt(params: {
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             lifecycleGeneration: params.lifecycleGeneration,
+            onExecutionStarted: params.opts.onExecutionStarted,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
@@ -1009,6 +1046,8 @@ export function runAgentAttempt(params: {
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
             allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
@@ -1107,6 +1146,7 @@ export function runAgentAttempt(params: {
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    chatType: params.sessionEntry?.chatType,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -1173,7 +1213,9 @@ export function runAgentAttempt(params: {
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: runtimeToolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
-    trustedInternalHandoff: params.opts.trustedInternalHandoff,
+    trustedInternalHandoff: trustedSubagentAnnounceHandoff
+      ? params.opts.trustedInternalHandoff
+      : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
@@ -1198,8 +1240,11 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
+      params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
         params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
       }
@@ -1218,6 +1263,7 @@ export function runAgentAttempt(params: {
 
 export function buildAcpResult(params: {
   payloadText: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
   startedAt: number;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
@@ -1235,6 +1281,7 @@ export function buildAcpResult(params: {
       durationMs: Date.now() - params.startedAt,
       aborted: abortFields.aborted ?? resultCancelled,
       stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   };
 }
@@ -1597,6 +1644,7 @@ export function emitAcpLifecycleEnd(params: {
   abortSignal?: AbortSignal;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
 }) {
   finalizeAcpToolsForRun(
@@ -1620,6 +1668,7 @@ export function emitAcpLifecycleEnd(params: {
       phase: "end",
       endedAt: Date.now(),
       ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   });
 }

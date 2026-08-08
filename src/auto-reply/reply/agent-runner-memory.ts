@@ -49,7 +49,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -1293,6 +1294,10 @@ export async function runMemoryFlushIfNeeded(params: {
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        userLockedAuthProfileId:
+          params.followupRun.run.authProfileIdSource === "user"
+            ? params.followupRun.run.authProfileId
+            : undefined,
       },
       identity: {
         runId: flushRunId,
@@ -1368,6 +1373,8 @@ export async function runMemoryFlushIfNeeded(params: {
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
+          contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           onAgentEvent: (evt) => {
             if (evt.stream === "tool" && evt.data.name === "write") {
               if (evt.data.phase === "result" && evt.data.isError !== true) {

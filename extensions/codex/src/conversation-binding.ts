@@ -1,6 +1,5 @@
 // Codex plugin module implements conversation binding behavior.
 import {
-  embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -16,14 +15,18 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import {
-  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
+import {
+  isCodexAppServerIndeterminateRequestCancellationError,
+  type CodexAppServerClient,
+} from "./app-server/client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
@@ -40,7 +43,6 @@ import type {
   CodexThreadStartResponse,
   CodexTurnStartResponse,
   JsonObject,
-  JsonValue,
 } from "./app-server/protocol.js";
 import {
   resolveCodexNativeExecutionBlock,
@@ -67,6 +69,10 @@ import {
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import {
+  getCodexAppServerTurnRouter,
+  type CodexThreadRouteReservation,
+} from "./app-server/turn-router.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
@@ -717,11 +723,9 @@ async function runBoundTurn(params: {
   let client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
   let activeTurnId: string | undefined;
-  let collector: ReturnType<typeof createCodexConversationTurnCollector> | undefined;
   let activeTurnCleanup: () => void = () => undefined;
   let retiredUnsafeClient: CodexAppServerClient | undefined;
-  let notificationCleanup: () => void = () => undefined;
-  let requestCleanup: () => void = () => undefined;
+  let turnRoute: CodexThreadRouteReservation | undefined;
   try {
     if (networkProxyBindingChanged) {
       const response = assertCodexThreadStartResponse(
@@ -836,44 +840,13 @@ async function runBoundTurn(params: {
       }
     }
     const turnCollector = createCodexConversationTurnCollector(threadId);
-    collector = turnCollector;
-    notificationCleanup = client.addNotificationHandler((notification) =>
-      turnCollector.handleNotification(notification),
-    );
-    requestCleanup = client.addRequestHandler(async (request): Promise<JsonValue | undefined> => {
-      if (request.method === "item/tool/call") {
-        return {
-          contentItems: [
-            {
-              type: "inputText",
-              text: "OpenClaw native Codex conversation binding does not expose dynamic OpenClaw tools yet.",
-            },
-          ],
-          success: false,
-        };
-      }
-      if (
-        request.method === "item/commandExecution/requestApproval" ||
-        request.method === "item/fileChange/requestApproval"
-      ) {
-        return {
-          decision: "decline",
-          reason:
-            "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.",
-        };
-      }
-      if (request.method === "item/permissions/requestApproval") {
-        return { permissions: {}, scope: "turn" };
-      }
-      if (request.method.includes("requestApproval")) {
-        return {
-          decision: "decline",
-          reason:
-            "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.",
-        };
-      }
-      return undefined;
+    turnRoute = getCodexAppServerTurnRouter(client).reserveThread({
+      threadId,
+      onNotification: turnCollector.handleNotification,
     });
+    // The client denies unclaimed approvals and dynamic tools. Its keyed router owns
+    // pre-bind buffering so this conversation cannot claim sibling turn requests.
+    turnRoute.armTurn();
     const response: CodexTurnStartResponse = await client.request(
       "turn/start",
       {
@@ -902,6 +875,7 @@ async function runBoundTurn(params: {
       turnId: activeTurnId,
     });
     turnCollector.setTurnId(activeTurnId);
+    await turnRoute.bindTurn(activeTurnId);
     const completion = await turnCollector.wait({
       timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
     });
@@ -912,27 +886,21 @@ async function runBoundTurn(params: {
       },
     };
   } catch (error) {
-    const timedOut = error instanceof CodexConversationTurnTimeoutError;
-    if (timedOut && activeTurnId && collector) {
-      try {
-        // Keep the exact turn, notification handlers, and lease alive until
-        // Codex confirms the interrupt; otherwise provider inference survives.
-        await client.request(
-          "turn/interrupt",
-          { threadId, turnId: activeTurnId },
-          { timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS },
-        );
-        await collector.waitForTerminal({ timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS });
-      } catch (interruptError) {
-        embeddedAgentLog.debug("codex conversation turn interrupt failed during timeout cleanup", {
-          threadId,
-          turnId: activeTurnId,
-          error: interruptError,
-        });
+    if (
+      (error instanceof CodexConversationTurnTimeoutError && activeTurnId) ||
+      (turnRoute && isCodexAppServerIndeterminateRequestCancellationError(error))
+    ) {
+      // Per-thread serialization makes an empty startup interrupt follow an
+      // accepted turn whose id was lost to local request cancellation.
+      const completed = await interruptCodexTurnAndWaitBestEffort(client, {
+        threadId,
+        turnId: activeTurnId ?? "",
+      });
+      if (!completed) {
         // Retirement detaches the physical client while sibling leases finish;
         // never send another cleanup request or retire that detached client twice.
         retiredUnsafeClient = client;
-        await retireUnsafeCodexConversationClientBestEffort(client, "turn interrupt");
+        await retireUnsafeCodexTurnClientBestEffort(client, "turn interrupt");
       }
     }
     if (isIncognitoSessionKey(params.sessionKey)) {
@@ -946,31 +914,15 @@ async function runBoundTurn(params: {
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         });
         if (!unsubscribed) {
-          await retireUnsafeCodexConversationClientBestEffort(client, "thread unsubscribe");
+          await retireUnsafeCodexTurnClientBestEffort(client, "thread unsubscribe");
         }
       }
     }
     throw error;
   } finally {
     activeTurnCleanup();
-    notificationCleanup();
-    requestCleanup();
+    turnRoute?.release();
     releaseCodexAppServerClientLease(clientLease);
-  }
-}
-
-async function retireUnsafeCodexConversationClientBestEffort(
-  client: CodexAppServerClient,
-  operation: "turn interrupt" | "thread unsubscribe",
-): Promise<void> {
-  try {
-    await closeCodexStartupClientBestEffort(client);
-  } catch (error) {
-    // Cleanup must not replace the original turn or timeout failure.
-    embeddedAgentLog.debug("codex conversation client retirement failed during cleanup", {
-      operation,
-      error,
-    });
   }
 }
 

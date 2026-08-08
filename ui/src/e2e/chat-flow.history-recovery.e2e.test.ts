@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
@@ -17,6 +19,138 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("restores reasoning and tool activity after navigating away from a session", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await mkdir(artifactDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const visibleAnswer = "Trace preserved after navigation.";
+    const reasoning = "Checked the persisted session trace.";
+    const currentMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Current session placeholder." }],
+        timestamp: 1,
+      },
+    ];
+    const traceMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: reasoning },
+          { type: "text", text: visibleAnswer },
+          {
+            type: "toolCall",
+            id: "call-read",
+            name: "read",
+            arguments: { path: "AGENTS.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: 3,
+      },
+    ];
+    const responseCases = {
+      cases: [
+        {
+          match: { sessionKey: sessionB },
+          response: { messages: traceMessages, sessionId: "trace-session", thinkingLevel: "high" },
+        },
+        {
+          match: { sessionKey: sessionA },
+          response: {
+            messages: currentMessages,
+            sessionId: "current-session",
+            thinkingLevel: "high",
+          },
+        },
+      ],
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": responseCases,
+        "chat.startup": responseCases,
+        "sessions.list": chatSessionListResponse([
+          {
+            key: sessionA,
+            kind: "direct",
+            label: "Session A",
+            reasoningLevel: "high",
+            updatedAt: 2,
+          },
+          {
+            key: sessionB,
+            kind: "direct",
+            label: "Session B",
+            reasoningLevel: "high",
+            updatedAt: 1,
+          },
+        ]),
+      },
+      sessionKey: sessionA,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
+
+      const sessionLink = (sessionKey: string) =>
+        page.locator(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+        );
+      const expectTrace = async () => {
+        await page.getByText(visibleAnswer, { exact: true }).waitFor({ timeout: 10_000 });
+        await expect.poll(() => page.locator(".chat-thinking").textContent()).toContain(reasoning);
+        await expect
+          .poll(() => page.locator(".chat-tool-msg-summary").textContent())
+          .toContain("Read");
+      };
+
+      await sessionLink(sessionB).click();
+      await expectTrace();
+      if (artifactDir) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "trace-after-first-navigation.png"),
+        });
+      }
+
+      await sessionLink(sessionA).click();
+      await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
+      const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      await sessionLink(sessionB).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length)
+        .toBeGreaterThan(historyRequestsBeforeReturn);
+      await expectTrace();
+      if (artifactDir) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "trace-after-return.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps valid assistant history visible after a malformed transcript block", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -444,7 +578,7 @@ suite.define(() => {
       await gateway.closeLatest(1006, "lost ack");
 
       const queue = page.locator(".chat-queue");
-      await queue.getByText("Needs review").waitFor({ timeout: 10_000 });
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await queue.locator(".chat-queue__retry").click();
 

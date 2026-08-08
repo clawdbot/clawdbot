@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   movePendingDeliveryQueueEntryNamespace,
   replacePendingDeliveryQueueEntry,
@@ -480,19 +481,12 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   stateDir?: string;
 }): Promise<{ moved: number; skipped: number }> {
   const migrationKey = params.stateDir ?? "<default-state>";
-  const active = activeLegacyMigrations.get(migrationKey);
-  if (active) {
-    return await active;
-  }
-  const migration = migrateLegacyPendingOutboundDeliveriesOwned(params);
-  activeLegacyMigrations.set(migrationKey, migration);
-  try {
-    return await migration;
-  } finally {
-    if (activeLegacyMigrations.get(migrationKey) === migration) {
-      activeLegacyMigrations.delete(migrationKey);
-    }
-  }
+  return await getOrCreatePromise(
+    activeLegacyMigrations,
+    migrationKey,
+    () => migrateLegacyPendingOutboundDeliveriesOwned(params),
+    { evictOnSettled: true },
+  );
 }
 
 async function migrateLegacyPendingOutboundDeliveriesOwned(params: {

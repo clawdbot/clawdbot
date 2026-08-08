@@ -7,6 +7,7 @@ import {
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
+  formatContextTokenCapacity,
   formatDurationCompact,
   formatDurationHuman,
   formatMs,
@@ -15,7 +16,6 @@ import {
   formatTimeMs,
   formatTokens,
   formatUnknownText,
-  parseSessionKeyParts,
   truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
@@ -196,34 +196,6 @@ describe("formatUnknownText", () => {
   });
 });
 
-describe("parseSessionKeyParts", () => {
-  it("parses a standard agent session key", () => {
-    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
-      agentId: "data-expert",
-      channel: "dingtalk",
-      accountId: "cidzg6sF43NZMy52Rnk8EN",
-    });
-  });
-
-  it("parses account ids containing separators", () => {
-    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
-      agentId: "main",
-      channel: "telegram",
-      accountId: "user:12345:extra",
-    });
-  });
-
-  it("returns null for non-agent or malformed keys", () => {
-    expect(parseSessionKeyParts("global:default")).toBeNull();
-    expect(parseSessionKeyParts("direct:some-key")).toBeNull();
-    expect(parseSessionKeyParts("")).toBeNull();
-    expect(parseSessionKeyParts("agent:")).toBeNull();
-    expect(parseSessionKeyParts("agent:main")).toBeNull();
-    expect(parseSessionKeyParts("agent:main:")).toBeNull();
-    expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
-  });
-});
-
 describe("formatCompactTokenCount", () => {
   it("formats values under 1,000 as-is", () => {
     expect(formatCompactTokenCount(0)).toBe("0");
@@ -238,6 +210,7 @@ describe("formatCompactTokenCount", () => {
 
   it("formats millions with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000_000)).toBe("1M");
+    expect(formatCompactTokenCount(1_050_000)).toBe("1.1M");
     expect(formatCompactTokenCount(1_500_000)).toBe("1.5M");
   });
 
@@ -261,6 +234,21 @@ describe("formatCompactTokenCount", () => {
       "1.0K",
     );
     expect(formatCompactTokenCount(1_000_000, { trimTrailingZero: false })).toBe("1.0M");
+  });
+});
+
+describe("formatContextTokenCapacity", () => {
+  it("truncates million-scale capacity to at most one decimal", () => {
+    expect(formatContextTokenCapacity(1_000_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_050_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_100_000)).toBe("1.1M");
+  });
+
+  it("preserves shared compact formatting below one million", () => {
+    expect(formatContextTokenCapacity(999)).toBe("999");
+    expect(formatContextTokenCapacity(1_000)).toBe("1k");
+    expect(formatContextTokenCapacity(32_768)).toBe("32.8k");
+    expect(formatContextTokenCapacity(999_999)).toBe("1M");
   });
 });
 

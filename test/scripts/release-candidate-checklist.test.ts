@@ -9,6 +9,7 @@ import {
   buildReleaseCandidateState,
   buildPublishCommand,
   buildTelegramArtifactInputs,
+  assertPlannedReleaseTagIsAbsent,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
@@ -78,14 +79,12 @@ describe("release candidate checklist", () => {
       toolingSha: "b".repeat(40),
     });
     const resumed = reconcileReleaseCandidateState(
-      JSON.parse(
-        JSON.stringify({
-          ...expected,
-          phase: "waiting",
-          fullReleaseRunId: "111",
-          npmPreflightRunId: "222",
-        }),
-      ),
+      structuredClone({
+        ...expected,
+        phase: "waiting",
+        fullReleaseRunId: "111",
+        npmPreflightRunId: "222",
+      }),
       expected,
     );
 
@@ -94,6 +93,19 @@ describe("release candidate checklist", () => {
       fullReleaseRunId: "111",
       npmPreflightRunId: "222",
     });
+  });
+
+  it("treats the release tag as a planned post-validation identity", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)]);
+
+    expect(options.targetSha).toBe("a".repeat(40));
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => true)).toThrow(
+      "already exists",
+    );
+    expect(() => assertPlannedReleaseTagIsAbsent("v2026.7.1-beta.4", () => false)).not.toThrow();
+    expect(() => parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"])).toThrow(
+      "--target-sha must be a full lowercase commit SHA",
+    );
   });
 
   it("rejects stale or conflicting release candidate state", () => {
@@ -346,7 +358,38 @@ describe("release candidate checklist", () => {
         targetSha,
         isAncestor: () => true,
       }),
-    ).toThrow("duplicate contribution record PR rows: #123");
+    ).toThrow("duplicate contribution record PR #123");
+  });
+
+  it("rejects canonical provenance whose unique total does not match the PR rows", () => {
+    const targetSha = "b".repeat(40);
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- User-facing notes.",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 in-range PR + 1 retained seed-only PR = 2 unique PRs.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #123** fix: example.",
+    ].join("\n");
+
+    expect(() =>
+      validateCandidateChangelogProvenance({
+        changelog,
+        version: "2026.7.1",
+        tag: "v2026.7.1-beta.3",
+        targetSha,
+        isAncestor: () => true,
+      }),
+    ).toThrow("contribution record row count 1 != 2");
   });
 
   it("uses numbered historical record rows and skips Unreleased baseline rows", () => {
@@ -367,7 +410,7 @@ describe("release candidate checklist", () => {
       "",
       "### Complete contribution record",
       "",
-      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
+      "This audited record covers the complete base..HEAD history: 1 merged PR.",
       "",
       "#### Pull requests",
       "",

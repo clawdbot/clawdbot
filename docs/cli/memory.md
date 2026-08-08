@@ -27,13 +27,13 @@ openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--ver
 Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
-| Flag        | Effect                                                                                                                                                                                                                                                                                                    |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; unknown vector/semantic state means it was not probed. QMD lexical `searchMode: "search"` always skips semantic vector probes, even with `--deep`. |
-| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                                          |
-| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                                               |
-| `--json`    | Print JSON.                                                                                                                                                                                                                                                                                               |
-| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                                             |
+| Flag        | Effect                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not probed. QMD lexical `searchMode: "search"` always skips semantic vector probes, even with `--deep`. |
+| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                                                                                                             |
+| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                                                                                                                  |
+| `--json`    | Print JSON.                                                                                                                                                                                                                                                                                                                                                                  |
+| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                                                                                                                |
 
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
 scheduled sweeps never seem to run, the managed dreaming cron depends on the
@@ -63,6 +63,12 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--agent <id>`: defaults to the default agent (not the full agent list).
 - `--max-results <n>`: cap result count (positive integer).
 - `--min-score <n>`: filter out matches below this score.
+
+If the index remains dirty after the bounded search-time refresh, human output
+warns that matches may be incomplete. With `--json`, the response adds
+`stale: true`, plus `warning` and `action` fields describing how to rebuild the
+index. Treat an empty `results` array as authoritative only when `stale` is
+absent.
 
 ## `memory promote`
 

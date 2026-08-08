@@ -5,7 +5,7 @@ import {
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
 } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 describe("system agent setup-flow operations", () => {
   it("parses channel listing and connect requests", () => {
@@ -121,6 +121,7 @@ describe("system agent setup-flow operations", () => {
     expect(output).toContain("openclaw channels add --channel slack");
     expect(output).toContain("openclaw configure --section web");
     expect(output).toContain("openclaw configure --section gateway");
+    expect(output).toContain("on the machine running OpenClaw");
   });
 
   it("prints one-shot pointers for hosted skills, search, and Gateway setup", async () => {
@@ -150,7 +151,9 @@ describe("system agent setup-flow operations", () => {
     const result = await executeSystemAgentOperation({ kind: "model-setup" }, runtime);
 
     expect(result.applied).toBe(false);
-    expect(lines.join("\n")).toContain("Exit OpenClaw and run `openclaw onboard`");
+    expect(lines.join("\n")).toContain("Run `openclaw onboard` on the machine running OpenClaw");
+    expect(lines.join("\n")).toContain("Stop the OpenClaw host");
+    expect(lines.join("\n")).toContain("restart the host");
     expect(lines.join("\n")).not.toContain("openclaw configure --section model");
   });
 

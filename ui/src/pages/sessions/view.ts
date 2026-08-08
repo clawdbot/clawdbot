@@ -31,8 +31,8 @@ import {
   formatMs,
   formatRelativeTimestamp,
   formatTokens,
-  parseSessionKeyParts,
 } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
@@ -51,6 +51,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -98,6 +99,13 @@ export type SessionsProps = {
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
   checkpointErrorByKey: Record<string, string>;
+  patchWriteDisabledReason?: string;
+  patchAdminDisabledReason?: string;
+  groupWriteDisabledReason?: string;
+  deleteArchivedDisabledReason?: string;
+  checkpointBranchDisabledReason?: string;
+  checkpointRestoreDisabledReason?: string;
+  deleteSelectedDisabledReason?: string;
   onFiltersChange: (next: {
     activeMinutes: string;
     limit: string;
@@ -806,7 +814,7 @@ function setDropTargetActive(event: DragEvent, active: boolean) {
 }
 
 function categoryDropHandlers(props: SessionsProps, category: string | null) {
-  if (props.groupBy !== "category") {
+  if (props.groupBy !== "category" || props.groupWriteDisabledReason) {
     return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
   }
   const carriesSessionKey = (event: DragEvent) =>
@@ -871,10 +879,14 @@ function renderCategoryCell(row: GatewaySessionRow, props: SessionsProps) {
   return html`
     <td>
       <select
-        ?disabled=${props.loading}
+        ?disabled=${props.loading || Boolean(props.groupWriteDisabledReason)}
+        title=${props.groupWriteDisabledReason ?? nothing}
         aria-label=${t("sessionsView.moveToGroup")}
         class="session-group-select"
         @change=${(e: Event) => {
+          if (props.groupWriteDisabledReason) {
+            return;
+          }
           const select = e.target as HTMLSelectElement;
           if (select.value === NEW_GROUP_OPTION) {
             // The page prompts for a name and patches; restore until the refresh lands.
@@ -938,6 +950,7 @@ function renderFilterToggle(params: {
 function renderOverrideSelect(params: {
   label: string;
   disabled: boolean;
+  disabledReason?: string;
   options: readonly { value: string; label: string }[];
   current: string;
   onChange: (value: string) => void;
@@ -948,6 +961,7 @@ function renderOverrideSelect(params: {
       <select
         class="settings-select"
         ?disabled=${params.disabled}
+        title=${params.disabledReason ?? nothing}
         @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
       >
         ${params.options.map(
@@ -1027,7 +1041,10 @@ export function renderSessions(props: SessionsProps) {
       ? html`
           <button
             class="btn danger"
-            ?disabled=${props.loading || archivedCount === 0}
+            ?disabled=${props.loading ||
+            archivedCount === 0 ||
+            Boolean(props.deleteArchivedDisabledReason)}
+            title=${props.deleteArchivedDisabledReason ?? nothing}
             @click=${props.onDeleteAllArchived}
           >
             ${icons.trash} ${t("sessionsView.deleteAllArchived")}
@@ -1207,7 +1224,12 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
       </label>
       ${props.groupBy === "category"
         ? html`
-            <button class="btn btn--sm" @click=${() => props.onRequestNewCategory()}>
+            <button
+              class="btn btn--sm"
+              ?disabled=${Boolean(props.groupWriteDisabledReason)}
+              title=${props.groupWriteDisabledReason ?? nothing}
+              @click=${() => props.onRequestNewCategory()}
+            >
               ${icons.plus} ${t("sessionsView.newGroup")}
             </button>
           `
@@ -1223,7 +1245,8 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             </button>
             <button
               class="btn btn--sm danger"
-              ?disabled=${props.loading}
+              ?disabled=${props.loading || Boolean(props.deleteSelectedDisabledReason)}
+              title=${props.deleteSelectedDisabledReason ?? nothing}
               @click=${props.onDeleteSelected}
             >
               ${icons.trash} ${t("sessionsView.deleteSelected")}
@@ -1464,14 +1487,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                       href=${chatUrl}
                       class="session-link"
                       @click=${(e: MouseEvent) => {
-                        if (
-                          e.defaultPrevented ||
-                          e.button !== 0 ||
-                          e.metaKey ||
-                          e.ctrlKey ||
-                          e.shiftKey ||
-                          e.altKey
-                        ) {
+                        if (!shouldHandleNavigationClick(e)) {
                           return;
                         }
                         if (props.onNavigateToChat) {
@@ -1650,7 +1666,8 @@ function renderSessionDetailsRow(params: {
               <input
                 class="settings-input"
                 .value=${row.label ?? ""}
-                ?disabled=${props.loading}
+                ?disabled=${props.loading || Boolean(props.patchWriteDisabledReason)}
+                title=${props.patchWriteDisabledReason ?? nothing}
                 placeholder=${t("sessionsView.optionalPlaceholder")}
                 @change=${(e: Event) => {
                   const value =
@@ -1661,14 +1678,16 @@ function renderSessionDetailsRow(params: {
             </label>
             ${renderOverrideSelect({
               label: t("sessionsView.thinking"),
-              disabled: props.loading,
+              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+              disabledReason: props.patchAdminDisabledReason,
               options: thinkLevels,
               current: thinking,
               onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
             })}
             ${renderOverrideSelect({
               label: t("sessionsView.fast"),
-              disabled: props.loading,
+              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+              disabledReason: props.patchAdminDisabledReason,
               options: fastLevels,
               current: fastMode,
               onChange: (value) =>
@@ -1678,14 +1697,16 @@ function renderSessionDetailsRow(params: {
             })}
             ${renderOverrideSelect({
               label: t("sessionsView.verbose"),
-              disabled: props.loading,
+              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+              disabledReason: props.patchAdminDisabledReason,
               options: verboseLevels,
               current: verbose,
               onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
             })}
             ${renderOverrideSelect({
               label: t("sessionsView.reasoning"),
-              disabled: props.loading,
+              disabled: props.loading || Boolean(props.patchAdminDisabledReason),
+              disabledReason: props.patchAdminDisabledReason,
               options: reasoningLevels.map((level) => ({
                 value: level,
                 label: level || t("sessionsView.inherit"),
@@ -1750,7 +1771,9 @@ function renderSessionDetailsRow(params: {
                             <div class="session-checkpoint-card__actions">
                               <button
                                 class="btn btn--sm"
-                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId}
+                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId ||
+                                Boolean(props.checkpointBranchDisabledReason)}
+                                title=${props.checkpointBranchDisabledReason ?? nothing}
                                 @click=${() =>
                                   props.onBranchFromCheckpoint(row.key, checkpoint.checkpointId)}
                               >
@@ -1758,7 +1781,9 @@ function renderSessionDetailsRow(params: {
                               </button>
                               <button
                                 class="btn btn--sm"
-                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId}
+                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId ||
+                                Boolean(props.checkpointRestoreDisabledReason)}
+                                title=${props.checkpointRestoreDisabledReason ?? nothing}
                                 @click=${() =>
                                   props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
                               >

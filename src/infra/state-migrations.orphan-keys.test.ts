@@ -4,8 +4,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { migrateOrphanedSessionKeys } from "./state-migrations.js";
-import { resolveSessionStoreOwnership } from "./state-migrations.session-store.js";
+import {
+  migrateOrphanedSessionKeys,
+  resolveSessionStoreOwnership,
+} from "./state-migrations.session-store.js";
 
 const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -16,6 +18,17 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
     listPluginDoctorSessionStoreAgentIds: listPluginDoctorSessionStoreAgentIdsMock,
   };
 });
+
+vi.mock(
+  "../channels/plugins/bundled.js",
+  () =>
+    ({
+      listBundledChannelLegacySessionSurfaces: () => [],
+    }) satisfies Pick<
+      typeof import("../channels/plugins/bundled.js"),
+      "listBundledChannelLegacySessionSurfaces"
+    >,
+);
 
 function writeStore(storePath: string, store: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });

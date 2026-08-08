@@ -398,7 +398,12 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.put"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
@@ -467,7 +472,13 @@ suite.define(() => {
         },
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.delete",
+        "sessions.groups.list",
+        "sessions.groups.rename",
+      ],
       sessionKey: "agent:main:main",
       sessionGroups: ["Apps", "Research"],
     });
@@ -582,7 +593,12 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.rename"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.rename",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
@@ -655,7 +671,13 @@ suite.define(() => {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
       sessionKey: "agent:main:session-0",
       sessionGroups: ["Alpha", "Beta"],
     });
@@ -818,7 +840,12 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       sessionKey: "agent:main:main",
       // Stored-but-empty catalog groups stay visible as sections/move targets.
       sessionGroups: ["First group"],

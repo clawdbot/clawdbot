@@ -1,6 +1,8 @@
 // Vitest Process Group tests cover vitest process group script behavior.
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createVitestProcessCompletion,
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   resolveVitestProcessGroupSignalTarget,
@@ -79,6 +81,24 @@ describe("vitest process group helpers", () => {
         kill,
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    ["Windows", { detached: true, platform: "win32" as const }],
+    ["non-detached POSIX", { detached: false, platform: "darwin" as const }],
+  ])("keeps %s completion on direct-child exit", async (_label, params) => {
+    const child = Object.assign(new EventEmitter(), { pid: 4200 });
+    const kill = vi.fn(() => true as const);
+    const completion = createVitestProcessCompletion({
+      child: child as never,
+      kill,
+      ...params,
+    });
+
+    child.emit("exit", 0, null);
+
+    await expect(completion).resolves.toEqual({ code: 0, signal: null });
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("installs and removes process cleanup listeners", () => {

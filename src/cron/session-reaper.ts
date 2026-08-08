@@ -33,7 +33,15 @@ function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   const raw = cronConfig?.sessionRetention;
   if (typeof raw === "string" && raw.trim()) {
     try {
-      return parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      const ms = parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      // A zero retention ("0h") is a disable signal, not "prune everything":
+      // cutoff would equal now and the next sweep would delete every cron run
+      // session. Negative durations never get here (the parser rejects them);
+      // the <= 0 check stays defensive.
+      if (ms <= 0) {
+        return null;
+      }
+      return ms;
     } catch {
       return DEFAULT_RETENTION_MS;
     }

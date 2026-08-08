@@ -10,6 +10,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
@@ -18,7 +19,8 @@ import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-regist
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
-type SubagentRunSqliteInsert = Insertable<SubagentRunsTable>;
+type BoundSubagentRunRecord = Insertable<SubagentRunsTable>;
+type SubagentRunSqliteInsert = BoundSubagentRunRecord;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
@@ -42,7 +44,7 @@ type SubagentRunReadSqliteRow = Pick<
   delivery_suspended_at: number | null;
 };
 type CanonicalSubagentRunRecord = SubagentRunRecord &
-  Required<Pick<SubagentRunRecord, "execution" | "completion" | "delivery">>;
+  Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
 const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
 const DELIVERY_STATUSES = new Set(
   "not_required pending in_progress delivered failed suspended discarded".split(" "),
@@ -123,7 +125,8 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
 
-function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunSqliteInsert {
+/** Canonically serializes a run before an outer transaction acquires the write lock. */
+export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
   const normalized = normalizeSubagentRunState(structuredClone(entry));
   if (!isCanonicalSubagentRunRecord(normalized)) {
     throw new Error("subagent run is missing canonical nested state");
@@ -148,11 +151,11 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     run_timeout_seconds: normalized.runTimeoutSeconds ?? null,
     spawn_mode: normalized.spawnMode ?? null,
     created_at: normalized.createdAt,
-    started_at: normalized.startedAt ?? null,
+    started_at: normalized.execution.startedAt ?? null,
     session_started_at: normalized.sessionStartedAt ?? null,
     accumulated_runtime_ms: normalized.accumulatedRuntimeMs ?? null,
-    ended_at: normalized.endedAt ?? null,
-    outcome_json: jsonStringify(normalized.outcome),
+    ended_at: normalized.execution.endedAt ?? null,
+    outcome_json: jsonStringify(normalized.execution.outcome),
     archive_at_ms: normalized.archiveAtMs ?? null,
     cleanup_completed_at: normalized.cleanupCompletedAt ?? null,
     cleanup_handled: boolToSqlite(normalized.cleanupHandled),
@@ -196,6 +199,23 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
   };
 }
 
+/** Upserts a prebound run on the exact supplied shared-state handle. */
+export function upsertSubagentRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  row: BoundSubagentRunRecord,
+): void {
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .insertInto("subagent_runs")
+      .values(row)
+      .onConflict((conflict) =>
+        conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
+      ),
+  );
+}
+
 function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
   const { run_id: _runId, ...update } = values;
   return update;
@@ -209,18 +229,11 @@ function writeSubagentRunValues(
   if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
     return;
   }
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runOpenClawStateWriteTransaction((database) => {
+    const { db } = database;
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
     for (const row of values) {
-      executeSqliteQuerySync(
-        db,
-        stateDb
-          .insertInto("subagent_runs")
-          .values(row)
-          .onConflict((conflict) =>
-            conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
-          ),
-      );
+      upsertSubagentRunRowInDatabase(database, row);
     }
     if (retainedRunIds !== undefined) {
       const deleteQuery =
@@ -314,7 +327,7 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         "ended_reason",
         "cleanup_completed_at",
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
-        subagentPayloadJsonValue<string | null>("$.outcome.status").as("outcome_status"),
+        subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
@@ -345,6 +358,8 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
   const deliveryStatus = DELIVERY_STATUSES.has(row.delivery_status ?? "")
     ? (row.delivery_status as NonNullable<SubagentRunRecord["delivery"]>["status"])
     : undefined;
+  const startedAt = normalizeFiniteNumber(row.started_at);
+  const endedAt = normalizeFiniteNumber(row.ended_at);
   return Object.fromEntries(
     Object.entries({
       runId,
@@ -354,13 +369,15 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       model: row.model || undefined,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,
-      startedAt: normalizeFiniteNumber(row.started_at),
+      execution: {
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(endedAt !== undefined ? { endedAt } : {}),
+        ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),
+      },
       sessionStartedAt: normalizeFiniteNumber(row.session_started_at),
       accumulatedRuntimeMs: normalizeFiniteNumber(row.accumulated_runtime_ms),
-      endedAt: normalizeFiniteNumber(row.ended_at),
       runTimeoutSeconds: normalizeFiniteNumber(row.run_timeout_seconds),
       endedReason: row.ended_reason || undefined,
-      outcome: outcomeStatus ? { status: outcomeStatus } : undefined,
       cleanupCompletedAt: normalizeFiniteNumber(row.cleanup_completed_at),
       delivery: deliveryStatus
         ? {
@@ -427,7 +444,7 @@ export function loadSubagentSessionListRunsFromSqlite(): Map<string, SubagentRun
 
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
-  const values = [...runs.values()].map(subagentRunRecordToSqliteInsert);
+  const values = [...runs.values()].map(bindSubagentRunRecord);
   writeSubagentRunValues(
     values,
     undefined,
@@ -446,7 +463,7 @@ export function saveSubagentRegistryChangesToSqlite(
   for (const runId of runIds) {
     const entry = runs.get(runId);
     if (entry) {
-      values.push(subagentRunRecordToSqliteInsert(entry));
+      values.push(bindSubagentRunRecord(entry));
     } else {
       deleteRunIds.push(runId);
     }

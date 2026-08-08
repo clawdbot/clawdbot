@@ -16,6 +16,7 @@ import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
   applyJobPatch,
   applyDeclarativeJobSpec,
@@ -35,17 +36,35 @@ import type {
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
+  DeferredCronNotifications,
 } from "./state.js";
 import { emit } from "./state.js";
 import {
   ensureLoaded,
   persist,
   persistOrRestore,
+  runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
+
+async function resolveConfiguredChannelsForValidation(
+  state: CronServiceState,
+): Promise<readonly string[] | undefined> {
+  if (!state.deps.listConfiguredChannels) {
+    return undefined;
+  }
+  try {
+    return await state.deps.listConfiguredChannels();
+  } catch {
+    // Channel discovery is advisory at mutation time. Runtime delivery remains
+    // authoritative, so discovery failures must not create false rejections.
+    state.deps.log.debug({}, "cron: configured channel validation skipped");
+    return undefined;
+  }
+}
 
 function reconcileStreamSourceIdentity(job: CronJob, nextJob: CronJob): void {
   if (nextJob.schedule.kind !== "stream") {
@@ -228,6 +247,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error(`cron declarationKey is ambiguous within caller scope: ${declarationKey}`);
     }
     const existing = matches[0];
+    const configuredChannels = await resolveConfiguredChannelsForValidation(state);
 
     if (existing) {
       // A declarative upsert may not repurpose an existing heartbeat monitor
@@ -245,6 +265,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         nowMs: now,
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
+        configuredChannels,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -273,18 +294,19 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
+      configuredChannels,
     });
     state.store?.jobs.push(job);
 
-    // Auto-disable notifications describe durable state, so publish them only
+    // Mutation notifications describe durable state, so publish them only
     // after the write succeeds instead of leaking a rolled-back transition.
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: job.id,
     });
     armTimer(state);
@@ -351,11 +373,15 @@ export async function updateLoadedJob(params: {
   const now = state.deps.nowMs();
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
+  const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
+    ? await resolveConfiguredChannelsForValidation(state)
+    : undefined;
   applyJobPatch(nextJob, patch, {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
+    configuredChannels,
   });
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
@@ -428,13 +454,13 @@ export async function remove(
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: id,
     });
     if (removed) {
@@ -479,13 +505,17 @@ export async function removeAgentJobsTransactional<T>(
     state.store.jobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
     );
-    recomputeNextRunsForMaintenance(state);
+    const postPersistNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
+    // Cron is durable first, but notifications stay speculative until the roster commits.
     await persistOrRestore(state, snapshot);
     let result: T;
     try {
       result = await commit();
     } catch (error) {
       if (error instanceof AgentDeletionCommitUncertainError) {
+        // Uncertain roster writes intentionally keep the cron deletion durable.
+        runPostPersistCronNotifications(state, postPersistNotifications);
         armTimer(state);
         for (const job of removedJobs) {
           noteActiveCronJobRemoval(job.id);
@@ -509,6 +539,7 @@ export async function removeAgentJobsTransactional<T>(
       }
       throw error;
     }
+    runPostPersistCronNotifications(state, postPersistNotifications);
     for (const job of removedJobs) {
       noteActiveCronJobRemoval(job.id);
       try {

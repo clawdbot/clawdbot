@@ -5,6 +5,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
@@ -23,7 +24,9 @@ import {
   CLAW_SCHEMA_VERSION,
   type ClawManifest,
   type ClawMcpServer,
+  type ClawOpenClawExtension,
   type ClawOpenClawProfile,
+  type ClawPackagePreflight,
 } from "./types.js";
 
 export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" as const;
@@ -75,7 +78,10 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
   };
 }
 
-function portableOpenClawProfile(agent: AgentConfig): ClawOpenClawProfile | undefined {
+function portableOpenClawProfile(
+  agent: AgentConfig,
+  extensions: ClawOpenClawExtension[],
+): ClawOpenClawProfile | undefined {
   const tools = {
     ...(agent.tools?.profile ? { profile: agent.tools.profile } : {}),
     ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
@@ -159,7 +165,9 @@ function portableOpenClawProfile(agent: AgentConfig): ClawOpenClawProfile | unde
         }
       : {}),
   };
-  return Object.keys(settings).length > 0 ? { schemaVersion: 1, agent: settings } : undefined;
+  return extensions.length > 0 || Object.keys(settings).length > 0
+    ? { schemaVersion: 1, agent: settings, extensions }
+    : undefined;
 }
 
 function normalizedRelativePath(value: string): string {
@@ -258,6 +266,7 @@ export async function exportClawAgent(
   options: OpenClawStateDatabaseOptions & {
     config: OpenClawConfig;
     packageDeps?: PackageRemovalDeps;
+    packagePreflight?: ClawPackagePreflight;
     sourceMcpServers?: Record<string, Record<string, unknown>>;
   },
 ): Promise<ClawExportResult> {
@@ -304,11 +313,16 @@ export async function exportClawAgent(
       `Cannot export drifted managed files: ${driftedFiles.map((file) => `${file.path} (${file.state})`).join(", ")}.`,
     );
   }
-  const driftedPackages = record.packages.filter((pkg) => pkg.state !== "present");
+  const driftedPackages = record.packages.filter(
+    (pkg) =>
+      pkg.state !== "present" ||
+      (pkg.extensionCompatibility !== undefined &&
+        pkg.extensionCompatibility.state !== "compatible"),
+  );
   if (driftedPackages.length > 0) {
     throw new ClawExportError(
       "packages_drifted",
-      `Cannot export drifted packages: ${driftedPackages.map((pkg) => `${pkg.kind}:${pkg.ref}@${pkg.version} (${pkg.state})`).join(", ")}.`,
+      `Cannot export drifted packages: ${driftedPackages.map((pkg) => `${pkg.kind}:${pkg.ref}@${pkg.version} (${pkg.extensionCompatibility?.state ?? pkg.state})`).join(", ")}.`,
     );
   }
   const unresolvedCronJobs = record.cronJobs.filter(
@@ -357,6 +371,19 @@ export async function exportClawAgent(
   if (avatar.sidecar && !managedPaths.has(avatar.sidecar.path)) {
     contents.push(avatar.sidecar);
   }
+  let pendingPackageBootstrap: Buffer | undefined;
+  if (record.install.bootstrap && record.bootstrapState === "pending") {
+    pendingPackageBootstrap = await workspace.readBytes("BOOTSTRAP.md", {
+      maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+    });
+    const contentDigest = `sha256:${createHash("sha256").update(pendingPackageBootstrap).digest("hex")}`;
+    if (contentDigest !== record.install.bootstrap.contentDigest) {
+      throw new ClawExportError(
+        "bootstrap_drifted",
+        "Cannot export BOOTSTRAP.md because it changed during ownership inspection.",
+      );
+    }
+  }
   const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
   const files: ClawManifest["workspace"]["files"] = [];
   for (const file of contents) {
@@ -370,28 +397,40 @@ export async function exportClawAgent(
   const configuredMcpServers = normalizeConfiguredMcpServers(
     options.sourceMcpServers ?? options.config.mcp?.servers,
   );
-  const openClawProfile = portableOpenClawProfile(agent);
+  const extensions = record.packages
+    .filter((pkg) => pkg.extension)
+    .map((pkg) => ({
+      id: pkg.extension!.id,
+      kind: "plugin" as const,
+      format: pkg.extension!.format,
+      source: pkg.source,
+      ref: pkg.ref,
+      version: pkg.version,
+    }))
+    .toSorted((left, right) => comparePortableText(left.id, right.id));
+  const openClawProfile = portableOpenClawProfile(agent, extensions);
   const openClawProfilePath = "profiles/openclaw.yml";
   const openClawProfileRaw = openClawProfile
     ? Buffer.from(stringifyYaml(openClawProfile))
     : undefined;
+  const portablePackages = record.packages
+    .filter((pkg) => !pkg.extension)
+    .map((pkg) => ({
+      kind: pkg.kind,
+      source: pkg.source,
+      ref: pkg.ref,
+      version: pkg.version,
+    }))
+    .toSorted((left, right) => {
+      const leftIdentity = `${left.kind}:${left.ref}:${left.version}`;
+      const rightIdentity = `${right.kind}:${right.ref}:${right.version}`;
+      return comparePortableText(leftIdentity, rightIdentity);
+    });
   const manifest: ClawManifest = {
     schemaVersion: CLAW_SCHEMA_VERSION,
     agent: portableAgent(agent, avatar.source),
-    ...(openClawProfile ? { metadata: { "openclaw.config": openClawProfilePath } } : {}),
     workspace: { bootstrapFiles, files },
-    packages: record.packages
-      .map((pkg) => ({
-        kind: pkg.kind,
-        source: pkg.source,
-        ref: pkg.ref,
-        version: pkg.version,
-      }))
-      .toSorted((left, right) => {
-        const leftIdentity = `${left.kind}:${left.ref}:${left.version}`;
-        const rightIdentity = `${right.kind}:${right.ref}:${right.version}`;
-        return comparePortableText(leftIdentity, rightIdentity);
-      }),
+    packages: portablePackages,
     mcpServers: Object.fromEntries(
       record.mcpServers.map((ref) => [
         ref.name,
@@ -477,6 +516,9 @@ export async function exportClawAgent(
         ...contents,
         ...(clawMarkdownBody ? [{ path: "CLAW.md#body", content: clawMarkdownBody }] : []),
         ...(openClawProfileRaw ? [{ path: openClawProfilePath, content: openClawProfileRaw }] : []),
+        ...(pendingPackageBootstrap
+          ? [{ path: "BOOTSTRAP.md", content: pendingPackageBootstrap }]
+          : []),
       ]),
       type: "module",
       openclaw: { claw: "CLAW.md" },
@@ -487,6 +529,10 @@ export async function exportClawAgent(
     filesWritten.push("package.json");
     await output.write("CLAW.md", clawMarkdownRaw, { overwrite: false });
     filesWritten.push("CLAW.md");
+    if (pendingPackageBootstrap) {
+      await output.write("BOOTSTRAP.md", pendingPackageBootstrap, { overwrite: false });
+      filesWritten.push("BOOTSTRAP.md");
+    }
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined);
     throw new ClawExportError(

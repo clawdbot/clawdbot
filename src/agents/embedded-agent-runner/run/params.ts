@@ -41,12 +41,15 @@ import type {
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine-turn-attempt.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SessionManager } from "../../sessions/index.js";
+import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -166,6 +169,7 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalOnly?: boolean;
   /** Mark proposals created by this internal review as autonomous captures. */
   skillWorkshopAutonomousCapture?: boolean;
+  skillWorkshopUpdateProposals?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */
@@ -252,8 +256,8 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  /** Trusted in-process subagent-completion handoff; never derived from public input. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process subagent-completion capability; never derived from public input. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
@@ -307,7 +311,7 @@ export type RunEmbeddedAgentParams = {
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
@@ -386,6 +390,10 @@ export type RunEmbeddedAgentParams = {
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Context engine resolved once by the outer logical-turn owner. */
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
+  /** Emits immutable attempt facts for selection by the outer logical-turn owner. */
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;

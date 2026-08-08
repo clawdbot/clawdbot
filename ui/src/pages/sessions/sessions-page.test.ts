@@ -10,6 +10,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { getWorkboardState } from "../../lib/workboard/index.ts";
 import {
@@ -19,6 +20,8 @@ import {
   createSessions,
   type TestSessionsPage,
 } from "./sessions-page.test-support.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
@@ -47,6 +50,7 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -538,7 +542,7 @@ describe("sessions page lifecycle", () => {
     const page = await createPage(createContext(mutableGateway.gateway, sessions));
     page.result = { count: 1, sessions: [{ key }] } as SessionsListResult;
     page.selectedKeys = new Set([key]);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
 
@@ -548,22 +552,106 @@ describe("sessions page lifecycle", () => {
     expect(page.selectedKeys).toEqual(new Set());
   });
 
-  it("routes a confirmed row-menu deletion through the scoped bulk owner", async () => {
+  it("does not delete a selection after the gateway changes during confirmation", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    const sessions = createSessions({ deleteMany: vi.fn() });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:old" }],
+    } as SessionsListResult;
+    page.selectedKeys = new Set(["agent:main:old"]);
+
+    const deleting = page.deleteSelected();
+    await Promise.resolve();
+    mutableGateway.emit({ phase: "reconnecting", client: null });
+    confirmation.resolve(true);
+    await deleting;
+
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("archive-gates a confirmed archived row-menu deletion", async () => {
     const key = "agent:main:work";
     const sessions = createSessions({
       deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, sessions));
-    const row = { key, label: "Work" } as GatewaySessionRow;
+    const row = { key, label: "Work", archived: true } as GatewaySessionRow;
     page.result = { count: 1, sessions: [row] } as SessionsListResult;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSessionFromMenu(row);
 
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key, agentId: undefined, archivedOnly: true },
+    ]);
     expect(page.result?.sessions).toEqual([]);
+  });
+
+  it.each([
+    ["active", false],
+    ["unknown", undefined],
+  ] as const)("keeps %s row-menu deletion admin-only", async (_state, archived) => {
+    const key = `agent:main:${_state}`;
+    const sessions = createSessions({
+      deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const row = {
+      key,
+      label: _state,
+      ...(archived === undefined ? {} : { archived }),
+    } as GatewaySessionRow;
+    page.result = { count: 1, sessions: [row] } as SessionsListResult;
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+
+    await page.deleteSessionFromMenu(row);
+
+    expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
+  });
+
+  it("derives archive gates per selected row and keeps unknown rows admin-only", async () => {
+    const activeKey = "agent:main:active";
+    const archivedKey = "agent:main:archived";
+    const unknownKey = "agent:main:unknown";
+    const sessions = createSessions({
+      deleteMany: vi.fn(async () => ({
+        deleted: [archivedKey],
+        errors: ["active denied", "unknown denied"],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    page.result = {
+      count: 2,
+      sessions: [
+        { key: activeKey, archived: false },
+        { key: archivedKey, archived: true },
+      ],
+    } as SessionsListResult;
+    page.selectedKeys = new Set([activeKey, archivedKey, unknownKey]);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+
+    await page.deleteSelected();
+
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      { key: activeKey, agentId: undefined },
+      { key: archivedKey, agentId: undefined, archivedOnly: true },
+      { key: unknownKey, agentId: undefined },
+    ]);
+    expect(page.result).toMatchObject({
+      count: 1,
+      sessions: [{ key: activeKey, archived: false }],
+    });
+    expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
+    expect(page.error).toBe("active denied; unknown denied");
   });
 
   it("stops an active cloud worker and refreshes the session roster", async () => {
@@ -588,11 +676,15 @@ describe("sessions page lifecycle", () => {
         remoteWorkspaceDir: "/workspace",
       },
     } as GatewaySessionRow;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.stopCloudWorker(row);
 
-    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "Cloud task"?');
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message: 'Stop the cloud worker for "Cloud task"?',
+      confirmLabel: "Stop worker",
+      danger: true,
+    });
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:cloud", agentId: "main" },
@@ -653,7 +745,7 @@ describe("sessions page lifecycle", () => {
     const page = await createPage(context);
     page.result = { count: 1, sessions: [{ key: "main" }] } as SessionsListResult;
     page.selectedKeys = new Set(["main"]);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const requests = [
       page.deleteSelected(),

@@ -103,6 +103,7 @@ export type BuildTelegramMessageContextParams = {
   cfg: OpenClawConfig;
   account: { accountId: string };
   historyLimit: number;
+  dmHistoryLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;

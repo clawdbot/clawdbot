@@ -885,8 +885,8 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         isAmbiguousSharedStoreKey(key, mainKey, scope) ||
         (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
-    const hasLegacyAcpMetadata = Object.values(parsed.store).some(
-      (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
+    const hasLegacyAcpMetadata = Object.entries(parsed.store).some(
+      ([sessionKey, entry]) => normalizeSessionEntry(entry, sessionKey)?.acp !== undefined,
     );
     if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
       warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));

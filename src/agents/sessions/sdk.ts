@@ -21,6 +21,10 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
@@ -123,7 +127,10 @@ export interface CreateAgentSessionOptions {
   withSessionWriteLock?: AgentSessionWriteLockRunner;
 }
 
-type CreateAgentSessionInternalOptions = Pick<AgentSessionConfig, "contextOverflowRecoveryOwner">;
+type CreateAgentSessionInternalOptions = Pick<
+  AgentSessionConfig,
+  "contextOverflowRecoveryOwner"
+> & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
 interface CreateAgentSessionResult {
@@ -528,6 +535,7 @@ async function createAgentSessionImpl(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
+  setInternalBeforeToolBatch(agent, internalOptions.beforeToolBatch);
   if (agent.streamFn) {
     bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
   }

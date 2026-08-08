@@ -1,4 +1,5 @@
 // Npm Telegram Live tests cover npm telegram live script behavior.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -163,7 +164,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('package_install_source="openclaw@$(read_package_version');
     expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
     expect(script).toContain(
-      '-v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"',
+      '-v "$ROOT_DIR/scripts/lib/bounded-response.mjs:/tmp/lib/bounded-response.mjs:ro"',
     );
     expect(script).toContain(
       '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"',
@@ -267,7 +268,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS");
   });
 
-  it("keeps private QA harness imports local while using the installed package dist", () => {
+  it("keeps candidate runtime authoritative while mounting private QA dist separately", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const preparePackage = readFileSync(PREPARE_PACKAGE_PATH, "utf8");
     const gatewayRpcClient = readFileSync(
@@ -278,15 +279,12 @@ describe("package Telegram live Docker E2E", () => {
       path.resolve(TEST_DIR, "../../extensions/qa-lab/src/runtime-api.ts"),
       "utf8",
     );
-    const qaHarnessSources = [
-      "extensions/qa-lab/api.ts",
-      "extensions/qa-lab/src/self-check.ts",
-      "extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts",
-      "extensions/qa-lab/src/suite-launch.runtime.ts",
-      "extensions/qa-lab/src/suite.ts",
-    ].map((relativePath) => readFileSync(path.resolve(TEST_DIR, "../..", relativePath), "utf8"));
 
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
+    expect(script).toContain('-v "$ROOT_DIR/dist:/app/.openclaw-qa-harness-dist:ro"');
+    expect(script).toContain(
+      'ln -sfnT /app/.openclaw-qa-harness-dist "$openclaw_package_dir/.openclaw-qa-harness-dist"',
+    );
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
     expect(script).toContain('-v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro"');
     expect(script).toContain('-v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro"');
@@ -295,11 +293,55 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain("/app/node_modules/openclaw/package.json");
     expect(preparePackage).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
     expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
+    expect(preparePackage).toContain('pkg.exports["./plugin-sdk/qa-runtime"]');
+    expect(preparePackage).toContain('"./.openclaw-qa-harness-dist/plugin-sdk/qa-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
     expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
-    for (const source of qaHarnessSources) {
-      expect(source).not.toContain('from "openclaw/plugin-sdk/qa-runtime"');
+  });
+
+  it("adds private harness exports only to two ephemeral manifests", () => {
+    const root = mkTempRoot();
+    const packageJsonPaths = ["root-package.json", "installed-package.json"].map((name) =>
+      path.join(root, name),
+    );
+    for (const packageJsonPath of packageJsonPaths) {
+      writeFileSync(packageJsonPath, JSON.stringify({ exports: { ".": "./dist/index.js" } }));
     }
+
+    const result = spawnSync(process.execPath, [PREPARE_PACKAGE_PATH, ...packageJsonPaths], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    for (const packageJsonPath of packageJsonPaths) {
+      const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+        exports: Record<string, unknown>;
+      };
+      expect(pkg.exports).toMatchObject({
+        ".": "./dist/index.js",
+        "./plugin-sdk/gateway-runtime": {
+          types: "./dist/plugin-sdk/gateway-runtime.d.ts",
+          default: "./dist/plugin-sdk/gateway-runtime.js",
+        },
+        "./plugin-sdk/qa-runtime": {
+          default: "./.openclaw-qa-harness-dist/plugin-sdk/qa-runtime.js",
+        },
+      });
+    }
+
+    const thirdPackageJsonPath = path.join(root, "third-package.json");
+    writeFileSync(thirdPackageJsonPath, JSON.stringify({ exports: { ".": "./dist/index.js" } }));
+    const rejected = spawnSync(
+      process.execPath,
+      [PREPARE_PACKAGE_PATH, ...packageJsonPaths, thirdPackageJsonPath],
+      { encoding: "utf8" },
+    );
+
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("expected exactly two ephemeral package manifests, got 3");
+    expect(JSON.parse(readFileSync(thirdPackageJsonPath, "utf8"))).toEqual({
+      exports: { ".": "./dist/index.js" },
+    });
   });
 
   it("exposes installed package dependencies to the mounted QA harness", () => {

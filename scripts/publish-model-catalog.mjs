@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
@@ -14,7 +15,7 @@ const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
-const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRootDir = resolveRepoRoot(import.meta.url);
 
 function requireOptionValue(args, index, flag) {
   const value = args[index + 1]?.trim();

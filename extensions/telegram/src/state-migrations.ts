@@ -22,7 +22,7 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
   TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
-} from "./message-cache.js";
+} from "./message-cache-persistence.js";
 import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import {
   listTelegramLegacySentMessageCacheEntries,

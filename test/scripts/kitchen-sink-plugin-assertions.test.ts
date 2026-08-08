@@ -327,6 +327,32 @@ describe("kitchen-sink plugin assertions", () => {
     );
   });
 
+  it("persists the scenario personality in plugin config", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-config-"));
+    try {
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "configure-runtime"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          KITCHEN_SINK_ID: "openclaw-kitchen-sink-fixture",
+          KITCHEN_SINK_PERSONALITY: "conformance",
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(
+        readFileSync(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      );
+      expect(config.plugins.entries["openclaw-kitchen-sink-fixture"]).toMatchObject({
+        config: { personality: "conformance" },
+        hooks: { allowConversationAccess: true },
+      });
+    } finally {
+      rmSync(home, { force: true, recursive: true });
+    }
+  });
+
   it("requires kitchen-sink plugins to appear in inspect-all output", () => {
     const result = runAssertInstalled({
       allInspectPayload: [fullSurfaceInspectPayload("other-plugin")],

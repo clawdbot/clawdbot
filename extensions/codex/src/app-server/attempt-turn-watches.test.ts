@@ -53,12 +53,10 @@ describe("Codex app-server attempt turn watches", () => {
         return true;
       },
       onTimeout: (timeout) => timeouts.push(timeout),
-      onMarkTimedOut: vi.fn(),
       onAbort: (reason) => abortController.abort(reason),
       onCompleted: () => {
         completed = true;
       },
-      onResolveCompletion: vi.fn(),
       onRecordEvent: (name, fields) => events.push({ name, fields }),
       onAttemptProgress: (reason) => progress.push(reason),
       onProgressDiagnostic: (reason) => diagnostics.push(reason),

@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
-  it("bridges matching cross-tab storage changes until the last subscriber leaves", () => {
+  it("bridges matching storage events until the last subscriber leaves", () => {
     const addEventListener = vi.spyOn(window, "addEventListener");
     const removeEventListener = vi.spyOn(window, "removeEventListener");
     const firstListener = vi.fn();

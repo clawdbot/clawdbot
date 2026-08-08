@@ -91,7 +91,7 @@ function buildSseEventSourceFetch(
 export function resolveMcpTransport(
   serverName: string,
   rawServer: unknown,
-  options?: { cfg?: OpenClawConfig; agentDir?: string },
+  options?: { cfg?: OpenClawConfig; agentDir?: string; prepareDataDir?: string },
 ): ResolvedMcpTransport | null {
   const resolved = resolveMcpTransportConfig(serverName, rawServer);
   if (!resolved) {
@@ -103,6 +103,7 @@ export function resolveMcpTransport(
       args: resolved.args,
       env: resolved.env,
       cwd: resolved.cwd,
+      prepareDataDir: options?.prepareDataDir,
       stderr: "pipe",
     });
     return {

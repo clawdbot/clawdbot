@@ -305,6 +305,7 @@ export function renderAgentCron(params: {
   scopedNextWakeAtMs: number | null;
   loading: boolean;
   error: string | null;
+  canRunNow: boolean;
   onRefresh: () => void;
   onLoadMore: () => void;
   onRunNow: (jobId: string) => void;
@@ -376,7 +377,7 @@ export function renderAgentCron(params: {
                   })}
                   <button
                     class="btn btn--sm"
-                    ?disabled=${!job.enabled}
+                    ?disabled=${!params.canRunNow || !job.enabled}
                     @click=${() => params.onRunNow(job.id)}
                   >
                     ${t("agents.cronPanel.runNow")}
@@ -406,6 +407,7 @@ export function renderAgentFiles(params: {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  canWrite: boolean;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
@@ -554,14 +556,14 @@ export function renderAgentFiles(params: {
                             </button>
                             <button
                               class="btn btn--sm"
-                              ?disabled=${!isDirty}
+                              ?disabled=${!params.canWrite || !isDirty}
                               @click=${() => params.onFileReset(activeEntry.name)}
                             >
                               ${t("common.reset")}
                             </button>
                             <button
                               class="btn btn--sm primary"
-                              ?disabled=${params.agentFileSaving || !isDirty}
+                              ?disabled=${!params.canWrite || params.agentFileSaving || !isDirty}
                               @click=${() => params.onFileSave(activeEntry.name)}
                             >
                               ${params.agentFileSaving ? t("common.saving") : t("common.save")}
@@ -579,6 +581,7 @@ export function renderAgentFiles(params: {
                           <span>${t("agents.files.content")}</span>
                           <textarea
                             class="agent-file-textarea"
+                            ?disabled=${!params.canWrite}
                             .value=${draft}
                             @input=${(e: Event) =>
                               params.onFileDraftChange(

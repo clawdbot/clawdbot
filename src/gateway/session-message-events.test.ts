@@ -1,9 +1,10 @@
-/**
- * Session message event indexing and broadcast tests.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+/**
+ * Session message event indexing and broadcast tests.
+ */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { RawData } from "ws";
 import {
@@ -22,15 +23,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  emitAgentEvent,
-} from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
+import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -167,18 +168,46 @@ async function expectNoMessageWithin(params: {
   await expect(received).resolves.toBe(false);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
   const record = requireRecord(value, "record");
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key]).toEqual(expectedValue);
   }
+}
+
+function withMockedDateNow<T>(now: number, run: () => T): T {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    return run();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
+function attributedMessageProjection(value: unknown) {
+  const message = requireRecord(value, "attributed message");
+  const metadata = requireRecord(message["__openclaw"], "attributed message metadata");
+  return {
+    role: message.role,
+    content: message.content,
+    __openclaw: {
+      senderId: metadata.senderId,
+      senderName: metadata.senderName,
+      senderUsername: metadata.senderUsername,
+      senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
+    },
+  };
+}
+
+function currentProfileAvatarUrl(profileId: string): string {
+  const display = resolveCurrentUserProfileDisplay(profileId);
+  expect(display.kind).toBe("resolved");
+  if (display.kind !== "resolved") {
+    throw new Error("expected a resolved current profile display");
+  }
+  return display.avatarUrl;
 }
 
 describe("session.message websocket events", () => {
@@ -580,7 +609,7 @@ describe("session.message websocket events", () => {
       task: "finish recovered child work",
       cleanup: "keep",
       createdAt: 1_000,
-      startedAt: 2_000,
+      execution: { status: "running", startedAt: 2_000 },
     };
     await writeSessionStore({
       entries: {
@@ -909,6 +938,150 @@ describe("session.message websocket events", () => {
       webWs.close();
       tuiWs.close();
       reconnectedTuiWs?.close();
+    }
+  });
+
+  test("projects current revisioned sender avatars consistently across live events and RPC reads", async () => {
+    const SHARED_REV = 1_800_000_000_000;
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-current-profile-display";
+    const sessionKey = "agent:main:current-profile-display";
+    const sessionEntry = { sessionId, updatedAt: 1 };
+    await writeSessionStore({
+      entries: { "current-profile-display": sessionEntry },
+      storePath,
+    });
+
+    const profile = withMockedDateNow(SHARED_REV, () => {
+      const created = ensureProfileForEmail("current-profile-display@example.com");
+      setDisplayName(created.id, "Old Display Name");
+      expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
+      return created;
+    });
+    const firstAvatarUrl = currentProfileAvatarUrl(profile.id);
+
+    const ws = await harness.openWs();
+    try {
+      await connectOk(ws, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        scopes: ["operator.read"],
+      });
+      const subscription = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+      expect(subscription.ok).toBe(true);
+
+      const persistTurn = async (params: {
+        idempotencyKey: string;
+        senderName: string;
+        text: string;
+      }) => {
+        const liveEvent = waitForSessionMessageEvent(ws, sessionKey);
+        const persisted = await persistUserTurnTranscript({
+          agentId: "main",
+          sessionEntry,
+          sessionId,
+          sessionKey,
+          storePath,
+          input: {
+            idempotencyKey: params.idempotencyKey,
+            sender: {
+              id: profile.id,
+              name: params.senderName,
+              username: "ada",
+            },
+            text: params.text,
+          },
+        });
+        expect(persisted).toBeDefined();
+        return { persisted: persisted!, liveEvent: await liveEvent };
+      };
+      const readHistoryMessage = async (messageId: string) => {
+        const response = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+          sessionKey,
+        });
+        expect(response.ok).toBe(true);
+        const messages = response.payload?.messages ?? [];
+        const message = messages.find((candidate) => {
+          const record = requireRecord(candidate, "history message");
+          const metadata = requireRecord(record["__openclaw"], "history message metadata");
+          return metadata.id === messageId;
+        });
+        expect(message).toBeDefined();
+        return message;
+      };
+      const readMessage = async (messageId: string) => {
+        const response = await rpcReq<{ ok?: boolean; message?: unknown }>(ws, "chat.message.get", {
+          sessionKey,
+          messageId,
+        });
+        expect(response.ok).toBe(true);
+        expect(response.payload?.ok).toBe(true);
+        return response.payload?.message;
+      };
+      const expectedProjection = (text: string, senderName: string, avatarUrl: string) => ({
+        role: "user",
+        content: text,
+        __openclaw: {
+          senderId: profile.id,
+          senderName,
+          senderUsername: "ada",
+          senderProfileAvatarUrl: avatarUrl,
+        },
+      });
+      const expectRpcParity = async (messageId: string, expected: unknown) => {
+        expect(attributedMessageProjection(await readHistoryMessage(messageId))).toEqual(expected);
+        expect(attributedMessageProjection(await readMessage(messageId))).toEqual(expected);
+      };
+      const expectEmitterParity = async (
+        turn: Awaited<ReturnType<typeof persistTurn>>,
+        expected: unknown,
+      ) => {
+        const liveMessage = requireRecord(
+          turn.liveEvent.payload,
+          "session.message payload",
+        ).message;
+        expect(attributedMessageProjection(liveMessage)).toEqual(expected);
+        await expectRpcParity(turn.persisted.messageId, expected);
+      };
+
+      const first = await persistTurn({
+        idempotencyKey: "current-profile-display:first",
+        senderName: "Historical Ada",
+        text: "first attributed turn",
+      });
+      const firstExpected = expectedProjection(
+        "first attributed turn",
+        "Historical Ada",
+        firstAvatarUrl,
+      );
+      await expectEmitterParity(first, firstExpected);
+
+      withMockedDateNow(SHARED_REV, () => {
+        setDisplayName(profile.id, "Current Ada");
+        expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
+      });
+      const secondAvatarUrl = currentProfileAvatarUrl(profile.id);
+      expect(secondAvatarUrl).not.toBe(firstAvatarUrl);
+
+      const second = await persistTurn({
+        idempotencyKey: "current-profile-display:second",
+        senderName: "Current Ada",
+        text: "second attributed turn",
+      });
+      const secondExpected = expectedProjection(
+        "second attributed turn",
+        "Current Ada",
+        secondAvatarUrl,
+      );
+      await expectEmitterParity(second, secondExpected);
+
+      const refreshedFirstExpected = expectedProjection(
+        "first attributed turn",
+        "Historical Ada",
+        secondAvatarUrl,
+      );
+      await expectRpcParity(first.persisted.messageId, refreshedFirstExpected);
+    } finally {
+      ws.close();
     }
   });
 

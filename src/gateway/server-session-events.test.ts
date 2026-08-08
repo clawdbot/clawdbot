@@ -85,14 +85,14 @@ async function emitAssistantTranscriptUpdate(
   message: unknown = { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
 ) {
   const { broadcastToConnIds, handler } = createHandler(projectSessionActive);
-  handler({
+  await handler({
     sessionFile: "/tmp/sess-main.jsonl",
     sessionKey: "agent:main:main",
     message,
     messageId: "message-1",
     messageSeq: 1,
   });
-  await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledTimes(1));
+  expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
   return broadcastToConnIds.mock.calls[0]?.[1];
 }
 
@@ -109,7 +109,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   it("never silently drops an authoritative session message for a slow subscriber", async () => {
     const { broadcastToConnIds, handler } = createHandler(false);
 
-    handler({
+    await handler({
       sessionFile: "/tmp/sess-main.jsonl",
       sessionKey: "agent:main:main",
       message: { role: "user", content: [{ type: "text", text: "shared durable prompt" }] },
@@ -117,7 +117,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageSeq: 1,
     });
 
-    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledTimes(1));
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "session.message",
       expect.objectContaining({
@@ -148,7 +148,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       chatAbortControllers: new Map(),
     });
 
-    handler({
+    await handler({
       target: {
         agentId: "main",
         sessionId: "sess-main",
@@ -158,7 +158,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "committed-revision",
     });
 
-    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledOnce());
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:main:main");
     expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
       agentId: "main",
@@ -188,7 +188,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   it("rejects an identity-only invalidation when its custom-store owner was deleted", async () => {
     const { broadcastToConnIds, handler } = createHandler(false);
 
-    handler({
+    await handler({
       target: {
         agentId: "main",
         sessionId: "sess-main",
@@ -198,7 +198,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "deleted-revision",
     });
 
-    await vi.waitFor(() => expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledOnce());
+    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
     expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
   });
@@ -268,7 +268,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       );
       const { broadcastToConnIds, handler } = createHandler(false);
 
-      handler({
+      const pendingBroadcast = handler({
         target: {
           agentId: "main",
           sessionId: "sess-main",
@@ -290,9 +290,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       }
       resolveMessageCount?.(1);
 
-      await vi.waitFor(() =>
-        expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledTimes(expectedEntryReads),
-      );
+      await pendingBroadcast;
+      expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledTimes(expectedEntryReads);
       expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     },
@@ -314,7 +313,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
     const { broadcastToConnIds, handler } = createHandler(false);
 
-    handler({
+    await handler({
       target: {
         agentId: "main",
         sessionId: "sess-main",
@@ -327,7 +326,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageSeq: 1,
     });
 
-    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledOnce());
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -356,7 +355,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
     const { broadcastToConnIds, handler } = createHandler(false);
 
-    handler({
+    await handler({
       target: {
         agentId: "main",
         sessionId: "sess-main",
@@ -369,7 +368,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageSeq: 1,
     });
 
-    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledOnce());
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "session.message",
       expect.objectContaining({
@@ -385,7 +384,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     readSessionMessageCountAsyncMock.mockResolvedValue(3);
     const { broadcastToConnIds, handler } = createHandler(false);
 
-    handler({
+    await handler({
       target: {
         agentId: "main",
         sessionId: "sess-main",
@@ -396,7 +395,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageId: "legacy-lifecycle-message",
     });
 
-    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledOnce());
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "session.message",
       expect.objectContaining({
@@ -505,14 +504,14 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
 
     try {
-      handler({
+      await handler({
         sessionFile: "/tmp/sess-main.jsonl",
         sessionKey: "agent:main:main",
         message: { role: "toolResult", content: [] },
         messageId: "message-1",
         messageSeq: 1,
       });
-      await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
+      expect(received).toHaveBeenCalledOnce();
       expect(received).toHaveBeenCalledWith({
         sessionKey: "agent:main:main",
         phase: "message",
@@ -530,7 +529,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     readSessionMessageCountAsyncMock.mockResolvedValue(7);
     const { broadcastToConnIds, handler } = createHandler(false);
 
-    handler({
+    await handler({
       agentId: "main",
       message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
       messageId: "message-partial-target",
@@ -542,7 +541,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         storePath: "/tmp/explicit-sessions.json",
       },
     });
-    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledTimes(1));
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
 
     expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
       agentId: "main",

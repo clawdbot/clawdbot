@@ -200,6 +200,27 @@ describe("LINE send helpers", () => {
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });
 
+  it("keeps provider-valid Flex alternative text and bounds oversized Unicode safely", () => {
+    const contents = { type: "bubble" as const };
+
+    expect(sendModule.createFlexMessage("a".repeat(1200), contents).altText).toBe("a".repeat(1200));
+
+    const oversized = sendModule.createFlexMessage(`${"a".repeat(1499)}😀 overflow`, contents);
+    expect(oversized.altText).toBe("a".repeat(1499));
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(oversized.altText)).toBe(false);
+  });
+
+  it("sends the same provider-valid Flex alternative text through direct pushes", async () => {
+    const altText = "a".repeat(1200);
+
+    await sendModule.pushFlexMessage("U123", altText, { type: "bubble" }, { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [{ type: "flex", altText, contents: { type: "bubble" } }],
+    });
+  });
+
   it("normalizes raw Flex actions at both outbound API boundaries", async () => {
     const oversizedPostback = { type: "postback", label: "Open", data: "x".repeat(301) };
     const oversizedUri = {

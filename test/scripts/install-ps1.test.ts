@@ -105,6 +105,36 @@ describe("install.ps1 failure handling", () => {
     const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
     const cases = [
       {
+        name: "openclaw-native-command-exit",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Get-OpenClawCommandPath { return (Get-Process -Id $PID).Path }",
+          "$caught = $false",
+          "try {",
+          "  Invoke-OpenClawCommand -NoLogo -NoProfile -Command 'exit 17'",
+          "} catch {",
+          "  if ($_.Exception.Message -notmatch 'failed with exit code 17') { throw }",
+          "  $caught = $true",
+          "}",
+          "if (-not $caught) { throw 'nonzero native exit was accepted' }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "doctor-failure-output",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Invoke-OpenClawCommand { throw 'doctor failed' }",
+          "$output = @(Run-Doctor *>&1 | ForEach-Object { $_.ToString() })",
+          '$text = $output -join "`n"',
+          "if ($text -match 'Migration complete') { throw 'doctor failure reported success' }",
+          "if ($text -notmatch 'Migration failed') { throw \"missing warning: $text\" }",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "node-versions",
         source: [
           scriptWithoutEntryPoint,
@@ -655,6 +685,19 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
     expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
     expect(gitInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+  });
+
+  it("rejects a git checkout without a commit before updating it", () => {
+    const guardBody = extractFunctionBody(source, "Assert-GitCheckoutHasCommit");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(guardBody).toContain('"--git-dir=$gitDir"');
+    expect(guardBody).toContain('"--work-tree=$RepoDir"');
+    expect(guardBody).toContain('rev-parse --verify --quiet "HEAD^{commit}"');
+    expect(guardBody).toContain("Git checkout has no commit");
+    expect(guardBody).not.toContain("Remove-Item");
+    expect(guardBody).not.toContain("Move-Item");
+    expect(gitInstallBody).toContain("Assert-GitCheckoutHasCommit -RepoDir $RepoDir");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {

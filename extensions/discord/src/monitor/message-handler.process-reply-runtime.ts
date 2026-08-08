@@ -12,7 +12,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
-import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import type { RequestClient } from "../internal/discord.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -144,7 +144,7 @@ export function createDiscordMessageReplyRuntime(params: {
   };
   const beginDeliveryCorrelation = () =>
     params.isRoomEvent
-      ? beginDiscordInboundEventDeliveryCorrelation(
+      ? discordInboundEventDelivery.begin(
           ctxPayload.SessionKey,
           {
             outboundTo: messageChannelId,

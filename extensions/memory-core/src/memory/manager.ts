@@ -2,7 +2,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  readErrorName,
+  toErrorObject,
+} from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -88,6 +92,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -483,10 +488,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionPendingFiles = new Set<string>();
   protected override sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   private indexIdentityDirty = false;
-  protected override sessionDeltas = new Map<
-    string,
-    { lastSize: number; pendingBytes: number; pendingMessages: number }
-  >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
   private queuedArchiveFiles = new Set<string>();
@@ -976,7 +977,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           }
         }
         if (closeFailed) {
-          throw toLintErrorObject(firstError, "Embedding provider retirement failed");
+          throw toErrorObject(firstError, "Embedding provider retirement failed");
         }
       });
     this.providerRetirementPromise = retirement;
@@ -2194,6 +2195,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
+        index: resolvePersistedMemoryVectorIndexState({
+          db: this.db,
+          vectorTable: VECTOR_TABLE,
+          metaVectorDims: this.vector.dims,
+          hasSemanticChunks: this.hasSemanticChunks(),
+        }),
         storeAvailable: this.vector.available ?? undefined,
         semanticAvailable: this.vector.semanticAvailable,
         available: this.vector.semanticAvailable,
@@ -2335,7 +2342,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async retryFailedClose(): Promise<void> {
     const retirementErrors = await this.drainPendingProviderRetirements();
     if (this.providersPendingRetirement.size > 0) {
-      throw toLintErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed");
+      throw toErrorObject(retirementErrors.at(-1), "Embedding provider retirement failed");
     }
     if (INDEX_CACHE.get(this.cacheKey) === this) {
       INDEX_CACHE.delete(this.cacheKey);
@@ -2450,7 +2457,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       (this.providersPendingRetirement.size > 0 ? retirementErrors.at(-1) : undefined) ??
       closeErrors.values().next().value;
     if (closeError) {
-      throw toLintErrorObject(closeError, "Non-Error thrown");
+      throw toErrorObject(closeError, "Non-Error thrown");
     }
     if (INDEX_CACHE.get(this.cacheKey) === this) {
       INDEX_CACHE.delete(this.cacheKey);
@@ -2465,17 +2472,4 @@ function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boo
   );
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

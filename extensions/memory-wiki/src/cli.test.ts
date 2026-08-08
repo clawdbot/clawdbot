@@ -220,7 +220,7 @@ describe("memory-wiki cli", () => {
     );
   });
 
-  it("resolves --agent for local commands and requires it with multiple agent vaults", async () => {
+  it("keeps the parent --agent spelling compatible", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },
     });
@@ -237,14 +237,6 @@ describe("memory-wiki cli", () => {
     });
 
     await expect(fs.stat(path.join(rootDir, "marketing", "index.md"))).resolves.toBeDefined();
-
-    const missingAgentProgram = new Command();
-    missingAgentProgram.name("test");
-    missingAgentProgram.exitOverride();
-    registerWikiCli(missingAgentProgram, { config, getAppConfig: () => appConfig });
-    await expect(
-      missingAgentProgram.parseAsync(["wiki", "status", "--json"], { from: "user" }),
-    ).rejects.toThrow("agentId is required for memory-wiki when vault.scope=agent.");
   });
 
   it("forwards --agent through every bridge Gateway call", async () => {

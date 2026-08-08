@@ -95,6 +95,44 @@ describe("RealtimeTalkMediaStreamMeter", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("reclaims its interval when the initial level callback stops it", () => {
+    vi.useFakeTimers();
+    const close = vi.fn(async () => undefined);
+    const disconnectSource = vi.fn();
+    const disconnectAnalyser = vi.fn();
+    class MockAudioContext {
+      readonly close = close;
+      createMediaStreamSource() {
+        return { connect: vi.fn(), disconnect: disconnectSource };
+      }
+      createAnalyser() {
+        return {
+          fftSize: 0,
+          smoothingTimeConstant: 0,
+          disconnect: disconnectAnalyser,
+          getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+        };
+      }
+    }
+    vi.stubGlobal("AudioContext", MockAudioContext);
+    const onLevel = vi.fn((level: number) => {
+      if (level > 0) {
+        meter.stop();
+      }
+    });
+    const meter = new RealtimeTalkMediaStreamMeter(onLevel);
+
+    meter.start({} as MediaStream);
+    meter.stop();
+    meter.stop();
+    vi.advanceTimersByTime(1_000);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(disconnectSource).toHaveBeenCalledOnce();
+    expect(disconnectAnalyser).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("closes an owned AudioContext when analyser setup fails", () => {
     const close = vi.fn(async () => undefined);
     class MockAudioContext {

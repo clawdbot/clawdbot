@@ -15,6 +15,7 @@ import { renderDocsLink } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   loadPluginCatalog,
@@ -86,10 +87,6 @@ type MemoryPageProps = {
   routeData: ConfigRouteData | null;
   buildEditor: (keys: readonly string[]) => TemplateResult;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 class MemorySettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -383,7 +380,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       if (!this.isConnected || this.overviewRequest !== request) {
         return;
       }
-      this.overviewStatus = { kind: "error", message: errorMessage(error) };
+      this.overviewStatus = {
+        kind: "error",
+        message: formatUiError(error),
+      };
     } finally {
       if (this.overviewRequest === request) {
         this.probingEmbeddings = false;
@@ -496,7 +496,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.connection === connection) {
-        this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));
+        this.addonErrors = new Map(this.addonErrors).set(pluginId, formatUiError(error));
       }
     } finally {
       if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
@@ -547,7 +547,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.connection === connection) {
-        this.engineOutcome = { kind: "error", message: errorMessage(error) };
+        this.engineOutcome = {
+          kind: "error",
+          message: formatUiError(error),
+        };
       }
     } finally {
       if (this.connection === connection) {

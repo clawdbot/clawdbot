@@ -1,5 +1,6 @@
-// Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+// Discord tests cover send.sends basic channel messages plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./internal/discord.js";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
@@ -113,16 +114,7 @@ beforeEach(() => {
   clearDiscordDirectoryCacheForTest();
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {

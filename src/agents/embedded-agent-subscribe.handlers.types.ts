@@ -24,6 +24,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
+import type { ThinkingTagStreamState } from "./embedded-agent-utils.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -74,7 +75,7 @@ export type EmbeddedAgentSubscribeState = {
     toolName?: string;
     meta?: string;
     replaySafe?: boolean;
-    isError?: true;
+    isError?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -101,6 +102,8 @@ export type EmbeddedAgentSubscribeState = {
   streamReasoning: boolean;
 
   deltaBuffer: string;
+  /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
+  thinkingTagStream: ThinkingTagStreamState;
   blockBuffer: string;
   blockState: {
     thinking: boolean;
@@ -170,6 +173,8 @@ export type EmbeddedAgentSubscribeState = {
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
+  currentSourceMessagingToolSentTextsNormalized: string[];
+  currentSourceMessagingToolHeldPartial?: string;
   messagingToolSentTargets: MessagingToolSend[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
@@ -338,6 +343,7 @@ type ToolHandlerState = Pick<
   | "replayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
+  | "currentSourceMessagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
   | "messageToolOnlySourceReplyDelivered"

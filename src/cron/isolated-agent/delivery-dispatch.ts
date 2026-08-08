@@ -573,10 +573,11 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulCronDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    if (!synthesizedText) {
+    if (!synthesizedText && !params.spawnOnlyHandoff) {
       return null;
     }
-    const initialSynthesizedText = synthesizedText.trim();
+    const initialSynthesizedText = synthesizedText?.trim() ?? "";
+    const spawnOnlyHandoff = params.spawnOnlyHandoff;
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
     const subagentFollowupSessionKey = params.runSessionKey;
@@ -584,7 +585,8 @@ export async function dispatchCronDelivery(
       subagentFollowupSessionKey,
     );
     const shouldCheckCompletedDescendants =
-      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+      activeSubagentRuns === 0 &&
+      (spawnOnlyHandoff || isLikelyInterimCronMessage(initialSynthesizedText));
     const needsSubagentFollowupRuntime =
       shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
     const subagentFollowupRuntime = needsSubagentFollowupRuntime
@@ -602,7 +604,10 @@ export async function dispatchCronDelivery(
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
-    if (!params.deliveryBestEffort && (activeSubagentRuns > 0 || expectedSubagentFollowup)) {
+    if (
+      (!params.deliveryBestEffort || spawnOnlyHandoff) &&
+      (activeSubagentRuns > 0 || expectedSubagentFollowup)
+    ) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: subagentFollowupSessionKey,
         initialReply: initialSynthesizedText,
@@ -632,6 +637,23 @@ export async function dispatchCronDelivery(
       synthesizedText = completedDescendantReply;
       deliveryPayloads = [{ text: completedDescendantReply }];
     }
+    if (spawnOnlyHandoff && !synthesizedText?.trim()) {
+      // An accepted spawn is the turn's only completion; retiring it without
+      // child output permanently loses one-shot scheduled work.
+      const error = params.isAborted()
+        ? params.abortReason()
+        : activeSubagentRuns > 0
+          ? "cron child-session handoff timed out before producing a final assistant payload"
+          : "cron child-session handoff completed without a final assistant payload";
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "error",
+        error,
+        delivered: false,
+        deliveryAttempted,
+        ...params.telemetry,
+      });
+    }
     if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
       // update to the main requester. Mark deliveryAttempted so the timer does
@@ -647,7 +669,7 @@ export async function dispatchCronDelivery(
     }
     if (
       hadDescendants &&
-      synthesizedText.trim() === initialSynthesizedText &&
+      synthesizedText?.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
       !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
@@ -715,7 +737,8 @@ export async function dispatchCronDelivery(
     // send through the real outbound adapter so delivered=true always reflects
     // an actual channel send instead of internal announce routing.
     const useDirectDelivery =
-      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+      params.deliveryPayloadHasStructuredContent ||
+      (params.resolvedDelivery.threadId != null && !params.spawnOnlyHandoff);
     if (useDirectDelivery) {
       const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
       if (directResult) {

@@ -253,6 +253,12 @@ describe("filterMemorySearchHitsBySessionVisibility for QMD", () => {
         sessionFile: "/tmp/sessions/current.jsonl",
         chatType: "direct",
       },
+      "agent:main:visible-export": {
+        sessionId: "visible-export",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/visible-export.jsonl",
+        chatType: "direct",
+      },
       "agent:main:explicit:laptop": {
         sessionId: "actual-session-id",
         updatedAt: 1,
@@ -267,10 +273,12 @@ describe("filterMemorySearchHitsBySessionVisibility for QMD", () => {
         chatType: "group",
       },
     };
-    const searchPath = "qmd/sessions-main/shared-transcript-export.md";
+    // The filename resolves to an allowed decoy session; only the attached QMD
+    // identity reveals that the actual transcript also has a shared alias.
+    const searchPath = "qmd/sessions-main/visible-export.md";
     const indexPath = await createQmdArtifactIndex({
       agentId: "main",
-      artifactPath: "shared-transcript-export.md",
+      artifactPath: "visible-export.md",
       collection: "sessions-main",
       searchPath,
       sessionId: "actual-session-id",
@@ -285,17 +293,17 @@ describe("filterMemorySearchHitsBySessionVisibility for QMD", () => {
         endLine: 2,
       },
       {
-        artifactPath: "shared-transcript-export.md",
+        artifactPath: "visible-export.md",
         collection: "sessions-main",
         indexPath,
         searchPath,
       },
     );
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
+    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
 
     const filtered = await filterMemorySearchHitsBySessionVisibility({
       cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
+      requesterSessionKey: "agent:main:telegram:direct:owner:active-memory:abcdef123456",
       sandboxed: false,
       hits: [hit],
       conversationRecall: {

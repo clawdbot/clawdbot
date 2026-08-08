@@ -3,6 +3,7 @@ import type { StreamEvent } from "./mock-openai-contracts.js";
 import {
   buildAssistantEvents,
   buildAssistantThenToolCallEvents,
+  buildFailedResponseEvents,
   buildReasoningAndAssistantEvents,
   buildReasoningOnlyEvents,
 } from "./mock-openai-events.js";
@@ -29,6 +30,16 @@ function readOutputItemSlots(events: StreamEvent[]) {
 }
 
 describe("mock OpenAI Responses output item slots", () => {
+  it("emits the provider no-details failure used by repeated-request recovery QA", () => {
+    expect(buildFailedResponseEvents()).toEqual([
+      expect.objectContaining({ type: "response.created" }),
+      expect.objectContaining({
+        type: "response.failed",
+        response: expect.not.objectContaining({ error: expect.anything() }),
+      }),
+    ]);
+  });
+
   it("indexes preview deltas and the final answer on the same assistant slot", () => {
     const events = buildAssistantEvents([
       {
@@ -139,6 +150,7 @@ describe("mock OpenAI Responses output item slots", () => {
     const events = buildAssistantThenToolCallEvents(
       {
         id: "assistant-before-tool",
+        phase: "commentary",
         streamDeltas: ["looking up"],
         text: "looking up",
       },
@@ -175,6 +187,23 @@ describe("mock OpenAI Responses output item slots", () => {
         output_index: 1,
         delta: JSON.stringify({ path: "README.md" }),
       },
+    );
+    expect(
+      events
+        .filter(
+          (event) =>
+            event.type === "response.output_item.added" ||
+            event.type === "response.output_item.done",
+        )
+        .map((event) => event.item)
+        .filter((item) => item.type === "message"),
+    ).toEqual([
+      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
+      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
+    ]);
+    const completed = events.find((event) => event.type === "response.completed");
+    expect(completed?.response.output[0]).toEqual(
+      expect.objectContaining({ id: "assistant-before-tool", phase: "commentary" }),
     );
   });
 

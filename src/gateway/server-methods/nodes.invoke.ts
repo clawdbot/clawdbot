@@ -6,6 +6,7 @@ import {
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
@@ -29,7 +30,7 @@ import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
-  respondUnavailableOnNodeInvokeError,
+  respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
@@ -77,13 +78,7 @@ function emitTalkPttNodeEvent(params: {
   const sessionId = `node:${params.nodeId}:talk:${captureId}`;
   const seq = (talkPttEventSeqBySessionId.get(sessionId) ?? 0) + 1;
   talkPttEventSeqBySessionId.set(sessionId, seq);
-  while (talkPttEventSeqBySessionId.size > 2048) {
-    const oldest = talkPttEventSeqBySessionId.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    talkPttEventSeqBySessionId.delete(oldest);
-  }
+  pruneMapToMaxSize(talkPttEventSeqBySessionId, 2048);
 
   const type =
     params.command === "talk.ptt.start"
@@ -196,30 +191,21 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     }
     const invokeDeadlineAtMs =
       typeof p.timeoutMs === "number" && p.timeoutMs > 0 ? Date.now() + p.timeoutMs : undefined;
-    let pluginNodeCommandDispatched = false;
+    let nodeCommandDispatched = false;
     const resolveRemainingInvokeTimeoutMs = () =>
       invokeDeadlineAtMs === undefined ? p.timeoutMs : Math.max(0, invokeDeadlineAtMs - Date.now());
-    const respondIfInvokeExpired = (includeDispatchState = false) => {
+    const respondIfInvokeExpired = () => {
       if (invokeDeadlineAtMs === undefined || resolveRemainingInvokeTimeoutMs() !== 0) {
         return false;
       }
-      if (pluginNodeCommandDispatched || includeDispatchState) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "TIMEOUT: node invoke timed out", {
-            details: {
-              nodeError: { code: "TIMEOUT", message: "node invoke timed out" },
-              nodeCommandDispatched: pluginNodeCommandDispatched,
-            },
-          }),
-        );
-        return true;
-      }
-      respondUnavailableOnNodeInvokeError(respond, {
-        ok: false,
-        error: { code: "TIMEOUT", message: "node invoke timed out" },
-      });
+      respondUnavailableOnNodeInvokeErrorWithProvenance(
+        respond,
+        {
+          ok: false,
+          error: { code: "TIMEOUT", message: "node invoke timed out" },
+        },
+        { nodeCommandDispatched },
+      );
       return true;
     };
     await respondUnavailableOnThrow(respond, async () => {
@@ -406,7 +392,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               false,
               undefined,
               errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: { code: "NOT_CONNECTED" },
+                details: {
+                  code: "NOT_CONNECTED",
+                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+                  nodeCommandDispatched: false,
+                },
               }),
             );
             return;
@@ -487,7 +477,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               onNodeCommandDispatched: () => {
                 // Deadline races must retain transport ownership so a command
                 // already handed to the node is never advertised as retry-safe.
-                pluginNodeCommandDispatched = true;
+                nodeCommandDispatched = true;
               },
               idempotencyKey: p.idempotencyKey,
               isInvocationCurrent: () =>
@@ -496,7 +486,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           invokeDeadlineAtMs,
         );
         if (policyResult === NODE_INVOKE_DEADLINE_EXPIRED) {
-          respondIfInvokeExpired(true);
+          respondIfInvokeExpired();
           return;
         }
         if (!(await continuePairingWork())) {
@@ -599,6 +589,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
+          onDispatchReady: () => {
+            nodeCommandDispatched = true;
+          },
         });
         if (!(await continuePairingWork())) {
           return;
@@ -670,7 +663,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-          if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+          if (
+            !respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
+              nodeCommandDispatched,
+            })
+          ) {
             return;
           }
           return;

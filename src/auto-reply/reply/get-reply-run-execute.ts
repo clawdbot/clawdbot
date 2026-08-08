@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
@@ -58,8 +59,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } = state;
@@ -308,6 +309,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
+    ...(opts?.onFollowupQueueDisposition
+      ? { onQueueDisposition: opts.onFollowupQueueDisposition }
+      : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -411,7 +415,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       timeoutMs,
       runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
-      ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
+      ownerNumbers: resolveOwnerPromptNumbers({
+        ownerNumbers: command.ownerList,
+        senderId: command.senderId,
+        senderIsOwner: command.senderIsOwner,
+      }),
       inputProvenance,
       ...(opts?.suppressNextUserMessagePersistence
         ? { suppressNextUserMessagePersistence: true }
@@ -445,6 +453,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
@@ -453,7 +462,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         latestSessionState.sessionId;
       return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
-    isStreaming,
     opts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,

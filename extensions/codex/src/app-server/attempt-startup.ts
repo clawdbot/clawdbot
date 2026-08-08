@@ -242,6 +242,7 @@ export async function startCodexAttemptThread(params: {
                       : {}),
                   }
                 : {}),
+              agentId: params.sessionAgentId,
               agentDir: params.agentDir,
               config: params.config,
               onStartedClient: (client) => {
@@ -330,7 +331,7 @@ export async function startCodexAttemptThread(params: {
               }
               throw new AgentHarnessPreflightError(
                 `Codex Computer Use readiness failed: ${formatErrorMessage(error)}`,
-                { cause: error },
+                { cause: error, scope: "harness" },
               );
             }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();

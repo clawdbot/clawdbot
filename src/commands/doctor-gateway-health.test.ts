@@ -84,8 +84,43 @@ describe("checkGatewayHealth", () => {
       timeoutMs: 6000,
       config: cfg,
     });
+    expect(callGateway).toHaveBeenNthCalledWith(3, {
+      method: "diagnostics.stability",
+      params: { type: "telemetry.exporter", limit: 1000 },
+      timeoutMs: 3000,
+      config: cfg,
+    });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
+  });
+
+  it("renders the shared redacted telemetry exporter summary", async () => {
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        events: [
+          {
+            seq: 1,
+            type: "telemetry.exporter",
+            source: "diagnostics-otel",
+            target: "logs",
+            transport: "stdout",
+            outcome: "started",
+            reason: "configured",
+            payload: "private log payload",
+          },
+        ],
+      });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      "diagnostics-otel · logs · started · stdout",
+      "Telemetry exporters",
+    );
+    expect(JSON.stringify(note.mock.calls)).not.toContain("private log payload");
   });
 
   it("reports failed channel diagnostics without marking a reachable gateway unhealthy", async () => {

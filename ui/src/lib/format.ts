@@ -1,3 +1,4 @@
+import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -25,9 +26,7 @@ type FormatDurationCompactOptions = {
   spaced?: boolean;
 };
 
-type RelativeUnit = "second" | "minute" | "hour" | "day";
-
-function formatUnit(value: number, unit: RelativeUnit | "millisecond"): string {
+function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
     unit,
@@ -36,7 +35,7 @@ function formatUnit(value: number, unit: RelativeUnit | "millisecond"): string {
   }).format(value);
 }
 
-function formatRelative(value: number, unit: RelativeUnit): string {
+function formatRelative(value: number, unit: RelativeTimeUnit): string {
   return new Intl.RelativeTimeFormat(i18n.getLocale(), {
     numeric: "auto",
     style: "narrow",
@@ -52,27 +51,10 @@ export function formatTimeAgo(
     return fallback;
   }
 
-  const seconds = Math.round(durationMs / 1000);
-  const minutes = Math.round(seconds / 60);
-  let value: number;
-  let unit: RelativeUnit;
-  if (seconds < 60) {
+  const { value, unit } = bucketRelativeTimeMs(durationMs);
+  if (unit === "second") {
     if (options.suffix !== false) {
       return t("common.justNow");
-    }
-    value = seconds;
-    unit = "second";
-  } else if (minutes < 60) {
-    value = minutes;
-    unit = "minute";
-  } else {
-    const hours = Math.round(minutes / 60);
-    if (hours < 48) {
-      value = hours;
-      unit = "hour";
-    } else {
-      value = Math.round(hours / 24);
-      unit = "day";
     }
   }
   return options.suffix === false ? formatUnit(value, unit) : formatRelative(-value, unit);
@@ -89,25 +71,12 @@ export function formatRelativeTimestamp(
 
   const diff = timestampMs - Date.now();
   const isPast = diff <= 0;
-  const seconds = Math.round(Math.abs(diff) / 1000);
-  if (seconds < 60) {
+  const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
+  if (unit === "second") {
     if (options.suffix === false) {
-      return formatUnit(seconds, "second");
+      return formatUnit(value, unit);
     }
-    return isPast ? t("common.justNow") : formatRelative(seconds, "second");
-  }
-
-  const minutes = Math.round(seconds / 60);
-  let value = minutes;
-  let unit: RelativeUnit = "minute";
-  if (minutes >= 60) {
-    const hours = Math.round(minutes / 60);
-    value = hours;
-    unit = "hour";
-    if (hours >= 48) {
-      value = Math.round(hours / 24);
-      unit = "day";
-    }
+    return isPast ? t("common.justNow") : formatRelative(value, unit);
   }
 
   if (options.dateFallback && unit === "day" && value > 7) {
@@ -357,27 +326,9 @@ export function formatCompactTokenCount(
   return String(tokens);
 }
 
-export function parseSessionKeyParts(
-  key: string,
-): { agentId: string; channel: string; accountId: string } | null {
-  if (!key.startsWith("agent:")) {
-    return null;
+export function formatContextTokenCapacity(tokens: number): string {
+  if (tokens < 1_000_000) {
+    return formatCompactTokenCount(tokens);
   }
-  const rest = key.slice("agent:".length);
-  const firstColon = rest.indexOf(":");
-  if (firstColon < 1) {
-    return null;
-  }
-  const agentId = rest.slice(0, firstColon);
-  const afterAgent = rest.slice(firstColon + 1);
-  const secondColon = afterAgent.indexOf(":");
-  if (secondColon < 1) {
-    return null;
-  }
-  const channel = afterAgent.slice(0, secondColon);
-  const accountId = afterAgent.slice(secondColon + 1);
-  if (!accountId) {
-    return null;
-  }
-  return { agentId, channel, accountId };
+  return `${Math.floor(tokens / 100_000) / 10}M`;
 }

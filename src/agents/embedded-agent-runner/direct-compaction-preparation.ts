@@ -29,7 +29,6 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
-import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import {
   classifyCompactionReason,
@@ -71,11 +70,6 @@ export async function prepareDirectCompactionAttempt(
   const diagnosticCompactionRunId = `${runId}:compaction:${diagId}`;
   let diagnosticModelCallSeq = 0;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  ensureRuntimePluginsLoaded({
-    config: params.config,
-    workspaceDir: resolvedWorkspace,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-  });
   const earlyAgentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -111,6 +105,7 @@ export async function prepareDirectCompactionAttempt(
     agentHarnessId: boundHarnessRuntime,
     agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
     workspaceDir: resolvedWorkspace,
+    pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {

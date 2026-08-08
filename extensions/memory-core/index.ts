@@ -8,11 +8,9 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type AnyAgentTool,
-  type OpenClawPluginApi,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -252,6 +250,14 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
     },
+    async authorizeSearchHits(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      const runtime = createMemoryRuntime(host);
+      if (!runtime.authorizeSearchHits) {
+        throw new Error("memory-core runtime search authorization is unavailable");
+      }
+      return await runtime.authorizeSearchHits(params);
+    },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
     },
@@ -266,65 +272,22 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
   };
 }
 
-function configuredMemoryAgentIds(config: OpenClawConfig): string[] {
-  const configured = (config.agents?.list ?? []).map((entry) => entry.id).filter(Boolean);
-  if (configured.length > 0) {
-    return [...new Set(configured)];
-  }
-  return [resolveSessionAgentIds({ config }).sessionAgentId];
-}
-
-function registerMemoryManagerWarmup(
-  api: OpenClawPluginApi,
-  memoryRuntime: MemoryPluginRuntime,
-): void {
-  api.on("gateway_start", (_event, ctx) => {
-    const config = (api.runtime.config?.current?.() ?? ctx.config ?? api.config) as OpenClawConfig;
-    if (normalizePluginsConfig(config.plugins).slots.memory !== "memory-core") {
-      return;
-    }
-    for (const agentId of configuredMemoryAgentIds(config)) {
-      const backend = memoryRuntime.resolveMemoryBackendConfig({ cfg: config, agentId });
-      void memoryRuntime
-        .getMemorySearchManager({ cfg: config, agentId })
-        .then(async ({ manager, error }) => {
-          if (!manager) {
-            if (error) {
-              api.logger.debug?.(`memory-core: startup index warmup unavailable: ${error}`);
-            }
-            return;
-          }
-          if (backend.backend === "builtin") {
-            await manager.sync?.({ reason: "startup-warmup" });
-          }
-        })
-        .catch((error: unknown) => {
-          api.logger.debug?.(
-            `memory-core: startup index warmup failed for ${agentId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        });
-    }
-  });
-}
-
 export default definePluginEntry({
   id: "memory-core",
   name: "OpenClaw Memory",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    const acquireLocalService = api.runtime.llm?.acquireLocalService;
-    const withLease = api.runtime.state.withLease.bind(api.runtime.state);
-    const host = { acquireLocalService, withLease } satisfies MemoryCoreRuntimeHost;
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-      api.runtime.state.openKeyedStore<T>(options),
-    );
+    const acquireLocalService: MemoryCoreAcquireLocalService = (...args) =>
+      api.runtime.llm.acquireLocalService(...args);
+    const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options);
+    const withLease: PluginStateLeaseRunner = (...args) => api.runtime.state.withLease(...args);
+    const host = { acquireLocalService, openKeyedStore, withLease } satisfies MemoryCoreRuntimeHost;
+    configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
-    registerMemoryManagerWarmup(api, memoryRuntime);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,

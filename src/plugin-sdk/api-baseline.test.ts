@@ -2,10 +2,12 @@
  * Tests the plugin SDK public API baseline.
  */
 import path from "node:path";
+import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import {
   computePluginSdkApiBaselineHashFileContent,
+  formatPluginSdkApiTypeAlias,
   listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
@@ -28,6 +30,31 @@ const TEST_ENTRYPOINTS = [
   "realtime-voice",
   "sqlite-runtime-testing",
 ] as const;
+
+function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
+  const fileName = "/plugin-sdk-tuple-fixture.ts";
+  const source = [
+    "interface Array<T> { [index: number]: T; readonly length: number }",
+    "interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }",
+    `type Warmup = ${warmup};`,
+    `const VALUES = ${tuple};`,
+    "type Value = (typeof VALUES)[number];",
+  ].join("\n");
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.ESNext, true);
+  const options = { noLib: true, target: ts.ScriptTarget.ESNext };
+  const host = ts.createCompilerHost(options);
+  host.fileExists = (candidate) => candidate === fileName;
+  host.getSourceFile = (candidate) => (candidate === fileName ? sourceFile : undefined);
+  const checker = ts.createProgram([fileName], options, host).getTypeChecker();
+  const [warmupAlias, declaration] = sourceFile.statements.filter(ts.isTypeAliasDeclaration);
+  if (!warmupAlias || !declaration) {
+    throw new Error("Missing tuple fixture type aliases");
+  }
+  if (prewarm) {
+    checker.getTypeAtLocation(warmupAlias);
+  }
+  return { checker, declaration };
+}
 
 describe("Plugin SDK API baseline", () => {
   let rendered: PluginSdkApiBaselineRender;
@@ -88,6 +115,35 @@ describe("Plugin SDK API baseline", () => {
     expect(normalizePluginSdkApiSourcePath(repoRoot, sourcePath)).toBe("src/plugin-sdk/core.ts");
   });
 
+  it.each([
+    {
+      tuple: '["first", "middle", "last", "first"] as const',
+      warmup: '"last"',
+      expected: '"first" | "middle" | "last"',
+    },
+    {
+      tuple: "[3, 1, 2] as const",
+      warmup: "1",
+      expected: "3 | 1 | 2",
+    },
+  ])("keeps tuple-derived unions stable across unrelated type discovery", (fixture) => {
+    const baseline = createTupleAliasFixture(fixture.tuple, fixture.warmup, false);
+    const prewarmed = createTupleAliasFixture(fixture.tuple, fixture.warmup, true);
+    const unstable = prewarmed.checker.typeToString(
+      prewarmed.checker.getTypeAtLocation(prewarmed.declaration),
+      prewarmed.declaration,
+      ts.TypeFormatFlags.NoTruncation,
+    );
+
+    expect(unstable).not.toBe(fixture.expected);
+    expect(formatPluginSdkApiTypeAlias(baseline.checker, baseline.declaration)).toBe(
+      fixture.expected,
+    );
+    expect(formatPluginSdkApiTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe(
+      fixture.expected,
+    );
+  });
+
   it("renders complete declarations for the canonical public entrypoint inventory", () => {
     expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
 
@@ -113,6 +169,12 @@ describe("Plugin SDK API baseline", () => {
     expect(findDeclaration("LiveModelCatalogHttpError")).toContain(
       "constructor(providerId: string, status: number);",
     );
+    expect(findDeclaration("AgentHarnessPreflightError")).toContain('readonly scope?: "harness";');
+    expect(findDeclaration("AgentHarnessPreflightError")).toContain(
+      "constructor(message: string, options?: ErrorOptions & {",
+    );
+    expect(findDeclaration("AgentHarnessPreflightError")).toContain('scope?: "harness";');
+    expect(findDeclaration("AgentHarnessPreflightError")).not.toContain("harnessId");
     expect(findDeclaration("LiveModelCatalogHttpError")).not.toContain("super(");
     expect(findDeclaration("LiveModelRowProjection")).toContain(
       "export type LiveModelRowProjection",

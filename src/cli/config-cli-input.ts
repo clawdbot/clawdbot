@@ -232,7 +232,6 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(mode ? { mode } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
-      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
     };
   } else {
     const command = opts.providerCommand?.trim();
@@ -254,8 +253,6 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(opts.providerTrustedDir?.length
         ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
         : {}),
-      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
-      ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
     };
   }
 

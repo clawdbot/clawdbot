@@ -146,6 +146,7 @@ type ModelFallbackParams = {
   sessionKey?: string;
   fallbacksOverride?: unknown[];
   requestedRouteResolution?: "raw" | "resolved";
+  userLockedAuthProfileId?: string;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   prepareAgentHarnessRuntime?: (params: {
     provider: string;
@@ -304,6 +305,8 @@ describe("runMemoryFlushIfNeeded", () => {
                 allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
                 isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
                 isFallbackRetry: false,
+                contextEngineLogicalTurnLease: {} as never,
+                onContextEngineTurnCandidate: () => {},
               }),
           })) as {
             outcome?: "completed" | "exhausted";
@@ -399,7 +402,10 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     );
 
-    const followupRun = createTestFollowupRun();
+    const followupRun = createTestFollowupRun({
+      authProfileId: "anthropic:work",
+      authProfileIdSource: "user",
+    });
     const result = await runMemoryFlushIfNeeded({
       cfg: {
         agents: {
@@ -427,6 +433,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(requireModelFallbackCall().userLockedAuthProfileId).toBe("anthropic:work");
     const flushCall = requireEmbeddedAgentCall();
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
     expect(flushCall.transcriptPrompt).toBe("");
@@ -810,6 +817,7 @@ describe("runMemoryFlushIfNeeded", () => {
         isError: true,
       },
     ]);
+    expect(requireModelFallbackCall().userLockedAuthProfileId).toBeUndefined();
     expect(result.outcome).toBe("failed");
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
@@ -835,7 +843,10 @@ describe("runMemoryFlushIfNeeded", () => {
 
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun(),
+      followupRun: createTestFollowupRun({
+        authProfileId: "anthropic:auto",
+        authProfileIdSource: "auto",
+      }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,

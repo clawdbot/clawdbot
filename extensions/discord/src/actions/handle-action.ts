@@ -20,7 +20,7 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
-import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -118,7 +118,7 @@ export async function handleDiscordMessageAction(
     if (details?.ok !== true) {
       return;
     }
-    notifyDiscordInboundEventOutboundSuccess({
+    discordInboundEventDelivery.notify({
       sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
       to,
       accountId,
@@ -525,6 +525,7 @@ export async function handleDiscordMessageAction(
     ctx,
     resolveChannelId,
     readPolicyOptions,
+    actionOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {

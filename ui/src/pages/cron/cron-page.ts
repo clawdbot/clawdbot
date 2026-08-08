@@ -7,6 +7,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { watchAgentScope } from "../../lib/agents/index.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -37,6 +38,7 @@ import {
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
@@ -53,7 +55,26 @@ class CronPage extends OpenClawLightDomElement {
   @state() private detailTab: CronDetailTab = "settings";
 
   private modelSuggestionsState: CronState | null = null;
-  private gatewaySource?: ApplicationContext["gateway"];
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: (change) => this.resetGatewayState(change.snapshot),
+    onSnapshot: (change) => {
+      if (change.initial) {
+        this.resetGatewayState(change.snapshot);
+      }
+    },
+    ensureInitialData: () => this.ensureInitialData(),
+  });
+  private readonly observeAgentScope = watchAgentScope((scopeId) => {
+    // Replace the mutable request state so responses started for the old
+    // scope cannot populate the newly selected agent's page.
+    this.resetGatewayState(this.context.gateway.snapshot);
+    this.cron.cronAgentId = scopeId;
+    this.listTab = "tasks";
+    this.detailTab = "settings";
+    this.ensureInitialData();
+    this.requestUpdate();
+  });
   private get canManageCron(): boolean {
     return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
   }
@@ -74,44 +95,17 @@ class CronPage extends OpenClawLightDomElement {
     )
     .effect(
       () => this.context?.agentSelection,
-      (agentSelection) =>
-        agentSelection.subscribe((selection) => {
-          if (this.cron.cronAgentId === selection.scopeId) {
-            return;
-          }
-          // Replace the mutable request state so responses started for the old
-          // scope cannot populate the newly selected agent's page.
-          this.resetGatewayState(this.context.gateway.snapshot);
-          this.cron.cronAgentId = selection.scopeId;
-          this.listTab = "tasks";
-          this.detailTab = "settings";
-          this.ensureInitialData();
-          this.requestUpdate();
-        }),
-    )
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
-        this.gatewaySource = gateway;
-        this.syncGatewayState(gateway.snapshot, sourceChanged);
-        this.ensureInitialData();
-        return gateway.subscribe((snapshot) => {
-          if (this.gatewaySource === gateway) {
-            this.syncGatewayState(snapshot, false);
-            this.ensureInitialData();
-          }
-        });
-      },
+      (agentSelection) => this.observeAgentScope(agentSelection),
     )
     .effect(
       () => this.context?.gateway,
       (gateway) =>
         gateway.subscribeEvents((event) => {
           if (
-            this.gatewaySource === gateway &&
-            gateway.snapshot.phase === "connected" &&
-            gateway.snapshot.client &&
+            this.gateway.gateway === gateway &&
+            this.context.gateway === gateway &&
+            this.gateway.connected &&
+            this.gateway.client &&
             event.event === "cron"
           ) {
             void this.refreshCron({ tableFilters: true });
@@ -120,8 +114,6 @@ class CronPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    this.gatewaySource = undefined;
-    this.resetGatewayState();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -136,21 +128,6 @@ class CronPage extends OpenClawLightDomElement {
     this.agentsList = connected ? this.context.agents.state.agentsList : null;
     this.cronModelSuggestions = [];
     this.modelSuggestionsState = null;
-  }
-
-  private syncGatewayState(
-    snapshot: ApplicationContext["gateway"]["snapshot"],
-    sourceChanged: boolean,
-  ) {
-    if (
-      sourceChanged ||
-      this.cron.client !== snapshot.client ||
-      this.cron.connected !== (snapshot.phase === "connected")
-    ) {
-      // Each connection epoch owns a fresh mutable state object. In-flight work
-      // can finish against the old object without leaking into the next session.
-      this.resetGatewayState(snapshot);
-    }
   }
 
   private syncAgentsState() {

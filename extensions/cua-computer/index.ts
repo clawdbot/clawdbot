@@ -2,23 +2,16 @@ import { buildPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/
 import { z } from "zod";
 import { createCuaComputerCommands } from "./src/commands.js";
 
-const CuaComputerConfigSchema = z.strictObject({
-  driverPath: z.string().trim().min(1).optional(),
-});
+const CuaComputerConfigSchema = z.strictObject({});
 
 const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema, {
-  uiHints: {
-    driverPath: {
-      label: "cua-driver path",
-      help: "Absolute path or executable name resolved through PATH. Defaults to cua-driver.",
-    },
-  },
+  uiHints: {},
 });
 
 export default definePluginEntry({
   id: "cua-computer",
   name: "CUA Computer",
-  description: "Experimental cua-driver computer control for Windows and Linux node hosts.",
+  description: "Experimental CUA Driver SDK computer control for Windows and Linux node hosts.",
   configSchema,
   register(api) {
     const parsed = CuaComputerConfigSchema.safeParse(api.pluginConfig ?? {});
@@ -27,8 +20,17 @@ export default definePluginEntry({
         `Invalid cua-computer plugin config: ${parsed.error.issues[0]?.message ?? "invalid config"}`,
       );
     }
-    for (const command of createCuaComputerCommands({ driverPath: parsed.data.driverPath })) {
+    for (const command of createCuaComputerCommands()) {
       api.registerNodeHostCommand(command);
     }
+    // computer.act is dangerous-by-default and therefore also requires the
+    // operator's explicit gateway.nodes.commands.allow entry. The plugin
+    // policy is the final Gateway guard and the only path that may forward the
+    // already-allowlisted invocation to the paired node.
+    api.registerNodeInvokePolicy({
+      commands: ["computer.act"],
+      dangerous: true,
+      handle: async (ctx) => await ctx.invokeNode(),
+    });
   },
 });

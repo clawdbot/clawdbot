@@ -12,12 +12,12 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { authorizeIMessageResourceReference } from "./message-resource.js";
 import {
   resolveIMessageMessageId as resolveIMessageMessageIdImpl,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
+import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -328,6 +328,13 @@ export const imessageActionsRuntime = {
     partIndex?: number;
     options: IMessageBridgeActionOptions;
   }) {
+    const text = sanitizeIMessageFinalOutboundText(params.text).text;
+    const backwardsCompatMessage = sanitizeIMessageFinalOutboundText(
+      params.backwardsCompatMessage ?? params.text,
+    ).text;
+    if (!text.trim() || !backwardsCompatMessage.trim()) {
+      throw new Error("iMessage edit requires non-empty text after sanitization");
+    }
     await runIMessageCliJson(
       [
         "edit",
@@ -336,9 +343,9 @@ export const imessageActionsRuntime = {
         "--message",
         params.messageId,
         "--new-text",
-        params.text,
+        text,
         "--bc-text",
-        params.backwardsCompatMessage ?? params.text,
+        backwardsCompatMessage,
         "--part",
         String(params.partIndex ?? 0),
       ],
@@ -388,7 +395,12 @@ export const imessageActionsRuntime = {
     // asterisks. This mirrors the same extraction the rpc-send path does;
     // any caller that hits the bridge via `imsg send-rich` benefits without
     // needing to pre-format the text themselves.
-    const formatted = extractMarkdownFormatRuns(params.text);
+    const formatted = sanitizeIMessageFinalOutboundText(params.text, {
+      formatMarkdown: true,
+    });
+    if (!formatted.text.trim() && !params.attachment) {
+      throw new Error("iMessage rich send requires text or an attachment after sanitization");
+    }
     const buildArgs = (filePath?: string): string[] => [
       "send-rich",
       "--chat",
@@ -478,6 +490,14 @@ export const imessageActionsRuntime = {
     suppressComment?: boolean;
     options: IMessageBridgeActionOptions;
   }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
+    const question = sanitizeIMessageFinalOutboundText(params.question).text;
+    const choices = params.choices.map((choice) => sanitizeIMessageFinalOutboundText(choice).text);
+    if (!question.trim() || choices.some((choice) => !choice.trim())) {
+      throw new Error("iMessage poll requires a non-empty question and options after sanitization");
+    }
+    if (new Set(choices.map((choice) => choice.trim())).size !== choices.length) {
+      throw new Error("iMessage poll options must remain distinct after sanitization");
+    }
     const result = await runIMessageCliJson(
       [
         "poll",
@@ -485,8 +505,8 @@ export const imessageActionsRuntime = {
         "--chat",
         params.chatGuid,
         "--question",
-        params.question,
-        ...params.choices.flatMap((choice) => ["--option", choice]),
+        question,
+        ...choices.flatMap((choice) => ["--option", choice]),
         ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
         ...(params.suppressComment ? ["--no-comment"] : []),
       ],

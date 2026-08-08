@@ -25,6 +25,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
@@ -149,15 +150,12 @@ export function listPendingIMessageApprovalReactionPollTargets(params: {
   return [...targetByApprovalAndMessage.values()];
 }
 
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-reaction-state" })
-      .warn("iMessage persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break iMessage reactions.
-  }
-}
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalIMessageRuntime,
+  "imessage",
+  "approval-reaction-state",
+  "iMessage persistent approval reaction state failed",
+);
 
 function reportApprovalBindingCorrelationMismatch(binding: {
   approvalId: string;

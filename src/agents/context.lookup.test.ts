@@ -2,6 +2,7 @@
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "./context-resolution.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
@@ -27,6 +28,27 @@ const contextTestState = vi.hoisted(() => {
         staticEntries: state.staticCatalogModels,
       },
     })),
+    getPublishedModelCatalogOwnerSnapshot: vi.fn(
+      (
+        _params: unknown,
+      ):
+        | {
+            config: OpenClawConfig;
+            modelCatalog: {
+              entries: DiscoveredModel[];
+              routeVariants: never[];
+              staticEntries: DiscoveredModel[];
+            };
+          }
+        | undefined => ({
+        config: state.loadConfigImpl() as OpenClawConfig,
+        modelCatalog: {
+          entries: state.discoveredModels,
+          routeVariants: [],
+          staticEntries: state.staticCatalogModels,
+        },
+      }),
+    ),
   };
   return state;
 });
@@ -44,6 +66,8 @@ vi.mock("../config/runtime-source-projection.js", () => ({
 
 vi.mock("./prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
+  getPublishedPreparedModelCatalogOwnerSnapshot:
+    contextTestState.getPublishedModelCatalogOwnerSnapshot,
 }));
 
 function mockContextDeps(params: {
@@ -134,6 +158,15 @@ describe("lookupContextTokens", () => {
     contextTestState.runtimeConfigSourceSnapshot = null;
     contextTestState.loadModelCatalogOwnerSnapshot.mockClear();
     contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async () => ({
+      modelCatalog: {
+        entries: contextTestState.discoveredModels,
+        routeVariants: [],
+        staticEntries: contextTestState.staticCatalogModels,
+      },
+    }));
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockClear();
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockImplementation(() => ({
+      config: contextTestState.loadConfigImpl() as OpenClawConfig,
       modelCatalog: {
         entries: contextTestState.discoveredModels,
         routeVariants: [],
@@ -358,7 +391,7 @@ describe("lookupContextTokens", () => {
     );
   });
 
-  it("uses caller config when gateway startup starts cache warming", async () => {
+  it("keeps ordinary cache loading on the exact owner path", async () => {
     const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
     mockDiscoveryDeps([
       {
@@ -374,9 +407,106 @@ describe("lookupContextTokens", () => {
     expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ config, readOnly: true }),
     );
+    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
     ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("warms from the current Gateway-published owner without hashing a fallback owner key", async () => {
+    const requestedConfig = createContextOverrideConfig("synthetic", "stale-model", 111_000);
+    const publishedConfig = createContextOverrideConfig("synthetic", "current-model", 222_000);
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce({
+      config: publishedConfig,
+      modelCatalog: {
+        entries: [{ id: "discovered-model", provider: "synthetic", contextWindow: 64_000 }],
+        routeVariants: [],
+        staticEntries: [],
+      },
+    });
+
+    const { lookupContextTokens, prewarmContextWindowCacheAfterReady } =
+      await importContextModule();
+    await prewarmContextWindowCacheAfterReady({ config: requestedConfig });
+
+    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: requestedConfig,
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expect(
+      contextTestState.getPublishedModelCatalogOwnerSnapshot.mock.calls[0]?.[0],
+    ).not.toHaveProperty("readOnly");
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
+    expect(
+      lookupContextTokens("current-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(222_000);
+    expect(
+      lookupContextTokens("discovered-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(64_000);
+    expect(
+      lookupContextTokens("stale-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retires a failed published-owner load so exact request-time loading can recover", async () => {
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce(undefined);
+    const config = createContextOverrideConfig("synthetic", "recovered-model", 96_000);
+    contextTestState.loadConfigImpl = () => config;
+
+    const { ensureContextWindowCacheLoaded, prewarmContextWindowCacheAfterReady } =
+      await importContextModule();
+    await expect(prewarmContextWindowCacheAfterReady({ config })).resolves.toBeUndefined();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig).toBeUndefined();
+
+    await ensureContextWindowCacheLoaded();
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ config, readOnly: true }),
+    );
+  });
+
+  it("retires stale discovered metadata when exact catalog loading fails", async () => {
+    replaceDiscoveredContextTokenCache(new Map([["stale-model", 999_000]]));
+    contextTestState.loadModelCatalogOwnerSnapshot.mockRejectedValueOnce(
+      new Error("catalog unavailable"),
+    );
+
+    const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
+    await ensureContextWindowCacheLoaded(
+      createContextOverrideConfig("synthetic", "current-model", 96_000),
+    );
+
+    expect(
+      lookupContextTokens("stale-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retires an unpublished prewarm marker when shutdown cancels during import", async () => {
+    let cancelled = false;
+    const pending = contextModule.prewarmContextWindowCacheAfterReady({
+      config: {},
+      isCancelled: () => cancelled,
+    });
+    cancelled = true;
+
+    await pending;
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
   });
 
   it("warms fresh caches instead of reusing a pre-generation load promise", async () => {

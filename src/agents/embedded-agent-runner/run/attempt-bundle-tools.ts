@@ -6,6 +6,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
@@ -75,13 +76,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   // can reserve bundled tools or enter deferred catalogs and provider requests.
   const clientTools =
     providedClientTools && effectiveToolsAllow
-      ? applyEmbeddedAttemptToolsAllow(
-          providedClientTools.map((definition) => ({
-            name: definition.function.name,
-            definition,
-          })),
-          effectiveToolsAllow,
-        ).map(({ definition }) => definition)
+      ? providedClientTools.filter((definition) =>
+          isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
+        )
       : providedClientTools;
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&

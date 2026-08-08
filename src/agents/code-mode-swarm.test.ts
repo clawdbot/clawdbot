@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
-import { stableStringify } from "./stable-stringify.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,

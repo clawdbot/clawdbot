@@ -3,9 +3,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
+  abortTrackedChatRunById,
   boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
@@ -216,6 +219,114 @@ describe("registerChatAbortController", () => {
     expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
   });
 
+  it("re-arms agent expiry from execution admission exactly once", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-queued-agent",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 120_000,
+      kind: "agent",
+    });
+    const startedAtMs = registration.entry?.startedAtMs;
+
+    vi.advanceTimersByTime(90_000);
+    registration.markExecutionStarted();
+    const executionExpiresAtMs = resolveAgentRunExpiresAtMs({
+      now: Date.now(),
+      timeoutMs: 120_000,
+    });
+
+    expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+
+    vi.advanceTimersByTime(30_000);
+    registration.markExecutionStarted();
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+  });
+
+  it("does not re-arm an agent after its unswept queue deadline", () => {
+    vi.useFakeTimers();
+    for (const [runId, offsetMs] of [
+      ["run-agent-at-queue-deadline", 0],
+      ["run-agent-after-queue-deadline", 1],
+    ] as const) {
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 120_000,
+        kind: "agent",
+      });
+      const queueExpiresAtMs = registration.entry?.expiresAtMs;
+      const startedAtMs = registration.entry?.startedAtMs;
+      expect(queueExpiresAtMs).toBeTypeOf("number");
+
+      vi.setSystemTime((queueExpiresAtMs as number) + offsetMs);
+      registration.markExecutionStarted();
+      registration.markExecutionStarted();
+
+      expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+      expect(registration.entry?.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(registration.controller.signal.aborted).toBe(false);
+    }
+  });
+
+  it("does not re-arm stale, aborted, or non-agent registrations", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+
+    const staleControllers = new Map<string, ChatAbortControllerEntry>();
+    const stale = registerChatAbortController({
+      chatAbortControllers: staleControllers,
+      runId: "run-stale",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    const staleExpiry = stale.entry?.expiresAtMs;
+    staleControllers.delete("run-stale");
+
+    const abortedControllers = new Map<string, ChatAbortControllerEntry>();
+    const aborted = registerChatAbortController({
+      chatAbortControllers: abortedControllers,
+      runId: "run-aborted",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "agent",
+    });
+    const abortedExpiry = aborted.entry?.expiresAtMs;
+    aborted.controller.abort();
+
+    const chatControllers = new Map<string, ChatAbortControllerEntry>();
+    const chat = registerChatAbortController({
+      chatAbortControllers: chatControllers,
+      runId: "run-chat",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      kind: "chat-send",
+    });
+    const chatExpiry = chat.entry?.expiresAtMs;
+
+    vi.advanceTimersByTime(30_000);
+    stale.markExecutionStarted();
+    aborted.markExecutionStarted();
+    chat.markExecutionStarted();
+
+    expect(stale.entry?.expiresAtMs).toBe(staleExpiry);
+    expect(aborted.entry?.expiresAtMs).toBe(abortedExpiry);
+    expect(chat.entry?.expiresAtMs).toBe(chatExpiry);
+  });
+
   it("retains completed registrations until terminal persistence succeeds", async () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const onRemoved = vi.fn();
@@ -335,6 +446,30 @@ describe("abortChatRunById", () => {
     }
   });
 
+  it("preserves the owning session identity when synchronous abort cleanup clears run context", () => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      runId: "run-pre-reset-abort",
+    });
+    registerAgentRunContext(runId, { sessionKey, sessionId: entry.sessionId });
+    entry.controller.signal.addEventListener("abort", () => clearAgentRunContext(runId));
+    const events: Array<{ sessionId?: string }> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "lifecycle") {
+        events.push({ sessionId: event.sessionId });
+      }
+    });
+
+    try {
+      expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" })).toEqual({
+        aborted: true,
+      });
+      expect(events).toEqual([{ sessionId: entry.sessionId }]);
+    } finally {
+      unsubscribe();
+      clearAgentRunContext(runId);
+    }
+  });
+
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({
@@ -447,18 +582,26 @@ describe("abortChatRunById", () => {
       name: "fans out default-agent global aborts to scoped and legacy global subscribers",
       runId: "run-main-global",
       createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortChatRunById,
     },
     {
       name: "resolves unscoped global aborts to the default agent subscribers",
       runId: "run-unscoped-global",
       createEntry: () => createActiveEntry("global"),
+      abort: abortChatRunById,
+    },
+    {
+      name: "preserves default-agent global delivery through tracked maintenance aborts",
+      runId: "run-tracked-global",
+      createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortTrackedChatRunById,
     },
   ]) {
     it(testCase.name, () => {
       const ops = createOps({ runId: testCase.runId, entry: testCase.createEntry() });
       ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
 
-      const result = abortChatRunById(ops, { runId: testCase.runId, sessionKey: "global" });
+      const result = testCase.abort(ops, { runId: testCase.runId, sessionKey: "global" });
 
       expect(result).toEqual({ aborted: true });
       const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
@@ -614,7 +757,7 @@ describe("resolveInFlightRunSnapshot", () => {
 
   // Most cases request with requestedKey === canonicalKey; default canonical to
   // the requested key unless a case exercises the requested/canonical split.
-  const snap = (p: {
+  const resolveSnap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
     chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
@@ -639,14 +782,21 @@ describe("resolveInFlightRunSnapshot", () => {
       defaultAgentId: p.defaultAgentId,
     });
   };
+  const snap = (p: Parameters<typeof resolveSnap>[0]) => {
+    const result = resolveSnap(p);
+    if (result) {
+      Reflect.deleteProperty(result, "startedAt");
+    }
+    return result;
+  };
 
-  it("returns the live assistant text of a matching active run", () => {
-    const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:tui-x")]]),
+  it("returns live assistant text with the authoritative run start timestamp", () => {
+    const result = resolveSnap({
+      chatAbortControllers: new Map([["run-1", inFlightEntry("s", { startedAtMs: 1_234 })]]),
       chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
-      sessionKey: "agent:main:tui-x",
+      sessionKey: "s",
     });
-    expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+    expect(result).toEqual({ runId: "run-1", text: "partial answer so far", startedAt: 1_234 });
   });
 
   it("returns the active run plan snapshot with buffered text", () => {
@@ -863,11 +1013,11 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial", plan },
+        snapshot: { runId: "run-1", text: "partial", startedAt: 1_000, plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial", plan });
+    ).toEqual({ runId: "run-1", text: "partial", startedAt: 1_000, plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {
@@ -876,11 +1026,24 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), startedAt: 1_000, plan },
         messages: [],
         maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "", plan });
+    ).toEqual({ runId: "run-1", text: "", startedAt: 1_000, plan });
+  });
+
+  it("drops startedAt when the former minimal fallback exactly fills the budget", () => {
+    const messages = [{ role: "user", content: "near budget" }];
+    const minimal = { runId: "run-1", text: "" };
+    const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(minimal);
+    const result = boundInFlightRunSnapshotForChatHistory({
+      snapshot: { runId: "run-1", text: "x", startedAt: 1_000 },
+      messages,
+      maxBytes,
+    });
+    expect(result).toEqual(minimal);
+    expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(result)).toBeLessThanOrEqual(maxBytes);
   });
 
   it("drops an oversized plan after dropping text", () => {
@@ -915,5 +1078,41 @@ describe("resolveInFlightRunSnapshot", () => {
         maxBytes: 200,
       }),
     ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
+  });
+
+  it("prioritizes active progress and explicitly clears budget-dropped projections", () => {
+    const event = {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool" as const,
+      ts: 1_000,
+      data: { phase: "start", name: "read", toolCallId: "tool-1", args: {} },
+    };
+    const expected = {
+      runId: "run-1",
+      text: "",
+      events: [event],
+      plan: { steps: [] },
+    };
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "x".repeat(1_000),
+          events: [event],
+          plan: { steps: [{ step: "y".repeat(1_000), status: "in_progress" }] },
+        },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes(expected),
+      }),
+    ).toEqual(expected);
+
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "", events: [event] },
+        messages: [],
+        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes({ runId: "run-1", text: "", events: [] }),
+      }),
+    ).toEqual({ runId: "run-1", text: "", events: [] });
   });
 });

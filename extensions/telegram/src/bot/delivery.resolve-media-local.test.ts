@@ -1,7 +1,8 @@
-// Telegram tests cover delivery.resolve media retry plugin behavior.
 import { GrammyError } from "grammy";
 import type { Message } from "grammy/types";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+// Telegram tests cover delivery.resolve media retry plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
@@ -243,12 +244,7 @@ function requireResolvedMedia(
   return result;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -357,6 +353,107 @@ describe("resolveMedia getFile retry", () => {
       expect(getFile).toHaveBeenCalledTimes(3);
     },
   );
+
+  it.each([
+    { errorCode: 400, description: "Bad Request: wrong file identifier/HTTP URL specified" },
+    { errorCode: 401, description: "Unauthorized" },
+    { errorCode: 403, description: "Forbidden" },
+    { errorCode: 404, description: "Not Found" },
+    { errorCode: 409, description: "Conflict" },
+  ])(
+    "does not retry permanent Telegram getFile rejection $errorCode",
+    async ({ errorCode, description }) => {
+      const error = new GrammyError(
+        "Call to 'getFile' failed!",
+        { ok: false, error_code: errorCode, description, parameters: {} },
+        "getFile",
+        {},
+      );
+      const getFile = vi.fn().mockRejectedValue(error);
+      const promise = resolveMediaWithDefaults(makeCtx("document", getFile));
+      const failure = expectMediaFetchError(promise, {
+        code: "http_error",
+        messageIncludes: "Telegram getFile failed after retries",
+        status: errorCode,
+      });
+
+      await flushRetryTimers();
+      await failure;
+
+      expect(getFile).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    {
+      mediaField: "document" as const,
+      filePath: "documents/file_42.pdf",
+      contentType: "application/pdf",
+    },
+    {
+      mediaField: "sticker" as const,
+      filePath: "stickers/file_0.webp",
+      contentType: "image/webp",
+    },
+  ])(
+    "retries temporarily unavailable Telegram $mediaField files reported as 400",
+    async ({ mediaField, filePath, contentType }) => {
+      const error = new GrammyError(
+        "Call to 'getFile' failed!",
+        {
+          ok: false,
+          error_code: 400,
+          description: "Bad Request: wrong file_id or the file is temporarily unavailable",
+          parameters: {},
+        },
+        "getFile",
+        {},
+      );
+      const getFile = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce({
+        file_path: filePath,
+      });
+      const fileName = filePath.split("/").at(-1);
+      readRemoteMediaBuffer.mockResolvedValueOnce({
+        buffer: Buffer.from("media"),
+        contentType,
+        fileName,
+      });
+      saveMediaBuffer.mockResolvedValueOnce({
+        path: `/tmp/${fileName}`,
+        contentType,
+      });
+
+      const promise = resolveMediaWithDefaults(makeCtx(mediaField, getFile));
+      await flushRetryTimers();
+      const result = await promise;
+
+      expect(getFile).toHaveBeenCalledTimes(2);
+      expectResolvedMediaFields(result, `retried ${mediaField}`, {
+        path: `/tmp/${fileName}`,
+        kind: mediaField,
+      });
+    },
+  );
+
+  it.each([500, 502])("retries Telegram getFile server error %i", async (errorCode) => {
+    const error = new GrammyError(
+      "Call to 'getFile' failed!",
+      { ok: false, error_code: errorCode, description: "Server Error", parameters: {} },
+      "getFile",
+      {},
+    );
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const promise = resolveMediaWithDefaults(makeCtx("document", getFile));
+    await flushRetryTimers();
+    await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(2);
+  });
 
   it("does not catch errors from readRemoteMediaBuffer (only getFile is retried)", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });

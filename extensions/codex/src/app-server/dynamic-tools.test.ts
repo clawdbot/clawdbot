@@ -1,4 +1,3 @@
-// Codex tests cover dynamic tools plugin behavior.
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -26,7 +25,10 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+// Codex tests cover dynamic tools plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
@@ -104,12 +106,7 @@ function expectInputText(text: string) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 function callArg(
   mock: { mock: { calls: Array<Array<unknown>> } },
   callIndex: number,
@@ -443,6 +440,51 @@ describe("createCodexDynamicToolBridge", () => {
     expect(onAgentToolResult).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
     );
+    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
+      { runId: "run_5f3a9c", childSessionKey: "child-7b21" },
+    ]);
+  });
+
+  it("preserves an accepted sessions_spawn after result middleware strips its details", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
+      result: {
+        ...event.result,
+        content: [{ type: "text" as const, text: "Child launch recorded." }],
+        details: {},
+      },
+    }));
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "result-compactor",
+      pluginName: "Result Compactor",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "sessions_spawn",
+      textToolResult("Accepted: launching child session.", {
+        status: "accepted",
+        runId: "run_compacted",
+        childSessionKey: "child-compacted",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-compacted",
+      namespace: null,
+      tool: "sessions_spawn",
+      arguments: { task: "scan logs" },
+    });
+
+    expect(result).toEqual(expectInputText("Child launch recorded."));
+    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
+      { runId: "run_compacted", childSessionKey: "child-compacted" },
+    ]);
   });
 
   it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
@@ -499,6 +541,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result.success).toBe(false);
+    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([]);
   });
 
   it("treats accepted goal tool statuses (created / updated) as successful dynamic tool calls", async () => {
@@ -928,6 +971,73 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("rerun with narrower args");
   });
 
+  it.each([
+    { label: "ASCII", character: "a", truncated: false },
+    { label: "dense CJK", character: "你", truncated: true },
+  ])(
+    "budgets $label tool results by their shared token weight",
+    async ({ character, truncated }) => {
+      const original = character.repeat(16_000);
+      const bridge = createBridgeWithToolResult("large_lookup", textToolResult(original), {
+        contextWindowTokens: 128_000,
+      });
+
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-weighted",
+        namespace: null,
+        tool: "large_lookup",
+        arguments: {},
+      });
+      const firstItem = result.contentItems[0];
+      if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+        throw new Error("expected inputText tool result");
+      }
+      expect(estimateToolResultTextChars(firstItem.text)).toBeLessThanOrEqual(32_000);
+      if (truncated) {
+        expect(firstItem.text).toContain("original 16000 chars, weighted budget 32000");
+        expect(firstItem.text.length).toBeLessThan(9_000);
+      } else {
+        expect(firstItem.text).toBe(original);
+      }
+    },
+  );
+
+  it.each([
+    { label: "missing", contextWindowTokens: undefined, maxChars: 16_000 },
+    { label: "zero", contextWindowTokens: 0, maxChars: 16_000 },
+    { label: "negative", contextWindowTokens: -1, maxChars: 16_000 },
+    { label: "non-finite", contextWindowTokens: Number.POSITIVE_INFINITY, maxChars: 16_000 },
+    { label: "tiny", contextWindowTokens: 1, maxChars: 1 },
+    { label: "extra-large", contextWindowTokens: 200_000, maxChars: 64_000 },
+  ])(
+    "preserves the canonical cap for $label contexts",
+    async ({ contextWindowTokens, maxChars }) => {
+      const bridge = createBridgeWithToolResult(
+        "large_lookup",
+        textToolResult("x".repeat(70_000)),
+        {
+          contextWindowTokens,
+        },
+      );
+
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-context-cap",
+        namespace: null,
+        tool: "large_lookup",
+        arguments: {},
+      });
+      const firstItem = result.contentItems[0];
+      if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+        throw new Error("expected inputText tool result");
+      }
+      expect(firstItem.text.length).toBe(maxChars);
+    },
+  );
+
   it("applies the context-share ceiling for small effective windows", async () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
@@ -959,7 +1069,7 @@ describe("createCodexDynamicToolBridge", () => {
   it("keeps a whole code point when dynamic tool text crosses the automatic boundary", async () => {
     const maxChars = 16_000;
     const totalChars = 20_000;
-    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
     const textBudget = maxChars - noticeText.length - 1;
     const prefix = "a".repeat(textBudget - 1);
     const longText = `${prefix}😀${"z".repeat(totalChars - prefix.length - 2)}`;
@@ -1019,6 +1129,42 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("OpenClaw truncated dynamic tool result");
     expect(text).toContain("original 20000 chars");
     expect(text).not.toContain("b".repeat(10_000));
+  });
+
+  it("shares weighted budget across mixed text blocks while preserving images", async () => {
+    const bridge = createBridgeWithToolResult(
+      "mixed_lookup",
+      {
+        content: [
+          { type: "text", text: "a".repeat(4_000) },
+          { type: "image", mimeType: "image/png", data: COMPUTER_FRAME_IMAGE },
+          { type: "text", text: "你".repeat(9_000) },
+        ],
+        details: {},
+      },
+      { contextWindowTokens: 128_000 },
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-mixed-weighted",
+      namespace: null,
+      tool: "mixed_lookup",
+      arguments: {},
+    });
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+
+    expect(result.contentItems.map((item) => item.type)).toEqual([
+      "inputText",
+      "inputImage",
+      "inputText",
+    ]);
+    expect(result.contentItems[0]).toEqual({ type: "inputText", text: "a".repeat(4_000) });
+    expect(estimateToolResultTextChars(text)).toBeLessThanOrEqual(32_000);
+    expect(text).toContain("original 13000 chars, weighted budget 32000");
   });
 
   it.each([

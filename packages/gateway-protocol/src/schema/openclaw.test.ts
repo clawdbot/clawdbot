@@ -23,6 +23,21 @@ describe("OpenClaw chat params protocol", () => {
     ).toBe(true);
   });
 
+  it("accepts a typed wizard answer and rejects unknown answer fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch", display: "Twitch" },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects unsafe page ids and unknown context fields", () => {
     expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
       false,

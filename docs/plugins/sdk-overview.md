@@ -623,6 +623,15 @@ For an end-to-end authoring guide, see
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
 | `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
 
+To participate in durable admitted turns, context engines must declare
+`currentTurnFence: "before-current-turn-entry-v1"` and
+`turnAdvancementIdempotency: "atomic-idempotent-v1"` under
+`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
+idempotent write keyed by `advancementKey`. Without the full contract, OpenClaw
+uses the legacy context path for the whole logical turn and its retries, leaves
+the configured engine unchanged, and tries that engine again on the next
+logical turn.
+
 ### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |
@@ -635,6 +644,14 @@ For an end-to-end authoring guide, see
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
   `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
   API exists; they must not reach into another plugin's private layout.
+- A memory runtime that can return session-transcript hits should implement
+  `runtime.authorizeSearchHits(...)`. The host calls this hook before raw search
+  hits reach caller-visible surfaces and supplies the requesting agent, session
+  key, and sandbox state. Return only hits the requester may observe. If the hook
+  is absent, OpenClaw fails closed by withholding session-source hits while
+  retaining ordinary memory hits. Keep transcript identity and visibility
+  policy in the owning memory plugin; callers must not infer authorization from
+  paths or duplicate plugin-specific rules.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
@@ -690,20 +707,20 @@ shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                                                 |
-| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                                                   |
-| `api.name`               | `string`                  | Display name                                                                                |
-| `api.version`            | `string?`                 | Plugin version (optional)                                                                   |
-| `api.description`        | `string?`                 | Plugin description (optional)                                                               |
-| `api.source`             | `string`                  | Plugin source path                                                                          |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                            |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                  |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                   |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                     |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                            |
-| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                        |
+| Field                    | Type                      | Description                                                                               |
+| ------------------------ | ------------------------- | ----------------------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                                 |
+| `api.name`               | `string`                  | Display name                                                                              |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                                 |
+| `api.description`        | `string?`                 | Plugin description (optional)                                                             |
+| `api.source`             | `string`                  | Plugin source path                                                                        |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                          |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                   |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
 
 ## Internal module convention
 

@@ -6,6 +6,7 @@ import {
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
@@ -18,7 +19,10 @@ import {
   nativeHookRelayParamsWereRewritten,
   normalizeNativeHookToolName,
 } from "./native-hook-relay-codec.js";
-import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import {
+  MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
+  nativeHookRelayState,
+} from "./native-hook-relay-state.js";
 import type {
   JsonValue,
   NativeHookRelayDeferredApprovalOutcome,
@@ -38,7 +42,6 @@ export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferre
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
-const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const MAX_PERMISSION_FALLBACK_KEYS = 200;
 const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
 const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
@@ -445,13 +448,7 @@ function rememberNativeHookRelayPermissionAllowAlways(key: string, now = Date.no
     return;
   }
   permissionAllowAlwaysApprovals.set(key, { expiresAtMs });
-  while (permissionAllowAlwaysApprovals.size > MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES) {
-    const oldestKey = permissionAllowAlwaysApprovals.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    permissionAllowAlwaysApprovals.delete(oldestKey);
-  }
+  pruneMapToMaxSize(permissionAllowAlwaysApprovals, MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES);
 }
 
 export function pruneNativeHookRelayPermissionAllowAlways(now = Date.now()): void {

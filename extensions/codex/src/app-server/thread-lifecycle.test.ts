@@ -83,6 +83,7 @@ describe("Codex ring-zero thread config", () => {
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
     for (const config of [start.config, resume.config]) {
+      expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
       expect(config?.["features.multi_agent"]).toBe(false);
       expect(config?.["features.multi_agent_v2"]).toBe(false);
@@ -134,6 +135,7 @@ describe("Codex delegation capability", () => {
     });
 
     for (const request of [start, resume]) {
+      expect(request.config?.["agents.enabled"]).toBe(false);
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
@@ -190,6 +192,7 @@ describe("Codex delegation capability", () => {
 
     for (const request of [start, resume]) {
       for (const disabledFeature of [
+        "agents.enabled",
         "features.apps",
         "features.current_time_reminder",
         "features.deferred_executor",
@@ -546,7 +549,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -1261,6 +1264,22 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("preserves omitted native tiers until a previously owned sticky tier must be cleared", () => {
+    const options = {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    };
+    const inherited = buildTurnStartParams(createAttemptParams({ provider: "openai" }), options);
+    const cleared = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      ...options,
+      clearInheritedServiceTier: true,
+    });
+
+    expect(inherited).not.toHaveProperty("serviceTier");
+    expect(cleared.serviceTier).toBeNull();
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {

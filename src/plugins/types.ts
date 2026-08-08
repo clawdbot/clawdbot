@@ -11,6 +11,7 @@ export type {
   CliBackendConfig,
   CliBackendExecutionMode,
   CliBackendJsonlUsage,
+  CliBackendLiveSessionRequirement,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendParseJsonlEvent,
