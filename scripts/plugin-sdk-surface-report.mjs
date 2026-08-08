@@ -225,7 +225,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
       // +4: focused agent scope functions for doctor migration enumeration.
-      4839,
+      // +1: shared transcript credential-safety prompt for plugin-owned agent harnesses.
+      4840,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

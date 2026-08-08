@@ -154,6 +154,8 @@ type NodeOptionalPublicationState = {
   status: "unknown" | "supported" | "unsupported";
   hasPending: boolean;
   pendingParams?: unknown;
+  hasPublishedParams: boolean;
+  publishedParams?: unknown;
   hasRejectedParams: boolean;
   rejectedParams?: unknown;
   inFlight?: Promise<void>;
@@ -257,12 +259,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
     let state = optionalPublicationStates.get(method);
     if (!state) {
-      state = { status: "unknown", hasPending: false, hasRejectedParams: false };
+      state = {
+        status: "unknown",
+        hasPending: false,
+        hasPublishedParams: false,
+        hasRejectedParams: false,
+      };
       optionalPublicationStates.set(method, state);
     }
     if (
       state.status === "unsupported" ||
-      (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params))
+      (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
+      (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
+      (!state.inFlight &&
+        state.hasPublishedParams &&
+        isDeepStrictEqual(state.publishedParams, params))
     ) {
       return;
     }
@@ -281,6 +292,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         const nextParams = state.pendingParams;
         state.pendingParams = undefined;
         state.hasPending = false;
+        if (state.hasPublishedParams && isDeepStrictEqual(state.publishedParams, nextParams)) {
+          continue;
+        }
         if (state.hasRejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
           // A different value reopens publication. Keeping the old rejection
           // would drop a later return to that value while this request is in flight.
@@ -295,6 +309,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
             return;
           }
           state.status = "supported";
+          state.publishedParams = nextParams;
+          state.hasPublishedParams = true;
           state.hasRejectedParams = false;
           state.rejectedParams = undefined;
         } catch (error) {
@@ -315,6 +331,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
                 state.pendingParams = undefined;
                 state.hasPending = false;
               }
+            } else {
+              // A timeout or transport failure can occur after the Gateway applied
+              // the update. Forget the acknowledged baseline so the next desired
+              // value is never skipped against an uncertain remote state.
+              state.hasPublishedParams = false;
+              state.publishedParams = undefined;
             }
           }
         }

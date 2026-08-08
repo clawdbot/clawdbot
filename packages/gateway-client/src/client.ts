@@ -371,6 +371,17 @@ const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
 
+function resolveLegacyNodePlatform(platform: string): string | undefined {
+  switch (platform) {
+    case "macos":
+      return "darwin";
+    case "windows":
+      return "win32";
+    default:
+      return undefined;
+  }
+}
+
 type PendingStop = {
   ws: WebSocket;
   promise: Promise<void>;
@@ -775,8 +786,8 @@ export class GatewayClient {
       storedScopes,
       defaultScopes: ["operator.admin"],
     });
-    const platform = this.opts.platform ?? process.platform;
     const clientMode = this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+    const clientId = this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
     // Match server admission: only probes and exact node role+mode identities
     // may advertise specialized floors; every other client stays current-only.
     const minProtocol =
@@ -786,13 +797,24 @@ export class GatewayClient {
         : role === "node" && clientMode === GATEWAY_CLIENT_MODES.NODE
           ? MIN_NODE_PROTOCOL_VERSION
           : MIN_CLIENT_PROTOCOL_VERSION);
+    const configuredPlatform = this.opts.platform ?? process.platform;
+    // Protocol-v3 gateways pin Node.js desktop platform aliases before current
+    // canonical IDs existed. Emit the alias up front to avoid persisting a
+    // metadata repair request before a compatibility retry can succeed.
+    const platform =
+      role === "node" &&
+      clientMode === GATEWAY_CLIENT_MODES.NODE &&
+      clientId === GATEWAY_CLIENT_NAMES.NODE_HOST &&
+      minProtocol <= MIN_NODE_PROTOCOL_VERSION
+        ? (resolveLegacyNodePlatform(configuredPlatform) ?? configuredPlatform)
+        : configuredPlatform;
 
     return {
       params: {
         minProtocol,
         maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
         client: {
-          id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
           platform,

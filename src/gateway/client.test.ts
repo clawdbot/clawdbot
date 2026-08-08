@@ -4,7 +4,10 @@ import { generateKeyPairSync } from "node:crypto";
 // proxy bypass setup, command dispatch, reconnect, and error handling.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_MODES } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
@@ -1171,6 +1174,7 @@ describe("GatewayClient connect auth payload", () => {
       scopes?: string[];
       client?: {
         mode?: string;
+        platform?: string;
       };
       auth?: {
         token?: string;
@@ -1299,6 +1303,58 @@ describe("GatewayClient connect auth payload", () => {
 
     expect(connect.params?.client?.mode).toBe(GATEWAY_CLIENT_MODES.NODE);
     expect(signedPayload?.split("|")[3]).toBe(connect.params?.client?.mode);
+    client.stop();
+  });
+
+  it.each([
+    { canonical: "macos", legacy: "darwin" },
+    { canonical: "windows", legacy: "win32" },
+  ])("emits legacy $legacy platform metadata for v3-compatible nodes", ({ canonical, legacy }) => {
+    const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
+    const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      platform: canonical,
+      deviceFamily: canonical === "macos" ? "Mac" : "Windows",
+      hostDeps: { signDevicePayload },
+    });
+
+    const { connect } = startClientAndConnect({ client });
+    expect(connect.params?.client?.platform).toBe(legacy);
+    expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|")[9]).toBe(legacy);
+    client.stop();
+  });
+
+  it.each(["macos", "windows"])(
+    "keeps canonical %s platform metadata for v4-only nodes",
+    (platform) => {
+      const client = createClientWithIdentity(`device-v4-${platform}`, vi.fn(), {
+        role: "node",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        minProtocol: PROTOCOL_VERSION,
+        platform,
+        deviceFamily: platform === "macos" ? "Mac" : "Windows",
+      });
+
+      const { connect } = startClientAndConnect({ client });
+      expect(connect.params?.client?.platform).toBe(platform);
+      client.stop();
+    },
+  );
+
+  it("keeps canonical platform metadata for non-node-host node clients", () => {
+    const client = createClientWithIdentity("device-third-party-node", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
+      platform: "macos",
+      deviceFamily: "Mac",
+    });
+
+    const { connect } = startClientAndConnect({ client });
+    expect(connect.params?.client?.platform).toBe("macos");
     client.stop();
   });
 
@@ -1531,7 +1587,11 @@ describe("GatewayClient connect auth payload", () => {
     );
   }
 
-  function emitHelloOk(ws: MockWebSocket, connectId: string | undefined) {
+  function emitHelloOk(
+    ws: MockWebSocket,
+    connectId: string | undefined,
+    protocol = PROTOCOL_VERSION,
+  ) {
     ws.emitMessage(
       JSON.stringify({
         type: "res",
@@ -1539,6 +1599,7 @@ describe("GatewayClient connect auth payload", () => {
         ok: true,
         payload: {
           type: "hello-ok",
+          protocol,
           auth: { role: "operator", scopes: ["operator.admin"] },
         },
       }),

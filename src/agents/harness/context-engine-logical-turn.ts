@@ -75,6 +75,9 @@ export async function createContextEngineLogicalTurnLease(params: {
   let degradedReason = resolution.configuredFailure;
   let warned = false;
   const disposalHolds = new Set<Promise<unknown>>();
+  const isBaselineEngineSelection =
+    resolution.configuredFailure === undefined &&
+    resolution.configured.registeredId === resolution.fallback.registeredId;
 
   const asEffective = (): EffectiveContextEngineRef =>
     Object.freeze({
@@ -89,12 +92,22 @@ export async function createContextEngineLogicalTurnLease(params: {
     }
     warned = true;
     (params.warn ?? console.warn)(
-      `[context-engine] Context engine "${sanitizeForLog(resolution.configuredId)}" degraded to "${sanitizeForLog(resolution.fallback.registeredId)}" for this logical turn: ${sanitizeForLog(reason)}`,
+      `[context-engine] Context engine "${sanitizeForLog(resolution.configuredId)}" degraded to "${sanitizeForLog(resolution.fallback.registeredId)}" for this logical turn: ${sanitizeForLog(reason)}. ` +
+        `The "${sanitizeForLog(resolution.fallback.registeredId)}" engine will handle only this turn; configuration is unchanged, and "${sanitizeForLog(resolution.configuredId)}" will be retried next turn.`,
     );
   };
 
   const degradeBeforeStart = (reason: string): EffectiveContextEngineRef => {
-    if (state === "started" || state === "disposed") {
+    if (state === "disposed") {
+      throw new Error("context-engine logical turn selection is already pinned");
+    }
+    if (isBaselineEngineSelection) {
+      if (state === "unselected") {
+        state = "selected";
+      }
+      return asEffective();
+    }
+    if (state === "started") {
       throw new Error("context-engine logical turn selection is already pinned");
     }
     degradedReason ??= reason;
@@ -117,6 +130,11 @@ export async function createContextEngineLogicalTurnLease(params: {
     });
     if (!support.ok) {
       return `host "${selection.host.id}" is missing ${support.missingCapabilities.join(", ")}`;
+    }
+    if (isBaselineEngineSelection) {
+      // Legacy delegates durable transcript ownership to SessionManager, so only its
+      // actual host requirements apply to repeated logical-turn selection.
+      return undefined;
     }
     if (
       selection.hasAdmissionFence &&

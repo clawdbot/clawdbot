@@ -18,7 +18,7 @@ import {
 } from "./node-command-policy.js";
 import {
   filterLegacyNodeProtocolFeatures,
-  normalizeLegacyNodeHostClientMetadata,
+  normalizeNodeHostCompatibilityMetadata,
 } from "./node-legacy-protocol-filter.js";
 
 describe("gateway/node-command-policy", () => {
@@ -225,16 +225,23 @@ describe("gateway/node-command-policy", () => {
   it.each([
     ["darwin", "macos", "Mac"],
     ["linux", "linux", "Linux"],
+    ["macos", "macos", "Mac"],
     ["win32", "windows", "Windows"],
+    ["windows", "windows", "Windows"],
   ])("normalizes shipped protocol-v3 node-host metadata for %s", (platform, expected, family) => {
+    const normalized = normalizeNodeHostCompatibilityMetadata({
+      id: GATEWAY_CLIENT_IDS.NODE_HOST,
+      version: "2026.5.7",
+      platform,
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    expect(normalized).toMatchObject({ platform: expected, deviceFamily: family });
     expect(
-      normalizeLegacyNodeHostClientMetadata({
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        version: "2026.5.7",
-        platform,
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      }),
-    ).toMatchObject({ platform: expected, deviceFamily: family });
+      resolveNodeCommandAllowlist({} as OpenClawConfig, {
+        ...normalized,
+        approvedCommands: ["system.run"],
+      }).has("system.run"),
+    ).toBe(true);
   });
 
   it("does not normalize non-node-host or conflicting legacy metadata", () => {
@@ -245,14 +252,14 @@ describe("gateway/node-command-policy", () => {
       deviceFamily: "iPhone",
       mode: GATEWAY_CLIENT_MODES.NODE,
     } as const;
-    expect(normalizeLegacyNodeHostClientMetadata(conflicting)).toBe(conflicting);
+    expect(normalizeNodeHostCompatibilityMetadata(conflicting)).toBe(conflicting);
 
     const otherClient = {
       ...conflicting,
       id: GATEWAY_CLIENT_IDS.LINUX_APP,
       deviceFamily: undefined,
     };
-    expect(normalizeLegacyNodeHostClientMetadata(otherClient)).toBe(otherClient);
+    expect(normalizeNodeHostCompatibilityMetadata(otherClient)).toBe(otherClient);
   });
 
   it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {
