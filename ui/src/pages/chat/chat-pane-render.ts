@@ -213,9 +213,6 @@ export class ChatPane extends ChatPaneHeader {
       narrowLayout:
         chatLayoutWidth <
         WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
-      onOpenSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
     // Only side-docked rails narrow the conversation region.
@@ -253,6 +250,7 @@ export class ChatPane extends ChatPaneHeader {
     });
     const props: ChatProps = {
       transcript: this.transcript,
+      backgroundTaskTranscript: this.backgroundTaskTranscript,
       paneId: this.paneId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active,

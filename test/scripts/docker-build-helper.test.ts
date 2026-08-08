@@ -2279,6 +2279,10 @@ docker_e2e_docker_run_cmd run demo
     for (const script of [runner, publishedRunner]) {
       expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
       expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
+      expect(script).toContain(
+        "read -r plugin_package_name plugin_package_version plugin_package_tarball",
+      );
+      expect(script).not.toContain("read -r package_name package_version package_tarball");
     }
     expect(runner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"');
     expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');

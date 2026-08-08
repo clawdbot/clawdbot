@@ -51,6 +51,7 @@ function makeParams(
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
       totalTokens: options?.totalTokens ?? 123,
       totalTokensFresh: options?.totalTokensFresh ?? true,
+      totalTokensVersion: 1 as const,
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {

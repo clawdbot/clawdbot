@@ -247,6 +247,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionId: "parent-session",
         totalTokens: 150_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         updatedAt: 1,
       },
     );
@@ -371,7 +372,7 @@ describe("forkSessionEntryFromParent", () => {
 
     await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
       status: "fork",
-      parentTokens: 4_567,
+      parentTokens: 67,
     });
   });
 
