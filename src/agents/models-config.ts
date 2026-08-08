@@ -111,6 +111,9 @@ async function buildModelsJsonFingerprint(params: {
   const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
+  const defaultModelsFileMtimeMs = await readFileMtimeMs(
+    path.join(resolveDefaultAgentDir(params.config), "models.json"),
+  );
   const pluginCatalogFingerprint = createHash("sha256")
     .update(stableStringify(listPreparedPluginModelCatalogs(params.agentDir)))
     .digest("base64url");
@@ -126,6 +129,7 @@ async function buildModelsJsonFingerprint(params: {
     authProfilesMtimeMs,
     authProfilesWalMtimeMs,
     modelsFileMtimeMs,
+    defaultModelsFileMtimeMs,
     pluginCatalogFingerprint,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
@@ -182,6 +186,62 @@ async function writeModelsFileAtomicForModelsJson(
   contents: string,
 ): Promise<void> {
   await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
+}
+
+async function fileExists(pathname: string): Promise<boolean> {
+  try {
+    await fs.lstat(pathname);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function writeModelsFileAtomicIfMissing(
+  targetPath: string,
+  contents: string,
+): Promise<boolean> {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+  const tempPath = path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  try {
+    await fs.writeFile(tempPath, contents, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await fs.link(tempPath, targetPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return false;
+    }
+    throw error;
+  } finally {
+    await fs.unlink(tempPath).catch(() => {
+      // The target is already committed or the write failure is being propagated.
+    });
+  }
+}
+
+async function inheritDefaultModelsFileIfMissing(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+  targetPath: string;
+}): Promise<boolean> {
+  const defaultAgentDir = resolveDefaultAgentDir(params.config);
+  if (path.resolve(params.agentDir) === path.resolve(defaultAgentDir)) {
+    return false;
+  }
+  if (await fileExists(params.targetPath)) {
+    return false;
+  }
+  const contents = await privateFileStore(defaultAgentDir).readTextIfExists("models.json");
+  if (!contents?.trim()) {
+    return false;
+  }
+  return await writeModelsFileAtomicIfMissing(params.targetPath, contents);
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -428,11 +488,16 @@ async function prepareOpenClawModelsJsonSource(
     });
 
     if (plan.action === "skip") {
+      const wroteRoot = await inheritDefaultModelsFileIfMissing({
+        config: cfg,
+        agentDir,
+        targetPath,
+      });
       const wrotePluginCatalog = writePluginCatalogsForModelsJson({
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
       });
-      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog } };
+      return { fingerprint, result: { agentDir, wrote: wroteRoot || wrotePluginCatalog } };
     }
 
     if (plan.action === "noop") {

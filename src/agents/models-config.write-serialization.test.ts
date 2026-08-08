@@ -506,6 +506,75 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("bootstraps a missing secondary root catalog from the default agent on skip", async () => {
+    await withModelsTempHome(async (home) => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const defaultAgentDir = resolveDefaultAgentDir(cfg);
+      const agentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      const contents = `${JSON.stringify(
+        {
+          providers: {
+            openai: {
+              baseUrl: "https://gateway.example/v1",
+              headers: { "X-Tenant": "ops" },
+              apiKey: "$" + "{OPENAI_API_KEY}",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`;
+      await fs.mkdir(defaultAgentDir, { recursive: true });
+      await fs.writeFile(path.join(defaultAgentDir, "models.json"), contents, "utf8");
+      planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
+
+      const result = await ensureOpenClawModelsJson(cfg, agentDir);
+
+      expect(result.wrote).toBe(true);
+      expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(contents);
+      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+    });
+  });
+
+  it("does not overwrite an existing secondary root catalog on skip", async () => {
+    await withModelsTempHome(async (home) => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const defaultAgentDir = resolveDefaultAgentDir(cfg);
+      const agentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      const targetPath = path.join(agentDir, "models.json");
+      await fs.mkdir(defaultAgentDir, { recursive: true });
+      await fs.writeFile(path.join(defaultAgentDir, "models.json"), '{"providers":{"main":{}}}\n');
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(targetPath, "{ malformed catalog");
+      planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
+
+      const result = await ensureOpenClawModelsJson(cfg, agentDir);
+
+      expect(result.wrote).toBe(false);
+      expect(await fs.readFile(targetPath, "utf8")).toBe("{ malformed catalog");
+    });
+  });
+
+  it("retries secondary bootstrap when the default catalog appears after an earlier skip", async () => {
+    await withModelsTempHome(async (home) => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const defaultAgentDir = resolveDefaultAgentDir(cfg);
+      const agentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      const targetPath = path.join(agentDir, "models.json");
+      const contents = '{"providers":{"main":{}}}\n';
+      planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
+
+      expect((await ensureOpenClawModelsJson(cfg, agentDir)).wrote).toBe(false);
+      await fs.mkdir(defaultAgentDir, { recursive: true });
+      await fs.writeFile(path.join(defaultAgentDir, "models.json"), contents);
+
+      expect((await ensureOpenClawModelsJson(cfg, agentDir)).wrote).toBe(true);
+      expect(await fs.readFile(targetPath, "utf8")).toBe(contents);
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("repairs malformed catalog state before startup planning and fingerprints it once", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
