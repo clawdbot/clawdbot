@@ -29,9 +29,9 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -62,7 +62,6 @@ import {
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 /** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(
@@ -78,21 +77,14 @@ export function projectSessionActor(
   }
   let identity = userProfileIdentityById.get(id);
   if (!userProfileIdentityById.has(id)) {
-    try {
-      const profile = getUserProfileListItem(id);
-      const label = normalizeOptionalString(profile.displayName);
-      identity = {
-        ...(label ? { label } : {}),
-        ...(profile.hasAvatar
-          ? {
-              avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}`,
-            }
-          : {}),
-      };
-    } catch {
-      // Human actors can also be channel sender ids; only profile ids resolve here.
-      identity = undefined;
-    }
+    const display = resolveCurrentUserProfileDisplay(id);
+    identity =
+      display.kind === "unresolved"
+        ? undefined
+        : {
+            ...(display.label ? { label: display.label } : {}),
+            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
+          };
     userProfileIdentityById.set(id, identity);
   }
   return { type: actor.type, id, ...identity };

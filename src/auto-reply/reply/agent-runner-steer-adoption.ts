@@ -26,8 +26,8 @@ export async function finalizeAcceptedSteer(params: {
     }
   };
   if (transcriptCommitUnconfirmed) {
-    // Work without a confirmed canonical transcript must stop, but the source
-    // remains adopted because harness acceptance is already irreversible.
+    // The runtime accepted this message, but exact cancellation could not find it.
+    // Preserve at-most-once delivery: abort the uncertain owner without replaying.
     abortActiveRun();
     logVerbose(
       `queue: active session ${params.steerSessionId} accepted steering without transcript confirmation; aborting active run without ingress replay (${params.errorMessage ?? "unknown receipt failure"})`,

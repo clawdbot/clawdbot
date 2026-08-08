@@ -165,7 +165,15 @@ vi.mock("../../runtime.js", () => {
 
 vi.mock("./queue.js", () => {
   return {
+    admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    parkSteerCandidate: vi.fn(() => ({
+      admit: async () => "steer",
+      accepted: vi.fn(),
+      fallback: vi.fn(),
+      consume: vi.fn(),
+    })),
+    resolveFollowupAbortSignal: vi.fn(() => undefined),
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),

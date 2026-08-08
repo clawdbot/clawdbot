@@ -220,19 +220,19 @@ export function renderActivityGroup(
   const cards = groups.flatMap((group) =>
     group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
   );
+  const latestGroup = groups[groups.length - 1] ?? firstGroup;
+  const latestCards = latestGroup.messages.flatMap((item) =>
+    extractToolCardsCached(item.message, item.key),
+  );
   const toolCount =
     cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
-  const hasError = groups.some(
-    (group) =>
-      group.turnSucceeded !== true &&
-      group.messages.some((item) =>
-        extractToolCardsCached(item.message, item.key).some(isToolCardError),
-      ),
-  );
+  // Aggregate chrome follows the latest group; older failures stay visible
+  // in the settled summary and expanded child rows.
+  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
-    ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
+    ? latestCards.findLast((card) => isRunningToolCard(card, opts.runActive))
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`

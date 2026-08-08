@@ -481,31 +481,44 @@ jobs:
 
           validate_child_run() {
             local candidate_run_id="$1"
-            local candidate_run_json
+            local candidate_run_json attempt
             if [[ ! "$candidate_run_id" =~ ^[0-9]+$ ]]; then
               echo "::error::Refusing to adopt invalid ${workflow} run ID ${candidate_run_id}." >&2
               return 1
             fi
-            candidate_run_json="$(
-              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
-            )"
-            if ! jq -e \
-              --argjson id "$candidate_run_id" \
-              --argjson workflow_id "$expected_workflow_id" \
-              --arg title "$dispatch_run_name" \
-              --arg branch "$CHILD_WORKFLOW_REF" \
-              '(.id == $id)
-                and (.workflow_id == $workflow_id)
-                and (.display_title == $title)
-                and (.head_branch == $branch)
-                and (.event == "workflow_dispatch")' \
-              <<< "$candidate_run_json" >/dev/null; then
-              echo "::error::Refusing to adopt unvalidated ${workflow} run ${candidate_run_id}." >&2
-              jq '{id, workflow_id, path, display_title, head_branch, head_sha, event, html_url}' \
-                <<< "$candidate_run_json" >&2
-              return 1
-            fi
-            printf '%s\n' "$candidate_run_json"
+            # GitHub evaluates run-name asynchronously: a run adopted from the dispatch
+            # response can briefly report its default display_title. Identity fields are
+            # immediate-refuse; a lone title mismatch retries until the template lands.
+            for attempt in $(seq 1 12); do
+              candidate_run_json="$(
+                gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
+              )"
+              if ! jq -e \
+                --argjson id "$candidate_run_id" \
+                --argjson workflow_id "$expected_workflow_id" \
+                --arg branch "$CHILD_WORKFLOW_REF" \
+                '(.id == $id)
+                  and (.workflow_id == $workflow_id)
+                  and (.head_branch == $branch)
+                  and (.event == "workflow_dispatch")' \
+                <<< "$candidate_run_json" >/dev/null; then
+                echo "::error::Refusing to adopt unvalidated ${workflow} run ${candidate_run_id}." >&2
+                jq '{id, workflow_id, path, display_title, head_branch, head_sha, event, html_url}' \
+                  <<< "$candidate_run_json" >&2
+                return 1
+              fi
+              if jq -e --arg title "$dispatch_run_name" '.display_title == $title' \
+                <<< "$candidate_run_json" >/dev/null; then
+                printf '%s\n' "$candidate_run_json"
+                return 0
+              fi
+              echo "Waiting for ${workflow} run ${candidate_run_id} display title (attempt ${attempt})." >&2
+              sleep 5
+            done
+            echo "::error::Refusing to adopt ${workflow} run ${candidate_run_id}: display title never matched ${dispatch_run_name}." >&2
+            jq '{id, workflow_id, path, display_title, head_branch, head_sha, event, html_url}' \
+              <<< "$candidate_run_json" >&2
+            return 1
           }
 
           fetch_child_jobs() {

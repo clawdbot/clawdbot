@@ -2504,15 +2504,13 @@ function envAssignmentInsertIndex(words) {
 }
 
 function isWindowsRemoteTarget(commandArgs) {
-  return (
-    optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
-  );
+  // Mirror Crabbox's arg/env/config resolution so indirect Windows targets never receive POSIX shell.
+  return effectiveTargetContext(commandArgs).target === "windows";
 }
 
 function isNativeWindowsRemoteTarget(commandArgs) {
-  return (
-    isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2"
-  );
+  const targetContext = effectiveTargetContext(commandArgs);
+  return targetContext.target === "windows" && targetContext.windowsMode !== "wsl2";
 }
 
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
@@ -2529,7 +2527,7 @@ function isBrokeredWsl2RemoteTarget(commandArgs, providerName) {
     commandArgs[0] === "run" &&
     (canonicalProvider === "aws" || canonicalProvider === "azure") &&
     isWindowsRemoteTarget(commandArgs) &&
-    optionValue(commandArgs, "--windows-mode") === "wsl2"
+    effectiveTargetContext(commandArgs).windowsMode === "wsl2"
   );
 }
 

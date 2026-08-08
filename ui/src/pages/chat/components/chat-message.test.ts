@@ -2263,12 +2263,21 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
   });
 
-  it("uses the newest live card label before settling to the aggregate summary", () => {
+  it("uses the newest group's live card label without inheriting an earlier failure", () => {
     const container = document.createElement("div");
     const groups = [
-      createToolGroup("live-first", [
-        createMessageEntry("finished-read", createToolResultMessage("call-read", "read", "done")),
-      ]),
+      createToolGroup(
+        "live-first",
+        [
+          createMessageEntry(
+            "failed-read",
+            createToolResultMessage("call-read", "read", JSON.stringify({ error: "failed" }), {
+              isError: true,
+            }),
+          ),
+        ],
+        { turnSucceeded: false },
+      ),
       createToolGroup(
         "live-second",
         [
@@ -2292,58 +2301,97 @@ describe("grouped chat rendering", () => {
     const opts = { showReasoning: true, showToolCalls: true, runActive: true };
 
     render(renderActivityGroup(groups, opts), container);
+    const activitySummary = expectElement(
+      container,
+      ".chat-activity-group__summary",
+      HTMLButtonElement,
+    );
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
+    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
+    expect(activitySummary.getAttribute("aria-label")).toBeNull();
+    expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
       "Editing a.ts…",
     );
 
     render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Read a file, edited a file",
+      "Read a file, edited a file · 1 failed",
     );
   });
 
-  it("computes aggregate errors per owning group", () => {
+  it("derives cross-group error state from the latest group while retaining failed children", () => {
     const container = document.createElement("div");
     const failedMessage = (id: string) =>
-      createToolResultMessage(id, "web_search", JSON.stringify({ error: "No matches" }), {
-        isError: true,
-      });
-    const recovered = createToolGroup(
-      "recovered",
-      [createMessageEntry("recovered-message", failedMessage("call-recovered"))],
-      { turnSucceeded: true },
+      createAssistantMessage(
+        [
+          {
+            type: "tool_use",
+            id,
+            name: "bash",
+            input: { command: "run primary" },
+          },
+          createToolResultBlock(id, "bash", "Primary path failed", { isError: true }),
+        ],
+        { isError: true },
+      );
+    const failed = createToolGroup(
+      "failed",
+      [createMessageEntry("failed-message", failedMessage("call-failed"))],
+      { turnSucceeded: false },
     );
     const successful = createToolGroup("successful", [
       createMessageEntry("successful-message", createToolResultMessage("call-ok", "read", "ok")),
     ]);
 
     render(
-      renderActivityGroup([recovered, successful], {
+      renderActivityGroup([failed, successful], {
         showReasoning: true,
         showToolCalls: true,
       }),
       container,
     );
+    const recoveredSummary = expectElement(
+      container,
+      ".chat-activity-group__summary",
+      HTMLButtonElement,
+    );
     expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
+    expect(recoveredSummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
+    expect(recoveredSummary.getAttribute("aria-expanded")).toBe("false");
+    expect(recoveredSummary.getAttribute("aria-label")).toBeNull();
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toContain(
       "1 failed",
     );
 
-    const unrecovered = createToolGroup(
-      "unrecovered",
-      [createMessageEntry("unrecovered-message", failedMessage("call-unrecovered"))],
-      { turnSucceeded: false },
-    );
     render(
-      renderActivityGroup([recovered, unrecovered], {
+      renderActivityGroup([failed, successful], {
+        showReasoning: true,
+        showToolCalls: true,
+        isToolMessageExpanded: (id) => id === "activity:failed",
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
+    expect(container.querySelectorAll(".chat-tool-msg-summary--error")).toHaveLength(1);
+    expect(container.querySelector(".chat-tool-row__badge")?.textContent).toBe("failed");
+
+    render(
+      renderActivityGroup([successful, failed], {
         showReasoning: true,
         showToolCalls: true,
       }),
       container,
     );
+    const failedSummary = expectElement(
+      container,
+      ".chat-activity-group__summary",
+      HTMLButtonElement,
+    );
     expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull();
-    expect(container.querySelector(".chat-activity-group__summary--error")).not.toBeNull();
+    expect(failedSummary.classList.contains("chat-activity-group__summary--error")).toBe(true);
+    expect(failedSummary.getAttribute("aria-expanded")).toBe("true");
+    expect(failedSummary.getAttribute("aria-label")).toBe("Activity: 2 tools, includes errors.");
   });
 
   it("uses the running mutation verb in an active group summary", () => {

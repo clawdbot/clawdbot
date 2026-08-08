@@ -104,6 +104,12 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "claw_package_refs",
     "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
   );
+  ensureColumn(db, "claw_package_refs", "extension_id TEXT");
+  ensureColumn(db, "claw_package_refs", "extension_format TEXT");
+  ensureColumn(db, "claw_package_refs", "extension_detected_format TEXT");
+  ensureColumn(db, "claw_package_refs", "extension_mapped_json TEXT");
+  ensureColumn(db, "claw_package_refs", "extension_unavailable_json TEXT");
+  ensureColumn(db, "claw_package_refs", "extension_adapter_identity TEXT");
   const addedDiagnosticEventSequence = ensureColumn(
     db,
     "diagnostic_events",

@@ -402,6 +402,7 @@ export async function connectTestGatewayClient(params: {
   timeoutMs?: number;
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
+  caps?: string[];
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
   waitForEventLoopReady?: boolean;
@@ -444,6 +445,7 @@ async function connectClientOnce(params: {
   timeoutMs: number;
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
+  caps?: string[];
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
   waitForEventLoopReady?: boolean;
@@ -478,6 +480,7 @@ async function connectClientOnce(params: {
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
+      ...(params.caps ? { caps: params.caps } : {}),
       connectChallengeTimeoutMs: params.timeoutMs,
       deviceIdentity: params.deviceIdentity,
       onHelloOk: () => finish({ client }),

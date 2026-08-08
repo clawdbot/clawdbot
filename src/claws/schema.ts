@@ -89,6 +89,17 @@ const agentSchema = z
   })
   .strict();
 
+const openClawExtensionSchema = z
+  .object({
+    id: agentId,
+    kind: z.literal("plugin"),
+    format: z.enum(["openclaw", "claude", "codex", "cursor"]),
+    source: z.literal("clawhub"),
+    ref: clawHubPackageName,
+    version: exactVersion,
+  })
+  .strict();
+
 const openClawProfileSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -201,8 +212,32 @@ const openClawProfileSchema = z
           .optional(),
       })
       .strict(),
+    extensions: z.array(openClawExtensionSchema).optional().default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((profile, ctx) => {
+    const ids = new Set<string>();
+    const refs = new Set<string>();
+    profile.extensions.forEach((extension, index) => {
+      if (ids.has(extension.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["extensions", index, "id"],
+          message: `Extension id ${JSON.stringify(extension.id)} is declared more than once.`,
+        });
+      }
+      ids.add(extension.id);
+      const ref = extension.ref.toLowerCase();
+      if (refs.has(ref)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["extensions", index, "ref"],
+          message: `Extension ${JSON.stringify(extension.ref)} is declared more than once.`,
+        });
+      }
+      refs.add(ref);
+    });
+  });
 
 const workspaceSourceSchema = z.object({ source: packageRelativePath }).strict();
 const bootstrapFilesSchema = z

@@ -1847,10 +1847,11 @@ describe("qa test file scenario runner", () => {
     );
 
     expect(result.executionKind).toBe("script");
-    const producerStatuses =
-      result.results[0]?.producerEvidence?.entries.map((entry) => entry.result.status) ?? [];
+    const producerEntries = result.results[0]?.producerEvidence?.entries ?? [];
+    const producerStatuses = producerEntries.map((entry) => entry.result.status);
+    expect(producerEntries).toHaveLength(3);
+    expect(producerStatuses).toContain("blocked");
     expect(result.results[0]?.status).toBe(producerStatuses.includes("pass") ? "pass" : "blocked");
-    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
     expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
       "ux-matrix.qa-lab.producer-artifact-fixture",
       "ux-matrix.control-ui.screenshot-artifact",
