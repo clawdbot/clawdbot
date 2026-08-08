@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-32)).toEqual([
+    expect(listGatewayMethods().slice(-33)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -172,7 +172,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-39)).toEqual([
+    expect(coreMethods.slice(-40)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -217,7 +217,6 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
-    expect(methods.indexOf("sessions.archiveMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
     expect(methods.indexOf("sessions.archiveMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
     expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.archiveMany") + 1);
   });
