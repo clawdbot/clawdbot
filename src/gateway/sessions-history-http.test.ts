@@ -1112,7 +1112,7 @@ describe("session history HTTP endpoints", () => {
     },
   );
 
-  test.each(["garbage", "seq:garbage", "seq:0", "seq:99999999999999999999", "0", "-1", "1.5"])(
+  test.each(["", " ", "garbage", "seq:", "seq:0", "seq:99999999999999999999", "-1", "1.5"])(
     "rejects invalid cursor %j with 400",
     async (cursor) => {
       await seedSession({ text: "first message" });
