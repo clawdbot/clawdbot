@@ -40,23 +40,34 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
-    @Test func `source checkout entrypoint wins when package bin link is absent`() async throws {
-        let defaults = self.makeLocalDefaults()
+    @Test func `source checkout worker uses the freshness aware runner`() async throws {
         let tmp = try makeTempDirForTests()
+        let runner = tmp.appendingPathComponent("scripts/run-node.mjs")
         let sourceEntrypoint = tmp.appendingPathComponent("openclaw.mjs")
-        let staleGlobalBin = tmp.appendingPathComponent("global/bin")
+        let distEntrypoint = tmp.appendingPathComponent("dist/entry.js")
+        let projectExecutable = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        let runtimeBin = tmp.appendingPathComponent("runtime/bin")
+        let node = runtimeBin.appendingPathComponent("node")
+        try FileManager().createDirectory(
+            at: runner.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "// source runner\n".write(to: runner, atomically: true, encoding: .utf8)
         try makeExecutableForTests(at: sourceEntrypoint)
-        try makeExecutableForTests(at: staleGlobalBin.appendingPathComponent("openclaw"))
+        try makeExecutableForTests(at: distEntrypoint)
+        try makeExecutableForTests(at: projectExecutable)
+        try makeExecutableForTests(at: node)
+        try "#!/bin/sh\necho v22.22.3\n".write(to: node, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
-        let cmd = await CommandResolver.openclawCommand(
-            subcommand: "node",
-            extraArgs: ["worker"],
-            defaults: defaults,
-            configRoot: [:],
-            searchPaths: [staleGlobalBin.path],
-            projectRoot: tmp)
+        let launch = try #require(try await CommandResolver.projectNodeHostWorkerLaunch(
+            projectRoot: tmp,
+            searchPaths: [runtimeBin.path]))
 
-        #expect(cmd == [sourceEntrypoint.path, "node", "worker"])
+        #expect(launch.command == [node.path, runner.path, "node", "worker"])
+        #expect(launch.currentDirectoryURL == tmp)
+        #expect(!launch.command.contains(sourceEntrypoint.path))
+        #expect(!launch.command.contains(distEntrypoint.path))
+        #expect(!launch.command.contains(projectExecutable.path))
     }
 
     @Test func `falls back to node and script`() async throws {

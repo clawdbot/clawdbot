@@ -1,6 +1,10 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "./common.js";
 
 type GatewayToolCallerIdentity = {
@@ -73,7 +77,21 @@ export function wrapToolWithGatewayCallerIdentity(
     execute: async (...args) =>
       await withGatewayToolCallerIdentity(identity, async () => await tool.execute?.(...args)),
   };
-  return copyAgentToolMetadata(tool, wrapped);
+  copyAgentToolMetadata(tool, wrapped);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await withGatewayToolCallerIdentity(identity, () => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) =>
+              withGatewayToolCallerIdentity(identity, () => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
+  return wrapped;
 }
 
 export function createGatewayToolCallerWrapper(

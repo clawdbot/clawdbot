@@ -17,6 +17,7 @@ export type ChatModelCatalogState = {
 };
 
 export type ChatModelPickerOption = {
+  agentRuntimeId?: string;
   commitValue: string;
   contextWindow?: number;
   isDefault: boolean;
@@ -25,6 +26,24 @@ export type ChatModelPickerOption = {
   supportsTools?: boolean;
   value: string;
 };
+
+// Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
+// which cannot be imported here (it drags terminal sanitizers into the bundle).
+const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
+  "claude-cli": "Claude CLI",
+  codex: "Codex",
+  "codex-cli": "Codex",
+  "google-gemini-cli": "Gemini CLI",
+  openclaw: "OpenClaw",
+};
+
+function formatAgentRuntimeLabel(id: string): string {
+  const normalized = id.trim().toLowerCase();
+  return (
+    AGENT_RUNTIME_LABELS[normalized] ??
+    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
+  );
+}
 
 type ChatModelPickerParams = {
   defaultModelLabel: string;
@@ -470,6 +489,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     : "",
                                   entry.supportsTools === false
                                     ? t("chat.modelControls.chatOnly")
+                                    : "",
+                                  entry.agentRuntimeId
+                                    ? formatAgentRuntimeLabel(entry.agentRuntimeId)
                                     : "",
                                 ]
                                   .filter(Boolean)

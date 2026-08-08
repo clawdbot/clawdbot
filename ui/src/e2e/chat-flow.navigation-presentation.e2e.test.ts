@@ -299,7 +299,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
       // Keyboard focus on a header action marks the pane active.
-      await headers.first().getByRole("button", { name: "Split down" }).focus();
+      await headers.first().getByRole("button", { name: "Close pane" }).focus();
       const cells = page.locator(".chat-split-view__cell");
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
 

@@ -721,6 +721,8 @@ describe("subagent announce formatting", () => {
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     };
     readLatestAssistantReplyMock.mockResolvedValue(
@@ -897,7 +899,7 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
+  it("hands required NO_REPLY completion to the parent as missing output", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-completion-no-reply",
@@ -906,6 +908,24 @@ describe("subagent announce formatting", () => {
       requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
+      roundOneReply: " NO_REPLY ",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(getAgentCall()?.params?.message).toContain("(no output)");
+  });
+
+  it("keeps non-required NO_REPLY completion intentionally silent", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-non-required-completion-no-reply",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: false,
       roundOneReply: " NO_REPLY ",
     });
 
@@ -924,8 +944,8 @@ describe("subagent announce formatting", () => {
     {
       name: "silent",
       terminalReply: { disposition: "silent" } as const,
-      expectedAgentCalls: 0,
-      expectedMessage: undefined,
+      expectedAgentCalls: 1,
+      expectedMessage: "(no output)",
     },
     {
       name: "empty",

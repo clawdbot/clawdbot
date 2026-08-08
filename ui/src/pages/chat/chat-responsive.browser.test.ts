@@ -854,6 +854,163 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the split-pane close button reachable as the pane narrows", async () => {
+    const page = await openBrowserPage(1100, 240);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
+      const settingsCss = readStyleSheet("ui/src/styles/settings.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${settingsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 320px;">
+            <div class="chat-pane__header">
+              <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
+              <span class="chat-pane__session-title">A deliberately long split-pane session title</span>
+              <openclaw-session-owner-chip>
+                <span class="session-owner-chip session-owner-chip--header">O</span>
+              </openclaw-session-owner-chip>
+              <button class="chat-pane__workspace-chip" type="button">
+                ${iconSvg()}<span>openclaw-workspace</span>
+              </button>
+              <div class="chat-pane__face-switch chat-pane__face-switch--split">
+                <div class="settings-segmented">
+                  <button class="settings-segmented__btn" type="button">Chat</button>
+                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
+                  <button class="settings-segmented__btn" type="button">Dashboard</button>
+                </div>
+                <wa-dropdown class="chat-pane__dock-caret">
+                  <button
+                    slot="trigger"
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__dock-caret-trigger"
+                    type="button"
+                  >B</button>
+                </wa-dropdown>
+              </div>
+              <wa-dropdown class="chat-pane__sharing-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
+              </wa-dropdown>
+              <wa-dropdown class="chat-pane__branches-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger" type="button">R</button>
+              </wa-dropdown>
+              <wa-dropdown class="chat-pane__gateway-menu">
+                <button class="chat-pane__gateway-chip" type="button">
+                  <span class="chat-pane__gateway-health"></span>
+                  <span class="chat-pane__gateway-name">A long native gateway name</span>
+                </button>
+              </wa-dropdown>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle" type="button">D</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle" type="button">T</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle" type="button">W</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn" data-catalog-terminal type="button">E</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle" type="button">C</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right" type="button">H</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open" type="button">P</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const selectors = [
+        "openclaw-session-owner-chip",
+        ".chat-session-diff-toggle",
+        ".chat-tasks-toggle",
+        ".chat-workspace-toggle",
+        ".chat-session-discussion-toggle",
+        ".chat-pane__dock-caret",
+        ".chat-pane__sharing-menu",
+        ".chat-pane__branches-menu",
+        ".chat-pane__gateway-menu",
+        ".chat-pane__nav-toggle",
+        ".chat-pane__palette-open",
+        ".chat-pane__split-down",
+        ".chat-pane__split-right",
+      ];
+      const displayValues = async () =>
+        await page
+          .locator(selectors.join(","))
+          .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).display));
+      const setHeaderContentWidth = async (contentWidth: number) => {
+        await page.locator(".chat-split-view__cell").evaluate((cell, width) => {
+          const header = cell.querySelector<HTMLElement>(".chat-pane__header")!;
+          const style = getComputedStyle(header);
+          const horizontalInsets =
+            Number.parseFloat(style.paddingLeft) +
+            Number.parseFloat(style.paddingRight) +
+            Number.parseFloat(style.borderLeftWidth) +
+            Number.parseFloat(style.borderRightWidth);
+          (cell as HTMLElement).style.width = `${width + horizontalInsets}px`;
+        }, contentWidth);
+      };
+
+      const header = await getBoundingBox(page, ".chat-pane__header");
+      const close = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(close.x + close.width).toBeLessThanOrEqual(header.x + header.width);
+      expect(await displayValues()).toEqual(selectors.map(() => "none"));
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "580px";
+      });
+      await waitForLayoutSettled(page);
+      const intermediateHeader = await getBoundingBox(page, ".chat-pane__header");
+      const intermediateClose = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(intermediateClose.x + intermediateClose.width).toBeLessThanOrEqual(
+        intermediateHeader.x + intermediateHeader.width,
+      );
+      expect(await displayValues()).toEqual(selectors.map(() => "none"));
+      const intermediateOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      expect(intermediateOverflow.scrollWidth).toBeLessThanOrEqual(
+        intermediateOverflow.clientWidth,
+      );
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "1000px";
+      });
+      await waitForLayoutSettled(page);
+      const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
+        const headerElement = element as HTMLElement;
+        headerElement.style.containerType = "normal";
+        headerElement.style.width = "0px";
+        const width = headerElement.scrollWidth;
+        headerElement.style.removeProperty("width");
+        headerElement.style.removeProperty("container-type");
+        return width;
+      });
+      await setHeaderContentWidth(801);
+      await waitForLayoutSettled(page);
+      const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      const transitionHeader = await getBoundingBox(page, ".chat-pane__header");
+      const transitionClose = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(transitionClose.x + transitionClose.width).toBeLessThanOrEqual(
+        transitionHeader.x + transitionHeader.width,
+      );
+      expect(await displayValues()).not.toContain("none");
+      expect(
+        await page
+          .locator("[data-catalog-terminal]")
+          .evaluate((element) => getComputedStyle(element).display),
+      ).not.toBe("none");
+      expect(transitionOverflow.scrollWidth).toBeLessThanOrEqual(transitionOverflow.clientWidth);
+      expect(transitionOverflow.clientWidth - fullCompositionWidth).toBeGreaterThanOrEqual(8);
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "1000px";
+      });
+      expect(await displayValues()).not.toContain("none");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps a Done status disjoint from a long compact session headline", async () => {
     const page = await openBrowserPage(320, 240);
     try {

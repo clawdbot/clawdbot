@@ -29,6 +29,7 @@ const DEFAULT_INPUTS = {
   npmTelegramPackageSpec: "",
   npmTelegramProviderMode: "mock-openai",
   npmTelegramScenario: "",
+  skipPackageTelegramE2e: "false",
   allowUnreleasedChangelog: "false",
 };
 
@@ -903,6 +904,14 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       label: "different npm Telegram scenario",
       recordOptions: {
         validationInputs: { ...DEFAULT_INPUTS, npmTelegramScenario: "telegram-status-command" },
+      },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
+      label: "different package Telegram deferral",
+      recordOptions: {
+        validationInputs: { ...DEFAULT_INPUTS, skipPackageTelegramE2e: "true" },
       },
       resolverOptions: {},
     },

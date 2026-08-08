@@ -20,8 +20,9 @@ import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
+const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
 
-const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
+const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip", "camera.ptz.control"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
@@ -139,6 +140,7 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   macos: [
     ...CAMERA_COMMANDS,
+    ...MAC_CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     NODE_DEVICE_APPS_COMMAND,

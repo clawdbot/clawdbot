@@ -436,6 +436,23 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
 }
 
+async function readCodexHarnessSessionId(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<string> {
+  // The live reset proof must distinguish logical generation rollover from
+  // physical session-id rotation, so read the persisted row through Gateway.
+  const result: {
+    sessions?: Array<{ key?: string; sessionId?: string }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const sessionId = result.sessions?.find((entry) => entry.key === params.sessionKey)?.sessionId;
+  expect(sessionId, `expected sessionId for ${params.sessionKey}`).toBeTypeOf("string");
+  return sessionId as string;
+}
+
 async function readCodexHarnessSessionUsageFreshness(params: {
   client: GatewayClient;
   sessionKey: string;
@@ -1961,6 +1978,40 @@ describeLive("gateway live (Codex harness)", () => {
               });
               expect(secondText).toContain(secondToken);
               logCodexLiveStep("second-turn", { secondText });
+
+              // `/new` deliberately retains the physical OpenClaw session id. Prove the
+              // retired Codex thread does not poison the next app-server turn (#116022).
+              const preResetSessionId = await readCodexHarnessSessionId({
+                client: activeClient,
+                sessionKey,
+              });
+              const preResetThreadId = observedCodexThreadIds.get(sessionKey);
+              expect(preResetThreadId).toBeTypeOf("string");
+              const resetText = await requestCodexCommandText({
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+                command: "/new",
+                expectedText: "New session started.",
+              });
+              logCodexLiveStep("new-command", { resetText });
+              expect(await readCodexHarnessSessionId({ client: activeClient, sessionKey })).toBe(
+                preResetSessionId,
+              );
+
+              const resetNonce = randomBytes(3).toString("hex").toUpperCase();
+              const resetToken = `CODEX-HARNESS-AFTER-NEW-${resetNonce}`;
+              const resetReply = await requestAgentText({
+                client: activeClient,
+                sessionKey,
+                expectedReply: resetToken,
+                message: `Reply with exactly ${resetToken} and nothing else.`,
+              });
+              expect(resetReply).toContain(resetToken);
+              expect(observedCodexThreadIds.get(sessionKey)).not.toBe(preResetThreadId);
+              expect(observedCodexThreadActions.get(sessionKey)).toBe("started");
+              logCodexLiveStep("post-new-turn", { resetReply });
+
               await assertCodexHarnessSessionSelection({
                 client: activeClient,
                 modelKey,

@@ -193,11 +193,10 @@ suite.define(() => {
     }
   });
 
-  // Batch archiving used to force one canonical sessions.list per row, which is
-  // what made a multi-select stall. The whole selection must archive on one
-  // refresh and leave the sidebar settled with the rows gone.
+  // Batch archiving used to serialize one sessions.patch transaction per row.
+  // The whole selection now crosses the Gateway once and settles from one list.
 
-  it("archives a sidebar multi-select with one canonical list refresh", async () => {
+  it("archives a sidebar multi-select in one RPC and surfaces ordered partial failures", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -214,8 +213,20 @@ suite.define(() => {
           sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
           sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
         ]),
-        "sessions.patch": {},
+        "sessions.archiveMany": {
+          outcomes: [
+            { ok: true, key: batchKeys[0], agentId: "main" },
+            {
+              ok: false,
+              key: batchKeys[1],
+              agentId: "main",
+              error: { code: "INVALID_REQUEST", message: "active run" },
+            },
+            { ok: true, key: batchKeys[2], agentId: "main" },
+          ],
+        },
       },
+      sessionArchiveFiltering: true,
       sessionKey: "agent:main:main",
     });
 
@@ -240,18 +251,26 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
       await activateMenuItem(archiveItem);
 
-      for (const key of batchKeys) {
-        await waitForPatch(gateway, (params) => params.key === key && params.archived === true);
-      }
-
-      const patches = await gateway.getRequests("sessions.patch");
-      expect(patches.map((request) => requireRecord(request.params).key)).toEqual([...batchKeys]);
-      // The whole selection costs one canonical refresh, not one per archived row.
+      const archive = await gateway.waitForRequest("sessions.archiveMany");
+      const archiveParams = requireRecord(archive.params);
+      expect(archiveParams.archived).toBe(true);
+      expect((archiveParams.targets as Array<{ key: string }>).map((target) => target.key)).toEqual(
+        [...batchKeys],
+      );
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
         .toBe(listCountBeforeBatch + 1);
+      await rowFor(batchKeys[0]).waitFor({ state: "detached" });
+      await rowFor(batchKeys[2]).waitFor({ state: "detached" });
+      await rowFor(batchKeys[1]).waitFor({ state: "visible" });
+      const error = page.locator("[data-sidebar-session-error]");
+      await error.waitFor({ state: "visible" });
+      await expect.poll(() => error.textContent()).toContain(`${batchKeys[1]}: active run`);
+      await expect
+        .poll(() => page.locator(".app-toast").textContent())
+        .toContain("Archived 2 threads");
       await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
-      // Hold past the batch so a late per-row refresh would still be caught.
       await page.waitForTimeout(500);
       expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
     } finally {
@@ -282,6 +301,9 @@ suite.define(() => {
           sessionRow("agent:main:main", "Main", baseTime),
           ...sessionRows,
         ]),
+        "sessions.archiveMany": {
+          outcomes: batchRows.map((row) => ({ ok: true, key: row.key, agentId: "main" })),
+        },
         "sessions.patch": {},
       },
       sessionArchiveFiltering: true,
@@ -317,8 +339,8 @@ suite.define(() => {
       await activateMenuItem(
         batchMenu.getByRole("menuitem", { name: `Archive ${batchRows.length}` }),
       );
+      await gateway.waitForRequest("sessions.archiveMany");
       for (const row of batchRows) {
-        await waitForPatch(gateway, (params) => params.key === row.key && params.archived === true);
         await gateway.emitGatewayEvent("sessions.changed", {
           ...row,
           archived: true,

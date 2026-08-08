@@ -256,7 +256,7 @@ describe("subagent registry restart recovery", () => {
         nextRunId: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
         expected: entry,
         task: "finish the restart-safe task",
-        requirePersistence: true,
+        persistenceFailure: "return-false",
       }),
     );
     expect(replaceRun.mock.calls[0]?.[0].restartRecovery).toMatchObject({
@@ -782,7 +782,7 @@ describe("subagent registry restart recovery", () => {
         previousRunId: entry.runId,
         nextRunId: "subagent-recovery:accepted",
         restartRecovery: expect.objectContaining({ phase: "accepted" }),
-        requirePersistence: true,
+        persistenceFailure: "return-false",
       }),
     );
     expect(dispatchAgent).not.toHaveBeenCalled();
