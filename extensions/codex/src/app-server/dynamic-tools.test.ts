@@ -3557,7 +3557,12 @@ describe("createCodexDynamicToolBridge", () => {
     });
     setActivePluginRegistry(registry);
     const bridge = createCodexDynamicToolBridge({
-      tools: [createTool({ name: "message", execute: vi.fn(async () => textToolResult("ok")) })],
+      tools: [
+        createTool({
+          name: "message",
+          execute: vi.fn(async () => textToolResult("ok")),
+        }),
+      ],
       signal: new AbortController().signal,
       hookContext: { runId },
     });
@@ -3575,7 +3580,8 @@ describe("createCodexDynamicToolBridge", () => {
     );
     await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
 
-    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toEqual({
+    const snapshot = bridge.consumeToolExecutionSnapshot?.(callId);
+    expect(snapshot).toMatchObject({
       executedArguments: {
         action: "send",
         target: "channel:adjusted",

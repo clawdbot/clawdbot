@@ -3,6 +3,10 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import {
+  applyInputProvenanceToUserMessage,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -11,12 +15,12 @@ import type {
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
+import type { AgentSessionSteerReceipt } from "./agent-session-steering.js";
 import type { PromptOptions } from "./agent-session-types.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
@@ -169,7 +173,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         if (options.streamingBehavior === "followUp") {
           await this.queueFollowUp(expandedText, currentImages);
         } else {
-          await this.queueSteer(expandedText, currentImages);
+          const message = this.createUserMessage(expandedText, currentImages);
+          await this.reservePreparedSteer({ text: expandedText, message }).accepted;
         }
         preflightResult?.(true);
         return;
@@ -337,28 +342,55 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
+    inputProvenance?: InputProvenance,
   ): Promise<void> {
-    // Check for extension commands (cannot be queued)
-    if (text.startsWith("/")) {
-      this.throwIfExtensionCommand(text);
-    }
-
-    // Expand skill commands and prompt templates
-    let expandedText = this.expandSkillCommand(text);
-    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-
-    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
-    await this.queueSteer(
-      expandedText,
+    await this.steerWithReceipt(
+      text,
       images,
-      preparedMessage && userTurnTranscriptRecorder
-        ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
-        : undefined,
+      userTurnTranscriptRecorder,
       media,
       imageOrder,
-      queueIdentity,
-    );
+      inputProvenance,
+    ).accepted;
+  }
+
+  /** Queue steering with exact cancellation and durable transcript acknowledgment. */
+  steerWithReceipt(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
+  ): AgentSessionSteerReceipt {
+    // Reserve before async expansion so timeout and terminal cleanup can prevent late admission.
+    const reservation = this.steering.reserve(text);
+    void this.prepareSteer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      inputProvenance,
+    )
+      .then((prepared) => {
+        reservation.admit(prepared.text, prepared.message, () =>
+          this.agent.steer(prepared.message),
+        );
+      })
+      .catch((error: unknown) => {
+        reservation.reject(error);
+      });
+    return reservation.receipt;
+  }
+
+  private reservePreparedSteer(prepared: {
+    text: string;
+    message: AgentMessage;
+  }): AgentSessionSteerReceipt {
+    const reservation = this.steering.reserve(prepared.text);
+    reservation.admit(prepared.text, prepared.message, () => this.agent.steer(prepared.message));
+    return reservation.receipt;
   }
 
   /**
@@ -381,32 +413,37 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     await this.queueFollowUp(expandedText, images);
   }
 
-  /**
-   * Internal: Queue a steering message (already expanded, no extension command check).
-   */
-  private async queueSteer(
+  private async prepareSteer(
     text: string,
     images?: ImageContent[],
-    transcriptContext?: {
-      message: PersistedUserTurnMessage;
-      recorder: UserTurnTranscriptRecorder;
-    },
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-  ): Promise<void> {
-    this.steeringMessages.push(text);
-    this.emitQueueUpdate();
-    const runtimeMessage = this.createUserMessage(text, images);
+    inputProvenance?: InputProvenance,
+  ): Promise<{ text: string; message: AgentMessage }> {
+    if (text.startsWith("/")) {
+      this.throwIfExtensionCommand(text);
+    }
+    let expandedText = this.expandSkillCommand(text);
+    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    const runtimeMessage = applyInputProvenanceToUserMessage(
+      this.createUserMessage(expandedText, images),
+      inputProvenance,
+    ) as PersistedUserTurnMessage;
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
-    setSteeringMessageIdentity(promptMessage, queueIdentity);
-    this.agent.steer(
-      transcriptContext
-        ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
-        : promptMessage,
-    );
+    return {
+      text: expandedText,
+      message:
+        preparedMessage && userTurnTranscriptRecorder
+          ? attachRuntimeUserTurnTranscriptContext(promptMessage, {
+              message: preparedMessage,
+              recorder: userTurnTranscriptRecorder,
+            })
+          : promptMessage,
+    };
   }
 
   /**
@@ -532,10 +569,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = [...this.steeringMessages];
     const followUp = [...this.followUpMessages];
-    this.steeringMessages = [];
     this.followUpMessages = [];
+    const steering = this.steering.clear();
     this.agent.clearAllQueues();
     this.emitQueueUpdate();
     return { steering, followUp };
@@ -543,12 +579,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /** Number of pending messages (includes both steering and follow-up) */
   get pendingMessageCount(): number {
-    return this.steeringMessages.length + this.followUpMessages.length;
+    return this.steering.pendingCount + this.followUpMessages.length;
   }
 
   /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
-    return this.steeringMessages;
+    return this.steering.pendingTexts;
   }
 
   /** Get pending follow-up messages (read-only) */

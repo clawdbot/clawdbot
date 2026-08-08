@@ -3,13 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
+  loadTranscriptEvents,
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
+import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -19,11 +24,21 @@ import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  loadSqliteTrajectoryRuntimeEvents,
+} from "./runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
+const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
+const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
+
+function expectedSessionHash(domain: string, value: string): string {
+  return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
+}
 
 function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
@@ -46,7 +61,7 @@ const emptyUsage: Usage = {
   },
 };
 
-function userMessage(content: string): Message {
+function userMessage(content: string): Extract<AgentMessage, { role: "user" }> {
   return {
     role: "user",
     content,
@@ -84,7 +99,7 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
 
 function writeSimpleSessionFile(
   sessionFile: string,
-  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
+  params: { userEntryTimestamp?: string | number; userMessage?: AgentMessage } = {},
 ): void {
   const header = {
     type: "session",
@@ -756,6 +771,7 @@ describe("exportTrajectoryBundle", () => {
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
+    const opaqueRoutingSecret = "opaque-routing-credential-value";
     const rawSecrets = [
       "sk-exported-session-secret",
       "ghp_123456789012345678901234",
@@ -815,9 +831,35 @@ describe("exportTrajectoryBundle", () => {
       summary: `branch summary saw ${rawSecrets[4]}`,
       details: { token: rawSecrets[0] },
     };
+    const customEntry = {
+      type: "custom",
+      id: "entry-custom",
+      parentId: "entry-branch-summary",
+      timestamp: "2026-04-01T05:46:44.000Z",
+      customType: "diagnostic",
+      data: { sessionKey: opaqueRoutingSecret },
+    };
+    const customMessageEntry = {
+      type: "custom_message",
+      id: "entry-custom-message",
+      parentId: "entry-custom",
+      timestamp: "2026-04-01T05:46:45.000Z",
+      customType: "diagnostic",
+      content: "custom diagnostic",
+      details: { nested: { sourceSessionKey: opaqueRoutingSecret } },
+      display: false,
+    };
     fs.writeFileSync(
       sessionFile,
-      `${[header, userEntry, assistantEntry, compactionEntry, branchSummaryEntry]
+      `${[
+        header,
+        userEntry,
+        assistantEntry,
+        compactionEntry,
+        branchSummaryEntry,
+        customEntry,
+        customMessageEntry,
+      ]
         .map((entry) => JSON.stringify(entry))
         .join("\n")}\n`,
       "utf8",
@@ -914,8 +956,691 @@ describe("exportTrajectoryBundle", () => {
     for (const secret of rawSecrets) {
       expect(exportedBundleText).not.toContain(secret);
     }
+    expect(exportedBundleText).not.toContain(opaqueRoutingSecret);
     expect(JSON.stringify(bundle.events)).not.toContain(rawSecrets[5]);
     expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
+  });
+
+  it("projects structured provenance while retaining transcript content and leaf identity", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
+    const spoofedHash = `sha256:v1:${"f".repeat(64)}`;
+    const canonicalSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "canonical-source");
+    const canonicalOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, "canonical-origin");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: applyInputProvenanceToUserMessage(userMessage("delegated request"), {
+        kind: "inter_session",
+        sourceSessionKey: rawSessionKey,
+      }),
+    });
+    const origins: unknown[] = [
+      {
+        kind: "inter_session",
+        sourceSessionKey: ` ${rawSessionKey} `,
+        originSessionId: ` ${rawSessionKey} `,
+        sourceSessionHash: spoofedHash,
+        originSessionHash: spoofedHash,
+        sourceChannel: " discord ",
+        sourceTool: " sessions_send ",
+        nested: { sourceSessionKey: "nested-secret" },
+        extra: "drop-me",
+      },
+      {
+        kind: "external_user",
+        sourceSessionHash: canonicalSourceHash,
+        originSessionHash: canonicalOriginHash,
+        sourceChannel: "telegram",
+      },
+      {
+        kind: "forged",
+        sourceSessionKey: rawSessionKey,
+      },
+      [{ kind: "inter_session", sourceSessionKey: rawSessionKey }],
+      {
+        kind: "inter_session",
+        sourceSessionHash: "sha256:v1:not-a-canonical-hash",
+      },
+    ];
+    const runtimeEvents: TrajectoryEvent[] = [
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "context.compiled",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+        data: {
+          prompt: "compile the request",
+          dynamicToolArgs: {
+            sessionKey: "legacy-opaque-session-credential",
+            sourceSessionKey: "legacy-opaque-source-session-credential",
+          },
+        },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "tool.result",
+        ts: "2026-04-22T08:00:01.000Z",
+        seq: 2,
+        sourceSeq: 2,
+        sessionId: "session-1",
+        data: {
+          toolCallId: "call-target",
+          result: {
+            sessionKey: "legacy-target-session-credential",
+          },
+        },
+      },
+      ...origins.map(
+        (origin, index): TrajectoryEvent => ({
+          traceSchema: "openclaw-trajectory",
+          schemaVersion: 1,
+          traceId: "session-1",
+          source: "runtime",
+          type: "prompt.submitted",
+          ts: `2026-04-22T08:00:0${index + 2}.000Z`,
+          seq: index + 3,
+          sourceSeq: index + 3,
+          sessionId: "session-1",
+          data: { prompt: `prompt-${index}`, origin },
+        }),
+      ),
+    ];
+    const runtimeBytes = `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    fs.writeFileSync(runtimeFile, runtimeBytes, "utf8");
+    const sessionBytes = fs.readFileSync(sessionFile, "utf8");
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    const exportedPrompts = bundle.events.filter(
+      (event) => event.source === "runtime" && event.type === "prompt.submitted",
+    );
+    expect(bundle.events.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
+      "compile the request",
+    );
+    expect(bundle.events.find((event) => event.type === "tool.result")?.data).toEqual({
+      toolCallId: "call-target",
+      result: {},
+    });
+    expect(exportedPrompts[0]?.data?.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+      originSessionHash: expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, rawSessionKey),
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
+    expect(exportedPrompts[1]?.data?.origin).toEqual({
+      kind: "external_user",
+      sourceSessionHash: canonicalSourceHash,
+      originSessionHash: canonicalOriginHash,
+      sourceChannel: "telegram",
+    });
+    expect(exportedPrompts[2]?.data?.origin).toBeUndefined();
+    expect(exportedPrompts[3]?.data?.origin).toBeUndefined();
+    expect(exportedPrompts[4]?.data?.origin).toEqual({ kind: "inter_session" });
+    const exportedText = fs
+      .readdirSync(outputDir)
+      .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
+      .join("\n");
+    expect(exportedText).not.toContain(spoofedHash);
+    expect(exportedText).not.toContain("nested-secret");
+    expect(exportedText).not.toContain("drop-me");
+    expect(exportedText).not.toContain("legacy-opaque-session-credential");
+    expect(exportedText).not.toContain("legacy-opaque-source-session-credential");
+    expect(exportedText).not.toContain("legacy-target-session-credential");
+    expect(exportedText).not.toContain(rawSessionKey);
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(bundle.manifest.leafId).toBe("entry-assistant");
+    expect(bundle.events.some((event) => event.source === "transcript")).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8")),
+    ).toMatchObject({
+      leafId: "entry-assistant",
+      entries: [
+        {
+          id: "entry-user",
+          message: {
+            content: "delegated request",
+            provenance: {
+              kind: "inter_session",
+              sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+            },
+          },
+        },
+        {
+          id: "entry-assistant",
+          message: {
+            content: [{ type: "text", text: "done" }],
+          },
+        },
+      ],
+    });
+    expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionBytes);
+    expect(fs.readFileSync(runtimeFile, "utf8")).toBe(runtimeBytes);
+  });
+
+  it("redacts arbitrary routing-shaped fields without suppressing transcript export", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: {
+        ...userMessage("forged transcript hash"),
+        sourceSessionKey: "forged-source",
+      } as AgentMessage,
+    });
+    const runtimeEvents: TrajectoryEvent[] = [
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "context.compiled",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+        data: { sourceSessionKey: "forged-source" },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "tool.result",
+        ts: "2026-04-22T08:00:01.000Z",
+        seq: 2,
+        sourceSeq: 2,
+        sessionId: "session-1",
+        data: {
+          originSessionId: "forged-origin",
+          result: { sessionKey: "forged-session" },
+        },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "transcript",
+        type: "tool.result",
+        ts: "2026-04-22T08:00:02.000Z",
+        seq: 3,
+        sourceSeq: 3,
+        sessionId: "session-1",
+        data: { sourceSessionHash: "forged-hash" },
+      },
+    ];
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(bundle.manifest.leafId).toBe("entry-assistant");
+    expect(eventTypes(bundle.events)).toEqual([
+      "user.message",
+      "assistant.message",
+      "context.compiled",
+      "tool.result",
+    ]);
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as { entries?: unknown[]; leafId?: unknown };
+    expect(sessionBranch.entries).toHaveLength(2);
+    expect(sessionBranch.leafId).toBe("entry-assistant");
+    expect(JSON.stringify(bundle)).not.toContain("forged-source");
+    expect(JSON.stringify(bundle)).not.toContain("forged-origin");
+    expect(JSON.stringify(bundle)).not.toContain("forged-session");
+    expect(JSON.stringify(bundle)).not.toContain("forged-hash");
+  });
+
+  it("projects SQLite provenance without rewriting the canonical transcript", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:session-1";
+    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
+    const inputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: rawSessionKey,
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    } as const;
+    const transcriptScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(transcriptScope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: applyInputProvenanceToUserMessage(
+          userMessage("canonical transcript"),
+          inputProvenance,
+        ),
+      },
+      {
+        type: "message",
+        id: "entry-assistant",
+        parentId: "entry-user",
+        timestamp: "2026-04-01T05:46:41.000Z",
+        message: assistantMessage([{ type: "text", text: "canonical assistant reply" }]),
+      },
+    ]);
+    const transcriptBefore = await loadTranscriptEvents(transcriptScope);
+    const transcriptBytesBefore = JSON.stringify(transcriptBefore);
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId,
+      sessionKey,
+      sessionTarget: transcriptScope,
+      workspaceDir: tmpDir,
+    });
+    const runtimeRecorder = expectDefined(recorder, "SQLite trajectory recorder");
+    runtimeRecorder.recordEvent("context.compiled", {
+      systemPrompt: "system",
+      prompt: "compiled prompt",
+      tools: [{ name: "read", description: "read a file" }],
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "snapshot" }],
+        },
+      ],
+    });
+    runtimeRecorder.recordEvent("trace.metadata", {
+      harness: { type: "openclaw" },
+      prompting: {
+        skillsPrompt: "skills",
+        userPromptPrefixText: "prefix",
+      },
+    });
+    runtimeRecorder.recordEvent("model.completed", {
+      assistantTexts: ["assistant"],
+      messagesSnapshot: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "content block" }],
+        },
+      ],
+    });
+    runtimeRecorder.recordEvent("trace.artifacts", {
+      finalStatus: "completed",
+      finalPromptText: "final prompt",
+      assistantTexts: ["artifact"],
+      snapshot: { status: "complete" },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "submitted prompt",
+      origin: inputProvenance,
+    });
+    await runtimeRecorder.flush();
+
+    await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: transcriptScope,
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+
+    const bundleFiles = fs.readdirSync(outputDir).toSorted();
+    expect(bundleFiles).toEqual([
+      "artifacts.json",
+      "events.jsonl",
+      "manifest.json",
+      "metadata.json",
+      "prompts.json",
+      "session-branch.json",
+      "system-prompt.txt",
+      "tools.json",
+    ]);
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as {
+      entries?: Array<{ message?: { provenance?: unknown } }>;
+    };
+    expect(sessionBranch.entries?.[0]?.message?.provenance).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
+    const transcriptAfter = await loadTranscriptEvents(transcriptScope);
+    expect(JSON.stringify(transcriptAfter)).toBe(transcriptBytesBefore);
+  });
+
+  it("keeps the committed native prompt and provenance aligned across persistence and export", async () => {
+    const tmpDir = makeTempDir();
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "native-steer-session";
+    const sessionKey = "agent:main:native-steer-session";
+    const storePath = path.join(tmpDir, "sessions.json");
+    const committedPrompt = '<skill name="deploy">expanded and [sanitized]</skill>';
+    const origin = {
+      kind: "internal_system",
+      sourceTool: "sessions_send",
+    } as const;
+    const transcriptScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(transcriptScope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: applyInputProvenanceToUserMessage(userMessage(committedPrompt), origin),
+      },
+    ]);
+    const recorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId,
+        sessionKey,
+        sessionTarget: transcriptScope,
+        workspaceDir: tmpDir,
+      }),
+      "SQLite trajectory recorder",
+    );
+    recorder.recordEvent("prompt.submitted", { prompt: committedPrompt, origin });
+    await recorder.flush();
+
+    const transcript = await loadTranscriptEvents(transcriptScope);
+    const transcriptUser = transcript.find(
+      (entry) =>
+        isRecord(entry) &&
+        entry.type === "message" &&
+        isRecord(entry.message) &&
+        entry.message.role === "user",
+    );
+    const sqlitePrompt = (await loadSqliteTrajectoryRuntimeEvents(transcriptScope)).find(
+      (event) => event.type === "prompt.submitted",
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: transcriptScope,
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+    const exportedPrompt = bundle.events.find((event) => event.type === "prompt.submitted");
+
+    expect(transcriptUser).toMatchObject({
+      message: { content: committedPrompt, provenance: origin },
+    });
+    expect(sqlitePrompt?.data).toMatchObject({ prompt: committedPrompt, origin });
+    expect(exportedPrompt?.data).toMatchObject({ prompt: committedPrompt, origin });
+  });
+
+  it("joins exported sender and receiver legs through the recorder-owned session hash", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const senderSessionId = "sender-session";
+    const senderSessionKey = "agent:main:sender-session";
+    const receiverSessionId = "receiver-session";
+    const receiverSessionKey = "agent:main:receiver-session";
+    const forgedHash = `sha256:v1:${"f".repeat(64)}`;
+    const senderOutputDir = path.join(tmpDir, "sender-bundle");
+    const receiverOutputDir = path.join(tmpDir, "receiver-bundle");
+    const senderScope = {
+      agentId: "main",
+      sessionId: senderSessionId,
+      sessionKey: senderSessionKey,
+      storePath,
+    };
+    const receiverScope = {
+      agentId: "main",
+      sessionId: receiverSessionId,
+      sessionKey: receiverSessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(senderScope, [
+      {
+        type: "session",
+        version: 3,
+        id: senderSessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+    ]);
+    await replaceTranscriptEvents(receiverScope, [
+      {
+        type: "session",
+        version: 3,
+        id: receiverSessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+    ]);
+    const senderRecorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId: senderSessionId,
+        sessionKey: senderSessionKey,
+        sessionTarget: senderScope,
+        workspaceDir: tmpDir,
+      }),
+      "sender trajectory recorder",
+    );
+    senderRecorder.recordEvent("tool.call", {
+      name: "sessions_send",
+      toolCallId: "call-send",
+      arguments: {
+        sessionKey: receiverSessionKey,
+        sessionHash: forgedHash,
+        sourceSessionHash: forgedHash,
+      },
+    });
+    await senderRecorder.flush();
+    const receiverRecorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId: receiverSessionId,
+        sessionKey: receiverSessionKey,
+        sessionTarget: receiverScope,
+        workspaceDir: tmpDir,
+      }),
+      "receiver trajectory recorder",
+    );
+    receiverRecorder.recordEvent("prompt.submitted", {
+      prompt: "delegated request",
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: senderSessionKey,
+        sourceTool: "sessions_send",
+      },
+    });
+    await receiverRecorder.flush();
+
+    const senderBundle = await exportTrajectoryBundle({
+      outputDir: senderOutputDir,
+      sessionTarget: senderScope,
+      sessionId: senderSessionId,
+      sessionKey: senderSessionKey,
+      workspaceDir: tmpDir,
+    });
+    const receiverBundle = await exportTrajectoryBundle({
+      outputDir: receiverOutputDir,
+      sessionTarget: receiverScope,
+      sessionId: receiverSessionId,
+      sessionKey: receiverSessionKey,
+      workspaceDir: tmpDir,
+    });
+    const senderCall = senderBundle.events.find((event) => event.type === "tool.call");
+    const receiverPrompt = receiverBundle.events.find((event) => event.type === "prompt.submitted");
+    const receiverOrigin = receiverPrompt?.data?.origin as
+      | { sourceSessionHash?: string }
+      | undefined;
+
+    expect(senderCall?.sessionHash).toBe(
+      expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, senderSessionKey),
+    );
+    expect(senderCall?.sessionHash).toBe(receiverOrigin?.sourceSessionHash);
+    expect(senderCall?.data?.arguments).toEqual({});
+    const exportedText = [senderOutputDir, receiverOutputDir]
+      .map((outputDir) => fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8"))
+      .join("\n");
+    expect(exportedText).not.toContain(senderSessionKey);
+    expect(exportedText).not.toContain(receiverSessionKey);
+    expect(exportedText).not.toContain(forgedHash);
+  });
+
+  it("preserves exact Codex steer text from SQLite through export", async () => {
+    const tmpDir = makeTempDir();
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "codex-steer-session";
+    const sessionKey = "agent:main:codex-steer-session";
+    const storePath = path.join(tmpDir, "sessions.json");
+    const committedPrompt = "steer this active turn\nwith exact spacing";
+    const transcriptScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(transcriptScope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: userMessage(committedPrompt),
+      },
+    ]);
+    const recorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId,
+        sessionKey,
+        sessionTarget: transcriptScope,
+        workspaceDir: tmpDir,
+        provider: "codex",
+      }),
+      "SQLite trajectory recorder",
+    );
+    recorder.recordEvent("prompt.submitted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      prompt: committedPrompt,
+      imagesCount: 0,
+    });
+    await recorder.flush();
+
+    const sqlitePrompt = (await loadSqliteTrajectoryRuntimeEvents(transcriptScope)).find(
+      (event) => event.type === "prompt.submitted",
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: transcriptScope,
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+    const exportedPrompt = bundle.events.find((event) => event.type === "prompt.submitted");
+
+    expect(sqlitePrompt?.data?.prompt).toBe(committedPrompt);
+    expect(exportedPrompt?.data?.prompt).toBe(committedPrompt);
+  });
+
+  it("projects each provenance record independently without an identity limit", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    const identities = Array.from(
+      { length: 65 },
+      (_value, index) => `export-identity-${index.toString().padStart(3, "0")}`,
+    );
+    const runtimeEvents = identities.map(
+      (identity, index): TrajectoryEvent => ({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "prompt.submitted",
+        ts: `2026-04-22T08:00:00.${index.toString().padStart(3, "0")}Z`,
+        seq: index + 1,
+        sourceSeq: index + 1,
+        sessionId: "session-1",
+        data: {
+          origin: {
+            kind: "inter_session",
+            sourceSessionKey: identity,
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    const prompts = bundle.events.filter((event) => event.type === "prompt.submitted");
+    expect(prompts).toHaveLength(65);
+    expect(prompts[64]?.data?.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "export-identity-064"),
+    });
   });
 
   it("rejects oversized runtime trajectory files", async () => {
@@ -1869,6 +2594,10 @@ describe("exportTrajectoryBundle", () => {
                 id: "weather",
                 filePath: path.join(tmpDir, "skills", "weather", "SKILL.md"),
               },
+              {
+                id: "deploy",
+                filePath: path.join(tmpDir, "skills", "deploy", "SKILL.md"),
+              },
             ],
           },
           prompting: {
@@ -1914,6 +2643,25 @@ describe("exportTrajectoryBundle", () => {
             completedCount: 1,
             activeCount: 0,
           },
+        },
+      },
+      {
+        // Pins the persisted native-runner tool.call shape: skill invocation
+        // detection must consume the canonical `arguments` field it records.
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "tool.call",
+        ts: "2026-04-22T08:00:04.000Z",
+        seq: 6,
+        sourceSeq: 6,
+        sessionId: "session-1",
+        data: {
+          phase: "start",
+          name: "read",
+          toolCallId: "native-tool-1",
+          arguments: { path: path.join(tmpDir, "skills", "deploy", "SKILL.md") },
         },
       },
     ];
@@ -1984,6 +2732,8 @@ describe("exportTrajectoryBundle", () => {
     };
     expect(metadata.skills?.entries?.[0]?.id).toBe("weather");
     expect(metadata.skills?.entries?.[0]?.invoked).toBe(true);
+    expect(metadata.skills?.entries?.[1]?.id).toBe("deploy");
+    expect(metadata.skills?.entries?.[1]?.invoked).toBe(true);
     const prompts = fs.readFileSync(path.join(outputDir, "prompts.json"), "utf8");
     const artifacts = fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8");
     const systemPrompt = fs.readFileSync(path.join(outputDir, "system-prompt.txt"), "utf8");

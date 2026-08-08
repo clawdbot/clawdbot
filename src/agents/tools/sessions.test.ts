@@ -851,6 +851,72 @@ describe("sessions_send gating", () => {
     ]);
   });
 
+  it("passes structured origin into accepted timeoutSeconds 0 active-run steering", async () => {
+    const { clearActiveEmbeddedRun, setActiveEmbeddedRun } =
+      await import("../embedded-agent-runner/runs.js");
+    const targetSessionKey = "agent:other:subagent:run:active-target";
+    const targetSessionId = "active-target-session-id";
+    const queueMessage = vi.fn(async () => undefined);
+    const handle = {
+      kind: "embedded" as const,
+      queueMessage,
+      isStreaming: () => true,
+      isStopped: () => false,
+      isCompacting: () => false,
+      supportsTranscriptCommitWait: true,
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(targetSessionId, handle, targetSessionKey);
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: targetSessionKey, kind: "direct", sessionId: targetSessionId }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected gateway method ${String(request.method)}`);
+    });
+
+    try {
+      const result = await createMainSessionsSendTool().execute("call-active-steer", {
+        sessionKey: targetSessionKey,
+        message: "delegated work",
+        timeoutSeconds: 0,
+      });
+
+      expect(requireDetails(result)).toMatchObject({
+        status: "accepted",
+        sessionKey: targetSessionKey,
+      });
+      expect(queueMessage).toHaveBeenCalledWith(
+        expect.stringContaining("delegated work"),
+        expect.objectContaining({
+          waitForTranscriptCommit: true,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: MAIN_AGENT_SESSION_KEY,
+            sourceChannel: MAIN_AGENT_CHANNEL,
+            sourceTool: "sessions_send",
+          },
+        }),
+      );
+    } finally {
+      clearActiveEmbeddedRun(targetSessionId, handle, targetSessionKey);
+    }
+  });
+
   it("does not disclose a resolved session key when sessionId access is denied", async () => {
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,

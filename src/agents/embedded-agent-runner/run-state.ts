@@ -32,7 +32,7 @@ export type EmbeddedAgentQueueHandle = {
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
-  ) => Promise<void | EmbeddedAgentQueueMessageResult>;
+  ) => Promise<void | ReplyBackendQueueMessageResult>;
   messageInjection?: ReplyBackendMessageInjection;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
@@ -50,8 +50,6 @@ export type EmbeddedAgentQueueHandle = {
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
-
-export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;

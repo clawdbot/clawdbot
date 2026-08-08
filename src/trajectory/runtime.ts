@@ -1,7 +1,6 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type {
   QueuedFileWriter,
   QueuedFileWriterDiagnostics,
@@ -10,15 +9,18 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSecrets } from "../logging/redact.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
+import {
+  hashTrajectorySourceSessionKey,
+  projectTrajectoryDiagnosticValue,
+  TrajectoryProvenanceSanitizer,
+} from "./provenance-sanitization.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
@@ -41,15 +43,11 @@ type TrajectoryRuntimeInit = {
 type TrajectoryRuntimeRecorder = {
   enabled: true;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  recordToolResult: (data: Record<string, unknown>) => void;
   flush: () => Promise<void>;
   describeFlushState: () => string | undefined;
 };
 
-const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
-const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
-const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
-const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
-const TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES = 4 * 1024;
 // Oversized events first shed repeated conversation state while keeping the
 // rest of their schema-v1 payload. The compact fallback then preserves keys
 // that remain useful even when every nonessential field must be dropped.
@@ -60,6 +58,16 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
   "systemPrompt",
 ] as const;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache", "prompt"] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_PROMPT_SUBMITTED_KEYS = [
+  "origin",
+  ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
+] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
+  "name",
+  "toolCallId",
+  "isError",
+  "success",
+] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
 
@@ -87,6 +95,15 @@ function truncateOversizedTrajectoryEvent(
   const originalData = event.data ?? {};
   const originalDataKeys = Object.keys(originalData);
   const preservedDataKeys = new Set<string>();
+  const preservedDataKeyOrder =
+    event.type === "prompt.submitted"
+      ? TRAJECTORY_RUNTIME_OVERSIZE_PROMPT_SUBMITTED_KEYS
+      : event.type === "tool.result"
+        ? [
+            ...TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
+            ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
+          ]
+        : TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS;
   const baseData = {
     truncated: true,
     originalBytes: bytes,
@@ -116,7 +133,7 @@ function truncateOversizedTrajectoryEvent(
 
   const buildTruncatedEventLine = (includeDroppedFields: boolean): string | undefined => {
     const data: Record<string, unknown> = { ...baseData };
-    for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+    for (const key of preservedDataKeyOrder) {
       if (preservedDataKeys.has(key)) {
         data[key] = originalData[key];
       }
@@ -139,7 +156,7 @@ function truncateOversizedTrajectoryEvent(
     return undefined;
   }
 
-  for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
+  for (const key of preservedDataKeyOrder) {
     if (!Object.hasOwn(originalData, key)) {
       continue;
     }
@@ -152,97 +169,6 @@ function truncateOversizedTrajectoryEvent(
     preservedDataKeys.delete(key);
   }
   return best;
-}
-
-function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  return {
-    truncated: true,
-    reason,
-    ...details,
-  };
-}
-
-function limitTrajectoryPayloadValue(
-  value: unknown,
-  depth = 0,
-  seen: WeakSet<object> = new WeakSet(),
-): unknown {
-  if (typeof value === "string") {
-    if (value.length > TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS) {
-      return truncatedTrajectoryValue("trajectory-field-size-limit", {
-        originalChars: value.length,
-        limitChars: TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS,
-      });
-    }
-    return value;
-  }
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-  if (seen.has(value)) {
-    return truncatedTrajectoryValue("trajectory-circular-reference");
-  }
-  if (depth >= TRAJECTORY_RUNTIME_DATA_MAX_DEPTH) {
-    return truncatedTrajectoryValue("trajectory-depth-limit", {
-      limitDepth: TRAJECTORY_RUNTIME_DATA_MAX_DEPTH,
-    });
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    const limited = value
-      .slice(0, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS)
-      .map((item) => limitTrajectoryPayloadValue(item, depth + 1, seen));
-    if (value.length > TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS) {
-      limited.push(
-        truncatedTrajectoryValue("trajectory-array-size-limit", {
-          originalLength: value.length,
-          limitItems: TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS,
-        }),
-      );
-    }
-    seen.delete(value);
-    return limited;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
-  const limited: Record<string, unknown> = {};
-  for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
-    limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
-  }
-  if (keys.length > TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS) {
-    limited["_truncated"] = truncatedTrajectoryValue("trajectory-object-size-limit", {
-      originalKeys: keys.length,
-      limitKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS,
-    });
-  }
-  seen.delete(value);
-  return limited;
-}
-
-function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
-  const finalPromptText = data.finalPromptText;
-  const redactedFinalPromptText =
-    typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
-  const boundedData =
-    typeof finalPromptText === "string" &&
-    typeof redactedFinalPromptText === "string" &&
-    (Buffer.byteLength(finalPromptText, "utf8") > TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES ||
-      Buffer.byteLength(redactedFinalPromptText, "utf8") >
-        TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES)
-      ? {
-          ...data,
-          finalPromptText: truncateUtf8Prefix(
-            redactedFinalPromptText,
-            TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
-          ),
-          finalPromptTextOriginalLength: finalPromptText.length,
-        }
-      : typeof redactedFinalPromptText === "string"
-        ? { ...data, finalPromptText: redactedFinalPromptText }
-        : data;
-  return redactSecrets(
-    sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
-  ) as Record<string, unknown>;
 }
 
 function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {
@@ -398,7 +324,7 @@ export function toTrajectoryToolDefinitions(
         {
           name,
           description: tool.description,
-          parameters: sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(tool.parameters)),
+          parameters: projectTrajectoryDiagnosticValue(tool.parameters),
         },
       ];
     })
@@ -435,6 +361,8 @@ export function createTrajectoryRuntimeRecorder(
   }
   let seq = 0;
   const traceId = params.sessionId;
+  const sessionHash = hashTrajectorySourceSessionKey(params.sessionKey);
+  const provenanceSanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
 
   const buildEvent = (
     type: string,
@@ -442,6 +370,7 @@ export function createTrajectoryRuntimeRecorder(
   ): { event: TrajectoryEvent; line: string } | undefined => {
     const nextSeq = seq + 1;
     const sourceSeq = sink.nextSourceSeq?.() ?? nextSeq;
+    const eventData = data ? provenanceSanitizer.sanitizeEventData(type, data) : undefined;
     const event: TrajectoryEvent = {
       traceSchema: "openclaw-trajectory",
       schemaVersion: 1,
@@ -453,12 +382,13 @@ export function createTrajectoryRuntimeRecorder(
       sourceSeq,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionHash,
       runId: params.runId,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
       modelId: params.modelId,
       modelApi: params.modelApi,
-      data: data ? sanitizeTrajectoryPayload(data) : undefined,
+      data: eventData,
     };
     const line = safeJsonStringify(event);
     if (!line) {
@@ -481,6 +411,12 @@ export function createTrajectoryRuntimeRecorder(
         return;
       }
       sink.write(built.event, built.line);
+    },
+    recordToolResult: (data) => {
+      const built = buildEvent("tool.result", data);
+      if (built) {
+        sink.write(built.event, built.line);
+      }
     },
     flush: async () => {
       await sink.flush();

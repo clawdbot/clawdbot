@@ -1682,6 +1682,9 @@ describe("runCodexAppServerAttempt", () => {
         recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
           trajectoryEvents.push({ type, data });
         },
+        recordToolResult: (data: { prompt?: string; systemPrompt?: string }) => {
+          trajectoryEvents.push({ type: "tool.result", data });
+        },
         flush: async () => undefined,
       },
     });
@@ -1724,10 +1727,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data?.prompt).toBe(
       inputText,
     );
+    expect(
+      trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data,
+    ).not.toHaveProperty("origin");
     expect(result.systemPromptReport?.skills.promptChars).toBe(params.skillsSnapshot.prompt.length);
     expect(result.systemPromptReport?.skills.entries).toEqual([
       { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
     ]);
+  });
+
+  it("records delegation origin on Codex prompt.submitted", async () => {
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      sourceChannel: "webchat",
+      sourceTool: "sessions_send",
+    };
+    const trajectoryEvents: Array<{ data?: Record<string, unknown>; type: string }> = [];
+    params.inputProvenance = inputProvenance;
+    Object.assign(params, {
+      trajectoryRecorder: {
+        recordEvent: (type: string, data?: Record<string, unknown>) => {
+          trajectoryEvents.push({ type, data });
+        },
+        recordToolResult: (data: Record<string, unknown>) => {
+          trajectoryEvents.push({ type: "tool.result", data });
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data).toMatchObject(
+      {
+        prompt: "hello",
+        origin: inputProvenance,
+      },
+    );
   });
 
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {

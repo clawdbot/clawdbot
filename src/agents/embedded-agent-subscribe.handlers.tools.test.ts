@@ -9,6 +9,8 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "../trajectory/paths.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -213,6 +215,32 @@ function createTestContext(): {
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
+type RecordedTrajectoryEvent = { type: string; data?: Record<string, unknown> };
+
+function attachRecorder(ctx: ToolHandlerContext): RecordedTrajectoryEvent[] {
+  const recorded: RecordedTrajectoryEvent[] = [];
+  ctx.params.trajectoryRecorder = {
+    recordEvent: (type, data) => {
+      recorded.push({ type, ...(data ? { data } : {}) });
+    },
+    recordToolResult: (data) => {
+      recorded.push({ type: "tool.result", data });
+    },
+    flush: async () => {},
+  };
+  return recorded;
+}
+
+function requireRecorded(
+  recorded: readonly RecordedTrajectoryEvent[],
+  type: string,
+): Record<string, unknown> {
+  const event = recorded.find((entry) => entry.type === type);
+  if (!event?.data) {
+    throw new Error(`expected recorded ${type} event`);
+  }
+  return event.data;
+}
 
 function requireEvent(
   events: CapturedAgentEvent[],
@@ -2356,11 +2384,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   });
 
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
-    const { ctx } = createTestContext();
+    const { ctx, onAgentEvent } = createTestContext();
     const onToolResult = vi.fn();
     const onAgentToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
     ctx.params.onAgentToolResult = onAgentToolResult;
+    const recorded = attachRecorder(ctx);
 
     await endTool(ctx, {
       toolName: "exec",
@@ -2400,6 +2429,25 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         details: expect.objectContaining({ status: "approval-unavailable" }),
       }),
       isError: true,
+    });
+    expectRecordFields(requireRecorded(recorded, "tool.result"), "recorded tool.result", {
+      name: "exec",
+      toolCallId: "tool-exec-unavailable",
+      isError: true,
+      success: false,
+    });
+    const blockedCommand = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .find(
+        (event) =>
+          event.stream === "item" &&
+          event.data?.itemId === "command:tool-exec-unavailable" &&
+          event.data.status === "blocked",
+      );
+    expectRecordFields(blockedCommand?.data, "blocked command item", {
+      kind: "command",
+      status: "blocked",
+      toolCallId: "tool-exec-unavailable",
     });
     expect(ctx.state.toolMetas).toEqual([
       expect.objectContaining({ toolName: "exec", isError: true }),
@@ -3560,6 +3608,158 @@ describe("control UI credential redaction (issue #72283)", () => {
       "plain result",
       "plain result",
     );
+  });
+});
+describe("tool trajectory recording", () => {
+  afterEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  it("records a delegation tool call and result matching the emitted tool stream", async () => {
+    const events: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((evt) => events.push(evt as never));
+    const { ctx } = createTestContext();
+    const recorded = attachRecorder(ctx);
+    try {
+      await executeTool(ctx, {
+        toolName: "sessions_send",
+        toolCallId: "tool-delegation-1",
+        args: { sessionKey: "agent:main:worker", message: "please review the patch" },
+        isError: false,
+        result: { content: [{ type: "text", text: "delivered" }] },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const startEvent = requireEvent(
+      events,
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "start",
+      "tool start",
+    );
+    const resultEvent = requireEvent(
+      events,
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+      "tool result",
+    );
+
+    expect(recorded.map((entry) => entry.type)).toEqual(["tool.call", "tool.result"]);
+    const liveArgs = (startEvent.data as { args?: unknown }).args;
+    expect(liveArgs).toEqual({
+      sessionKey: "agent:main:worker",
+      message: "please review the patch",
+    });
+    expect(requireRecorded(recorded, "tool.call")).toEqual({
+      phase: "start",
+      name: "sessions_send",
+      toolCallId: "tool-delegation-1",
+      arguments: liveArgs,
+    });
+    expect(requireRecorded(recorded, "tool.result")).toEqual({
+      ...resultEvent.data,
+      success: true,
+    });
+  });
+
+  it("records a failed tool result as unsuccessful", async () => {
+    const { ctx } = createTestContext();
+    const recorded = attachRecorder(ctx);
+
+    await executeTool(ctx, {
+      toolName: "sessions_send",
+      toolCallId: "tool-delegation-error",
+      args: { sessionKey: "agent:main:worker", message: "ping" },
+      isError: true,
+      result: { content: [{ type: "text", text: "target session not found" }] },
+    });
+
+    expectRecordFields(requireRecorded(recorded, "tool.result"), "recorded tool.result", {
+      name: "sessions_send",
+      toolCallId: "tool-delegation-error",
+      isError: true,
+      success: false,
+    });
+  });
+
+  it("retains tool identity and outcome when a 33-block result requires compaction", async () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-tool-result-compaction",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+    if (!recorder) {
+      throw new Error("expected trajectory recorder");
+    }
+    const { ctx } = createTestContext();
+    ctx.params.trajectoryRecorder = recorder;
+
+    await executeTool(ctx, {
+      toolName: "custom_fetch",
+      toolCallId: "tool-trajectory-oversized-result",
+      args: { query: "incident timeline" },
+      isError: false,
+      result: {
+        content: Array.from({ length: 33 }, (_value, index) => ({
+          type: "text",
+          text: `${index}:${"x".repeat(7_990)}`,
+        })),
+      },
+    });
+
+    const resultLine = writes.find((line) => JSON.parse(line).type === "tool.result");
+    if (!resultLine) {
+      throw new Error("expected persisted tool.result");
+    }
+    const persisted = JSON.parse(resultLine) as { data: Record<string, unknown> };
+    expect(persisted.data).toMatchObject({
+      name: "custom_fetch",
+      toolCallId: "tool-trajectory-oversized-result",
+      isError: false,
+      success: true,
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+    expect(persisted.data.result).toBeUndefined();
+    expect(Buffer.byteLength(resultLine, "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    );
+  });
+
+  it("redacts secrets from recorded tool arguments", async () => {
+    const { ctx } = createTestContext();
+    const recorded = attachRecorder(ctx);
+
+    await startTool(ctx, {
+      toolName: "gateway",
+      toolCallId: "tool-trajectory-secret",
+      args: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" },
+    });
+
+    const serialized = JSON.stringify(requireRecorded(recorded, "tool.call").arguments);
+    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
+    expect(serialized).toContain("gpt-4");
+  });
+
+  it("runs tool lifecycle handlers without a recorder attached", async () => {
+    const { ctx } = createTestContext();
+    expect(ctx.params.trajectoryRecorder).toBeUndefined();
+
+    await expect(
+      executeTool(ctx, {
+        toolName: "sessions_send",
+        toolCallId: "tool-delegation-no-recorder",
+        args: { sessionKey: "agent:main:worker", message: "ping" },
+        isError: false,
+        result: { content: [{ type: "text", text: "delivered" }] },
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

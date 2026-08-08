@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -9,6 +10,7 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import { AgentSessionSteering } from "./agent-session-steering.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -46,6 +48,7 @@ import type { SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 
 const log = createSubsystemLogger("agents/session");
+const MAX_COMMITTED_STEERING_PROMPT_CHARS = 32_768;
 
 interface ToolDefinitionEntry {
   definition: ToolDefinition;
@@ -69,8 +72,8 @@ export abstract class AgentSessionBase {
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
 
-  /** Tracks pending steering messages for UI display. Removed when delivered. */
-  protected steeringMessages: string[] = [];
+  /** Owns exact steering queue identity through durable transcript settlement. */
+  protected steering = new AgentSessionSteering(() => this.emitQueueUpdate());
   /** Tracks pending follow-up messages for UI display. Removed when delivered. */
   protected followUpMessages: string[] = [];
   /** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -301,7 +304,7 @@ export abstract class AgentSessionBase {
   protected emitQueueUpdate(): void {
     this.emit({
       type: "queue_update",
-      steering: [...this.steeringMessages],
+      steering: this.steering.pendingTexts,
       followUp: [...this.followUpMessages],
     });
   }
@@ -313,19 +316,26 @@ export abstract class AgentSessionBase {
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
   protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
-    if (event.type === "agent_end") {
-      const reason: unknown = signal?.reason;
-      this.lastRunEndedForTurnHandoff =
-        signal?.aborted === true &&
-        typeof reason === "object" &&
-        reason !== null &&
-        (reason as { turnHandoff?: unknown }).turnHandoff === true;
+    try {
+      if (event.type === "agent_end") {
+        const reason: unknown = signal?.reason;
+        this.lastRunEndedForTurnHandoff =
+          signal?.aborted === true &&
+          typeof reason === "object" &&
+          reason !== null &&
+          (reason as { turnHandoff?: unknown }).turnHandoff === true;
+      }
+      if (this.eventMayWriteSession(event)) {
+        await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
+        return;
+      }
+      await this.handleAgentEventUnlocked(event);
+    } catch (error) {
+      if (event.type === "message_start" || event.type === "message_end") {
+        this.steering.reject(event.message, error);
+      }
+      throw error;
     }
-    if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
-      return;
-    }
-    await this.handleAgentEventUnlocked(event);
   };
 
   private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
@@ -337,20 +347,13 @@ export abstract class AgentSessionBase {
     // This ensures the UI sees the updated queue state
     if (event.type === "message_start" && event.message.role === "user") {
       this.overflowRecoveryAttempted = false;
+      const steeringStarted = this.steering.start(event.message);
       const messageText = extractTextContent(event.message.content);
-      if (messageText) {
-        // Check steering queue first
-        const steeringIndex = this.steeringMessages.indexOf(messageText);
-        if (steeringIndex !== -1) {
-          this.steeringMessages.splice(steeringIndex, 1);
+      if (!steeringStarted && messageText) {
+        const followUpIndex = this.followUpMessages.indexOf(messageText);
+        if (followUpIndex !== -1) {
+          this.followUpMessages.splice(followUpIndex, 1);
           this.emitQueueUpdate();
-        } else {
-          // Check follow-up queue
-          const followUpIndex = this.followUpMessages.indexOf(messageText);
-          if (followUpIndex !== -1) {
-            this.followUpMessages.splice(followUpIndex, 1);
-            this.emitQueueUpdate();
-          }
         }
       }
     }
@@ -395,6 +398,19 @@ export abstract class AgentSessionBase {
         });
         if (event.message.role === "assistant") {
           this.lastAssistantEntryId = entryId;
+        }
+        if (event.message.role === "user" && this.steering.isTracked(event.message)) {
+          const persistedEntry = this.sessionManager.getEntry(entryId);
+          if (persistedEntry?.type !== "message" || persistedEntry.message.role !== "user") {
+            throw new Error(`persisted steering message ${entryId} could not be identified`);
+          }
+          // Receipts expose only the bounded visible text from the exact durable entry.
+          // Raw and prepared inputs are not authoritative after persistence transforms.
+          const committedPrompt = truncateUtf16Safe(
+            extractTextContent(persistedEntry.message.content),
+            MAX_COMMITTED_STEERING_PROMPT_CHARS,
+          );
+          this.steering.resolve(event.message, committedPrompt);
         }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -586,6 +602,7 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    this.steering.dispose();
     const abortOperations = [
       () => this.abortRetry(),
       () => this.abortCompaction(),

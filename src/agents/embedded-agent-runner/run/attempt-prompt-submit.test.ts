@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -53,6 +54,24 @@ function createBaseInput() {
     trajectoryRecorder: null,
     transcriptLeafId: null,
     transcriptPrompt: "transcript prompt",
+  };
+}
+
+function createCapturingTrajectoryRecorder() {
+  const events: { type: string; data?: Record<string, unknown> }[] = [];
+  return {
+    events,
+    recorder: {
+      enabled: true as const,
+      recordEvent: (type: string, data?: Record<string, unknown>) => {
+        events.push({ type, data });
+      },
+      recordToolResult: (data: Record<string, unknown>) => {
+        events.push({ type: "tool.result", data });
+      },
+      flush: async () => undefined,
+      describeFlushState: () => undefined,
+    },
   };
 }
 
@@ -131,6 +150,38 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(activeSession.messages).not.toContain(runtimeContextMessage);
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
+  });
+
+  it("records delegation origin on prompt.submitted only for delegated turns", async () => {
+    const inputProvenance: InputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:sender-session",
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    };
+    const { events, recorder } = createCapturingTrajectoryRecorder();
+    const promptActiveSession = vi.fn(async () => undefined);
+
+    const delegated = createSession();
+    await submitEmbeddedAttemptPrompt({
+      ...createBaseInput(),
+      activeSession: delegated.activeSession,
+      attempt: { sessionId, inputProvenance },
+      promptActiveSession,
+      trajectoryRecorder: recorder,
+    });
+
+    const direct = createSession();
+    await submitEmbeddedAttemptPrompt({
+      ...createBaseInput(),
+      activeSession: direct.activeSession,
+      promptActiveSession,
+      trajectoryRecorder: recorder,
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["prompt.submitted", "prompt.submitted"]);
+    expect(events[0]?.data).toMatchObject({ prompt: "model prompt", origin: inputProvenance });
+    expect(events[1]?.data).not.toHaveProperty("origin");
   });
 
   it("caps oversized MCP tool results at the provider boundary", async () => {

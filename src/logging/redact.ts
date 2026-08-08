@@ -2,7 +2,6 @@ import { findStructuredAuthParamRanges, redactStructuredAuthHeaders } from "@ope
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
@@ -24,15 +23,16 @@ import {
   SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
+import {
+  maskStructuredFieldValue as maskToken,
+  shouldRedactStructuredAuthorizationCode,
+} from "./structured-field-redaction.js";
 
 export type RedactSensitiveMode = "off" | "tools";
 export type RedactPattern = string | RegExp;
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
-const DEFAULT_REDACT_MIN_LENGTH = 18;
-const DEFAULT_REDACT_KEEP_START = 6;
-const DEFAULT_REDACT_KEEP_END = 4;
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
@@ -197,18 +197,6 @@ function includesDefaultRedactPatterns(value?: RedactPattern[]): boolean {
   }
   const source = new Set(value.filter((pattern): pattern is string => typeof pattern === "string"));
   return DEFAULT_REDACT_PATTERNS.every((pattern) => source.has(pattern));
-}
-
-function maskToken(token: string): string {
-  if (token === "***") {
-    return token;
-  }
-  if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
-    return "***";
-  }
-  const start = sliceUtf16Safe(token, 0, DEFAULT_REDACT_KEEP_START);
-  const end = sliceUtf16Safe(token, -DEFAULT_REDACT_KEEP_END);
-  return `${start}…${end}`;
 }
 
 function splitSecretValueForMask(token: string): {
@@ -992,34 +980,6 @@ export function redactSensitiveFieldValueWithConfig(
     value,
     resolveToolPayloadRedaction(loggingConfig),
   );
-}
-
-function pathEndsWith(path: readonly string[], suffix: readonly string[]): boolean {
-  if (path.length < suffix.length) {
-    return false;
-  }
-  return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
-}
-
-function shouldRedactStructuredAuthorizationCode(
-  normalizedKey: string,
-  path: readonly string[],
-): boolean {
-  if (normalizedKey !== "code") {
-    return false;
-  }
-  const normalizedPath = path.map((part) => part.toLowerCase());
-  if (
-    normalizedPath.length === 1 ||
-    pathEndsWith(normalizedPath, ["error", "code"]) ||
-    pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
-    pathEndsWith(normalizedPath, ["status", "code"]) ||
-    pathEndsWith(normalizedPath, ["details", "code"]) ||
-    pathEndsWith(normalizedPath, ["warnings", "code"])
-  ) {
-    return false;
-  }
-  return true;
 }
 
 function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {

@@ -6,7 +6,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
@@ -15,6 +20,12 @@ import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
 const tempDirs: string[] = [];
+const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
+const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
+
+function expectedSessionHash(domain: string, value: string): string {
+  return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
+}
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-runtime-"));
@@ -68,6 +79,12 @@ describe("trajectory runtime", () => {
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
       oauth: "ya29.fake-access-token-with-enough-length",
       apple: "abcd-efgh-ijkl-mnop",
+      dynamicToolArgs: {
+        sessionKey: "opaque-session-credential",
+        sessionHash: `sha256:v1:${"f".repeat(64)}`,
+        sourceSessionHash: `sha256:v1:${"e".repeat(64)}`,
+        sourceSessionKey: "opaque-source-session-credential",
+      },
       tools: toTrajectoryToolDefinitions([
         { name: "z-tool", parameters: { z: 1 } },
         { name: "a-tool", description: "alpha", parameters: { a: 1 } },
@@ -80,6 +97,9 @@ describe("trajectory runtime", () => {
     expect(parsed.type).toBe("context.compiled");
     expect(parsed.source).toBe("runtime");
     expect(parsed.sessionId).toBe("session-1");
+    expect(parsed.sessionHash).toBe(
+      expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "agent:main:session-1"),
+    );
     expect(parsed.data.tools).toEqual([
       { name: "a-tool", description: "alpha", parameters: { a: 1 } },
       { name: "z-tool", parameters: { z: 1 } },
@@ -88,7 +108,53 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(parsed.data.dynamicToolArgs).toEqual({});
+    expect(JSON.stringify(parsed.data)).not.toContain("opaque-session-credential");
+    expect(JSON.stringify(parsed.data)).not.toContain("opaque-source-session-credential");
+    expect(JSON.stringify(parsed.data)).not.toContain(`sha256:v1:${"f".repeat(64)}`);
+    expect(JSON.stringify(parsed.data)).not.toContain(`sha256:v1:${"e".repeat(64)}`);
   });
+
+  it.each(["native", "dynamic", "mcp"])(
+    "redacts path-sensitive authorization codes in %s tool arguments",
+    (toolKind) => {
+      const writes: string[] = [];
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        writer: {
+          filePath: "/tmp/session.trajectory.jsonl",
+          write: (line) => {
+            writes.push(line);
+          },
+          flush: async () => undefined,
+        },
+      });
+
+      expectTrajectoryRuntimeRecorder(recorder).recordEvent("tool.call", {
+        name: "test_tool",
+        toolKind,
+        arguments: {
+          oauth: { code: "opaque-oauth-code-1234567890" },
+          provider: { code: "opaque-provider-code-1234567890" },
+          nested: [{ providerAuth: { code: "opaque-array-code-1234567890" } }],
+          error: { code: "ERR_TOOL_FAILED" },
+          status: { code: "RETRY_REQUIRED" },
+          warnings: [{ code: "invalid-runtime-event" }],
+        },
+      });
+
+      const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+      expect(parsed.data.arguments).toEqual({
+        oauth: { code: "opaque…7890" },
+        provider: { code: "opaque…7890" },
+        nested: [{ providerAuth: { code: "opaque…7890" } }],
+        error: { code: "ERR_TOOL_FAILED" },
+        status: { code: "RETRY_REQUIRED" },
+        warnings: [{ code: "invalid-runtime-event" }],
+      });
+    },
+  );
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
     const tempDir = makeTempDir();
@@ -156,6 +222,51 @@ describe("trajectory runtime", () => {
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
     ).resolves.toEqual([expect.objectContaining({ source: "runtime", type: "session.started" })]);
+  });
+
+  it("pseudonymizes prompt provenance before writing SQLite event JSON", async () => {
+    const tempDir = makeTempDir();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session-1",
+        storePath,
+      }),
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "inspect",
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: rawSessionKey,
+        sourceTool: "sessions_send",
+      },
+    });
+    await runtimeRecorder.flush();
+
+    const [event] = await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath });
+    expect(event?.data?.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+      sourceTool: "sessions_send",
+    });
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const row = database.db
+      .prepare(
+        "SELECT event_json FROM trajectory_runtime_events WHERE session_id = ? ORDER BY seq ASC LIMIT 1",
+      )
+      .get("session-1") as { event_json?: string } | undefined;
+    const eventJson = expectDefined(row?.event_json, "trajectory runtime SQLite row");
+    expect(eventJson).not.toContain(rawSessionKey);
+    expect(eventJson).toContain(expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey));
   });
 
   it("rejects a legacy SQLite marker for another session", () => {
@@ -327,6 +438,99 @@ describe("trajectory runtime", () => {
     expect(parsed.data.truncated).toBeUndefined();
   });
 
+  it("canonicalizes native and Codex-projected prompt origins before memory persistence", () => {
+    const writes: string[] = [];
+    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
+    const distinctSessionKey = "p1-reproduction=OTHER";
+    const spoofedHash = `sha256:v1:${"f".repeat(64)}`;
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "native",
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: ` ${rawSessionKey} `,
+        originSessionId: ` ${rawSessionKey} `,
+        sourceSessionHash: spoofedHash,
+        originSessionHash: spoofedHash,
+        sourceChannel: " discord ",
+        sourceTool: " sessions_send ",
+        nested: { sourceSessionKey: "nested-secret" },
+        extra: "drop-me",
+      },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "codex-projected",
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: rawSessionKey,
+        originSessionId: rawSessionKey,
+        sourceChannel: "discord",
+        sourceTool: "sessions_send",
+      },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "distinct",
+      origin: { kind: "inter_session", sourceSessionKey: distinctSessionKey },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "hash-shaped-raw",
+      origin: { kind: "inter_session", sourceSessionKey: spoofedHash },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "spoofed-hash-only",
+      origin: { kind: "inter_session", sourceSessionHash: spoofedHash },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "unknown-kind",
+      origin: { kind: "forged", sourceSessionKey: rawSessionKey },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "array-origin",
+      origin: [{ kind: "inter_session", sourceSessionKey: rawSessionKey }],
+    });
+
+    const events = writes.map((line) => JSON.parse(line) as { data: Record<string, unknown> });
+    const expectedSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey);
+    const expectedOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, rawSessionKey);
+    expect(events[0]?.data.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSourceHash,
+      originSessionHash: expectedOriginHash,
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
+    expect(events[1]?.data.origin).toEqual(events[0]?.data.origin);
+    expect(events[2]?.data.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, distinctSessionKey),
+    });
+    expect(events[3]?.data.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, spoofedHash),
+    });
+    expect(events[4]?.data.origin).toEqual({ kind: "inter_session" });
+    expect(events[5]?.data.origin).toBeUndefined();
+    expect(events[6]?.data.origin).toBeUndefined();
+    expect(expectedSourceHash).not.toBe(expectedOriginHash);
+    expect(events[2]?.data.origin).not.toEqual(events[0]?.data.origin);
+    expect(writes.join("\n")).not.toContain(rawSessionKey);
+    expect(writes.join("\n")).not.toContain(spoofedHash);
+    expect(writes.join("\n")).not.toContain("nested-secret");
+    expect(writes.join("\n")).not.toContain("drop-me");
+  });
+
   it("preserves usage when truncating oversized runtime events", () => {
     const writes: string[] = [];
     const usage = {
@@ -374,6 +578,50 @@ describe("trajectory runtime", () => {
     });
     expect(parsed.data.messagesSnapshot).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(["messagesSnapshot"]);
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
+  it("preserves tool identity and outcome in compact oversized results", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordToolResult({
+      name: "github.search_code",
+      toolCallId: "mcp-oversized",
+      isError: false,
+      success: true,
+      result: {
+        content: Array.from({ length: 33 }, (_value, index) => ({
+          type: "text",
+          text: `${index}:${"x".repeat(8_000)}`,
+        })),
+      },
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.type).toBe("tool.result");
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      name: "github.search_code",
+      toolCallId: "mcp-oversized",
+      isError: false,
+      success: true,
+    });
+    expect(parsed.data.result).toBeUndefined();
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
@@ -533,6 +781,56 @@ describe("trajectory runtime", () => {
     });
     expect(parsed.data.tools).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(["tools"]);
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
+  it("preserves delegation origin when an oversized prompt.submitted is truncated", () => {
+    const writes: string[] = [];
+    const rawSessionKey = "agent:main:sender-session";
+    const origin = {
+      kind: "inter_session",
+      sourceSessionKey: rawSessionKey,
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    };
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordEvent("prompt.submitted", {
+      prompt: "handle the escalation",
+      tools: Array.from({ length: 12 }, (_value, index) => ({
+        name: `tool-${index}`,
+        description: "x".repeat(32_000),
+      })),
+      imagesCount: 0,
+      origin,
+    });
+
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      prompt: "handle the escalation",
+      origin: {
+        kind: "inter_session",
+        sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+        sourceChannel: "discord",
+        sourceTool: "sessions_send",
+      },
+    });
+    expect(parsed.data.tools).toBeUndefined();
+    expect(JSON.stringify(parsed)).not.toContain(rawSessionKey);
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);

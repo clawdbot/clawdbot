@@ -257,11 +257,12 @@ export function createCodexAttemptServerRequestController(
           });
         }
         const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
-        trajectoryRecorder?.recordEvent("tool.result", {
+        trajectoryRecorder?.recordToolResult({
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
           name: call.tool,
+          isError: !protocolResponse.success,
           success: protocolResponse.success,
           contentItems: protocolResponse.contentItems,
         });

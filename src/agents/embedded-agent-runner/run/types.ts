@@ -91,6 +91,7 @@ type EmbeddedRunAttemptToolTerminalObserver = (
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  recordToolResult: (data: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
 

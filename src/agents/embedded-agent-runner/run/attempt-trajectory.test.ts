@@ -25,6 +25,11 @@ function createInput(disableTrajectory = false) {
       config: {},
       disableTrajectory,
       fastMode: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+      },
       model: { api: "anthropic-messages" },
       modelId: "model-1",
       provider: "provider-1",

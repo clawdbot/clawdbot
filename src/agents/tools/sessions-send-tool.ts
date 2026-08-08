@@ -27,7 +27,10 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   isCronRunSessionKey,
@@ -343,6 +346,7 @@ async function startAgentRun(params: {
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
+  inputProvenance?: InputProvenance;
 }): Promise<
   | {
       ok: true;
@@ -371,6 +375,7 @@ async function startAgentRun(params: {
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
+        ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
         ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
       let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -942,12 +947,14 @@ export function createSessionsSendTool(opts?: {
               sessionKey: displayKey,
               deliveryTimeoutMs: announceTimeoutMs,
               allowActiveRunQueueDelivery: true,
+              inputProvenance,
             });
             if (!start.ok) {
               return start.result;
             }
             runId = start.runId;
-            const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
+            const dispatchedSessionKey = start.a2aSessionKey ?? resolvedKey;
+            const watchField = registerWatchIfRequested(dispatchedSessionKey);
             if (!start.activeRunQueue) {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }

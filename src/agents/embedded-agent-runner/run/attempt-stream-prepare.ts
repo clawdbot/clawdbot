@@ -17,6 +17,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -64,6 +65,10 @@ type StreamRunState = {
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
   cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+  messageInjection: {
+    isAvailable(): boolean;
+    queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
+  };
 };
 
 export function prepareEmbeddedAttemptStream(input: {
@@ -87,6 +92,7 @@ export function prepareEmbeddedAttemptStream(input: {
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
+  trajectoryRecorder?: SubscribeEmbeddedAgentSessionParams["trajectoryRecorder"];
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -259,6 +265,7 @@ export function prepareEmbeddedAttemptStream(input: {
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
       hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
       onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
+      ...(input.trajectoryRecorder ? { trajectoryRecorder: input.trajectoryRecorder } : {}),
       onAgentToolResult: attempt.onAgentToolResult,
       observeToolTerminal: attempt.observeToolTerminal,
       onToolResult: attempt.onToolResult,
@@ -404,12 +411,27 @@ export function prepareEmbeddedAttemptStream(input: {
       if (options?.steeringMode) {
         input.activeSession.agent.steeringMode = options.steeringMode;
       }
-      return await steerActiveSessionWithOptionalDeliveryWait(
+      const outcome = await steerActiveSessionWithOptionalDeliveryWait(
         input.activeSession,
         text,
         options,
         attempt.sessionKey,
       );
+      if (outcome.kind === "steered" && outcome.transcriptCommit === "confirmed") {
+        try {
+          input.trajectoryRecorder?.recordEvent("prompt.submitted", {
+            prompt: outcome.committedPrompt,
+            messages: input.activeSession.messages,
+            imagesCount: options?.images?.length ?? 0,
+            ...(options?.inputProvenance ? { origin: options.inputProvenance } : {}),
+          });
+        } catch (error) {
+          log.warn(`failed to record queued prompt trajectory: ${formatErrorMessage(error)}`);
+        }
+      }
+      return outcome.kind === "accepted-unconfirmed"
+        ? { transcriptCommit: "unconfirmed", errorMessage: outcome.errorMessage }
+        : undefined;
     } finally {
       activeQueueAdmissions--;
     }
@@ -418,13 +440,6 @@ export function prepareEmbeddedAttemptStream(input: {
     kind: "embedded",
     runId: attempt.runId,
     queueMessage,
-    messageInjection: {
-      isAvailable: () =>
-        acceptingSteerMessages &&
-        !input.getRunState().aborted &&
-        !input.runAbortController.signal.aborted,
-      queueMessage,
-    },
     isStreaming: () => input.activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,
     isStopped: () =>
@@ -434,6 +449,13 @@ export function prepareEmbeddedAttemptStream(input: {
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
+    messageInjection: {
+      isAvailable: () =>
+        acceptingSteerMessages &&
+        !input.getRunState().aborted &&
+        !input.runAbortController.signal.aborted,
+      queueMessage,
+    },
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,

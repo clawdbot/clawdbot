@@ -19,6 +19,22 @@ const mocks = vi.hoisted(() => ({
   subscribe: vi.fn(),
 }));
 
+function createSteerReceipt() {
+  let resolveAccepted!: () => void;
+  const accepted = new Promise<void>((resolve) => {
+    resolveAccepted = resolve;
+  });
+  let resolveCommitted!: (committedPrompt: string) => void;
+  const committed = new Promise<string>((resolve) => {
+    resolveCommitted = resolve;
+  });
+  return {
+    receipt: { accepted, committed, cancel: vi.fn(() => true) },
+    resolveAccepted,
+    resolveCommitted,
+  };
+}
+
 vi.mock("../../embedded-agent-subscribe.js", () => ({
   subscribeEmbeddedAgentSession: mocks.subscribe,
 }));
@@ -59,6 +75,8 @@ function prepareCatalogExecutor(
     onAttemptAbort?: () => void;
     abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
     markExternalAbort?: () => void;
+    activeSession?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"];
+    trajectoryRecorder?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["trajectoryRecorder"];
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -70,7 +88,7 @@ function prepareCatalogExecutor(
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
     } as never,
-    activeSession: { agent: {}, isStreaming: false } as never,
+    activeSession: options?.activeSession ?? ({ agent: {}, isStreaming: false } as never),
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
@@ -95,6 +113,7 @@ function prepareCatalogExecutor(
     sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
+    trajectoryRecorder: options?.trajectoryRecorder,
   });
 }
 
@@ -260,6 +279,82 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(prepared.queueHandle.isStopped?.()).toBe(false);
     resolveSteer?.();
     await queued;
+  });
+
+  it("records confirmed no-origin steering once and exposes the same message injection", async () => {
+    const deferred = createSteerReceipt();
+    const steerWithReceipt = vi.fn(() => deferred.receipt);
+    const recordEvent = vi.fn();
+    const activeSession = {
+      agent: { hasQueuedMessages: () => true },
+      isStreaming: true,
+      messages: [{ role: "user", content: "queued" }],
+      pendingMessageCount: 1,
+      steer: vi.fn(async () => undefined),
+      steerWithReceipt,
+    };
+    const prepared = prepareCatalogExecutor([], {
+      activeSession: activeSession as never,
+      trajectoryRecorder: { recordEvent } as never,
+    });
+    const accepted = vi.fn();
+
+    expect(prepared.queueHandle.messageInjection?.isAvailable()).toBe(true);
+    const queued = prepared.queueHandle.messageInjection!.queueMessage("queued prompt", {
+      onQueueAccepted: accepted,
+      waitForTranscriptCommit: true,
+    });
+    await vi.waitFor(() => expect(steerWithReceipt).toHaveBeenCalledOnce());
+    expect(recordEvent).not.toHaveBeenCalled();
+
+    deferred.resolveAccepted();
+    await vi.waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
+    deferred.resolveCommitted('<skill name="queue">expanded queued prompt</skill>');
+    await queued;
+
+    expect(recordEvent).toHaveBeenCalledOnce();
+    expect(recordEvent).toHaveBeenCalledWith("prompt.submitted", {
+      prompt: '<skill name="queue">expanded queued prompt</skill>',
+      messages: activeSession.messages,
+      imagesCount: 0,
+    });
+  });
+
+  it("records confirmed steering provenance only after commitment", async () => {
+    const deferred = createSteerReceipt();
+    const steerWithReceipt = vi.fn(() => deferred.receipt);
+    const recordEvent = vi.fn();
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      sourceTool: "sessions_send",
+    };
+    const prepared = prepareCatalogExecutor([], {
+      activeSession: {
+        agent: { hasQueuedMessages: () => true },
+        isStreaming: true,
+        messages: [],
+        pendingMessageCount: 1,
+        steer: vi.fn(async () => undefined),
+        steerWithReceipt,
+      } as never,
+      trajectoryRecorder: { recordEvent } as never,
+    });
+
+    const queued = prepared.queueHandle.queueMessage("delegated work", {
+      inputProvenance: origin,
+      waitForTranscriptCommit: true,
+    });
+    deferred.resolveAccepted();
+    await Promise.resolve();
+    expect(recordEvent).not.toHaveBeenCalled();
+    deferred.resolveCommitted("expanded delegated work");
+    await queued;
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      "prompt.submitted",
+      expect.objectContaining({ origin, prompt: "expanded delegated work" }),
+    );
   });
 
   it("routes live events to the transcript session instead of the sandbox authority session", () => {

@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
@@ -32,7 +31,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import {
   hasMeaningfulRetiredMediaCarrier,
   PERSISTED_LEGACY_MEDIA_KEYS,
@@ -41,6 +40,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
+import { TrajectoryProvenanceSanitizer } from "./provenance-sanitization.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
@@ -623,10 +623,6 @@ function extractAssistantToolCalls(
   });
 }
 
-function sanitizeTrajectoryExportValue<T>(value: T): T {
-  return redactSecrets(sanitizeDiagnosticPayload(value)) as T;
-}
-
 function buildTranscriptEvents(params: {
   entries: SessionEntry[];
   sessionId: string;
@@ -659,13 +655,13 @@ function buildTranscriptEvents(params: {
     switch (entry.type) {
       case "message": {
         push(resolveMessageEventType(entry.message), {
-          message: sanitizeDiagnosticPayload(entry.message),
+          message: entry.message,
         });
         for (const toolCall of extractAssistantToolCalls(entry.message)) {
           push("tool.call", {
             toolCallId: toolCall.id,
             name: toolCall.name,
-            arguments: sanitizeDiagnosticPayload(toolCall.arguments),
+            arguments: toolCall.arguments,
             assistantEntryId: entry.id,
             blockIndex: toolCall.index,
           });
@@ -677,7 +673,7 @@ function buildTranscriptEvents(params: {
           summary: entry.summary,
           firstKeptEntryId: entry.firstKeptEntryId,
           tokensBefore: entry.tokensBefore,
-          details: sanitizeDiagnosticPayload(entry.details),
+          details: entry.details,
           fromHook: entry.fromHook ?? false,
         });
         break;
@@ -691,21 +687,21 @@ function buildTranscriptEvents(params: {
         push("session.branch_summary", {
           fromId: entry.fromId,
           summary: entry.summary,
-          details: sanitizeDiagnosticPayload(entry.details),
+          details: entry.details,
           fromHook: entry.fromHook ?? false,
         });
         break;
       case "custom":
         push("session.custom", {
           customType: entry.customType,
-          data: sanitizeDiagnosticPayload(entry.data),
+          data: entry.data,
         });
         break;
       case "custom_message":
         push("session.custom_message", {
           customType: entry.customType,
-          content: sanitizeDiagnosticPayload(entry.content),
-          details: sanitizeDiagnosticPayload(entry.details),
+          content: entry.content,
+          details: entry.details,
           display: entry.display,
         });
         break;
@@ -845,77 +841,6 @@ function maybeRedactPathString(value: string, redaction: TrajectoryExportRedacti
     return redactSupportString(workspaceRedacted, redaction);
   }
   return workspaceRedacted;
-}
-
-function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedaction): unknown {
-  if (typeof value === "string") {
-    return maybeRedactPathString(value, redaction);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactLocalPathValues(entry, redaction));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const record = value as Record<string, unknown>;
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(record)) {
-    next[key] = redactLocalPathValues(entry, redaction);
-  }
-  return next;
-}
-
-function uniqueRedactedObjectKey(key: string, usedKeys: Set<string>): string {
-  if (!usedKeys.has(key)) {
-    usedKeys.add(key);
-    return key;
-  }
-  let index = 2;
-  while (usedKeys.has(`${key}#${index}`)) {
-    index += 1;
-  }
-  const unique = `${key}#${index}`;
-  usedKeys.add(unique);
-  return unique;
-}
-
-function redactTrajectoryExportObjectKeys(
-  value: unknown,
-  redaction: TrajectoryExportRedaction,
-): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactTrajectoryExportObjectKeys(entry, redaction));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const usedKeys = new Set<string>();
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
-    // Object keys can contain file paths or tool payload snippets too. Preserve
-    // all entries even when redaction collapses two original keys together.
-    next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
-      entry,
-      redaction,
-    );
-  }
-  return next;
-}
-
-function redactTrajectoryExportValue(
-  value: unknown,
-  redaction: TrajectoryExportRedaction,
-): unknown {
-  const redactedValue = sanitizeTrajectoryExportValue(redactLocalPathValues(value, redaction));
-  return redactTrajectoryExportObjectKeys(redactedValue, redaction);
-}
-
-function redactEventForExport(
-  event: TrajectoryEvent,
-  redaction: TrajectoryExportRedaction,
-): TrajectoryEvent {
-  return redactTrajectoryExportValue(event, redaction) as TrajectoryEvent;
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
@@ -1229,90 +1154,95 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const runtimeFile = runtimeParse.runtimeFile;
   const runtimeEvents = runtimeParse.events;
   assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
-  const projectedBranchEntries = branchEntries;
+  const provenanceSanitizer = new TrajectoryProvenanceSanitizer({ mode: "export" });
+  const transformExportText = (value: string) =>
+    redactToolPayloadText(maybeRedactPathString(value, redaction));
+  const projectionTransforms = {
+    transformKey: transformExportText,
+    transformString: transformExportText,
+  };
   const transcriptEvents = buildTranscriptEvents({
-    entries: projectedBranchEntries,
+    entries: branchEntries,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     traceId: params.sessionId,
   });
+  const {
+    runtimeEvents: sanitizedEvents,
+    branchEntries: sanitizedBranchEntries,
+    header: sanitizedHeader,
+  } = provenanceSanitizer.sanitizeExportSnapshot({
+    runtimeEvents: [...runtimeEvents, ...transcriptEvents],
+    branchEntries,
+    header,
+    ...projectionTransforms,
+  });
+  const sanitizedRuntimeEvents = sanitizedEvents.slice(0, runtimeEvents.length);
+  const sanitizedTranscriptEvents = sanitizedEvents.slice(runtimeEvents.length);
+  const exportedLeafId = provenanceSanitizer.sanitizeExportValue(leafId, projectionTransforms);
   const maxTotalEvents = params.maxTotalEvents ?? MAX_TRAJECTORY_TOTAL_EVENTS;
-  const totalEventCount = runtimeEvents.length + transcriptEvents.length;
+  const totalEventCount = sanitizedEvents.length;
   if (totalEventCount > maxTotalEvents) {
     throw new Error(
       `Trajectory export has too many events (${totalEventCount}; limit ${maxTotalEvents})`,
     );
   }
-  const rawEvents = sortTrajectoryEvents([...runtimeEvents, ...transcriptEvents]);
-  const events = rawEvents.map((event) => redactEventForExport(event, redaction));
-  const manifest: TrajectoryBundleManifest = {
-    traceSchema: "openclaw-trajectory",
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    traceId: params.sessionId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    workspaceDir: maybeRedactPathString(params.workspaceDir, redaction),
-    leafId,
-    eventCount: events.length,
-    runtimeEventCount: runtimeEvents.length,
-    transcriptEventCount: transcriptEvents.length,
-    sourceFiles: {
-      session: maybeRedactPathString(
-        sessionTarget?.sessionKey ?? params.sessionFile ?? params.sessionId,
-        redaction,
-      ),
-      runtime:
-        runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
-          ? maybeRedactPathString(runtimeFile, redaction)
-          : undefined,
-    },
-  };
+  const events = sortTrajectoryEvents(sanitizedEvents);
   const warnings = summarizeJsonlWarnings([...sessionWarnings, ...runtimeParse.warnings]);
-  if (warnings.length > 0) {
-    manifest.warnings = warnings;
-  }
+  const manifest = provenanceSanitizer.sanitizeExportValue<TrajectoryBundleManifest>(
+    {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      traceId: params.sessionId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: maybeRedactPathString(params.workspaceDir, redaction),
+      leafId: exportedLeafId,
+      eventCount: events.length,
+      runtimeEventCount: sanitizedRuntimeEvents.length,
+      transcriptEventCount: sanitizedTranscriptEvents.length,
+      sourceFiles: {
+        session: maybeRedactPathString(
+          sessionTarget?.sessionKey ?? params.sessionFile ?? params.sessionId,
+          redaction,
+        ),
+        runtime:
+          runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
+      },
+      ...(warnings.length > 0 ? { warnings } : {}),
+    },
+    projectionTransforms,
+  );
 
-  const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents);
+  const bundleRuntimeContext = resolveRuntimeContext(sanitizedRuntimeEvents);
   const files: DiagnosticSupportBundleFile[] = [];
   const supplementalFiles: string[] = [];
   const metadataCapture = buildMetadataCapture({
     manifest,
-    runtimeEvents,
-    events: rawEvents,
+    runtimeEvents: sanitizedRuntimeEvents,
+    events,
   });
   const artifactsCapture = buildArtifactsCapture({
     manifest,
-    runtimeEvents,
+    runtimeEvents: sanitizedRuntimeEvents,
   });
   const promptsCapture = buildPromptsCapture({
     manifest,
-    runtimeEvents,
+    runtimeEvents: sanitizedRuntimeEvents,
     runtimeContext: bundleRuntimeContext,
   });
   if (metadataCapture) {
-    files.push(
-      jsonSupportBundleFile(
-        "metadata.json",
-        redactTrajectoryExportValue(metadataCapture, redaction),
-      ),
-    );
+    files.push(jsonSupportBundleFile("metadata.json", metadataCapture));
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
-    files.push(
-      jsonSupportBundleFile(
-        "artifacts.json",
-        redactTrajectoryExportValue(artifactsCapture, redaction),
-      ),
-    );
+    files.push(jsonSupportBundleFile("artifacts.json", artifactsCapture));
     supplementalFiles.push("artifacts.json");
   }
   if (promptsCapture) {
-    files.push(
-      jsonSupportBundleFile("prompts.json", redactTrajectoryExportValue(promptsCapture, redaction)),
-    );
+    files.push(jsonSupportBundleFile("prompts.json", promptsCapture));
     supplementalFiles.push("prompts.json");
   }
   if (supplementalFiles.length > 0) {
@@ -1321,44 +1251,24 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
 
   files.push(trajectoryJsonlFile("events.jsonl", events));
   files.push(
-    jsonSupportBundleFile(
-      "session-branch.json",
-      redactTrajectoryExportValue(
-        {
-          header,
-          leafId,
-          entries: projectedBranchEntries,
-        },
-        redaction,
-      ),
-    ),
+    jsonSupportBundleFile("session-branch.json", {
+      header: sanitizedHeader,
+      leafId: exportedLeafId,
+      entries: sanitizedBranchEntries,
+    }),
   );
   if (bundleRuntimeContext.systemPrompt) {
-    files.push(
-      textSupportBundleFile(
-        "system-prompt.txt",
-        redactTrajectoryExportValue(bundleRuntimeContext.systemPrompt, redaction) as string,
-      ),
-    );
+    files.push(textSupportBundleFile("system-prompt.txt", bundleRuntimeContext.systemPrompt));
   }
   if (bundleRuntimeContext.tools) {
-    files.push(
-      jsonSupportBundleFile(
-        "tools.json",
-        redactTrajectoryExportValue(bundleRuntimeContext.tools, redaction),
-      ),
-    );
+    files.push(jsonSupportBundleFile("tools.json", bundleRuntimeContext.tools));
   }
 
   const redactedFiles = files.map(redactTrajectoryBundleFileContent);
   const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
   manifest.contents = contents;
-  const redactedManifest = redactTrajectoryExportValue(
-    manifest,
-    redaction,
-  ) as TrajectoryBundleManifest;
   const manifestFile = redactTrajectoryBundleFileContent(
-    jsonSupportBundleFile("manifest.json", redactedManifest),
+    jsonSupportBundleFile("manifest.json", manifest),
   );
 
   await writeSupportBundleDirectory({
@@ -1367,10 +1277,10 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
 
   return {
-    manifest: redactedManifest,
+    manifest,
     outputDir: params.outputDir,
     events,
-    header,
+    header: sanitizedHeader,
     runtimeFile:
       runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
     supplementalFiles,

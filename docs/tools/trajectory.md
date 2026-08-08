@@ -161,6 +161,14 @@ redacts sensitive values before writing export files:
 - workspace paths, replaced with `$WORKSPACE_DIR`
 - home directory paths, where detected
 
+Session identifiers in recognized prompt and message provenance are
+independently pseudonymized with domain-separated SHA-256 values before
+trajectory persistence. Arbitrary routing-shaped fields outside those
+validated provenance paths are omitted. Export sanitizes cloned data without
+rewriting or suppressing the canonical transcript, branch, or leaf. Matching
+structured identifiers remain correlatable across events. This is
+pseudonymization, not anonymity, so treat the hashes as sensitive metadata.
+
 The exporter also bounds input size:
 
 - runtime capture: the live capture is a rolling window capped at 10 MiB, dropping the oldest events to make room for new ones; export accepts existing legacy runtime sidecar files up to 50 MiB

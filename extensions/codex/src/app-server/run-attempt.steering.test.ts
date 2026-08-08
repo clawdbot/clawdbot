@@ -17,6 +17,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import type { CodexHostTrajectoryRecorder } from "./trajectory.js";
 
 const activeRunRegistrationMocks = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
@@ -145,7 +146,18 @@ describe("runCodexAppServerAttempt steering", () => {
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
+    const recordEvent = vi.fn();
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
     params.taskSuggestionDeliveryMode = "gateway";
+    (
+      params as typeof params & {
+        trajectoryRecorder: CodexHostTrajectoryRecorder;
+      }
+    ).trajectoryRecorder = {
+      recordEvent,
+      recordToolResult: vi.fn(),
+      flush: async () => undefined,
+    };
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
@@ -190,10 +202,17 @@ describe("runCodexAppServerAttempt steering", () => {
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(steer?.params).toMatchObject({
+    expect(steer?.params).toEqual({
       threadId: "thread-1",
       expectedTurnId: "turn-1",
-      input: [{ type: "text", text: "steer this active turn" }],
+      input: [{ type: "text", text: "steer this active turn", text_elements: [] }],
+      clientUserMessageId,
+    });
+    expect(recordEvent).toHaveBeenCalledWith("prompt.submitted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      prompt: "steer this active turn",
+      imagesCount: 0,
     });
   });
 

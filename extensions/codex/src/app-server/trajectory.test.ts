@@ -50,6 +50,7 @@ function createMemoryHostTrajectoryRecorder(): {
     events,
     recorder: {
       recordEvent: (type, data) => events.push({ type, data }),
+      recordToolResult: (data) => events.push({ type: "tool.result", data }),
       flush: async () => undefined,
     },
   };
@@ -103,6 +104,20 @@ function createSqliteHostTrajectoryRecorder(params: {
         seq,
         sessionId: params.sessionId,
         ...(data === undefined ? {} : { data }),
+      });
+      seq += 1;
+    },
+    recordToolResult: (data) => {
+      events.push({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: `${params.sessionId}:test`,
+        source: "runtime",
+        type: "tool.result",
+        ts: new Date(0).toISOString(),
+        seq,
+        sessionId: params.sessionId,
+        data,
       });
       seq += 1;
     },
@@ -173,19 +188,38 @@ describe("Codex trajectory recorder", () => {
     ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
   });
 
-  it("redacts secrets and keeps recorded strings UTF-16 safe", async () => {
-    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
-    recorder.recordEvent("model.output", {
-      text: `${"x".repeat(19_999)}😀`,
-      apiKey: "secret",
-      authorization: "Bearer sk-test-secret-token",
-    });
-    await recorder.flush();
+  it.each(["dynamic", "mcp"])(
+    "forwards %s tool arguments unchanged to the host recorder",
+    async (toolKind) => {
+      const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+      const text = `${"x".repeat(19_999)}😀`;
+      recorder.recordEvent("tool.call", {
+        toolKind,
+        text,
+        apiKey: "secret",
+        authorization: "Bearer sk-test-secret-token",
+        arguments: {
+          sessionKey: "agent:receiver:main",
+          sourceSessionKey: "agent:sender:main",
+        },
+      });
+      await recorder.flush();
 
-    expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
-    expect(events[0]?.data?.apiKey).toBe("<redacted>");
-    expect(events[0]?.data?.authorization).toBe("<redacted>");
-  });
+      expect(events[0]).toEqual({
+        type: "tool.call",
+        data: {
+          toolKind,
+          text,
+          apiKey: "secret",
+          authorization: "Bearer sk-test-secret-token",
+          arguments: {
+            sessionKey: "agent:receiver:main",
+            sourceSessionKey: "agent:sender:main",
+          },
+        },
+      });
+    },
+  );
 
   it("records namespace dynamic tools as callable trajectory definitions", async () => {
     const tools = [
@@ -236,7 +270,7 @@ describe("Codex trajectory recorder", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("preserves usage when truncating oversized model completion events", async () => {
+  it("delegates oversized model completion events to the host recorder", async () => {
     const attempt = {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -275,11 +309,127 @@ describe("Codex trajectory recorder", () => {
     await recorder.flush();
 
     expect(events[0]?.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
       usage,
+      assistantTexts: ["done"],
     });
-    expect(events[0]?.data?.messagesSnapshot).toBeUndefined();
-    expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
+    expect(events[0]?.data?.messagesSnapshot).toHaveLength(20);
+    expect(events[0]?.data?.truncated).toBeUndefined();
+  });
+
+  it("delegates oversized tool results to the host tool-result path", () => {
+    const recorded: Array<Record<string, unknown>> = [];
+    const recorder = expectTrajectoryRecorder(
+      createCodexTrajectoryRecorder({
+        cwd: makeTempDir(),
+        attempt: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          runId: "run-1",
+          provider: "codex",
+          modelId: "gpt-5.4",
+          model: { api: "responses" },
+        } as never,
+        trajectoryRecorder: {
+          recordEvent: vi.fn(),
+          recordToolResult: (data) => recorded.push(data),
+          flush: async () => undefined,
+        },
+        env: {},
+      }),
+    );
+
+    const data = {
+      name: "sessions_send",
+      toolCallId: "call-oversized",
+      isError: true,
+      success: false,
+      contentItems: Array.from({ length: 64 }, () => ({
+        type: "inputText",
+        text: "x".repeat(8_000),
+      })),
+    };
+    recorder.recordToolResult(data);
+
+    expect(recorded).toEqual([data]);
+  });
+
+  it("projects trusted prompt origin without applying host bounds", async () => {
+    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+    const oversized = "界".repeat(30_000);
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      originSessionId: oversized,
+      sourceChannel: oversized,
+      sourceTool: oversized,
+    };
+
+    recorder.recordPromptSubmitted(
+      {
+        threadId: oversized,
+        turnId: oversized,
+        prompt: oversized,
+        imagesCount: 0,
+      },
+      origin,
+    );
+    await recorder.flush();
+
+    expect(events[0]?.data).toEqual({
+      threadId: oversized,
+      turnId: oversized,
+      prompt: oversized,
+      imagesCount: 0,
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        originSessionId: oversized,
+        sourceChannel: oversized,
+        sourceTool: oversized,
+      },
+    });
+  });
+
+  it("validates prompt provenance and projects only canonical fields", async () => {
+    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+
+    recorder.recordPromptSubmitted(
+      { threadId: "thread-1", turnId: "turn-1", prompt: "hello", imagesCount: 0 },
+      {
+        kind: "forged",
+        sourceSessionKey: "agent:sender:main",
+      } as never,
+    );
+    recorder.recordPromptSubmitted(
+      { threadId: "thread-1", turnId: "turn-2", prompt: "hello again", imagesCount: 0 },
+      {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+        sourceSessionHash: `sha256:v1:${"f".repeat(64)}`,
+        originSessionHash: `sha256:v1:${"e".repeat(64)}`,
+        nested: { sourceSessionKey: "nested-secret" },
+        apiKey: "must-not-leak",
+      } as never,
+    );
+    await recorder.flush();
+
+    expect(events[0]?.data).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      prompt: "hello",
+      imagesCount: 0,
+    });
+    expect(events[1]?.data).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-2",
+      prompt: "hello again",
+      imagesCount: 0,
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:sender:main",
+        sourceTool: "sessions_send",
+      },
+    });
   });
 });

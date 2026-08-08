@@ -13,7 +13,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
-import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptTrajectoryRecorder,
+} from "./embedded-agent-runner/run/types.js";
 import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
 import type {
   BlockReplyChunking,
@@ -140,5 +143,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * startup metadata snapshot.
    */
   trustedLocalMediaToolNames?: ReadonlySet<string>;
+  /**
+   * Mirrors tool stream events into the attempt trajectory. Native runs pass the
+   * attempt recorder; Codex and cloud-worker harnesses record from their own
+   * seams and never pass one.
+   */
+  trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   internalEvents?: AgentInternalEvent[];
 };

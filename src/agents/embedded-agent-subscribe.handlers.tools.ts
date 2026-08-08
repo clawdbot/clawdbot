@@ -1133,16 +1133,25 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
+    const toolStartEventData = {
+      phase: "start",
+      name: toolName,
+      toolCallId,
+      args: sanitizeToolArgs(args) as Record<string, unknown>,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    };
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
-        toolCallId,
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: toolStartEventData,
+    });
+    // Persisted rows use the canonical `arguments` field the trajectory export
+    // consumes (markInvokedSkills); the live tool stream keeps its `args` contract.
+    ctx.params.trajectoryRecorder?.recordEvent("tool.call", {
+      phase: "start",
+      name: toolName,
+      toolCallId,
+      arguments: toolStartEventData.args,
     });
     const itemData: AgentItemEventData = {
       itemId: buildToolItemId(toolCallId),
@@ -1160,13 +1169,7 @@ export function handleToolExecutionStart(
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
-        toolCallId,
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: toolStartEventData,
     });
 
     if (isExecToolName(toolName)) {
@@ -1645,19 +1648,25 @@ export async function handleToolExecutionEnd(
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
+  const toolResultEventData = {
+    phase: "result",
+    name: toolName,
+    toolCallId,
+    meta,
+    isError: isToolError,
+    result: eventResult,
+    ...(toolErrorSummary ? { toolErrorSummary } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  };
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      result: eventResult,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    },
+    data: toolResultEventData,
+  });
+  ctx.params.trajectoryRecorder?.recordToolResult({
+    ...toolResultEventData,
+    isError: observerIsError,
+    success: !observerIsError,
   });
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);

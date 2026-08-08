@@ -74,7 +74,12 @@ export function recordWorkerLiveTrajectoryEvent(
   let recorded = false;
   if (event.kind === "tool") {
     if (event.payload.phase === "start") {
-      recorder.recordEvent("tool.call", data);
+      // Schema-v1 worker rows already expose `args`; retain it for existing readers
+      // while adding the canonical `arguments` field consumed by trajectory export.
+      recorder.recordEvent("tool.call", {
+        ...data,
+        ...(data.args === undefined ? {} : { arguments: data.args }),
+      });
       recorded = true;
     } else if (event.payload.phase === "result") {
       recorder.recordEvent("tool.result", {
