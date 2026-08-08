@@ -4348,7 +4348,6 @@ export const en: TranslationMap = {
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
     },
-    outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     sessionRoute: {
       chooseTitle: "Choose a session",

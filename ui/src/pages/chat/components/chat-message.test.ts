@@ -1670,8 +1670,10 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")?.textContent?.trim()).toBe(
-      "5.5k output tokens",
+      "5.5k tokens",
     );
+    // Streaming tokens replace the whimsical phrase: one liveness signal at a time.
+    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("relabels the working indicator while the run waits for approval", () => {
