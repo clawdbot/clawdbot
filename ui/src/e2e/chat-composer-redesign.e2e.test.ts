@@ -587,33 +587,31 @@ suite.define(() => {
   });
 
   it("explains model filtering in replace mode", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
-    const gateway = await installMockGateway(page, {
-      models,
-      methodResponses: {
-        "chat.startup": {
-          agentsList: {
-            agents: [{ id: "main", name: "OpenClaw" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
+      const gateway = await installMockGateway(page, {
+        models,
+        methodResponses: {
+          "chat.startup": {
+            agentsList: {
+              agents: [{ id: "main", name: "OpenClaw" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            messages: [],
+            metadata: {
+              catalogMode: "replace",
+              commands: [],
+              models,
+            },
+            sessionId: "control-ui-e2e-session",
+            thinkingLevel: null,
           },
-          messages: [],
-          metadata: {
-            catalogMode: "replace",
-            commands: [],
-            models,
-          },
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
         },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
@@ -625,9 +623,7 @@ suite.define(() => {
       await expect
         .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
         .toBe("/settings/model-providers");
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
