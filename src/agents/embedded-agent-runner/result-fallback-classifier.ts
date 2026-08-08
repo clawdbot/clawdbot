@@ -291,9 +291,12 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
   // A completion that returns only empty/whitespace text payloads is the same
-  // silent drop as no payloads at all.
+  // silent drop as no payloads at all. Reasoning payloads are invisible to the
+  // shared visibility test, so their text must not make a mixed
+  // reasoning-plus-blank completion look like a visible reply.
+  const nonReasoningPayloads = payloads.filter((payload) => payload.isReasoning !== true);
   if (
-    payloads.every(
+    nonReasoningPayloads.every(
       (payload) =>
         !hasNonTextVisiblePayloadContent(payload) &&
         !(typeof payload?.text === "string" && payload.text.trim().length > 0),

@@ -503,6 +503,51 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies mixed reasoning-plus-blank completions as fallback-worthy (#120148)", () => {
+    // A result such as [{ isReasoning: true, text: "thinking" }, { text: " " }]
+    // carries no user-visible reply: reasoning text is invisible to the shared
+    // visibility test, and the remaining payload is blank. Counting the
+    // reasoning text as visible would silently end the turn on visible
+    // channels.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads: [{ isReasoning: true, text: "thinking about the answer" }, { text: "   " }],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "   ",
+          finalAssistantVisibleText: "   ",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "zai/glm-5.2 ended without a visible assistant reply",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("keeps mixed reasoning-plus-visible completions successful (#120148)", () => {
+    // The reasoning payload is invisible, but a sibling payload with visible
+    // text is a real reply, so the run must not be fallback-eligible.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "Here is the answer",
+          finalAssistantVisibleText: "Here is the answer",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("keeps deliberate silent replies successful for non-GPT models (#120132)", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "zai",
