@@ -3,6 +3,7 @@ import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
+import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
 import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
@@ -29,6 +30,7 @@ const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]",
 // through clone(), so a single large (or hostile, effectively endless) provider
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
+const CAPTURE_RESPONSE_BODY_CHUNK_TIMEOUT_MS = 30_000;
 
 type CapturedResponseBodyResult =
   | { status: "captured"; buffer: Buffer }
@@ -47,6 +49,7 @@ type CapturedResponseBodyResult =
 async function readCapturedResponseBodyBounded(
   response: Response,
   maxBytes: number,
+  pendingCapture?: PendingHttpCapture,
 ): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
   const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
@@ -58,12 +61,23 @@ async function readCapturedResponseBodyBounded(
       : { status: "unavailable" };
   }
   const reader = body.getReader();
+  if (pendingCapture) {
+    pendingCapture.reader = reader;
+  }
   const chunks: Buffer[] = [];
   let total = 0;
   let truncated = false;
+  let stalled = false;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunkWithIdleTimeout(
+        reader,
+        CAPTURE_RESPONSE_BODY_CHUNK_TIMEOUT_MS,
+        ({ chunkTimeoutMs }) => {
+          stalled = true;
+          return new Error(`Debug proxy capture response stalled for ${chunkTimeoutMs}ms`);
+        },
+      );
       if (done) {
         break;
       }
@@ -77,6 +91,11 @@ async function readCapturedResponseBodyBounded(
       chunks.push(Buffer.from(value));
       total += value.length;
     }
+  } catch (error) {
+    if (stalled) {
+      return { status: "unavailable" };
+    }
+    throw error;
   } finally {
     if (truncated) {
       void reader.cancel().catch(() => undefined);
@@ -117,6 +136,24 @@ type DebugProxyCaptureStoreLike = Pick<
   ReturnType<typeof getDebugProxyCaptureStore>,
   "upsertSession" | "endSession" | "recordEvent"
 >;
+
+type PendingHttpCapture = {
+  active: boolean;
+  reader?: ReadableStreamDefaultReader<Uint8Array>;
+  recordUnavailable: () => void;
+};
+
+type ActiveDebugProxyCaptureSession = {
+  store: DebugProxyCaptureStoreLike;
+  deps: DebugProxyCaptureRuntimeDeps;
+  finalizeOnExit: () => void;
+};
+
+const pendingHttpCapturesByStore = new WeakMap<
+  DebugProxyCaptureStoreLike,
+  Set<PendingHttpCapture>
+>();
+const activeDebugProxyCaptureSessions = new Map<string, ActiveDebugProxyCaptureSession>();
 
 export type DebugProxyCaptureRuntimeDeps = {
   getStore?: () => DebugProxyCaptureStoreLike;
@@ -404,14 +441,37 @@ export function initializeDebugProxyCapture(
   if (!settings.enabled) {
     return;
   }
-  resolveRuntimeDeps(deps).getStore().upsertSession({
+  const session = {
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
     sourceScope: "openclaw",
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
-  });
+  } satisfies Parameters<DebugProxyCaptureStoreLike["upsertSession"]>[0];
+  const activeSession = activeDebugProxyCaptureSessions.get(settings.sessionId);
+  if (activeSession) {
+    activeSession.store.upsertSession(session);
+    installDebugProxyGlobalFetchPatch(settings, deps);
+    return;
+  }
+
+  const finalizeOnExit = () => finalizeDebugProxyCapture(settings, deps);
+  // Capture owns terminal writes, so it must run before a store's generic exit
+  // close even when another CLI seam already created and registered that store.
+  process.prependOnceListener("exit", finalizeOnExit);
+  try {
+    const store = resolveRuntimeDeps(deps).getStore();
+    store.upsertSession(session);
+    activeDebugProxyCaptureSessions.set(settings.sessionId, {
+      store,
+      deps,
+      finalizeOnExit,
+    });
+  } catch (error) {
+    process.removeListener("exit", finalizeOnExit);
+    throw error;
+  }
   installDebugProxyGlobalFetchPatch(settings, deps);
 }
 
@@ -419,15 +479,31 @@ export function initializeDebugProxyCapture(
 // the cached store, preventing later normal requests from being captured.
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
+  _deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
   const settings = resolved ?? resolveDebugProxySettings();
   if (!settings.enabled) {
     return;
   }
-  const runtime = resolveRuntimeDeps(deps);
-  runtime.getStore().endSession(settings.sessionId);
-  uninstallDebugProxyGlobalFetchPatch(deps);
+  const activeSession = activeDebugProxyCaptureSessions.get(settings.sessionId);
+  if (!activeSession) {
+    return;
+  }
+  activeDebugProxyCaptureSessions.delete(settings.sessionId);
+  process.removeListener("exit", activeSession.finalizeOnExit);
+  const runtime = resolveRuntimeDeps(activeSession.deps);
+  const store = activeSession.store;
+  const pendingCaptures = pendingHttpCapturesByStore.get(store);
+  if (pendingCaptures) {
+    for (const capture of pendingCaptures) {
+      capture.active = false;
+      void capture.reader?.cancel().catch(() => undefined);
+      capture.recordUnavailable();
+    }
+    pendingHttpCapturesByStore.delete(store);
+  }
+  store.endSession(settings.sessionId);
+  uninstallDebugProxyGlobalFetchPatch(activeSession.deps);
   runtime.closeStore();
 }
 
@@ -541,12 +617,31 @@ export function captureHttpExchange(
     recordResponseMetadataOnly("too-large");
     return;
   }
-  void readCapturedResponseBodyBounded(params.response, MAX_CAPTURED_RESPONSE_BODY_BYTES)
+  const pendingCapture: PendingHttpCapture = {
+    active: true,
+    recordUnavailable: () => recordResponseMetadataOnly("unavailable"),
+  };
+  let pendingCaptures = pendingHttpCapturesByStore.get(store);
+  if (!pendingCaptures) {
+    pendingCaptures = new Set();
+    pendingHttpCapturesByStore.set(store, pendingCaptures);
+  }
+  pendingCaptures.add(pendingCapture);
+  void readCapturedResponseBodyBounded(
+    params.response,
+    MAX_CAPTURED_RESPONSE_BODY_BYTES,
+    pendingCapture,
+  )
     .then((result) => {
+      if (!pendingCapture.active) {
+        return;
+      }
       if (result.status !== "captured") {
         // The body either exceeded the cap or offered no bounded streaming path.
         // Preserve the exchange as metadata instead of allocating the whole body.
         recordResponseMetadataOnly(result.status);
+        pendingCapture.active = false;
+        pendingCaptures.delete(pendingCapture);
         return;
       }
       const responsePayload = runtime.persistEventPayload(store, {
@@ -570,21 +665,32 @@ export function captureHttpExchange(
         metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
         ...responsePayload,
       });
+      pendingCapture.active = false;
+      pendingCaptures.delete(pendingCapture);
     })
     .catch((error: unknown) => {
-      store.recordEvent({
-        ...createHttpCaptureEventBase({
-          settings,
-          rawUrl: captureUrl,
-          url,
-          transport: params.transport,
-          direction: "local",
-          kind: "error",
-          flowId,
-          method: params.method,
-        }),
-        errorText: redactCaptureText(error instanceof Error ? error.message : String(error)),
-      });
+      if (!pendingCapture.active) {
+        return;
+      }
+      pendingCapture.active = false;
+      pendingCaptures.delete(pendingCapture);
+      try {
+        store.recordEvent({
+          ...createHttpCaptureEventBase({
+            settings,
+            rawUrl: captureUrl,
+            url,
+            transport: params.transport,
+            direction: "local",
+            kind: "error",
+            flowId,
+            method: params.method,
+          }),
+          errorText: redactCaptureText(error instanceof Error ? error.message : String(error)),
+        });
+      } catch {
+        // Diagnostic capture must not surface a second failed store write.
+      }
     });
 }
 

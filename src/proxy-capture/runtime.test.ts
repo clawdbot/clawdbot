@@ -1,4 +1,7 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -10,6 +13,7 @@ import {
   initializeDebugProxyCapture,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
+import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 type StoreCall = { name: string; args: unknown[] };
 
@@ -482,6 +486,269 @@ describe("debug proxy runtime", () => {
     expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
     expect(response).not.toHaveProperty("dataText");
     expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it("finalizes stalled response clones after their caller abandons an open producer", async () => {
+    vi.useFakeTimers();
+    const cancelProducer = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("malformed media response"));
+        },
+        cancel: cancelProducer,
+      }),
+      { headers: { "content-type": "image/png" } },
+    );
+
+    try {
+      initializeDebugProxyCapture("test", settings, deps);
+      captureHttpExchange(
+        {
+          url: "https://media.example.test/stalled",
+          method: "GET",
+          response,
+        },
+        settings,
+        deps,
+      );
+      void response.body?.cancel("caller rejected malformed media").catch(() => undefined);
+
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(cancelProducer).toHaveBeenCalledOnce();
+      const recorded = events.filter((event) => event.kind === "response");
+      expect(recorded).toHaveLength(1);
+      expect(JSON.parse(String(recorded[0]?.metaJson))).toMatchObject({
+        bodyCapture: "unavailable",
+      });
+      expect(recorded[0]).not.toHaveProperty("dataText");
+      expect(events.some((event) => event.kind === "error")).toBe(false);
+    } finally {
+      finalizeDebugProxyCapture(settings, deps);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { caller: "CLI", precreateStore: false },
+    { caller: "proxy CLI", precreateStore: true },
+  ])(
+    "finalizes stalled captures before the $caller cached store closes on process exit",
+    async ({ precreateStore }) => {
+      vi.useFakeTimers();
+      closeDebugProxyCaptureStore();
+      const existingExitListeners = new Set(process.rawListeners("exit"));
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capture-finalize-"));
+      const databasePath = path.join(directory, "capture.sqlite");
+      const blobDirectory = path.join(directory, "blobs");
+      const getStore = vi.fn(() => getDebugProxyCaptureStore(databasePath, blobDirectory));
+      const realDeps: DebugProxyCaptureRuntimeDeps = {
+        ...deps,
+        getStore,
+        closeStore: closeDebugProxyCaptureStore,
+      };
+      const realSettings = {
+        ...settings,
+        sessionId: "closed-store-stalled-capture",
+        dbPath: databasePath,
+        blobDir: blobDirectory,
+      };
+      const cancelProducer = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("stalled response"));
+          },
+          cancel: cancelProducer,
+        }),
+        { headers: { "content-type": "image/png" } },
+      );
+      const unhandled: unknown[] = [];
+      const rememberUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", rememberUnhandled);
+
+      try {
+        if (precreateStore) {
+          getStore();
+        }
+        initializeDebugProxyCapture("test", realSettings, realDeps);
+        const sqliteStore = getStore();
+        const recordEvent = vi.spyOn(sqliteStore, "recordEvent");
+        const closeStore = vi.spyOn(sqliteStore, "close");
+        captureHttpExchange(
+          { url: "https://media.example.test/finalized", method: "GET", response },
+          realSettings,
+          realDeps,
+        );
+        void response.body?.cancel("caller stopped").catch(() => undefined);
+
+        // run-main installs its finalizer after initialization. Invoke the actual
+        // registered once wrappers in Node's snapshot/FIFO order without exiting.
+        process.once("exit", () => finalizeDebugProxyCapture(realSettings, realDeps));
+        const exitListeners = process
+          .rawListeners("exit")
+          .filter((listener) => !existingExitListeners.has(listener));
+        expect(exitListeners.length).toBeGreaterThanOrEqual(2);
+        for (const listener of exitListeners) {
+          Reflect.apply(listener, process, [0]);
+        }
+
+        expect(sqliteStore.isClosed).toBe(true);
+        expect(recordEvent).toHaveBeenCalledTimes(2);
+        expect(recordEvent.mock.calls[1]?.[0]).toMatchObject({
+          kind: "response",
+          metaJson: expect.stringContaining('"bodyCapture":"unavailable"'),
+        });
+        expect(recordEvent.mock.invocationCallOrder[1]).toBeLessThan(
+          closeStore.mock.invocationCallOrder[0]!,
+        );
+        expect(closeStore).toHaveBeenCalledOnce();
+        expect(new Set(getStore.mock.results.map((result) => result.value))).toEqual(
+          new Set([sqliteStore]),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cancelProducer).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+
+        initializeDebugProxyCapture("restarted", realSettings, realDeps);
+        const restartedStore = getStore();
+        expect(restartedStore).not.toBe(sqliteStore);
+        const storageTimerCount = vi.getTimerCount();
+        captureHttpExchange(
+          {
+            url: "https://media.example.test/restarted",
+            method: "GET",
+            response: new Response("restarted capture"),
+          },
+          realSettings,
+          realDeps,
+        );
+        await vi.advanceTimersByTimeAsync(30_001);
+
+        expect(
+          restartedStore
+            .getSessionEvents(realSettings.sessionId, 10)
+            .map((event) => event.kind)
+            .toSorted((left, right) => left.localeCompare(right)),
+        ).toEqual(["request", "request", "response", "response"]);
+        expect(vi.getTimerCount()).toBe(storageTimerCount);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", rememberUnhandled);
+        finalizeDebugProxyCapture(realSettings, realDeps);
+        for (const listener of process.rawListeners("exit")) {
+          if (!existingExitListeners.has(listener)) {
+            process.removeListener("exit", listener);
+          }
+        }
+        closeDebugProxyCaptureStore();
+        fs.rmSync(directory, { recursive: true, force: true });
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("leaves an active caller response readable when its capture clone stalls", async () => {
+    vi.useFakeTimers();
+    const cancelProducer = vi.fn();
+    let producer: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          producer = controller;
+          controller.enqueue(encoder.encode("first "));
+        },
+        cancel: cancelProducer,
+      }),
+      { headers: { "content-type": "text/plain" } },
+    );
+
+    try {
+      initializeDebugProxyCapture("test", settings, deps);
+      captureHttpExchange(
+        {
+          url: "https://media.example.test/active",
+          method: "GET",
+          response,
+        },
+        settings,
+        deps,
+      );
+
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(cancelProducer).not.toHaveBeenCalled();
+      const recorded = events.find((event) => event.kind === "response");
+      expect(JSON.parse(String(recorded?.metaJson))).toMatchObject({
+        bodyCapture: "unavailable",
+      });
+
+      producer?.enqueue(encoder.encode("second"));
+      producer?.close();
+      await expect(response.text()).resolves.toBe("first second");
+      expect(cancelProducer).not.toHaveBeenCalled();
+    } finally {
+      finalizeDebugProxyCapture(settings, deps);
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves and redacts genuine cloned response read failures", async () => {
+    const secret = "capture-stalled-reader-secret";
+    registerSecretValueForRedaction(secret);
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error(`upstream failed: ${secret}`));
+        },
+      }),
+    );
+
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      { url: "https://media.example.test/failed", method: "GET", response },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const recorded = events.find((event) => event.kind === "error");
+    expect(recorded?.errorText).toBe("upstream failed: [REDACTED]");
+    expect(events.some((event) => event.kind === "response")).toBe(false);
+  });
+
+  it("records redacted payload persistence errors before retiring the capture", async () => {
+    const secret = "capture-payload-persistence-secret";
+    registerSecretValueForRedaction(secret);
+    const failingDeps: DebugProxyCaptureRuntimeDeps = {
+      ...deps,
+      persistEventPayload(captureStore, payload) {
+        if (Buffer.isBuffer(payload.data)) {
+          throw new Error(`capture payload failed: ${secret}`);
+        }
+        return deps.persistEventPayload!(captureStore, payload);
+      },
+    };
+
+    initializeDebugProxyCapture("test", settings, failingDeps);
+    captureHttpExchange(
+      {
+        url: "https://media.example.test/persist-failed",
+        method: "GET",
+        response: new Response("captured"),
+      },
+      settings,
+      failingDeps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, failingDeps);
+
+    const recorded = events.find((event) => event.kind === "error");
+    expect(recorded?.errorText).toBe("capture payload failed: [REDACTED]");
+    expect(events.some((event) => event.kind === "response")).toBe(false);
   });
 
   it("captures small chunked bodies normally (under the cap)", async () => {
