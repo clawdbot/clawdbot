@@ -188,6 +188,7 @@ export async function detachConversation(
   };
   if (identity && expectedThreadId) {
     return await withCodexConversationThreadActivity(identity.bindingId, async () => {
+      let detachedPublicConversation: string | undefined;
       const retired = await retireCodexConversationThreadBinding({
         bindingStore: deps.bindingStore,
         identity,
@@ -196,13 +197,16 @@ export async function detachConversation(
         // The source session owns ephemeral tracking; destination channel
         // session keys do not describe how this subscription was created.
         ...(isIncognitoSessionKey(sourceSessionKey) ? { allowUntracked: true } : {}),
+        afterClear: async () => {
+          // The owner restores the exact native row if public detach fails;
+          // an attached conversation then resumes its original thread.
+          detachedPublicConversation = await detachPublicConversation();
+        },
       });
       if (!retired) {
         return "This Codex conversation binding changed while detaching; try again.";
       }
-      // Keep public detach on the same owner lane; releasing it between native
-      // cleanup and unbind lets queued inbound work recreate the old binding.
-      return await detachPublicConversation();
+      return detachedPublicConversation!;
     });
   }
   return await detachPublicConversation();

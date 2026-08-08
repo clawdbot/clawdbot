@@ -152,6 +152,7 @@ export async function retireCodexConversationThreadBinding(params: {
   expectedThreadId?: string;
   expectedStartId?: string;
   allowUntracked?: boolean;
+  afterClear?: () => Promise<void>;
 }): Promise<boolean> {
   const expected = await params.bindingStore.read(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
@@ -170,9 +171,35 @@ export async function retireCodexConversationThreadBinding(params: {
     await releaseCodexAppServerBindingSubscription(current, {
       allowUntracked: params.allowUntracked,
     });
-    return await params.bindingStore.mutate(params.identity, {
+    const cleared = await params.bindingStore.mutate(params.identity, {
       kind: "clear",
       threadId: current.threadId,
     });
+    if (!cleared || !params.afterClear) {
+      return cleared;
+    }
+    try {
+      await params.afterClear();
+      return true;
+    } catch (error) {
+      try {
+        // Public binding storage commits separately. Restore its exact native
+        // owner on failure without ever overwriting a replacement generation.
+        const restored = await params.bindingStore.mutate(params.identity, {
+          kind: "set",
+          binding: current,
+          if: { kind: "absent" },
+        });
+        if (!restored) {
+          throw new Error("the previous Codex binding generation could not be restored");
+        }
+      } catch (restorationError) {
+        throw new Error(
+          `Codex conversation detachment failed and native thread ${current.threadId} could not be restored; run /codex resume ${current.threadId} to recover it`,
+          { cause: new AggregateError([error, restorationError]) },
+        );
+      }
+      throw error;
+    }
   });
 }

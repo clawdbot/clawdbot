@@ -7,6 +7,7 @@ import {
   resolveDefaultAgentDir,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -41,6 +42,7 @@ import type {
   CodexPluginsConfigBlock,
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
+import { codexConversationBindingRuntime } from "./conversation-binding.js";
 
 type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
 
@@ -5018,54 +5020,84 @@ describe("codex command", () => {
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const ownershipOrder: string[] = [];
-    const clearBinding = vi.fn(async () => {
-      ownershipOrder.push("native");
-      return true;
-    });
+    const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const releaseNativeThread = vi
+      .spyOn(harness.client, "request")
+      .mockImplementation(async (method) => {
+        if (method !== "thread/unsubscribe") {
+          throw new Error(`unexpected Codex method ${method}`);
+        }
+        ownershipOrder.push("native-release");
+        return {} as never;
+      });
+    await retainCodexAppServerLiveThread(harness.client, "thread-detached");
+    const clearBinding = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        ownershipOrder.push("native-clear");
+        return await testCodexAppServerBindingStore.mutate(...args);
+      },
+    );
     const detachConversationBinding = vi.fn(async () => {
       ownershipOrder.push("public");
       return { removed: true };
     });
-    await writeTestBinding(
-      { kind: "conversation", bindingId: "binding-data-1" },
-      { threadId: "thread-detached", cwd: "/repo" },
-    );
-
-    await expect(
-      handleCodexCommand(
-        createContext("detach", sessionFile, {
-          detachConversationBinding,
-          getCurrentConversationBinding: async () => ({
-            bindingId: "binding-1",
-            pluginId: "codex",
-            pluginRoot: "/plugin",
-            channel: "test",
-            accountId: "default",
-            conversationId: "conversation",
-            boundAt: 1,
-            data: {
-              kind: "codex-app-server-session",
-              version: 2,
-              bindingId: "binding-data-1",
-              workspaceDir: "/repo",
-            },
-          }),
-        }),
-        {
-          deps: createDeps({
-            bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
-          }),
-        },
-      ),
-    ).resolves.toEqual({
-      text: "Detached this conversation from Codex.",
+    await writeTestBinding(identity, {
+      threadId: "thread-detached",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
     });
-    expect(detachConversationBinding).toHaveBeenCalled();
-    expect(clearBinding).toHaveBeenCalledWith(
-      { kind: "conversation", bindingId: "binding-data-1" },
-      { kind: "clear", threadId: "thread-detached" },
-    );
-    expect(ownershipOrder).toEqual(["native", "public"]);
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
+
+    try {
+      await expect(
+        handleCodexCommand(
+          createContext("detach", sessionFile, {
+            detachConversationBinding,
+            getCurrentConversationBinding: async () => ({
+              bindingId: "binding-1",
+              pluginId: "codex",
+              pluginRoot: "/plugin",
+              channel: "test",
+              accountId: "default",
+              conversationId: "conversation",
+              boundAt: 1,
+              data: {
+                kind: "codex-app-server-session",
+                version: 2,
+                bindingId: "binding-data-1",
+                workspaceDir: "/repo",
+              },
+            }),
+          }),
+          {
+            deps: createDeps({
+              bindingStore: { ...testCodexAppServerBindingStore, mutate: clearBinding },
+            }),
+          },
+        ),
+      ).resolves.toEqual({
+        text: "Detached this conversation from Codex.",
+      });
+      expect(detachConversationBinding).toHaveBeenCalled();
+      expect(clearBinding).toHaveBeenCalledWith(identity, {
+        kind: "clear",
+        threadId: "thread-detached",
+      });
+      expect(releaseNativeThread).toHaveBeenCalledWith(
+        "thread/unsubscribe",
+        { threadId: "thread-detached" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      expect(ownershipOrder).toEqual(["native-release", "native-clear", "public"]);
+    } finally {
+      retainClient.mockRestore();
+      harness.client.close();
+    }
   });
 
   it.each([
@@ -5163,43 +5195,367 @@ describe("codex command", () => {
 
   it("preserves the public conversation binding when native retirement fails", async () => {
     const identity = { kind: "conversation" as const, bindingId: "binding-data-1" };
-    await writeTestBinding(identity, { threadId: "thread-detached", cwd: "/repo" });
-    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
-    const mutate = vi.fn(async () => {
-      throw new Error("Codex native thread subscription could not be released");
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    await writeTestBinding(identity, {
+      threadId: "thread-detached",
+      clientId: harness.client.getInstanceId(),
+      cwd: "/repo",
     });
+    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+    const releaseNativeThread = vi
+      .spyOn(harness.client, "request")
+      .mockImplementation(async (method) => {
+        if (method !== "thread/unsubscribe") {
+          throw new Error(`unexpected Codex method ${method}`);
+        }
+        throw new Error("Codex native thread subscription could not be released");
+      });
+    await retainCodexAppServerLiveThread(harness.client, "thread-detached");
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
 
-    const result = await handleCodexCommand(
-      createContext("detach", undefined, {
-        detachConversationBinding,
-        getCurrentConversationBinding: async () => ({
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: "/plugin",
-          channel: "test",
-          accountId: "default",
-          conversationId: "conversation",
-          boundAt: 1,
-          data: {
-            kind: "codex-app-server-session",
-            version: 2,
-            bindingId: identity.bindingId,
-            workspaceDir: "/repo",
+    try {
+      const result = await handleCodexCommand(
+        createContext("detach", undefined, {
+          detachConversationBinding,
+          getCurrentConversationBinding: async () => ({
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: "/plugin",
+            channel: "test",
+            accountId: "default",
+            conversationId: "conversation",
+            boundAt: 1,
+            data: {
+              kind: "codex-app-server-session",
+              version: 2,
+              bindingId: identity.bindingId,
+              workspaceDir: "/repo",
+            },
+          }),
+        }),
+        { deps: createDeps() },
+      );
+
+      expect(result.text).toContain("native thread subscription could not be released");
+      expect(releaseNativeThread).toHaveBeenCalledOnce();
+      expect(detachConversationBinding).not.toHaveBeenCalled();
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: "thread-detached",
+        clientId: harness.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-detached"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      retainClient.mockRestore();
+      harness.client.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "returns false",
+      throws: false,
+      message: "changed while detaching",
+    },
+    {
+      label: "throws",
+      throws: true,
+      message: "native durable binding clear failed",
+    },
+  ])(
+    "preserves the public conversation when durable native clear $label",
+    async ({ throws, message }) => {
+      const identity = { kind: "conversation" as const, bindingId: "binding-clear-failure" };
+      const harness = createClientHarness();
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+      const releaseNativeThread = vi
+        .spyOn(harness.client, "request")
+        .mockResolvedValue({} as never);
+      await retainCodexAppServerLiveThread(harness.client, "thread-clear-failure");
+      const originalBinding = {
+        threadId: "thread-clear-failure",
+        clientId: harness.client.getInstanceId(),
+        cwd: tempDir,
+        conversationStartId: "start-clear-failure",
+      } satisfies CodexAppServerThreadBinding;
+      await writeTestBinding(identity, originalBinding);
+      const mutate = vi.fn(
+        async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+          if (args[1].kind === "clear") {
+            if (throws) {
+              throw new Error("native durable binding clear failed");
+            }
+            return false;
+          }
+          return await testCodexAppServerBindingStore.mutate(...args);
+        },
+      );
+      const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockReturnValue({ client: harness.client, release: vi.fn() });
+
+      try {
+        const result = await handleCodexCommand(
+          createContext("detach", undefined, {
+            detachConversationBinding,
+            getCurrentConversationBinding: async () => ({
+              bindingId: "binding-public-clear-failure",
+              pluginId: "codex",
+              pluginRoot: tempDir,
+              channel: "test",
+              accountId: "default",
+              conversationId: "conversation",
+              boundAt: 1,
+              data: {
+                kind: "codex-app-server-session",
+                version: 2,
+                bindingId: identity.bindingId,
+                workspaceDir: tempDir,
+                start: { id: originalBinding.conversationStartId },
+              },
+            }),
+          }),
+          {
+            deps: createDeps({
+              bindingStore: { ...testCodexAppServerBindingStore, mutate },
+            }),
           },
+        );
+
+        expect(result.text).toContain(message);
+        expect(releaseNativeThread).toHaveBeenCalledOnce();
+        expect(mutate).toHaveBeenCalledOnce();
+        expect(detachConversationBinding).not.toHaveBeenCalled();
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject(
+          originalBinding,
+        );
+      } finally {
+        retainClient.mockRestore();
+        harness.client.close();
+      }
+    },
+  );
+
+  it("resumes the original native thread after public conversation detachment fails", async () => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-detach-recovery" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const operations: string[] = [];
+    const request = vi
+      .spyOn(harness.client, "request")
+      .mockImplementation(async (method, params) => {
+        operations.push(method);
+        if (method === "thread/unsubscribe") {
+          return {} as never;
+        }
+        if (method === "thread/resume") {
+          return createThreadResumeResponse({
+            threadId: "thread-original-context",
+            cwd: tempDir,
+          }) as never;
+        }
+        if (method === "turn/start") {
+          queueMicrotask(() => {
+            harness.send({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-original-context",
+                turn: {
+                  id: "turn-original-context",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "answer", text: "Original context kept" }],
+                },
+              },
+            });
+          });
+          return { turn: { id: "turn-original-context" } } as never;
+        }
+        throw new Error(`unexpected Codex method ${method}: ${JSON.stringify(params)}`);
+      });
+    await retainCodexAppServerLiveThread(harness.client, "thread-original-context");
+    const originalBinding = {
+      threadId: "thread-original-context",
+      clientId: harness.client.getInstanceId(),
+      cwd: tempDir,
+      conversationStartId: "start-original-context",
+      historyCoveredThrough: "2026-01-01T00:00:00.000Z",
+    } satisfies CodexAppServerThreadBinding;
+    await writeTestBinding(identity, originalBinding);
+    const publicBinding = {
+      bindingId: "binding-public-original-context",
+      pluginId: "codex",
+      pluginRoot: tempDir,
+      channel: "test",
+      accountId: "default",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session" as const,
+        version: 2 as const,
+        bindingId: identity.bindingId,
+        workspaceDir: tempDir,
+        start: { id: originalBinding.conversationStartId },
+      },
+    };
+    const detachConversationBinding = vi.fn(async () => {
+      throw new Error("public conversation binding store write failed");
+    });
+    const mutate = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) =>
+        await testCodexAppServerBindingStore.mutate(...args),
+    );
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
+    const acquireClient = vi
+      .spyOn(sharedClientRuntime, "getLeasedSharedCodexAppServerClient")
+      .mockResolvedValue(harness.client);
+    const resolvePublic = vi
+      .spyOn(getSessionBindingService(), "resolveByConversation")
+      .mockReturnValue({ bindingId: publicBinding.bindingId } as never);
+
+    try {
+      const result = await handleCodexCommand(
+        createContext("detach", undefined, {
+          detachConversationBinding,
+          getCurrentConversationBinding: async () => publicBinding,
         }),
-      }),
-      {
-        deps: createDeps({
-          bindingStore: { ...testCodexAppServerBindingStore, mutate },
-        }),
+        {
+          deps: createDeps({
+            bindingStore: { ...testCodexAppServerBindingStore, mutate },
+          }),
+        },
+      );
+
+      expect(result.text).toContain("public conversation binding store write failed");
+      expect(operations).toEqual(["thread/unsubscribe"]);
+      expect(mutate.mock.calls.map(([, mutation]) => mutation.kind)).toEqual(["clear", "set"]);
+      expect(mutate).toHaveBeenLastCalledWith(identity, {
+        kind: "set",
+        binding: originalBinding,
+        if: { kind: "absent" },
+      });
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject(
+        originalBinding,
+      );
+
+      await expect(
+        codexConversationBindingRuntime.handleInboundClaim(
+          {
+            content: "continue original task",
+            bodyForAgent: "continue original task",
+            channel: "test",
+            isGroup: false,
+            commandAuthorized: true,
+            senderIsOwner: true,
+          },
+          { channelId: "test", pluginBinding: publicBinding },
+          { bindingStore: testCodexAppServerBindingStore, timeoutMs: 500 },
+        ),
+      ).resolves.toEqual({
+        handled: true,
+        reply: { text: "Original context kept" },
+      });
+      expect(operations).toEqual(["thread/unsubscribe", "thread/resume", "turn/start"]);
+      expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toMatchObject({
+        threadId: originalBinding.threadId,
+      });
+      expect(request.mock.calls.find(([method]) => method === "turn/start")?.[1]).toMatchObject({
+        threadId: originalBinding.threadId,
+        cwd: originalBinding.cwd,
+      });
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+        threadId: originalBinding.threadId,
+        conversationStartId: originalBinding.conversationStartId,
+        historyCoveredThrough: originalBinding.historyCoveredThrough,
+      });
+    } finally {
+      resolvePublic.mockRestore();
+      acquireClient.mockRestore();
+      retainClient.mockRestore();
+      harness.client.close();
+    }
+  });
+
+  it.each([
+    { label: "returns false", throws: false },
+    { label: "throws", throws: true },
+  ])("shows actionable thread recovery when public detach rollback $label", async ({ throws }) => {
+    const identity = { kind: "conversation" as const, bindingId: "binding-rollback-failure" };
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const releaseNativeThread = vi.spyOn(harness.client, "request").mockResolvedValue({} as never);
+    await retainCodexAppServerLiveThread(harness.client, "thread-rollback-failure");
+    await writeTestBinding(identity, {
+      threadId: "thread-rollback-failure",
+      clientId: harness.client.getInstanceId(),
+      cwd: tempDir,
+    });
+    const mutate = vi.fn(
+      async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        if (args[1].kind === "set") {
+          if (throws) {
+            throw new Error("native durable binding restore failed");
+          }
+          return false;
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
       },
     );
-
-    expect(result.text).toContain("native thread subscription could not be released");
-    expect(detachConversationBinding).not.toHaveBeenCalled();
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-      threadId: "thread-detached",
+    const detachConversationBinding = vi.fn(async () => {
+      throw new Error("public conversation binding store write failed");
     });
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const retainClient = vi
+      .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+      .mockReturnValue({ client: harness.client, release: vi.fn() });
+
+    try {
+      const result = await handleCodexCommand(
+        createContext("detach", undefined, {
+          detachConversationBinding,
+          getCurrentConversationBinding: async () => ({
+            bindingId: "binding-public-rollback-failure",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "test",
+            accountId: "default",
+            conversationId: "conversation",
+            boundAt: 1,
+            data: {
+              kind: "codex-app-server-session",
+              version: 2,
+              bindingId: identity.bindingId,
+              workspaceDir: tempDir,
+            },
+          }),
+        }),
+        {
+          deps: createDeps({
+            bindingStore: { ...testCodexAppServerBindingStore, mutate },
+          }),
+        },
+      );
+
+      expect(result.text).toContain("native thread thread-rollback-failure could not be restored");
+      expect(result.text).toContain("/codex resume thread-rollback-failure");
+      expect(releaseNativeThread).toHaveBeenCalledOnce();
+      expect(detachConversationBinding).toHaveBeenCalledOnce();
+      expect(mutate.mock.calls.map(([, mutation]) => mutation.kind)).toEqual(["clear", "set"]);
+      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toBeUndefined();
+    } finally {
+      retainClient.mockRestore();
+      harness.client.close();
+    }
   });
 
   it("rejects malformed detach commands before clearing bindings", async () => {
