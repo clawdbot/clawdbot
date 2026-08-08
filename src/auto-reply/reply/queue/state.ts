@@ -31,6 +31,7 @@ type FollowupQueueState = {
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
+  steerAcceptanceTail: Promise<boolean>;
   /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
   activeSummarySources: WeakSet<FollowupRun>;
   summaryElisions: Array<{
@@ -154,6 +155,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     droppedCount: 0,
     summaryLines: [],
     summarySources: [],
+    steerAcceptanceTail: Promise.resolve(true),
     activeSummarySources: new WeakSet(),
     summaryElisions: [],
     evictedSummaryCount: 0,

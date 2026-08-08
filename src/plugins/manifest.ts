@@ -11,7 +11,7 @@ import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
-import type { PluginManifest } from "./manifest-types.js";
+import type { PluginManifest, PluginManifestDoctorContract } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -209,6 +209,20 @@ export function loadPluginManifest(
   );
   const providers = normalizeTrimmedStringList(raw.providers);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
+  const doctorContract = rawDoctorContract
+    ? (Object.fromEntries(
+        [
+          "legacyConfigRules",
+          "normalizeCompatibilityConfig",
+          "resolveSessionStoreAgentIds",
+          "sessionRouteStateOwners",
+          "stateMigrations",
+        ].flatMap((key) =>
+          typeof rawDoctorContract[key] === "boolean" ? [[key, rawDoctorContract[key]]] : [],
+        ),
+      ) as PluginManifestDoctorContract)
+    : undefined;
   const manifestBeforeDashboard = {
     id,
     configSchema,
@@ -254,6 +268,7 @@ export function loadPluginManifest(
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
+    doctorContract,
     qaRunners: setupNormalizers.normalizeManifestQaRunners(raw.qaRunners),
   };
   const dashboardResult = setupNormalizers.normalizeManifestDashboard(raw.dashboard);

@@ -338,3 +338,93 @@ describe("gateway method authorization", () => {
     });
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+describe("sessions.archiveMany orchestration", () => {
+  it("starts canonical patches concurrently and preserves target order", async () => {
+    const originalPatch = sessionMutationHandlers["sessions.patch"];
+    if (!originalPatch) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const releases = Array.from({ length: 3 }, () => deferred<void>());
+    const patch = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
+      const index = Number(String(params.key).at(-1));
+      await releases[index]?.promise;
+      if (index === 1) {
+        respond(false, undefined, { code: "INVALID_REQUEST", message: "active run" });
+      } else {
+        respond(true, { ok: true });
+      }
+    });
+    sessionMutationHandlers["sessions.patch"] = patch;
+    const respond = vi.fn();
+    try {
+      const request = sessionMutationHandlers["sessions.archiveMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => ({ key: `agent:main:batch-${index}` })),
+          archived: true,
+        },
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as never);
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+      releases[2]!.resolve();
+      releases[1]!.resolve();
+      releases[0]!.resolve();
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          outcomes: [
+            { ok: true, key: "agent:main:batch-0" },
+            {
+              ok: false,
+              key: "agent:main:batch-1",
+              error: { code: "INVALID_REQUEST", message: "active run" },
+            },
+            { ok: true, key: "agent:main:batch-2" },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      sessionMutationHandlers["sessions.patch"] = originalPatch;
+    }
+  });
+
+  it("rejects logical aliases before dispatch", async () => {
+    const originalPatch = sessionMutationHandlers["sessions.patch"];
+    if (!originalPatch) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const patch = vi.fn<GatewayRequestHandler>();
+    sessionMutationHandlers["sessions.patch"] = patch;
+    const respond = vi.fn();
+    try {
+      await sessionMutationHandlers["sessions.archiveMany"]!({
+        params: {
+          targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
+          archived: true,
+        },
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "Duplicate target." }),
+      );
+      expect(patch).not.toHaveBeenCalled();
+    } finally {
+      sessionMutationHandlers["sessions.patch"] = originalPatch;
+    }
+  });
+});

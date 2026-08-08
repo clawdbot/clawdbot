@@ -554,6 +554,16 @@ CREATE TABLE IF NOT EXISTS device_auth_tokens (
 CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
   ON device_auth_tokens(updated_at_ms DESC, device_id, role);
 
+CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
+  gateway_scope TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  token TEXT NOT NULL,
+  scopes_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (gateway_scope, device_id, role)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
   package_name TEXT NOT NULL PRIMARY KEY,
   sort_order INTEGER NOT NULL,
@@ -2153,6 +2163,12 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
   origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  extension_id TEXT,
+  extension_format TEXT,
+  extension_detected_format TEXT,
+  extension_mapped_json TEXT,
+  extension_unavailable_json TEXT,
+  extension_adapter_identity TEXT,
   installed_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)

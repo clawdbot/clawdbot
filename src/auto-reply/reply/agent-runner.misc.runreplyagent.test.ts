@@ -165,7 +165,15 @@ vi.mock("../../runtime.js", () => {
 
 vi.mock("./queue.js", () => {
   return {
+    admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    parkSteerCandidate: vi.fn(() => ({
+      admit: async () => "steer",
+      accepted: vi.fn(),
+      fallback: vi.fn(),
+      consume: vi.fn(),
+    })),
+    resolveFollowupAbortSignal: vi.fn(() => undefined),
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
@@ -549,6 +557,8 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionId: "session",
       updatedAt: Date.now(),
       totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
     };
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
     compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
@@ -2771,6 +2781,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 1_000_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         compactionCount: 0,
       },
     });

@@ -3699,6 +3699,14 @@ describe("doctor health contributions", () => {
         shouldWrite: true,
       },
       {
+        name: "legacy protocol's broad parent opt-in",
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "enabled",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "supported",
+        },
+        shouldWrite: true,
+      },
+      {
         name: "falsey update env values",
         env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
         shouldWrite: true,

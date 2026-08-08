@@ -280,3 +280,89 @@ it("clears session suspension state between files", async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+it("disposes embedded-agent SQLite state before running the next file", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-lifecycle-runner-"));
+  const orderLogPath = path.join(root, "order.log");
+  const forceClearPath = path.join(
+    repoRoot,
+    "src",
+    "agents",
+    "embedded-agent-runner",
+    "runs.force-clear-terminal.test.ts",
+  );
+  const persistencePath = path.join(
+    repoRoot,
+    "src",
+    "agents",
+    "embedded-agent-runner",
+    "runs.persistence.test.ts",
+  );
+  try {
+    const embeddedConfigPath = JSON.stringify(
+      path.join(repoRoot, "test", "vitest", "vitest.agents-embedded-agent.config.ts"),
+    );
+    await fs.symlink(
+      path.join(repoRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    await fs.writeFile(
+      path.join(root, "vitest.config.ts"),
+      [
+        `import { createAgentsEmbeddedVitestConfig } from ${embeddedConfigPath};`,
+        'import { BaseSequencer } from "vitest/node";',
+        "class AlphabeticalSequencer extends BaseSequencer {",
+        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
+        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
+        "  }",
+        "}",
+        "const base = createAgentsEmbeddedVitestConfig();",
+        "export default {",
+        "  ...base,",
+        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
+        "  test: {",
+        "    ...base.test,",
+        "    exclude: [],",
+        "    isolate: false,",
+        "    fileParallelism: false,",
+        "    maxWorkers: 1,",
+        "    sequence: { ...base.test?.sequence, sequencer: AlphabeticalSequencer },",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        vitestEntry,
+        "run",
+        "src/agents/embedded-agent-runner/runs.force-clear-terminal.test.ts",
+        "src/agents/embedded-agent-runner/runs.persistence.test.ts",
+        "--config",
+        path.join(root, "vitest.config.ts"),
+      ],
+      {
+        cwd: repoRoot,
+        env: { ...childEnv(), OPENCLAW_VITEST_FILE_ORDER_LOG: orderLogPath },
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/Test Files\s+2 passed \(2\)/u);
+    await expect(fs.readFile(orderLogPath, "utf8")).resolves.toBe(
+      [
+        `START ${forceClearPath}`,
+        `END ${forceClearPath}`,
+        `START ${persistencePath}`,
+        `END ${persistencePath}`,
+        "",
+      ].join("\n"),
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

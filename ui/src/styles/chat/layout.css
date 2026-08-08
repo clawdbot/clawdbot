@@ -316,6 +316,12 @@ openclaw-chat-page {
   background: transparent;
 }
 
+/* The oversized clipped transcript owns its focus ring, so it stays inward to keep every edge visible. */
+.chat-thread:focus-visible {
+  outline: 2px solid var(--muted-strong);
+  outline-offset: -2px;
+}
+
 :root .chat-thread::-webkit-scrollbar-thumb {
   background: var(--muted-strong);
 }
@@ -3081,25 +3087,6 @@ openclaw-chat-video-player {
   margin: 0 4px;
 }
 
-.agent-chat__token-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 16px;
-  box-sizing: border-box;
-  min-height: 16px;
-  padding: 0 var(--chat-box-inset) 2px;
-}
-
-.agent-chat__token-count {
-  font-size: 0.7rem;
-  line-height: 1;
-  color: var(--muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
 .agent-chat__run-status {
   display: inline-flex;
   align-items: center;
@@ -3679,7 +3666,8 @@ openclaw-chat-video-player {
     padding: 0 2px 0 4px;
   }
 
-  .agent-chat__input .chat-controls__inline-select-menu--combined {
+  .agent-chat__input .chat-controls__model-menu,
+  .agent-chat__input .chat-controls__effort-menu {
     position: fixed;
     left: auto;
     right: max(12px, var(--safe-area-right));
@@ -3734,7 +3722,8 @@ openclaw-chat-video-player {
     overflow: visible;
   }
 
-  .agent-chat__input .chat-controls__inline-select-menu--combined {
+  .agent-chat__input .chat-controls__model-menu,
+  .agent-chat__input .chat-controls__effort-menu {
     max-height: calc(100vh - 148px);
   }
 
@@ -4268,6 +4257,16 @@ openclaw-chat-video-player {
   max-width: none;
 }
 
+.chat-controls__model-settings {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-controls__model-settings .chat-controls__inline-select-trigger {
+  width: auto;
+}
+
 .chat-controls__inline-select {
   position: relative;
   min-width: 0;
@@ -4327,6 +4326,12 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.chat-controls__trigger-meta {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 .chat-controls__model-capability-badge {
   display: inline-flex;
   align-items: center;
@@ -4348,26 +4353,11 @@ openclaw-chat-video-player {
   height: 12px;
 }
 
-/* Keep the chevron pinned right when the mobile trigger stretches. */
-.chat-controls__inline-select-icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  margin-left: auto;
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-
-.chat-controls__inline-select-icon svg,
 .chat-controls__inline-select-check svg {
   width: 100%;
   height: 100%;
   stroke: currentColor;
   fill: none;
-}
-
-.chat-controls__inline-select[open] .chat-controls__inline-select-icon {
-  transform: rotate(180deg);
 }
 
 .chat-controls__inline-select-menu {
@@ -4416,27 +4406,64 @@ openclaw-chat-video-player {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-/* The combined picker contains provider, model, and reasoning controls in one
-   bounded surface instead of opening a second flyout. */
-.chat-controls__inline-select-menu--combined {
-  left: auto;
-  right: 0;
+/* Model and effort are independent surfaces so either choice stays one focused
+   interaction without hiding the other pill's effective state. */
+.chat-controls__model-menu,
+.chat-controls__effort-menu {
   display: flex;
   flex-direction: column;
   gap: 0;
-  width: min(464px, calc(100vw - 24px));
-  max-height: min(440px, calc(100vh - 96px));
   padding: 0;
   overflow: hidden;
 }
 
-.chat-controls__model-browser {
-  display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
-  min-height: 132px;
-  max-height: 220px;
-  flex: 1 1 220px;
+.chat-controls__model-menu {
+  left: auto;
+  right: 0;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(440px, calc(100vh - 96px));
+}
+
+.chat-controls__effort-menu {
+  left: auto;
+  right: 0;
+  width: min(330px, calc(100vw - 24px));
   overflow: hidden;
+}
+
+.chat-controls__model-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+}
+
+.chat-controls__model-search-wrap svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.chat-controls__model-search {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.chat-controls__model-search::placeholder {
+  color: var(--muted);
 }
 
 .chat-controls__locked-model {
@@ -4470,32 +4497,16 @@ openclaw-chat-video-player {
   text-transform: uppercase;
 }
 
-.chat-controls__provider-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  padding: 8px 6px;
-  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--card) 78%, transparent);
-  overflow-y: auto;
-}
-
-.chat-controls__provider-option {
+.chat-controls__provider-heading {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  min-height: 32px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
+  padding: 8px 9px 3px;
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 550;
-  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* Mask/brand-color rules live on .provider-brand-icon (components.css). */
@@ -4509,39 +4520,17 @@ openclaw-chat-video-player {
   font-size: 9px;
 }
 
-.chat-controls__inline-select-trigger > .chat-controls__provider-icon {
-  width: 16px;
-  height: 16px;
-  flex-basis: 16px;
-}
-
-.chat-controls__provider-option:hover,
-.chat-controls__provider-option:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.chat-controls__provider-option[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text-strong);
-}
-
-.chat-controls__provider-models {
+.chat-controls__model-options {
+  display: block;
   min-width: 0;
-  padding: 8px;
+  padding: 0 7px 7px;
   overflow-y: auto;
   overscroll-behavior: none;
 }
 
 .chat-controls__provider-model-group {
   display: grid;
-  gap: 4px;
-}
-
-.chat-controls__provider-model-group[hidden] {
-  display: none;
+  gap: 2px;
 }
 
 .chat-controls__inline-select-section-label {
@@ -4553,16 +4542,81 @@ openclaw-chat-video-player {
   text-transform: uppercase;
 }
 
-.chat-controls__combined-model {
-  position: relative;
-  display: block;
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__model-options {
+  display: flex;
+  flex-direction: column;
 }
 
-.chat-controls__combined-model-option {
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-model-group {
+  display: contents;
+}
+
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-heading {
+  display: none;
+}
+
+.chat-controls__model-option {
+  order: var(--chat-model-rank, 0);
   justify-content: flex-start;
   gap: 8px;
   min-height: 40px;
   padding: 5px 8px;
+}
+
+/* display: flex above beats the UA [hidden] style; without this, filtered-out
+   rows keep rendering even though search marked them hidden. */
+.chat-controls__model-option[hidden] {
+  display: none;
+}
+
+.chat-controls__model-option[data-chat-model-highlighted] {
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: var(--bg-hover);
+}
+
+.chat-controls__model-option-provider {
+  display: none;
+}
+
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__model-option-provider {
+  display: inline-flex;
+}
+
+.chat-controls__model-option-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  min-width: 22px;
+  margin-left: auto;
+}
+
+.chat-controls__model-option-action kbd {
+  min-width: 18px;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.chat-controls__model-option-action kbd::before {
+  content: attr(data-chat-model-shortcut-number);
+}
+
+.chat-controls__model-search-empty {
+  min-height: 80px;
+  padding: 24px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.chat-controls__model-search-empty[hidden] {
+  display: none;
 }
 
 .chat-controls__model-option-copy {
@@ -4606,18 +4660,6 @@ openclaw-chat-video-player {
   text-transform: uppercase;
 }
 
-.chat-controls__model-state-label--current {
-  color: color-mix(in srgb, var(--accent) 76%, var(--text));
-}
-
-.chat-controls__model-state-label--current::before {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent);
-  content: "";
-}
-
 .chat-controls__model-state-label--default {
   color: var(--muted);
 }
@@ -4636,7 +4678,7 @@ openclaw-chat-video-player {
   width: auto;
   max-height: none;
   padding: 8px 10px 9px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border: 0;
   background: color-mix(in srgb, var(--card) 78%, transparent);
   overflow: visible;
 }
@@ -4649,17 +4691,16 @@ openclaw-chat-video-player {
   min-width: 0;
 }
 
-/* Model provenance sits above the provider browser, outside the reasoning
-   panel; mirrors the reasoning head's anatomy with its own class family so
-   test selectors and semantics stay distinct. */
 .chat-controls__model-provenance {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  padding: 8px 10px 6px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding: 7px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .chat-controls__model-provenance-state {
@@ -4783,13 +4824,17 @@ openclaw-chat-video-player {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
+  min-width: 18px;
   height: 18px;
-  padding: 0;
+  padding: 0 3px;
   border: none;
   border-radius: var(--radius-full);
   background: none;
   color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: lowercase;
 }
 
 .chat-controls__reasoning-reset:hover:not(:disabled),
@@ -4804,13 +4849,19 @@ openclaw-chat-video-player {
   opacity: 0.55;
 }
 
-.chat-controls__reasoning-reset svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
+.chat-controls__effort-heading {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chat-controls__effort-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 3px 6px -2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 550;
 }
 
 /* Discrete effort slider: native range input for keyboard/a11y, decorative
@@ -4838,10 +4889,6 @@ openclaw-chat-video-player {
   height: 4px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--text) 28%, transparent);
-}
-
-.chat-controls__reasoning-dot--default {
-  background: color-mix(in srgb, var(--text) 55%, transparent);
 }
 
 .chat-controls__reasoning-range {
@@ -4927,30 +4974,63 @@ openclaw-chat-video-player {
   opacity: 0.35;
 }
 
-/* Speed is a single fast-mode toggle: bolt icon plus the current state word.
-   Explicit off/auto overrides stay reachable through the /fast command. */
-.chat-controls__speed-row {
+.chat-controls__fast-mode-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   min-width: 0;
+  padding: 9px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.chat-controls__fast-mode-icon,
+.chat-controls__effort-zap {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  flex: 0 0 14px;
+}
+
+.chat-controls__fast-mode-icon svg,
+.chat-controls__effort-zap svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.chat-controls__fast-mode-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.chat-controls__fast-mode-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chat-controls__fast-mode-description {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-controls__speed-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 4px 12px;
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 18px;
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--border) 92%, var(--text));
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 4%, var(--card));
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 550;
-  line-height: 1;
+  background: color-mix(in srgb, var(--text) 12%, var(--card));
 }
 
 .chat-controls__speed-toggle:hover:not(:disabled),
@@ -4963,8 +5043,7 @@ openclaw-chat-video-player {
 
 .chat-controls__speed-toggle--active {
   border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 58%, var(--card));
 }
 
 .chat-controls__speed-toggle:disabled {
@@ -4972,25 +5051,25 @@ openclaw-chat-video-player {
   opacity: 0.55;
 }
 
-.chat-controls__speed-toggle-icon {
-  display: inline-flex;
-  width: 13px;
-  height: 13px;
-  flex: 0 0 auto;
+.chat-controls__speed-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+  transition: transform var(--duration-fast) var(--ease-out);
 }
 
-.chat-controls__speed-toggle-icon svg {
-  width: 100%;
-  height: 100%;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linejoin: round;
+.chat-controls__speed-toggle--active .chat-controls__speed-toggle-thumb {
+  transform: translateX(14px);
 }
 
-/* Filled bolt telegraphs the active fast tier without relying on color alone. */
-.chat-controls__speed-toggle--active .chat-controls__speed-toggle-icon svg {
-  fill: currentColor;
+.chat-controls__effort-trigger--fast {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
 }
 
 .chat-controls__reasoning-option {
@@ -5204,16 +5283,6 @@ openclaw-chat-video-player {
 
   .agent-chat__composer-controls .chat-controls {
     justify-content: flex-start;
-  }
-
-  .chat-controls__model-browser {
-    grid-template-columns: 120px minmax(0, 1fr);
-    min-height: 180px;
-  }
-
-  .chat-controls__provider-option {
-    padding-inline: 8px;
-    font-size: 12px;
   }
 
   .chat-controls {

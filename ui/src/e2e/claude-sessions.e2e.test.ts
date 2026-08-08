@@ -226,7 +226,10 @@ async function openClaudeCatalogTerminal(page: Page) {
 
 suite.define(() => {
   it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
-    const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await suite.browser.newPage({
+      hasTouch: true,
+      viewport: { width: 1440, height: 900 },
+    });
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
@@ -251,6 +254,32 @@ suite.define(() => {
           1,
         );
       }
+
+      const touchAffordance = await page
+        .locator(
+          '[data-session-section="catalog:claude"] .sidebar-session-group-toggle__lead--branded',
+        )
+        .evaluate((lead) => {
+          const providerIcon = lead.querySelector<HTMLElement>(
+            ".sidebar-session-catalog-provider-icon",
+          );
+          const chevron = lead.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+          if (!providerIcon || !chevron) {
+            throw new Error("expected branded catalog provider icon and chevron");
+          }
+          return {
+            coarsePointer: matchMedia("(pointer: coarse)").matches,
+            noHover: matchMedia("(hover: none)").matches,
+            providerOpacity: getComputedStyle(providerIcon).opacity,
+            chevronOpacity: getComputedStyle(chevron).opacity,
+          };
+        });
+      expect(touchAffordance).toEqual({
+        coarsePointer: true,
+        noHover: true,
+        providerOpacity: "0",
+        chevronOpacity: "0.75",
+      });
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -506,7 +535,7 @@ suite.define(() => {
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
     expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
     await expect
-      .poll(() => page.getByText("This thread is on a paired node and is view-only.").count())
+      .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {
@@ -681,7 +710,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(/^focus retention message 200\n/).waitFor();
     const thread = page.locator(".chat-thread");
-    const action = thread.locator("button.chat-group-delete").last();
+    const action = thread.locator("button.chat-reply-btn").last();
     await action.focus();
     const focusedRowKey = await action.evaluate(
       (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",

@@ -247,6 +247,7 @@ function rawManifest({
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
+      skipPackageTelegramE2e: "false",
       targetContextRef: "",
     },
     version,
@@ -1316,6 +1317,7 @@ describe("release CI summary child correlation", () => {
     const raw = rawManifest({});
     raw.childRuns.npmTelegram = "505";
     raw.validationInputs.npmTelegramPackageSpec = "openclaw@beta";
+    raw.validationInputs.skipPackageTelegramE2e = "true";
     const manifest = validateParentManifest(raw, {
       runAttempt: 2,
       runId: "29090000000",

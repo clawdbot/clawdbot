@@ -793,6 +793,40 @@ describe("runNodeHost", () => {
     });
   });
 
+  it("does not report a stale publication failure after manifest reconnect", async () => {
+    let rejectInitialPublication: ((error: Error) => void) | undefined;
+    await withReadyNodeHost(async ({ client, options }) => {
+      client.request.mockImplementation((method: string) => {
+        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD && !rejectInitialPublication) {
+          return new Promise((_resolve, reject) => {
+            rejectInitialPublication = reject;
+          });
+        }
+        return Promise.resolve({});
+      });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        options?.onHelloOk?.({
+          protocol: 3,
+          features: { methods: [], events: [] },
+        } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+        await vi.waitFor(() => expect(rejectInitialPublication).toBeDefined());
+        stderr.mockClear();
+
+        Object.assign(mocks, { nodePluginTools: [], nodeHostCaps: ["canvas"] });
+        mocks.availabilityChanged?.();
+        rejectInitialPublication?.(new Error("gateway closed (1012): node manifest changed"));
+
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("publish failed"));
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+  });
+
   it("clears gateway plugin tools when the final node-hosted tool disappears", async () => {
     mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
       ready: true,

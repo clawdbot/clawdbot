@@ -487,6 +487,7 @@ function cloneMessageCutSessionEntry(params: {
     estimatedCostUsd: undefined,
     totalTokens: undefined,
     totalTokensFresh: undefined,
+    totalTokensVersion: undefined,
     // A rotated transcript cannot resume provider/runtime identity from the old tail.
     // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
     contextTokens: undefined,

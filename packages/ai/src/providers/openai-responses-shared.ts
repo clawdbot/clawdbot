@@ -12,6 +12,14 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { suppressOpenAIResponsesCompaction } from "../transports/openai-responses-compaction-replay.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  createOpenAIResponsesCompactionPrefixPruner,
+  createResponsesStreamWithEncryptedContentRetry,
+  resolveNewestOpenAIResponsesCompactionReplay,
+} from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
@@ -141,6 +149,8 @@ interface OpenAIResponsesStreamOptions {
 interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
+  sessionId?: string;
+  authProfileId?: string;
 }
 export { convertResponsesToolPayload };
 
@@ -168,8 +178,9 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
+  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
 > &
+  Pick<BaseOpenAIStreamOptions, "authProfileId"> &
   FirstStreamEventInternalOptions;
 
 type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
@@ -247,6 +258,11 @@ export function convertResponsesMessages<TApi extends Api>(
   };
 
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const compaction = resolveNewestOpenAIResponsesCompactionReplay(transformedMessages, model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+  });
+  const compactionPruner = createOpenAIResponsesCompactionPrefixPruner(compaction);
 
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -267,6 +283,10 @@ export function convertResponsesMessages<TApi extends Api>(
 
   let msgIndex = 0;
   for (const msg of transformedMessages) {
+    if (compactionPruner.shouldSkipMessage(msg)) {
+      msgIndex += 1;
+      continue;
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
@@ -299,6 +319,7 @@ export function convertResponsesMessages<TApi extends Api>(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      const assistantCompaction = msg === compaction?.owner ? compaction : undefined;
       let textFallbackOrdinal = 0;
       const assistantMsg = msg;
       let previousReplayItemWasReasoning = false;
@@ -307,7 +328,13 @@ export function convertResponsesMessages<TApi extends Api>(
         assistantMsg.provider === model.provider &&
         assistantMsg.api === model.api;
 
-      for (const block of msg.content) {
+      for (const [contentIndex, block] of msg.content.entries()) {
+        if (compactionPruner.shouldSkipAssistantBlock(msg, contentIndex)) {
+          continue;
+        }
+        if (assistantCompaction && contentIndex === assistantCompaction.replayIndex) {
+          output.push(assistantCompaction.item);
+        }
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
             const reasoningItem = normalizeResponsesReasoningReplayItem({
@@ -347,6 +374,7 @@ export function convertResponsesMessages<TApi extends Api>(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
+          compactionPruner.recordToolCall(block.id);
           const toolCall = block;
           const [callId, itemIdRaw] = splitResponsesToolCallId(toolCall.id);
           let itemId: string | undefined = shouldReplayResponsesItemIds ? itemIdRaw : undefined;
@@ -368,6 +396,9 @@ export function convertResponsesMessages<TApi extends Api>(
           previousReplayItemWasReasoning = false;
         }
       }
+      if (assistantCompaction && assistantCompaction.replayIndex >= msg.content.length) {
+        output.push(assistantCompaction.item);
+      }
       if (output.length === 0) {
         continue;
       }
@@ -378,6 +409,10 @@ export function convertResponsesMessages<TApi extends Api>(
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
+      if (!compactionPruner.shouldKeepToolResult(msg.toolCallId)) {
+        msgIndex++;
+        continue;
+      }
       const [callId] = splitResponsesToolCallId(msg.toolCallId);
 
       let output: string | ResponseFunctionCallOutputItemList;
@@ -562,29 +597,41 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   model: Model<TApi>;
   output: AssistantMessage;
   options?: ResponsesLifecycleStreamOptions;
-  createClient: () => ResponsesStreamClient;
-  buildParams: () => ResponseCreateParamsStreaming;
+  resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
+  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  buildParams: (model: Model<TApi>) => ResponseCreateParamsStreaming;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
   formatError: (error: unknown) => string;
 }): Promise<void> {
-  const { stream, model, output, options } = params;
+  const { stream, output, options } = params;
 
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
-    const client = params.createClient();
-    let requestParams = params.buildParams();
+    const model = params.resolveRequestModel?.(params.model) ?? params.model;
+    const client = params.createClient(model);
+    let requestParams = params.buildParams(model);
     const nextParams = await options?.onPayload?.(requestParams, model);
     if (nextParams !== undefined) {
       requestParams = nextParams as ResponseCreateParamsStreaming;
     }
 
     firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-    const { data: openaiStream, response } = await client.responses
-      .create(requestParams, {
-        ...buildResponsesRequestOptions(options),
-        signal: firstEventAbort.signal,
-      })
-      .withResponse();
+    const { stream: openaiStream, response } = await createResponsesStreamWithEncryptedContentRetry(
+      {
+        client: client as never,
+        request: requestParams as never,
+        requestOptions: {
+          ...buildResponsesRequestOptions(options),
+          signal: firstEventAbort.signal,
+        },
+        model,
+        onCompactionRejected: () =>
+          suppressOpenAIResponsesCompaction(output, model, {
+            sessionId: options?.sessionId,
+            authProfileId: options?.authProfileId,
+          }),
+      },
+    );
     await options?.onResponse?.(
       { status: response.status, headers: headersToRecord(response.headers) },
       model,
@@ -608,7 +655,13 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
             signal: params.processStreamOptions?.signal ?? options?.signal,
           }
         : undefined;
-    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
+    await processResponsesStream(openaiStream, output, stream, model, {
+      ...processStreamOptions,
+      reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: options?.sessionId,
+        authProfileId: options?.authProfileId,
+      }),
+    });
 
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);

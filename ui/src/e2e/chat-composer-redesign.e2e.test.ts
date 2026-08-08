@@ -91,6 +91,7 @@ suite.define(() => {
       const chatContent = page.locator("main.content--chat");
       const chatMain = page.locator(".chat-workbench__main");
       const model = composer.locator('[data-chat-model-select="true"]');
+      const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
       const textarea = composer.locator("textarea");
@@ -149,12 +150,19 @@ suite.define(() => {
         .toBeLessThanOrEqual(1.5);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
       await expect
-        .poll(() => model.locator(".chat-controls__inline-select-label").textContent())
-        .toBe("GPT-5.5 · High");
+        .poll(async () =>
+          (await model.locator(".chat-controls__inline-select-label").textContent())?.trim(),
+        )
+        .toBe("GPT-5.5");
+      await expect
+        .poll(async () =>
+          (await effort.locator(".chat-controls__inline-select-label").textContent())?.trim(),
+        )
+        .toBe("High");
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))
-        .toBe("Thread context usage: 46k of 200k (23%)");
+        .toBe("Session context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
           contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
@@ -171,7 +179,7 @@ suite.define(() => {
         .toBe("Weekly · all models 72%");
       await contextUsage.click();
 
-      await model.click();
+      await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedToggle = composer.locator("[data-chat-speed-toggle]");
       await expect
@@ -179,16 +187,8 @@ suite.define(() => {
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
       // OpenAI sessions toggle between the standard and priority tiers.
-      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Standard");
       await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
-      await expect
-        .poll(() => composer.locator(".chat-controls__model-option-icon").count())
-        .toBe(0);
-      await expect
-        .poll(() => composer.locator(".chat-controls__provider-icon").count())
-        .toBeGreaterThan(0);
-      // Reasoning and speed commit immediately; the picker stays open so all
-      // three controls can be adjusted together.
+      // Reasoning and speed commit immediately while the Effort picker stays open.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
       await expect
@@ -202,7 +202,7 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
       await speedToggle.click();
       await expect
@@ -217,24 +217,24 @@ suite.define(() => {
         )
         .toBe(true);
       await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
-      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Fast");
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => composer.locator(".chat-controls__inline-select-menu").isVisible())
+        .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(false);
-      await model.click();
+      await effort.click();
       await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);
-      const providerButtons = composer.locator("[data-chat-model-provider]");
+      await page.keyboard.press("Escape");
+      await model.click();
+      const providerHeadings = composer.locator("[data-chat-model-provider]");
       await expect
-        .poll(async () => (await providerButtons.allTextContents()).map((label) => label.trim()))
+        .poll(async () => (await providerHeadings.allTextContents()).map((label) => label.trim()))
         .toEqual(["OpenAI", "Anthropic"]);
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
         .toContain("GPT-5.4 Pro");
-      await providerButtons.filter({ hasText: "Anthropic" }).click();
       const anthropicModels = composer.locator('[data-chat-model-provider-group="anthropic"]');
       await expect.poll(() => anthropicModels.isVisible()).toBe(true);
       await expect.poll(() => anthropicModels.textContent()).toContain("Claude Sonnet 4.6");
@@ -497,9 +497,7 @@ suite.define(() => {
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
       await model.click();
-      const mobilePickerBox = await composer
-        .locator(".chat-controls__inline-select-menu--combined")
-        .boundingBox();
+      const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
         throw new Error("expected mobile model picker to have a layout box");

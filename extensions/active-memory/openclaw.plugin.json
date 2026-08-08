@@ -1,5 +1,8 @@
 {
   "id": "active-memory",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },

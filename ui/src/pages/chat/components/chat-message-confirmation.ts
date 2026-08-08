@@ -3,7 +3,6 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 
-const SKIP_DELETE_CONFIRM_PREFERENCE = "openclaw:skipDeleteConfirm";
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const DELETE_CONFIRM_VIEWPORT_MARGIN_PX = 8;
 const DELETE_CONFIRM_TRIGGER_GAP_PX = 6;
@@ -100,22 +99,6 @@ function placeDeleteConfirmPopover(
   popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
-export function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
-  // "Hide" is honest copy: this action only hides the bubble in this browser's
-  // localStorage; the message stays in the transcript and in agent context.
-  return renderConfirmedActionButton({
-    action: onDelete,
-    ariaLabel: t("chat.messages.hideMessage"),
-    buttonClass: "chat-group-delete",
-    confirmLabel: t("chat.messages.hide"),
-    confirmText: t("chat.messages.hideConfirm"),
-    icon: icons.eyeOff ?? icons.x,
-    preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
-    side,
-    tooltip: t("chat.messages.hideTooltip"),
-  });
-}
-
 export function renderRewindButton(
   onRewind: () => void,
   disabled: boolean,
@@ -157,16 +140,6 @@ export function openChatRewindConfirmation(trigger: HTMLElement, action: () => v
     confirmText: t("chat.messages.rewindConfirm"),
     preferenceName: SKIP_REWIND_CONFIRM_PREFERENCE,
     side: "left",
-  });
-}
-
-export function openChatHideConfirmation(trigger: HTMLElement, action: () => void): void {
-  openConfirmedActionPopover(trigger, {
-    action,
-    confirmLabel: t("chat.messages.hide"),
-    confirmText: t("chat.messages.hideConfirm"),
-    preferenceName: SKIP_DELETE_CONFIRM_PREFERENCE,
-    side: "right",
   });
 }
 

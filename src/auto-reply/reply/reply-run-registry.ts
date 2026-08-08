@@ -48,6 +48,11 @@ export type ReplyBackendQueueMessageOptions = {
   media?: MediaFact[];
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
+  /** Stable source identity for exact queued-message commit/cancellation matching. */
+  queueIdentity?: string;
+  abortSignal?: AbortSignal;
+  /** Releases arrival ordering once the runtime has actually accepted this queue item. */
+  onQueueAccepted?: (accepted: boolean) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */

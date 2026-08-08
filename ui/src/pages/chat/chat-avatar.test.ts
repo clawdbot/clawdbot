@@ -91,10 +91,12 @@ describe("renderChatAvatar", () => {
 
   it("swaps a failing local user image to initials instead of a broken image", () => {
     const container = document.createElement("div");
-    render(
-      renderChatAvatar("user", undefined, { name: "Buns", avatar: "/avatar/user" }),
-      container,
-    );
+    const renderUser = () =>
+      render(
+        renderChatAvatar("user", undefined, { name: "Buns", avatar: "/avatar/user" }),
+        container,
+      );
+    renderUser();
     const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
     const image = slot?.querySelector("img");
     expect(image?.getAttribute("src")).toBe("/avatar/user");
@@ -103,6 +105,41 @@ describe("renderChatAvatar", () => {
     image?.dispatchEvent(new Event("error"));
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
+
+    renderUser();
+    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
+  });
+
+  it("settles a missing local profile avatar to initials before rendering its URL", async () => {
+    const gatewayOrigin = globalThis.location.origin;
+    setAvatarGatewayOrigin(gatewayOrigin);
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    const container = document.createElement("div");
+    const avatarUrl = "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7";
+    const renderUser = () =>
+      render(renderChatAvatar("user", undefined, { name: "Hannah", avatar: avatarUrl }), container);
+
+    renderUser();
+    const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
+    const image = slot?.querySelector("img");
+    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(image?.hasAttribute("src")).toBe(false);
+    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      `${gatewayOrigin}${avatarUrl}`,
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+    );
+    expect(image?.hasAttribute("src")).toBe(false);
+
+    renderUser();
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
+    expect(slot?.classList.contains("is-fallback")).toBe(true);
+    expect(image?.hasAttribute("src")).toBe(false);
+    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
   });
 });
 

@@ -183,7 +183,7 @@ suite.define(() => {
 
       const message = page.locator(".new-session-page__message");
       await message.fill("fix the flaky test");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
@@ -271,7 +271,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -473,7 +473,7 @@ suite.define(() => {
       await pollLocatorText(second.locator(".session-menu__sub")).toBe("b");
       await second.click();
       await page.locator(".new-session-page__message").fill("continue in work checkout");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         cwd: "/b/openclaw",
@@ -540,7 +540,7 @@ suite.define(() => {
       );
 
       await page.locator(".new-session-page__message").fill("continue on the recent node");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         cwd: NODE_PICKED,
@@ -773,7 +773,7 @@ suite.define(() => {
       await pollLocatorText(placeLabel).toBe("repo · Old node");
 
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const createRequest = await gateway.waitForRequest("sessions.create");
       expect(createRequest.params).toMatchObject({
         agentId: "research",

@@ -59,6 +59,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
     authProfileId,
     authProfileIdSource,
@@ -452,6 +453,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();

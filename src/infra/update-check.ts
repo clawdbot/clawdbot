@@ -24,6 +24,7 @@ type GitUpdateStatus = {
   tag: string | null;
   branch: string | null;
   upstream: string | null;
+  upstreamSha?: string | null;
   dirty: boolean | null;
   ahead: number | null;
   behind: number | null;
@@ -236,6 +237,7 @@ async function checkGitUpdateStatus(params: {
     tag: null,
     branch: null,
     upstream: null,
+    upstreamSha: null,
     dirty: null,
     ahead: null,
     behind: null,
@@ -327,6 +329,7 @@ async function checkGitUpdateStatus(params: {
     tag,
     branch,
     upstream,
+    upstreamSha: upstreamCommit,
     dirty,
     ahead: parsed?.ahead ?? null,
     behind: parsed?.behind ?? null,

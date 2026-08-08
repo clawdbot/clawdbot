@@ -710,7 +710,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        'gh() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
+        'gh_plain() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
         `graphql_push_to_fork example/repo topic ${headSha}`,
         'test "$(jq -r .variables.input.message.headline .local/graphql-payload.json)" = "reviewed fixup"',
         'test "$(jq -r .variables.input.message.body .local/graphql-payload.json)" = "Co-authored-by: Helper <helper@example.com>"',
@@ -740,7 +740,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -779,7 +779,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -792,7 +792,7 @@ describe("GraphQL fork publication", () => {
 });
 
 describe("fork publication transport", () => {
-  it("keeps the PR push URL process-local", () => {
+  it("keeps the PR push URL process-local and reports a missing branch", () => {
     const { repoDir } = makeRetryRepo();
     const result = runGatesBash(
       [
@@ -801,23 +801,9 @@ describe("fork publication transport", () => {
         "setup_prhead_remote",
         'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
         "test ! -e .local/git-called",
-      ].join("\n"),
-      { cwd: repoDir, sourcePush: true },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("preserves an HTTPS fallback for the later push", () => {
-    const { repoDir } = makeRetryRepo();
-    const result = runGatesBash(
-      [
-        "PRHEAD_REMOTE_URL=ssh://git@example.test/contributor/repo.git",
-        "resolve_head_push_url_https() { printf '%s\\n' https://github.com/contributor/repo.git; }",
-        'git() { if [ "$1" = ls-remote ] && [ "$2" = https://github.com/contributor/repo.git ]; then printf \'hosted\\trefs/heads/topic\\n\'; fi; }',
-        "resolve_prhead_remote_sha topic",
-        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
-        'test "$PRHEAD_REMOTE_SHA" = hosted',
+        "if remote_error=$(resolve_prhead_remote_sha topic 2>&1); then exit 97; fi",
+        'test "$remote_error" = "Remote branch refs/heads/topic not found on prhead"',
+        "test -e .local/git-called",
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
     );

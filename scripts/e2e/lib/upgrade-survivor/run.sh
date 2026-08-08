@@ -21,8 +21,10 @@ export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
-export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
-export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
+if [ "$SCENARIO" = "configured-plugin-installs" ]; then
+  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
+  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
+fi
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
 export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
@@ -55,6 +57,7 @@ FAILURE_PHASE=""
 FAILURE_MESSAGE=""
 gateway_pid=""
 plugin_registry_pid=""
+clawhub_fixture_pid=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -227,9 +230,6 @@ NODE
 }
 
 cleanup() {
-  if [ -n "${plugin_registry_pid:-}" ]; then
-    kill "$plugin_registry_pid" >/dev/null 2>&1 || true
-  fi
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
   fi
@@ -241,6 +241,8 @@ cleanup() {
       openclaw_e2e_terminate_gateways "$shim_pid"
     fi
   fi
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+  openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
 }
 
 on_error() {
@@ -371,6 +373,33 @@ TS
   echo "Seeded source-only plugin shadow: $shadow_root"
 }
 
+wait_for_fixture_port() {
+  local pid="$1" port_file="$2" log_file="$3" label="$4"
+  for _ in $(seq 1 100); do
+    [ -s "$port_file" ] && return 0
+    openclaw_e2e_process_alive "$pid" || break
+    sleep 0.1
+  done
+  openclaw_e2e_print_log "$log_file" >&2
+  echo "Timed out waiting for upgrade survivor $label." >&2
+  return 1
+}
+
+configure_clawhub_fixture() {
+  unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+  [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && return 0
+  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file
+  port_file="$fixture_root/port"
+  log_file="$fixture_root/server.log"
+  mkdir -p "$fixture_root"
+  node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+    prepublish-artifacts "$port_file" \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
+  clawhub_fixture_pid="$!"
+  wait_for_fixture_port "$clawhub_fixture_pid" "$port_file" "$log_file" "ClawHub fixture"
+  export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
+}
+
 configure_plugin_registry() {
   local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
@@ -406,8 +435,8 @@ for (const entry of manifest.packages) {
 }
 NODE
     )"
-    while IFS=$'\t' read -r package_name package_version package_tarball; do
-      registry_args+=("$package_name" "$package_version" "$package_tarball")
+    while IFS=$'\t' read -r plugin_package_name plugin_package_version plugin_package_tarball; do
+      registry_args+=("$plugin_package_name" "$plugin_package_version" "$plugin_package_tarball")
     done <<<"$registry_rows"
   fi
 
@@ -472,6 +501,7 @@ NODE
   fi
 
   mkdir -p "$fixture_root"
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version" \
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
@@ -479,22 +509,9 @@ NODE
     >"$log_file" 2>&1 &
   plugin_registry_pid="$!"
 
-  for _ in $(seq 1 100); do
-    if [ -s "$port_file" ]; then
-      export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
-      export npm_config_registry="$NPM_CONFIG_REGISTRY"
-      return 0
-    fi
-    if ! kill -0 "$plugin_registry_pid" 2>/dev/null; then
-      openclaw_e2e_print_log "$log_file" >&2
-      return 1
-    fi
-    sleep 0.1
-  done
-
-  openclaw_e2e_print_log "$log_file" >&2
-  echo "Timed out waiting for upgrade survivor npm registry." >&2
-  return 1
+  wait_for_fixture_port "$plugin_registry_pid" "$port_file" "$log_file" "npm registry"
+  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
+  export npm_config_registry="$NPM_CONFIG_REGISTRY"
 }
 
 legacy_plugin_dependency_probe_paths() {
@@ -1459,8 +1476,14 @@ phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase prepare-update-restart-probe prepare_update_restart_probe
+phase configure-clawhub-fixture configure_clawhub_fixture
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
+if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+  phase assert-prepublish-requests node \
+    "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$candidate_version"
+fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase doctor run_doctor

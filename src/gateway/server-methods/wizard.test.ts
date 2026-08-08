@@ -1,6 +1,12 @@
 // Wizard server-method tests cover stable lifecycle errors for process-local sessions.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createDeferred } from "../../shared/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -138,6 +144,44 @@ describe("hosted wizard runtime isolation", () => {
 });
 
 describe("wizard setup ownership", () => {
+  it("retains gateway work admission between requests until the wizard settles", async () => {
+    resetGatewayWorkAdmission();
+    const runnerSettled = createDeferred();
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+      },
+    };
+
+    try {
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        const respond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.start"],
+          "wizard.start test invariant",
+        )({ params: { mode: "local" }, respond, context } as never);
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+      });
+
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(createSafeGatewayRestartPreflight()).toMatchObject({
+        safe: false,
+        blockers: [expect.objectContaining({ kind: "root-request", count: 1 })],
+      });
+      runnerSettled.resolve();
+      await vi.waitFor(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+      expect(createSafeGatewayRestartPreflight().safe).toBe(true);
+    } finally {
+      runnerSettled.resolve();
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("blocks a replacement wizard until the cancelled runner settles", async () => {
     const runnerSettled = createDeferred();
     const tracker = createWizardSessionTracker();

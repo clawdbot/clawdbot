@@ -15,6 +15,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -708,7 +709,7 @@ describe("chat pane catalog session lifecycle", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         undefined,
         true,
         undefined,
@@ -720,11 +721,11 @@ describe("chat pane catalog session lifecycle", () => {
     const listener = (event: Event) => {
       detail = (event as CustomEvent).detail;
     };
-    window.addEventListener("openclaw:terminal-toggle", listener);
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
     try {
       (container.querySelector('[aria-label="Open in terminal"]') as HTMLElement).click();
     } finally {
-      window.removeEventListener("openclaw:terminal-toggle", listener);
+      window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
     }
     expect(detail).toEqual({ open: true, catalog: key });
   });

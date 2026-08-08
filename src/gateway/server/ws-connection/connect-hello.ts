@@ -19,6 +19,7 @@ import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
@@ -72,15 +73,16 @@ export async function sendGatewayHello(
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
+  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
+    includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
-  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });

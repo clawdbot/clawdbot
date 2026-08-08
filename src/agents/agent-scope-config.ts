@@ -196,7 +196,9 @@ export function resolveAgentConfig(
   agentId: string,
 ): ResolvedAgentConfig | undefined {
   const id = normalizeAgentId(agentId);
-  const entry = resolveAgentEntry(cfg, id);
+  const entry: AgentEntry | undefined =
+    resolveAgentEntry(cfg, id) ??
+    (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined);
   if (!entry) {
     return undefined;
   }

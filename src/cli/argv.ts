@@ -609,24 +609,3 @@ export function buildParseArgv(rawArgs: string[], programName = "openclaw"): str
   }
   return ["node", programName, ...normalizedArgv];
 }
-
-export function shouldMigrateStateFromPath(path: string[]): boolean {
-  if (path.length === 0) {
-    return true;
-  }
-  const [primary, secondary] = path;
-  if (primary === "health" || primary === "logs" || primary === "sessions") {
-    return false;
-  }
-  // Remote RPC clients must not migrate state owned by the running gateway.
-  if (primary === "gateway" && secondary === "call") {
-    return false;
-  }
-  if (primary === "update" && secondary === "status") {
-    return false;
-  }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
-    return false;
-  }
-  return true;
-}

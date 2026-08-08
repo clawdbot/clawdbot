@@ -16,7 +16,10 @@ import {
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
-import { filterLegacyNodeProtocolFeatures } from "./node-legacy-protocol-filter.js";
+import {
+  filterLegacyNodeProtocolFeatures,
+  normalizeLegacyNodeHostClientMetadata,
+} from "./node-legacy-protocol-filter.js";
 
 describe("gateway/node-command-policy", () => {
   afterEach(() => {
@@ -100,6 +103,46 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.snapshot")).toBe(false);
   });
 
+  it("keeps safe PTZ status Mac-only and requires an explicit allow for control", () => {
+    const macNode = {
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["camera.ptz.status", "camera.ptz.control"],
+    };
+    const defaultAllowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, macNode);
+    expect(defaultAllowlist.has("camera.ptz.status")).toBe(true);
+    expect(defaultAllowlist.has("camera.ptz.control")).toBe(false);
+
+    for (const platform of ["ios", "android", "windows", "linux", "unknown"]) {
+      const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, { platform });
+      expect(allowlist.has("camera.ptz.status")).toBe(false);
+      expect(allowlist.has("camera.ptz.control")).toBe(false);
+    }
+
+    const explicitAllow = resolveNodeCommandAllowlist(
+      {
+        gateway: { nodes: { commands: { allow: ["camera.ptz.control"] } } },
+      } as OpenClawConfig,
+      macNode,
+    );
+    expect(explicitAllow.has("camera.ptz.control")).toBe(true);
+
+    const denied = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            commands: {
+              allow: ["camera.ptz.control"],
+              deny: ["camera.ptz.control"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      macNode,
+    );
+    expect(denied.has("camera.ptz.control")).toBe(false);
+  });
+
   it("adds canvas commands from the active canvas plugin node policy", () => {
     installCanvasPluginDefaults();
 
@@ -134,6 +177,8 @@ describe("gateway/node-command-policy", () => {
       "camera.list",
       "camera.snap",
       "camera.clip",
+      "camera.ptz.status",
+      "camera.ptz.control",
       "location.get",
       "remote.echo",
     ]) {
@@ -154,6 +199,8 @@ describe("gateway/node-command-policy", () => {
           "camera.list",
           "camera.snap",
           "camera.clip",
+          "camera.ptz.status",
+          "camera.ptz.control",
           "location.get",
           "remote.echo",
           "device.info",
@@ -167,10 +214,45 @@ describe("gateway/node-command-policy", () => {
         "camera.list",
         "camera.snap",
         "camera.clip",
+        "camera.ptz.status",
+        "camera.ptz.control",
         "location.get",
         "device.info",
       ],
     });
+  });
+
+  it.each([
+    ["darwin", "macos", "Mac"],
+    ["linux", "linux", "Linux"],
+    ["win32", "windows", "Windows"],
+  ])("normalizes shipped protocol-v3 node-host metadata for %s", (platform, expected, family) => {
+    expect(
+      normalizeLegacyNodeHostClientMetadata({
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "2026.5.7",
+        platform,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      }),
+    ).toMatchObject({ platform: expected, deviceFamily: family });
+  });
+
+  it("does not normalize non-node-host or conflicting legacy metadata", () => {
+    const conflicting = {
+      id: GATEWAY_CLIENT_IDS.NODE_HOST,
+      version: "2026.5.7",
+      platform: "linux",
+      deviceFamily: "iPhone",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    } as const;
+    expect(normalizeLegacyNodeHostClientMetadata(conflicting)).toBe(conflicting);
+
+    const otherClient = {
+      ...conflicting,
+      id: GATEWAY_CLIENT_IDS.LINUX_APP,
+      deviceFamily: undefined,
+    };
+    expect(normalizeLegacyNodeHostClientMetadata(otherClient)).toBe(otherClient);
   });
 
   it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {

@@ -34,6 +34,7 @@ import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
@@ -494,9 +495,18 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     }
   }
   const { activeSessionId, isActive } = resolveQueueBusyState();
+  const pendingQueue = getExistingFollowupQueue(queueKey);
+  const queueAdmissionState = !pendingQueue
+    ? "empty"
+    : pendingQueue.items.some((item) => !item.steerPending) ||
+        pendingQueue.inFlight.size > 0 ||
+        pendingQueue.droppedCount > 0
+      ? "ready"
+      : "steering";
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
     !isRoomEvent &&
+    queueAdmissionState !== "ready" &&
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
@@ -508,6 +518,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       resolvedQueue.mode === "followup" ||
       resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
+    queueAdmissionState,
     isActive,
     isHeartbeat: context.isHeartbeat,
     shouldFollowup,
@@ -581,6 +592,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
     authProfileId,
     authProfileIdSource,

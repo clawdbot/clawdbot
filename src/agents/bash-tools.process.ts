@@ -391,6 +391,12 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
+              // Finished polls render a bounded tail; disclose retained content so the
+              // model can recover it through paged logs instead of treating it as complete.
+              const retainedOutputNote =
+                scopedFinished.tail.length < scopedFinished.aggregated.length
+                  ? "\n\n[earlier retained output is omitted; use action=log with offset and limit to page]"
+                  : "";
               return {
                 content: [
                   {
@@ -400,6 +406,7 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
+                        retainedOutputNote +
                         `\n\nProcess exited with ${
                           scopedFinished.exitSignal
                             ? `signal ${scopedFinished.exitSignal}`
@@ -445,7 +452,7 @@ export function createProcessTool(
               await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
-          const { stdout, stderr } = drainSession(scopedSession);
+          const { stdout, stderr, outputDropped } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
@@ -466,6 +473,9 @@ export function createProcessTool(
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const retainedOutputNote = outputDropped
+            ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
+            : "";
           const hasNewOutput = output.length > 0;
           const retryInMs = exited
             ? undefined
@@ -480,6 +490,7 @@ export function createProcessTool(
                 type: "text",
                 text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
+                    retainedOutputNote +
                     (exited
                       ? `\n\nProcess exited with ${
                           exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`

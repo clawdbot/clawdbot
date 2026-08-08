@@ -1,5 +1,6 @@
 /** Builds installed-index records from normalized plugin manifest registry entries. */
 import path from "node:path";
+import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
@@ -167,14 +168,6 @@ function describePackageInstallSource(
   return describePluginInstallSource(install, {
     expectedPackageName: candidate?.packageName,
   });
-}
-
-function normalizeStringField(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizePackageChannel(

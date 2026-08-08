@@ -309,6 +309,12 @@ export interface ClawMcpServerRefs {
 export interface ClawPackageRefs {
   agent_id: string;
   claw_name: string;
+  extension_adapter_identity: string | null;
+  extension_detected_format: string | null;
+  extension_format: string | null;
+  extension_id: string | null;
+  extension_mapped_json: string | null;
+  extension_unavailable_json: string | null;
   independent_owner: number;
   installed_at_ms: number;
   origin: string;
@@ -692,6 +698,15 @@ export interface GatewayBootLifecycle {
   reason: string | null;
   started_at_ms: number;
   startup_reason: string | null;
+}
+
+export interface GatewayOriginDeviceTokens {
+  device_id: string;
+  gateway_scope: string;
+  role: string;
+  scopes_json: string;
+  token: string;
+  updated_at_ms: number;
 }
 
 export interface GatewayRestartHandoff {
@@ -1604,6 +1619,7 @@ export interface DB {
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
+  gateway_origin_device_tokens: GatewayOriginDeviceTokens;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;

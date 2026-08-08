@@ -22,7 +22,7 @@ import {
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderDeleteButton, renderRewindButton } from "./chat-message-confirmation.ts";
+import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
   renderMessageActionButtons,
   renderReplyButton,
@@ -92,7 +92,6 @@ type RenderMessageGroupOptions = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
-  onDelete?: () => void;
   onReply?: (target: MessageReplyTarget) => void;
   onRewind?: () => void;
   rewindDisabled?: boolean;
@@ -220,19 +219,19 @@ export function renderActivityGroup(
   const cards = groups.flatMap((group) =>
     group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
   );
+  const latestGroup = groups[groups.length - 1] ?? firstGroup;
+  const latestCards = latestGroup.messages.flatMap((item) =>
+    extractToolCardsCached(item.message, item.key),
+  );
   const toolCount =
     cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
-  const hasError = groups.some(
-    (group) =>
-      group.turnSucceeded !== true &&
-      group.messages.some((item) =>
-        extractToolCardsCached(item.message, item.key).some(isToolCardError),
-      ),
-  );
+  // Aggregate chrome follows the latest group; older failures stay visible
+  // in the settled summary and expanded child rows.
+  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
-    ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
+    ? latestCards.findLast((card) => isRunningToolCard(card, opts.runActive))
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
@@ -253,7 +252,6 @@ export function renderActivityGroup(
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
-      data-chat-row-keys=${JSON.stringify(groups.map((group) => group.key))}
     >
       ${showAvatarGutter
         ? renderChatAvatar(
@@ -323,7 +321,6 @@ export function renderActivityGroup(
       <div class="chat-group-footer">
         <span class="chat-sender-name">${t("chat.messages.activity")}</span>
         ${renderChatTimestamp(firstGroup.timestamp)}
-        ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
       </div>
     </div>
   `;
@@ -397,7 +394,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onDelete || opts.onRewind);
+    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
 
   // Attributed (logged-in) senders tint their bubbles with the same stable
   // identity hue as their avatar initials; CSS owns per-theme lightness so
@@ -487,7 +484,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   ${footerActionDetails?.replyTarget && opts.onReply
                     ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
                     : nothing}
-                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
                   ${opts.onRewind
                     ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
                     : nothing}
@@ -500,21 +496,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           <span class="chat-sender-name">${who}</span>
           ${renderMessageMeta(group.timestamp, meta)}
         </div>
-        ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
+        ${normalizedRole !== "user" && footerActionDetails
           ? html`
               <div
                 class="chat-group-footer-actions"
                 data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
               >
-                ${footerActionDetails
-                  ? renderMessageActionButtons(
-                      footerActionDetails,
-                      opts,
-                      normalizedRole !== "user" ? opts.onDelete : undefined,
-                    )
-                  : opts.onDelete
-                    ? renderDeleteButton(opts.onDelete, "right")
-                    : nothing}
+                ${renderMessageActionButtons(footerActionDetails, opts)}
               </div>
             `
           : nothing}

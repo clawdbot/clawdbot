@@ -138,6 +138,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     });
     const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
     const hasUnread = liveRows.some((row) => row.unread === true);
+    const hasBrandIcon = hasProviderBrandIcon(catalog.id);
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
     const canCreateSession = catalog.capabilities.createSession !== undefined;
@@ -199,15 +200,22 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               title=${hasError ? errorHelp : nothing}
               @click=${() => params.onToggleSection(sectionId)}
             >
-              ${hasProviderBrandIcon(catalog.id)
-                ? renderProviderBrandIcon(catalog.id, {
-                    className: "sidebar-session-catalog-provider-icon",
-                  })
-                : nothing}
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+              <span
+                class="sidebar-session-group-toggle__lead ${hasBrandIcon
+                  ? "sidebar-session-group-toggle__lead--branded"
+                  : ""}"
+                aria-hidden="true"
               >
+                ${hasBrandIcon
+                  ? renderProviderBrandIcon(catalog.id, {
+                      className: "sidebar-session-catalog-provider-icon",
+                    })
+                  : nothing}
+                <span class="sidebar-session-group-toggle__icon"
+                  >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                >
+              </span>
+              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
               ${hasError || (collapsed && rows.length > 0)
                 ? html`<span
@@ -240,7 +248,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             ${canCreateSession
               ? html`<button
                   type="button"
-                  class="sidebar-session-group-actions sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
+                  class="sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new"
                   title=${params.newSessionDisabledReason ??
                   `${t("chat.runControls.newSession")} — ${catalog.label}`}
                   aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
@@ -445,6 +453,7 @@ function renderCatalogSessionRow(
           }
         }}
       >
+        <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
