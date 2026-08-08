@@ -90,6 +90,7 @@ import {
   createTelegramPluginBase,
   findTelegramTokenOwnerAccountId,
   formatDuplicateTelegramTokenReason,
+  resolveTelegramConfigAccessorAccount,
   telegramConfigAdapter,
 } from "./shared.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
@@ -1246,11 +1247,8 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   security: telegramSecurityAdapter,
   threading: {
-    scopedAccountReplyToMode: {
-      resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
-      resolveReplyToMode: (account) => account.config.replyToMode,
-      fallback: "off",
-    },
+    resolveReplyToMode: ({ cfg, accountId }) =>
+      resolveTelegramConfigAccessorAccount({ cfg, accountId }).config.replyToMode ?? "off",
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
     resolveCurrentChannelId: ({ to, threadId }) => {
