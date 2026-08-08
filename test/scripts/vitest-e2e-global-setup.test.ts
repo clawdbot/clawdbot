@@ -13,7 +13,7 @@ import {
   waitForDead,
   waitForPidFile,
 } from "../helpers/process-wait.js";
-import { runE2eGlobalSetup } from "./vitest.e2e.global-setup.js";
+import { runE2eGlobalSetup } from "../vitest/vitest.e2e.global-setup.js";
 
 type SetupCommandRunner = NonNullable<Parameters<typeof runE2eGlobalSetup>[0]>;
 
@@ -22,15 +22,18 @@ const PROCESS_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
 
 describe("vitest E2E global setup", () => {
   it("runs both build commands sequentially with their exact environments", async () => {
-    const firstCommand = Promise.withResolvers<number>();
+    let resolveFirstCommand!: (status: number) => void;
+    const firstCommand = new Promise<number>((resolve) => {
+      resolveFirstCommand = resolve;
+    });
     const runCommand = vi
       .fn<SetupCommandRunner>()
-      .mockImplementationOnce(() => firstCommand.promise)
+      .mockImplementationOnce(() => firstCommand)
       .mockResolvedValueOnce(0);
 
     const setupPromise = runE2eGlobalSetup(runCommand);
     await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
-    firstCommand.resolve(0);
+    resolveFirstCommand(0);
     await setupPromise;
     expect(runCommand.mock.calls).toEqual([
       [
@@ -74,7 +77,7 @@ process.stdin.once("data", () => {
 process.stdin.resume();
 `,
     );
-    const setupUrl = new URL("./vitest.e2e.global-setup.ts", import.meta.url).href;
+    const setupUrl = new URL("../vitest/vitest.e2e.global-setup.ts", import.meta.url).href;
     const runnerScript = `import { runE2eSetupCommand } from ${JSON.stringify(setupUrl)};
 await runE2eSetupCommand([${JSON.stringify(fixturePath)}], process.env);`;
     const runner = spawn(
