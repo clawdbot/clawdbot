@@ -80,11 +80,16 @@ export const streamAzureOpenAIResponses: StreamFunction<
     model,
     output,
     options,
-    createClient: () => {
-      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      return createClient(model, apiKey, options);
+    resolveRequestModel: (requestModel) => {
+      const { baseUrl } = resolveAzureConfig(requestModel, options);
+      return baseUrl === requestModel.baseUrl ? requestModel : { ...requestModel, baseUrl };
     },
-    buildParams: () => buildParams(model, context, options, resolveDeploymentName(model, options)),
+    createClient: (requestModel) => {
+      const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+      return createClient(requestModel, apiKey, options);
+    },
+    buildParams: (requestModel) =>
+      buildParams(requestModel, context, options, resolveDeploymentName(model, options)),
     formatError: formatAzureOpenAIError,
   });
 

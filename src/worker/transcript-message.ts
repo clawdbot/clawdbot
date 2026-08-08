@@ -102,6 +102,7 @@ export function projectWorkerProviderReplay<
 
 export function cloneUsage(
   message: AssistantMessage,
+  onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void,
 ): WorkerTranscriptMessage & { role: "assistant" } {
   const projected: WorkerTranscriptAssistantMessage = {
     role: "assistant",
@@ -178,11 +179,15 @@ export function cloneUsage(
   return projectWorkerProviderReplay({
     message: projected,
     providerReplay: message.providerReplay,
+    onOmitted: onProviderReplayOmitted,
   });
 }
 
 export function toWorkerTranscriptMessage(
   message: AgentMessage,
+  options?: {
+    onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void;
+  },
 ): WorkerTranscriptMessage | undefined {
   if (message.role === "user") {
     const content =
@@ -194,7 +199,7 @@ export function toWorkerTranscriptMessage(
     return { role: "user", content, timestamp: message.timestamp };
   }
   if (message.role === "assistant") {
-    return cloneUsage(message);
+    return cloneUsage(message, options?.onProviderReplayOmitted);
   }
   if (message.role === "toolResult") {
     return {

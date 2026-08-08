@@ -313,6 +313,37 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it.each([
+    ["malformed content", { data: "" }],
+    ["oversized id", { id: "i".repeat(10_000) }],
+    ["foreign route", { provider: "azure" }],
+  ])("omits invalid OpenAI compaction replay state for %s", (_name, override) => {
+    const providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      id: "cmp_1",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      ...override,
+    };
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay,
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+
+    expect(result).not.toHaveProperty("providerReplay");
+    expect(msg).toHaveProperty("providerReplay", providerReplay);
+  });
+
   it("handles configured providers without explicit models", () => {
     const msg = {
       role: "assistant",

@@ -597,17 +597,19 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   model: Model<TApi>;
   output: AssistantMessage;
   options?: ResponsesLifecycleStreamOptions;
-  createClient: () => ResponsesStreamClient;
-  buildParams: () => ResponseCreateParamsStreaming;
+  resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
+  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  buildParams: (model: Model<TApi>) => ResponseCreateParamsStreaming;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
   formatError: (error: unknown) => string;
 }): Promise<void> {
-  const { stream, model, output, options } = params;
+  const { stream, output, options } = params;
 
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
-    const client = params.createClient();
-    let requestParams = params.buildParams();
+    const model = params.resolveRequestModel?.(params.model) ?? params.model;
+    const client = params.createClient(model);
+    let requestParams = params.buildParams(model);
     const nextParams = await options?.onPayload?.(requestParams, model);
     if (nextParams !== undefined) {
       requestParams = nextParams as ResponseCreateParamsStreaming;

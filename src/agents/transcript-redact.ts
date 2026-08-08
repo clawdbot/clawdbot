@@ -592,6 +592,9 @@ function redactTranscriptStructuredValue(
         }
         continue;
       }
+      next ??= { ...source };
+      delete next[key];
+      continue;
     }
     if (
       location === "assistant-content-block" &&
