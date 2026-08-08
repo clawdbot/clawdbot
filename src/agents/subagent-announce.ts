@@ -464,19 +464,19 @@ export async function runSubagentAnnounceFlow(params: {
     const fallbackReply = failedTerminalOutcome
       ? undefined
       : normalizeOptionalString(params.fallbackReply);
-    const fallbackIsSilent =
+    const hasVisibleFallback =
       Boolean(fallbackReply) &&
-      (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
+      !(isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
+    const cleanedFallbackReply = hasVisibleFallback
+      ? (stripAndClassifyReply(fallbackReply ?? "") ?? undefined)
+      : undefined;
 
     if (!childCompletionFindings) {
       if (params.terminalReply?.disposition === "silent") {
-        if (fallbackReply && !fallbackIsSilent) {
-          reply = stripAndClassifyReply(fallbackReply) ?? undefined;
-        } else if (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage) {
+        if (!hasVisibleFallback && (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)) {
           return true;
-        } else {
-          reply = undefined;
         }
+        reply = cleanedFallbackReply;
       }
       if (params.terminalReply?.disposition === "empty" && outcome.status === "timeout") {
         const timeoutProgress = await readSubagentTimeoutProgress(
@@ -503,7 +503,7 @@ export async function runSubagentAnnounceFlow(params: {
           });
         }
 
-        if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+        if (!reply?.trim() && hasVisibleFallback) {
           reply = fallbackReply;
         }
 
@@ -530,21 +530,9 @@ export async function runSubagentAnnounceFlow(params: {
         }
 
         const replyIsAnnounceSkip = isAnnounceSkip(reply);
-        const replyIsSilent = isSilentReplyText(reply, SILENT_REPLY_TOKEN);
-        if (replyIsAnnounceSkip || replyIsSilent) {
-          if (fallbackReply && !fallbackIsSilent) {
-            const cleaned = stripAndClassifyReply(fallbackReply);
-            if (cleaned === null) {
-              if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
-                logWarn(
-                  `cron job completion for session=${targetRequesterSessionKey} ` +
-                    `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
-                    `the agent replied with the skip sentinel instead of delivering a result`,
-                );
-              }
-              return true;
-            }
-            reply = cleaned;
+        if (replyIsAnnounceSkip || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+          if (hasVisibleFallback && cleanedFallbackReply) {
+            reply = cleanedFallbackReply;
           } else {
             if (replyIsAnnounceSkip && isCronSessionKey(targetRequesterSessionKey)) {
               logWarn(
@@ -553,25 +541,20 @@ export async function runSubagentAnnounceFlow(params: {
                   `the agent replied with the skip sentinel instead of delivering a result`,
               );
             }
-            if (replyIsAnnounceSkip || isAnnounceSkip(fallbackReply) || !expectsCompletionMessage) {
+            if (
+              replyIsAnnounceSkip ||
+              isAnnounceSkip(fallbackReply) ||
+              !expectsCompletionMessage ||
+              hasVisibleFallback
+            ) {
               return true;
             }
             reply = undefined;
           }
         } else if (reply) {
-          const cleaned = stripAndClassifyReply(reply);
-          if (cleaned === null) {
-            if (fallbackReply && !fallbackIsSilent) {
-              const cleanedFallback = stripAndClassifyReply(fallbackReply);
-              if (cleanedFallback === null) {
-                return true;
-              }
-              reply = cleanedFallback;
-            } else {
-              return true;
-            }
-          } else {
-            reply = cleaned;
+          reply = stripAndClassifyReply(reply) ?? cleanedFallbackReply;
+          if (!reply) {
+            return true;
           }
         }
       }
@@ -589,10 +572,7 @@ export async function runSubagentAnnounceFlow(params: {
         (params.terminalReply?.disposition === "silent" ||
           isSilentReplyText(reply, SILENT_REPLY_TOKEN))
       ) {
-        reply =
-          fallbackReply && !fallbackIsSilent
-            ? (stripAndClassifyReply(fallbackReply) ?? undefined)
-            : undefined;
+        reply = hasVisibleFallback ? cleanedFallbackReply : undefined;
       }
       outcome = params.outcome ?? { status: "unknown" };
     }
