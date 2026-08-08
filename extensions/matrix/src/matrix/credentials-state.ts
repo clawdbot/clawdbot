@@ -16,7 +16,7 @@ export type MatrixStoredCredentialRecord = MatrixStoredCredentials & {
   accountId: string;
 };
 
-export type MatrixCredentialRevocationRecord = {
+type MatrixCredentialRevocationRecord = {
   accountId: string;
   kind: "revoked";
   revokedAt: string;
