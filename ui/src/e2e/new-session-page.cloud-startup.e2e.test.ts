@@ -111,9 +111,6 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
 
-      const modelSelect = page.locator(
-        '.new-session-page__composer [data-chat-model-select="true"]',
-      );
       const effortSelect = page.locator(
         '.new-session-page__composer [data-chat-thinking-select="true"]',
       );
