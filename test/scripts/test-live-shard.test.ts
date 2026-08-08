@@ -103,6 +103,10 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-codex-bind.live.test.ts",
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);
+    expect(selectLiveShardFiles("native-live-src-gateway-profiles", allFiles)).toEqual([
+      "src/gateway/gateway-models.profiles.live.test.ts",
+      "src/gateway/gateway-openai-long-context.live.test.ts",
+    ]);
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
       "src/gateway/android-node.capabilities.live.test.ts",
       "src/gateway/gateway-acp-spawn-defaults.live.test.ts",

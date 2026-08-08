@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { buildOpenAIResponsesReplayContext } from "../transports/openai-responses-compaction-replay.js";
 import type { Context, Model } from "../types.js";
 import {
   streamAzureOpenAIResponses,
@@ -157,5 +158,78 @@ describe("azure-openai-responses", () => {
     } finally {
       configureAiTransportHost({});
     }
+  });
+
+  it("fences compaction replay by the resolved Azure endpoint", async () => {
+    const routeA = "https://route-a.openai.azure.com/openai/v1";
+    const routeB = "https://route-b.openai.azure.com/openai/v1";
+    const sessionId = "azure-replay-session";
+    const replayContext = buildOpenAIResponsesReplayContext(
+      { ...azureResponsesModel, baseUrl: routeA },
+      { sessionId },
+    );
+    if (!replayContext.baseUrlHash) {
+      throw new Error("expected Azure replay route hash");
+    }
+    const replayMessages = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "earlier" }],
+          api: azureResponsesModel.api,
+          provider: azureResponsesModel.provider,
+          model: azureResponsesModel.id,
+          providerReplay: {
+            v: 1,
+            type: "openai-responses-compaction",
+            data: "opaque-compaction-route-a",
+            ...replayContext,
+            baseUrlHash: replayContext.baseUrlHash,
+          },
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        },
+        { role: "user", content: "continue", timestamp: 2 },
+      ],
+    } satisfies Context;
+    const inputs: unknown[][] = [];
+    configureAiTransportHost({
+      buildModelFetch: () => async (input, init) => {
+        const body = (await new Request(input, init).json()) as { input?: unknown[] };
+        inputs.push(body.input ?? []);
+        return Response.json({ error: { message: "captured" } }, { status: 400 });
+      },
+    });
+    try {
+      for (const azureBaseUrl of [routeA, routeB]) {
+        await streamAzureOpenAIResponses(azureResponsesModel, replayMessages, {
+          apiKey: "test-api-key",
+          azureBaseUrl,
+          sessionId,
+        }).result();
+      }
+    } finally {
+      configureAiTransportHost({});
+    }
+
+    expect(inputs[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "compaction",
+          encrypted_content: "opaque-compaction-route-a",
+        }),
+      ]),
+    );
+    expect(inputs[1]).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "compaction" })]),
+    );
   });
 });

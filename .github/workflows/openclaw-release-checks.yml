@@ -61,6 +61,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_package_telegram_e2e:
+        description: Defer beta Package Acceptance Telegram E2E
+        required: false
+        default: false
+        type: boolean
       allow_frozen_target_scenario_omissions:
         description: Allow trusted compatibility filtering for a canonical frozen release target
         required: false
@@ -141,6 +146,7 @@ jobs:
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
+      skip_package_telegram_e2e: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
       repo_live_suite_filter: ${{ steps.inputs.outputs.repo_live_suite_filter }}
@@ -324,6 +330,7 @@ jobs:
           RELEASE_FAIL_FAST_INPUT: ${{ inputs.fail_fast }}
           RELEASE_RUN_MATURITY_SCORECARD_INPUT: ${{ inputs.run_maturity_scorecard }}
           RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: ${{ inputs.allow_unreleased_changelog }}
+          RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: ${{ inputs.skip_package_telegram_e2e }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
@@ -407,6 +414,16 @@ jobs:
             allow_unreleased_changelog=false
           else
             allow_unreleased_changelog=false
+          fi
+          skip_package_telegram_e2e="$(printf '%s' "$RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$skip_package_telegram_e2e" != "true" && "$skip_package_telegram_e2e" != "1" && "$skip_package_telegram_e2e" != "yes" ]]; then
+            skip_package_telegram_e2e=false
+          else
+            skip_package_telegram_e2e=true
+          fi
+          if [[ "$skip_package_telegram_e2e" == "true" && "$release_profile" != "beta" ]]; then
+            echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
+            exit 1
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
@@ -528,6 +545,7 @@ jobs:
             printf 'fail_fast=%s\n' "$fail_fast"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
+            printf 'skip_package_telegram_e2e=%s\n' "$skip_package_telegram_e2e"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
             printf 'repo_live_suite_filter=%s\n' "$repo_live_suite_filter"
@@ -556,6 +574,7 @@ jobs:
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
@@ -576,6 +595,7 @@ jobs:
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
+            echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
             if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
@@ -1117,7 +1137,7 @@ jobs:
       docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
-      telegram_mode: mock-openai
+      telegram_mode: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}
       telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       shared_image_artifact_namespace: release-package
       candidate_artifact_json: ${{ inputs.candidate_artifact_json }}

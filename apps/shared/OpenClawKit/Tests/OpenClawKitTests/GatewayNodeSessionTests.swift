@@ -1470,6 +1470,120 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `route switch cancels queued PTZ control and waits for invoke cleanup`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeGate = AsyncGate()
+        let cancellations = DisconnectProbe()
+        let options = nodeConnectOptions(
+            caps: ["camera"],
+            commands: [OpenClawCameraCommand.ptzControl.rawValue],
+            clientId: "openclaw-macos")
+
+        try await gateway.connectForTest(testURL("ws://first.example.invalid"), options: options, session: session)
+        let route = try #require(await gateway.currentRoute())
+        let invoking = Task {
+            await gateway.invokeIfCurrentRoute(
+                BridgeInvokeRequest(
+                    id: "queued-ptz",
+                    command: OpenClawCameraCommand.ptzControl.rawValue,
+                    paramsJSON: nil),
+                expectedRoute: route,
+                onInvoke: { request in
+                    await invokeGate.wait()
+                    if Task.isCancelled {
+                        await cancellations.record(request.id)
+                    }
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
+                })
+        }
+        try await waitUntil("PTZ invoke queued before hardware admission") {
+            await invokeGate.hasStarted()
+        }
+
+        let replacement = Task {
+            try await gateway.connectForTest(
+                testURL("ws://replacement.example.invalid"),
+                options: options,
+                session: session)
+        }
+        try await waitUntil("replacement detached old PTZ route") {
+            await gateway.currentRoute() == nil
+        }
+        #expect(session.snapshotMakeCount() == 1)
+
+        await invokeGate.release()
+        #expect(await (invoking.value).ok == false)
+        try await replacement.value
+        #expect(await cancellations.values() == ["queued-ptz"])
+        #expect(session.snapshotMakeCount() == 2)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `node invoke cancel cancels queued PTZ control and preserves callback`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeGate = AsyncGate()
+        let taskCancellations = DisconnectProbe()
+        let admissions = DisconnectProbe()
+        let callback = NodeInvokeControlProbe()
+        let options = nodeConnectOptions(
+            caps: ["camera"],
+            commands: [OpenClawCameraCommand.ptzControl.rawValue],
+            clientId: "openclaw-macos")
+
+        try await gateway.connectForTest(
+            testURL("ws://gateway.example.invalid"),
+            options: options,
+            session: session,
+            onInvokeCancel: { invokeID in await callback.recordCancellation(invokeID) })
+        let route = try #require(await gateway.currentRoute())
+        let invoking = Task {
+            await gateway.invokeIfCurrentRoute(
+                BridgeInvokeRequest(
+                    id: "queued-ptz",
+                    command: OpenClawCameraCommand.ptzControl.rawValue,
+                    paramsJSON: nil),
+                expectedRoute: route,
+                onInvoke: { request in
+                    await invokeGate.wait()
+                    if Task.isCancelled {
+                        await taskCancellations.record(request.id)
+                        return BridgeInvokeResponse(
+                            id: request.id,
+                            ok: false,
+                            error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: canceled"))
+                    }
+                    await admissions.record(request.id)
+                    return BridgeInvokeResponse(id: request.id, ok: true)
+                })
+        }
+        try await waitUntil("PTZ invoke queued before explicit cancellation") {
+            await invokeGate.hasStarted()
+        }
+
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.cancel",
+                payload: AnyCodable(["invokeId": AnyCodable("queued-ptz")]),
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 1)
+        await invokeGate.release()
+
+        #expect(await (invoking.value).ok == false)
+        #expect(await taskCancellations.values() == ["queued-ptz"])
+        #expect(await admissions.values() == [])
+        #expect(await (callback.values()).1 == ["queued-ptz"])
+        await gateway.disconnect()
+    }
+
+    @Test
     func `queued old socket invoke cannot adopt replacement admission after disconnect cleanup`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()

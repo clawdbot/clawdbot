@@ -417,6 +417,7 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/dist:/app/.openclaw-qa-harness-dist:ro" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
+  -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail

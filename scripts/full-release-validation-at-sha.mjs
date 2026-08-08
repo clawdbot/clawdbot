@@ -34,11 +34,12 @@ const DEFAULT_INPUTS = {
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
-Creates a temporary remote branch pinned to trusted main release tooling,
-dispatches Full Release Validation with the target commit as its ref input,
+Creates temporary remote branches pinned to trusted main release tooling and
+the exact target commit, dispatches Full Release Validation with the target
+branch as its ref input,
 watches the parent run, verifies all child workflow head SHAs match the trusted
-workflow lineage through the release evidence manifest, then deletes the
-temporary branch by default. Exact-target and changelog-only Release SHA
+workflow lineage through the release evidence manifest, then deletes both
+temporary branches by default. --keep-branch retains both branches. Exact-target and changelog-only Release SHA
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
 -f fail_fast=true to cancel each child after its first failed job. The release
@@ -217,6 +218,35 @@ function verifyTargetRef(targetRef, targetSha) {
 function resolveSha(requestedSha) {
   const rev = requestedSha || "HEAD";
   return run("git", ["rev-parse", "--verify", `${rev}^{commit}`], { dryRun: false });
+}
+
+function fetchTargetRef(targetRef) {
+  if (!targetRef) {
+    return;
+  }
+  const sourceRef = RELEASE_BRANCH_PATTERN.test(targetRef)
+    ? `refs/heads/${targetRef}`
+    : `refs/tags/${targetRef}`;
+  run("git", ["fetch", "--no-tags", "origin", sourceRef], {
+    stdio: "inherit",
+  });
+}
+
+function resolveTargetSha(requestedSha, targetRef) {
+  fetchTargetRef(targetRef);
+  const revision = requestedSha || "HEAD";
+  const resolved = runStatus("git", ["rev-parse", "--verify", `${revision}^{commit}`], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const resolvedSha = typeof resolved.stdout === "string" ? resolved.stdout.trim() : "";
+  if (resolved.status !== 0 || !resolvedSha) {
+    throw new Error(
+      targetRef
+        ? `Target SHA ${revision} is not available locally after fetching ${targetRef}`
+        : `Target SHA ${revision} is not available locally; pass --target-ref so it can be fetched by name`,
+    );
+  }
+  return resolvedSha;
 }
 
 export function releaseProfileForTarget(
@@ -408,7 +438,7 @@ function verifyReleaseEvidence(parentRunId, workflowSha) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const targetSha = resolveSha(args.sha);
+  const targetSha = resolveTargetSha(args.sha, args.targetRef);
   args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
@@ -417,25 +447,32 @@ function main() {
   const shortSha = workflowSha.slice(0, 12);
   const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
+  const targetBranch = `validation/target-${targetSha.slice(0, 12)}-${Date.now()}`;
+  const remoteTargetBranchRef = `refs/heads/${targetBranch}`;
   const dispatchInputs = {
-    ref: targetSha,
+    ref: targetBranch,
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,
   };
 
   console.log(`Target SHA: ${targetSha}`);
   console.log(`Trusted workflow SHA: ${workflowSha}`);
+  console.log(`Temporary target ref: ${targetBranch}`);
   console.log(`Temporary workflow ref: ${branch}`);
-
-  run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
-    dryRun: args.dryRun,
-    stdio: "inherit",
-  });
 
   let parentRunId;
   let parentConclusion = "";
   let evidenceVerified = false;
   try {
+    run("git", ["push", "origin", `${targetSha}:${remoteTargetBranchRef}`], {
+      dryRun: args.dryRun,
+      stdio: "inherit",
+    });
+    run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
+      dryRun: args.dryRun,
+      stdio: "inherit",
+    });
+
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {
       dispatchArgs.push("-f", `${key}=${value}`);
@@ -481,15 +518,16 @@ function main() {
         evidenceVerified,
       })
     ) {
-      run("git", ["push", "origin", `:${remoteBranchRef}`], {
+      run("git", ["push", "origin", `:${remoteBranchRef}`, `:${remoteTargetBranchRef}`], {
         dryRun: args.dryRun,
         stdio: "inherit",
       });
     } else {
+      const keptRefs = `${remoteBranchRef} and ${remoteTargetBranchRef}`;
       console.warn(
         args.keepBranch
-          ? `Kept ${remoteBranchRef}`
-          : `Kept ${remoteBranchRef}: ${
+          ? `Kept ${keptRefs}`
+          : `Kept ${keptRefs}: ${
               parentConclusion === "success"
                 ? "release evidence was not verified"
                 : `parent concluded ${parentConclusion || "without a conclusion"}`
@@ -503,7 +541,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     main();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    console.error(
+      `[full-release-validation] FAILED: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    console.error("[full-release-validation] FAILED (exit 1)");
+    process.exitCode = 1;
   }
 }

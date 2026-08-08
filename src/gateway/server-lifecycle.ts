@@ -313,6 +313,7 @@ export async function prepareGatewayLifecycle(params: {
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
+    runtimeState.stopGatewayUpdateCheck();
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();

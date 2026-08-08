@@ -359,6 +359,15 @@
             "durationMs"
           ]
         },
+        "camera_ptz": {
+          "label": "camera PTZ",
+          "detailKeys": [
+            "ptzOperation",
+            "node",
+            "nodeId",
+            "deviceId"
+          ]
+        },
         "screen_record": {
           "label": "screen record",
           "detailKeys": [

@@ -107,7 +107,7 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           label: "Compacted history",
           description:
-            "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
+            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
           action: {
             kind: "session-checkpoints",
             label: "Open checkpoints",
@@ -905,7 +905,7 @@ describe("chat compaction divider", () => {
       "Compacted history",
     );
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open thread checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
     );
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent?.trim()).toBe("Open checkpoints");
@@ -1715,7 +1715,7 @@ describe("chat composer workbench", () => {
     expect(browserFileButton?.disabled).toBe(false);
     browserFileButton?.click();
     const collapseToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Collapse thread workspace"]',
+      'button[aria-label="Collapse session workspace"]',
     );
     expect(collapseToggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
     collapseToggle?.click();
@@ -1725,7 +1725,7 @@ describe("chat composer workbench", () => {
     expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
     expect(onBrowsePath).toHaveBeenCalledWith("ui");
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('button[aria-label="Thread workspace"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
   });
 
   it("opens inline Markdown images", () => {
@@ -4978,7 +4978,7 @@ describe("chat model controls", () => {
     {
       name: "uses a neutral model label for non-Codex locked sessions",
       runtimeId: "openclaw",
-      expected: "Thread model",
+      expected: "Session model",
       omitSession: false,
     },
   ])("$name", ({ runtimeId, expected, omitSession }) => {
@@ -5194,6 +5194,65 @@ describe("chat model controls", () => {
       getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
     ).toBe("1M");
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("distinguishes model rows that use different agent runtimes", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6",
+          name: "GPT-5.6",
+          provider: "openai",
+          contextWindow: 1_000_000,
+          agentRuntime: { id: "openclaw", source: "model" },
+        },
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextWindow: 1_000_000,
+          agentRuntime: { id: "codex", source: "model" },
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+          contextWindow: 200_000,
+          agentRuntime: { id: "claude-cli", source: "model" },
+        },
+        {
+          id: "gemini-3-pro",
+          name: "Gemini 3 Pro",
+          provider: "google",
+          contextWindow: 1_000_000,
+          agentRuntime: { id: "google-gemini-cli", source: "model" },
+        },
+        {
+          id: "gpt-5.6-terra",
+          name: "GPT-5.6 Terra",
+          provider: "openai",
+          contextWindow: 1_000_000,
+          agentRuntime: { id: "openclaw", source: "implicit" },
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const metaFor = (value: string) =>
+      container.querySelector(
+        `[data-chat-model-option="${value}"] .chat-controls__model-option-meta`,
+      )?.textContent;
+
+    expect(metaFor("openai/gpt-5.6")).toBe("1M · OpenClaw");
+    expect(metaFor("openai/gpt-5.6")).not.toContain("Codex");
+    expect(metaFor("openai/gpt-5.6-sol")).toBe("1M · Codex");
+    // Known CLI runtime ids map to their product labels, not capitalized ids.
+    expect(metaFor("anthropic/claude-opus-4-5")).toBe("200k · Claude CLI");
+    expect(metaFor("google/gemini-3-pro")).toBe("1M · Gemini CLI");
+    // Implicitly resolved runtimes stay unlabeled; only operator-pinned
+    // (source model/provider) rows carry the runtime meta.
+    expect(metaFor("openai/gpt-5.6-terra")).toBe("1M");
   });
 
   it("marks chat-only models in the active control and picker", () => {

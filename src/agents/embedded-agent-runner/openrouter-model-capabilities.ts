@@ -19,7 +19,7 @@
  */
 
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readResponseWithLimit } from "../../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../../infra/http-body.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -175,12 +175,6 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       cacheWrite: (parseStrictFiniteNumber(model.pricing?.input_cache_write) ?? 0) * 1_000_000,
     },
   };
-}
-
-async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
-  if (response && !response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 // ---------------------------------------------------------------------------

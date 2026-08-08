@@ -157,7 +157,7 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
-    expect(button?.getAttribute("aria-label")).toBe("New thread — Claude Code");
+    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
     button?.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });

@@ -2,7 +2,10 @@
  * Normalizes tool-call names, ids, and standalone text calls for providers.
  */
 import { randomUUID } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
+  hasNonEmptyString as replayToolCallNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   createPromotedPlainTextToolCallEvents,
@@ -334,10 +337,6 @@ function collectFollowingToolResults(
     sawNonToolResult = true;
   }
   return { ids, displaced };
-}
-
-function replayToolCallNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function resolveReplayToolCallName(

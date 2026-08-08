@@ -1,5 +1,6 @@
 // Message-action runner normalizes tool params, resolves channel/target/media,
 // applies policies, and dispatches send/poll/plugin actions.
+import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -282,12 +283,6 @@ export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
-}
-
-function asResultRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function withSendNormalization(

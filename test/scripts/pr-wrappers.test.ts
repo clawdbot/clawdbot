@@ -207,7 +207,8 @@ describe("scripts/pr wrappers", () => {
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
     expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
     expect(merge).toContain('gh_plain pr merge "$pr"');
-    expect(merge).toContain('gh_plain pr comment "$pr"');
+    expect(merge).toContain('"repos/{owner}/{repo}/issues/$pr/comments"');
+    expect(merge).toContain("--jq '.html_url // empty'");
     expect(merge).toContain("gh_plain api -X DELETE");
   });
 
@@ -335,7 +336,7 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("--squash");
     expect(script).toContain("--merge");
     expect(script).toContain("--rebase");
-    expect(script).toContain('echo "Merged via $merge_label."');
+    expect(script).toContain("'Merged via %s.");
     expect(script).toContain("--auto");
     expect(script).toContain('--match-head-commit "$PREP_HEAD_SHA"');
   });

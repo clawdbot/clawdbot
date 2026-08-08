@@ -127,7 +127,7 @@ describe("session menu", () => {
       },
     });
     const openChat = menuItem(menu, "Open chat");
-    const pin = menuItem(menu, "Pin thread");
+    const pin = menuItem(menu, "Pin session");
     const deleteItem = menuItem(menu, "Delete…");
 
     expect(openChat.disabled).toBe(false);
@@ -155,14 +155,14 @@ describe("session menu", () => {
 
     expect(menuItemLabels(menu)).toEqual([
       "Open chat",
-      "Pin thread",
+      "Pin session",
       "Change icon",
       "Mark as unread",
       "Rename…",
       "Fork",
       "Add to Workboard",
       "Move to group",
-      "Archive thread",
+      "Archive session",
       "Delete…",
     ]);
   });
@@ -215,15 +215,15 @@ describe("session menu", () => {
       session: { archived: true },
     });
 
-    expect(menuItem(menu, "Restore thread").disabled).toBe(false);
+    expect(menuItem(menu, "Restore session").disabled).toBe(false);
     expect(menuItem(menu, "Delete…").disabled).toBe(false);
-    expect(menuItem(menu, "Pin thread").disabled).toBe(true);
+    expect(menuItem(menu, "Pin session").disabled).toBe(true);
   });
 
   it("disables archive and delete when an active session cannot be archived", async () => {
     const menu = await mountMenu({ archiveAllowed: false });
 
-    expect(menuItem(menu, "Archive thread").disabled).toBe(true);
+    expect(menuItem(menu, "Archive session").disabled).toBe(true);
     expect(menuItem(menu, "Delete…").disabled).toBe(true);
   });
 
@@ -234,7 +234,7 @@ describe("session menu", () => {
       onAction: (action) => calls.push(action.kind),
     });
 
-    menuItem(menu, "Pin thread").click();
+    menuItem(menu, "Pin session").click();
 
     expect(calls).toEqual(["close", "toggle-pin"]);
   });
@@ -478,7 +478,7 @@ describe("session menu", () => {
       onAction: (action) => calls.push(action.kind),
     });
 
-    const pin = menuItem(menu, "Pin thread");
+    const pin = menuItem(menu, "Pin session");
     expect(pin.querySelector(".session-menu__shortcut")?.textContent).toBe("P");
     expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
     expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 import { stageCodexAppServerProtocolArtifacts } from "./codex-app-server-protocol-artifacts.js";
@@ -40,6 +41,11 @@ type PnpmCommand = {
   windowsVerbatimArguments?: boolean;
 };
 
+type CargoProtocolFixtureCommand = {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+};
+
 type ResolvePnpmCommandOptions = {
   comSpec?: string;
   env?: NodeJS.ProcessEnv;
@@ -69,20 +75,30 @@ export function resolveCodexProtocolPnpmCommand(
   return command;
 }
 
-export function buildCodexProtocolExportArgs(manifestPath: string, outDir: string): string[] {
-  return [
-    "run",
-    "--manifest-path",
-    manifestPath,
-    "-p",
-    "codex-app-server-protocol",
-    "--bin",
-    "export",
-    "--",
-    "--out",
-    outDir,
-    "--experimental",
-  ];
+export function buildCodexProtocolFixtureCommand(
+  manifestPath: string,
+  outDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CargoProtocolFixtureCommand {
+  return {
+    args: [
+      "test",
+      "--manifest-path",
+      manifestPath,
+      "-p",
+      "codex-app-server-protocol",
+      "--lib",
+      "schema_fixtures_tests::write_schema_fixtures_from_env",
+      "--",
+      "--exact",
+      "--ignored",
+    ],
+    env: {
+      ...env,
+      CODEX_APP_SERVER_SCHEMA_ROOT: outDir,
+      CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL: "1",
+    },
+  };
 }
 
 export function resolveCodexProtocolMinFreeBytes(env: NodeJS.ProcessEnv = process.env): number {
@@ -165,7 +181,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
   await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
-  const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
+  const root = await fs.mkdtemp(path.join(repoRoot, "codex-protocol-tmp-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
   const jsonRoot = path.join(root, "json");
@@ -175,8 +191,12 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   };
 
   try {
-    await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot });
-    runCargoProtocolGenerator(codexRepo, buildCodexProtocolExportArgs(manifestPath, generatedRoot));
+    await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot: root });
+    runCargoProtocolGenerator(
+      codexRepo,
+      buildCodexProtocolFixtureCommand(manifestPath, generatedRoot),
+    );
+    await materializeCodexProtocolPrecomputedExports(generatedRoot);
     await stageCodexAppServerProtocolArtifacts(generatedRoot, { jsonRoot, typescriptRoot });
     formatGeneratedTypeScript(repoRoot, typescriptRoot);
   } catch (error) {
@@ -191,6 +211,44 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export async function materializeCodexProtocolPrecomputedExports(root: string): Promise<void> {
+  const archivePath = path.join(root, "precomputed/app-server-exports-experimental.json.zst");
+  const decoded = JSON.parse(
+    zstdDecompressSync(await fs.readFile(archivePath)).toString("utf8"),
+  ) as unknown;
+  if (!isPlainObject(decoded)) {
+    throw new Error("Codex experimental protocol export must be an object");
+  }
+  const artifacts = [
+    ...readCodexProtocolArtifactMap(decoded.typescript, "typescript"),
+    ...readCodexProtocolArtifactMap(decoded.json_schema, "json_schema"),
+  ];
+  await fs.rm(root, { recursive: true, force: true });
+  await Promise.all(
+    artifacts.map(async ([relativePath, content]) => {
+      const targetPath = path.resolve(root, relativePath);
+      const rootPrefix = `${path.resolve(root)}${path.sep}`;
+      if (!targetPath.startsWith(rootPrefix)) {
+        throw new Error(`Codex protocol export path escapes output root: ${relativePath}`);
+      }
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, content);
+    }),
+  );
+}
+
+function readCodexProtocolArtifactMap(value: unknown, label: string): Array<[string, string]> {
+  if (!isPlainObject(value)) {
+    throw new Error(`Codex experimental protocol ${label} export must be an object`);
+  }
+  return Object.entries(value).map(([relativePath, content]) => {
+    if (typeof content !== "string") {
+      throw new Error(`Codex experimental protocol ${label} export ${relativePath} must be text`);
+    }
+    return [relativePath, content];
+  });
 }
 
 export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
@@ -321,16 +379,19 @@ async function resolveExistingStatfsPath(targetPath: string): Promise<string> {
   }
 }
 
-function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
-  const result = spawnSync("cargo", args, {
+function runCargoProtocolGenerator(codexRepo: string, command: CargoProtocolFixtureCommand): void {
+  const result = spawnSync("cargo", command.args, {
     cwd: codexRepo,
+    env: command.env,
     stdio: "inherit",
   });
   if (result.error) {
     throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
   }
   if (result.status !== 0) {
-    throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
+    throw new Error(
+      `cargo ${command.args.join(" ")} failed with exit code ${result.status ?? "unknown"}`,
+    );
   }
 }
 

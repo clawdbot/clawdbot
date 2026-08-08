@@ -200,8 +200,16 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     const isDefault =
       defaultSelectable && option.value.trim().toLowerCase() === normalizedDefaultModel;
     const catalogEntry = resolveChatModelCatalogEntry(option.value, props.modelCatalog);
+    // Runtime meta labels only operator-pinned runtimes (models/provider config);
+    // implicit/default resolution stays unlabeled so ordinary rows stay clean.
+    const agentRuntime = catalogEntry?.agentRuntime;
+    const agentRuntimeId =
+      agentRuntime && (agentRuntime.source === "model" || agentRuntime.source === "provider")
+        ? agentRuntime.id.trim()
+        : undefined;
     return {
       commitValue: isDefault ? "" : option.value,
+      ...(agentRuntimeId ? { agentRuntimeId } : {}),
       ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
       ...(typeof catalogEntry?.supportsTools === "boolean"
         ? { supportsTools: catalogEntry.supportsTools }

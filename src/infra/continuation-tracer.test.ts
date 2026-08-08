@@ -256,6 +256,20 @@ describe("continuation-tracer :: registry (set/get/reset)", () => {
     expect(reloaded.getContinuationTracer()).toBe(customTracer);
     reloaded.resetContinuationTracer();
   });
+
+  it("shares the installed tracer across distinct global stores in one process", () => {
+    const stateKey = Symbol.for("openclaw.continuationTracer.state.v1");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
+    const customTracer: Tracer = { startSpan: () => noopTracer.startSpan("x") };
+    setContinuationTracer(customTracer);
+
+    const processState = processStore[stateKey];
+    globalStore[stateKey] = { activeTracer: noopTracer };
+
+    expect(getContinuationTracer()).toBe(customTracer);
+    expect(globalStore[stateKey]).toBe(processState);
+  });
 });
 
 describe("continuation-tracer :: contract pin", () => {

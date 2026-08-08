@@ -89,6 +89,11 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
+Use `-f skip_package_telegram_e2e=true` only when the release owner explicitly
+defers the Package Acceptance Telegram E2E to a follow-up beta. The input is
+rejected for `stable` and `full`, recorded in validation evidence, and does not disable the focused
+`rerun_group=npm-telegram` workflow.
+
 ## Top-level stages
 
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs

@@ -408,15 +408,28 @@ type ContinuationTracerState = {
 const CONTINUATION_TRACER_STATE_KEY = Symbol.for("openclaw.continuationTracer.state.v1");
 
 function continuationTracerState(): ContinuationTracerState {
-  const globalState = globalThis as typeof globalThis & {
-    [key: symbol]: ContinuationTracerState | undefined;
-  };
-  const existing = globalState[CONTINUATION_TRACER_STATE_KEY];
-  if (existing) {
-    return existing;
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
+  const processState = processStore[CONTINUATION_TRACER_STATE_KEY] as
+    | ContinuationTracerState
+    | undefined;
+  if (processState) {
+    globalStore[CONTINUATION_TRACER_STATE_KEY] = processState;
+    return processState;
+  }
+  const globalState = globalStore[CONTINUATION_TRACER_STATE_KEY] as
+    | ContinuationTracerState
+    | undefined;
+  if (globalState) {
+    processStore[CONTINUATION_TRACER_STATE_KEY] = globalState;
+    return globalState;
   }
   const created: ContinuationTracerState = { activeTracer: noopTracer };
-  globalState[CONTINUATION_TRACER_STATE_KEY] = created;
+  globalStore[CONTINUATION_TRACER_STATE_KEY] = created;
+  // Bundled plugin code and core can use different globalThis contexts while
+  // sharing one Node process. Bridge through process so every emitter sees the
+  // diagnostics adapter instead of silently falling back to the no-op tracer.
+  processStore[CONTINUATION_TRACER_STATE_KEY] = created;
   return created;
 }
 
@@ -424,9 +437,9 @@ function continuationTracerState(): ContinuationTracerState {
  * Get the active continuation-tracer. Defaults to the no-op tracer until
  * `setContinuationTracer` is called by the diagnostics bootstrap step.
  *
- * The registry is stored on globalThis because continuation code crosses lazy
- * runtime and plugin-SDK module identities; every copy must see the same
- * diagnostics-otel adapter after bootstrap.
+ * The registry is bridged through process and mirrored onto globalThis because
+ * continuation code crosses lazy runtime, plugin-SDK, and bundled-plugin module
+ * identities that can use different globals within one Node process.
  */
 export function getContinuationTracer(): Tracer {
   return continuationTracerState().activeTracer;

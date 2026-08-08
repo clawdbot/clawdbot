@@ -168,7 +168,7 @@ suite.define(() => {
       await page.mouse.click(8, 8);
       await expect.poll(pickerOpen).toBe(false);
       await page.locator(".new-session-page__message").fill("use this model");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -285,7 +285,7 @@ suite.define(() => {
         .toBe(branchRequests + 1);
 
       await page.locator(".new-session-page__message").fill("keep both remembered choices");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
       await gateway.resolveDeferred("chat.metadata", { models });
@@ -388,7 +388,7 @@ suite.define(() => {
       const message = page.locator(".new-session-page__message");
       await message.fill("use a safe folder");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
 
       await gateway.rejectDeferred("fs.listDir", {
@@ -429,9 +429,9 @@ suite.define(() => {
 
       await message.fill("use the repaired preference");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
     });
@@ -477,7 +477,7 @@ suite.define(() => {
       );
 
       await page.locator(".new-session-page__message").fill("keep the newer choice");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
     });
@@ -508,7 +508,7 @@ suite.define(() => {
 
       await page.locator(".new-session-page__message").fill("keep my early folder choice");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toContain(
         "target-repo",

@@ -39,6 +39,23 @@ function identifiedClient(userId: string): GatewayClient {
 }
 
 describe("session mutation authorization store caches", () => {
+  it("fails an archiveMany request when a nested target is incognito", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:dashboard:incognito-archive-many";
+      await sessionAccessor.upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId: "session-incognito", updatedAt: 1, incognito: true },
+      );
+      const result = resolveSessionMutationAuthorization({
+        client: identifiedClient("viewer@example.com"),
+        method: "sessions.archiveMany",
+        requestParams: { targets: [{ key: sessionKey, agentId: "main" }], archived: true },
+        context: { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never,
+      });
+      expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+    });
+  });
+
   it("materializes and discovers each store once when one request resolves multiple targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (const [sessionKey, sessionId] of [

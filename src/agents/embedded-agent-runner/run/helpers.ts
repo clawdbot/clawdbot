@@ -189,15 +189,20 @@ export function resolveReportedModelRef(params: {
 
 export function resolveLatestCallUsage(params: {
   currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
-  carriedCandidates: readonly (NormalizedUsage | undefined)[];
+  carriedUsage: NormalizedUsage | undefined;
+  transcriptFallback: NormalizedUsage | undefined;
 }): {
   currentAttempt: NormalizedUsage | undefined;
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
+  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
+    ? params.transcriptFallback
+    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
   };
 }
 
@@ -218,13 +223,13 @@ export function normalizeAssistantUsageForContext(
 
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
-  lastAssistantUsage?: UsageSnapshot | null;
+  latestUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
-  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
-    ? lastAssistantUsage
+  const latestUsage = normalizeUsage(params.latestUsage as never);
+  const lastCallUsage = hasNonzeroUsage(latestUsage)
+    ? latestUsage
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
       : undefined;
@@ -252,11 +257,11 @@ export function buildErrorAgentMeta(params: {
   contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastAssistant?: { api?: string; usage?: unknown } | null;
+  currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
 }): EmbeddedAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
-    lastAssistantUsage: normalizeAssistantUsageForContext(params.lastAssistant),
+    latestUsage: normalizeAssistantUsageForContext(params.currentAttemptAssistant),
     lastRunPromptUsage: params.lastRunPromptUsage,
   });
   return {

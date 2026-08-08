@@ -4347,26 +4347,11 @@ openclaw-chat-video-player {
   height: 12px;
 }
 
-/* Keep the chevron pinned right when the mobile trigger stretches. */
-.chat-controls__inline-select-icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  margin-left: auto;
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-
-.chat-controls__inline-select-icon svg,
 .chat-controls__inline-select-check svg {
   width: 100%;
   height: 100%;
   stroke: currentColor;
   fill: none;
-}
-
-.chat-controls__inline-select[open] .chat-controls__inline-select-icon {
-  transform: rotate(180deg);
 }
 
 .chat-controls__inline-select-menu {

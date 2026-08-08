@@ -638,42 +638,6 @@ describe("managed service update handoff", () => {
     expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
   });
 
-  it("serializes extended-stable into the detached CLI command", async () => {
-    const { startManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-
-    const result = await startManagedServiceUpdateHandoff({
-      root: "/tmp/openclaw",
-      restartDrainTimeoutMs: 300_000,
-      channel: "extended-stable",
-      parentPid: 12345,
-      execPath: "/usr/local/bin/node",
-      argv1: "/opt/openclaw/openclaw.mjs",
-      meta: {},
-    });
-
-    const spawnCall = spawnMock.mock.calls[0] as unknown as [string, string[]] | undefined;
-    const args = spawnCall?.[1];
-    const paramsPath = args?.[1];
-    if (!paramsPath) {
-      throw new Error("expected managed-service handoff params path");
-    }
-    tempDirs.add(path.dirname(paramsPath));
-    const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
-      commandArgv?: string[];
-    };
-    expect(helperParams.commandArgv).toEqual([
-      "/usr/local/bin/node",
-      "/opt/openclaw/openclaw.mjs",
-      "update",
-      "--yes",
-      "--json",
-      "--channel",
-      "extended-stable",
-    ]);
-    expect(result.command).toContain("--channel extended-stable");
-  });
-
   itUnix(
     "starts the managed gateway service when the update command fails after handoff",
     async () => {

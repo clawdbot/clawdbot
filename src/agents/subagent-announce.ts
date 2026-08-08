@@ -352,9 +352,26 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     let skipAnnounceDelivery = false;
+    const fallbackReply = failedTerminalOutcome
+      ? undefined
+      : normalizeOptionalString(params.fallbackReply);
+    const hasVisibleFallback =
+      Boolean(fallbackReply) &&
+      !(isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
+    const cleanedFallbackReply = hasVisibleFallback
+      ? (normalizeSubagentAnnounceReply(fallbackReply ?? "") ?? undefined)
+      : undefined;
+
     if (!childCompletionFindings) {
-      if (params.terminalReply?.disposition === "silent" && !managedArtifactReturn) {
-        return true;
+      if (params.terminalReply?.disposition === "silent") {
+        if (
+          !managedArtifactReturn &&
+          !hasVisibleFallback &&
+          (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)
+        ) {
+          return true;
+        }
+        reply = cleanedFallbackReply;
       }
       if (
         childSessionEffectsAllowed() &&
@@ -373,13 +390,6 @@ export async function runSubagentAnnounceFlow(params: {
         }
       }
       if (!params.terminalReply) {
-        const fallbackReply = failedTerminalOutcome
-          ? undefined
-          : normalizeOptionalString(params.fallbackReply);
-        const fallbackIsSilent =
-          Boolean(fallbackReply) &&
-          (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
-
         if (childSessionEffectsAllowed() && !reply && allowFailedOutputCapture) {
           reply = await readSubagentOutput(params.childSessionKey, outcome);
         }
@@ -392,7 +402,7 @@ export async function runSubagentAnnounceFlow(params: {
           });
         }
 
-        if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+        if (!reply?.trim() && hasVisibleFallback) {
           reply = fallbackReply;
         }
 
@@ -413,55 +423,37 @@ export async function runSubagentAnnounceFlow(params: {
           }
         }
 
-        if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
-          if (fallbackReply && !fallbackIsSilent) {
-            const cleaned = normalizeSubagentAnnounceReply(fallbackReply);
-            if (cleaned === null) {
-              warnIfCronAnnounceSkipped({
-                reply,
-                requesterSessionKey: targetRequesterSessionKey,
-                childRunId: params.childRunId,
-              });
-              if (!managedArtifactReturn) {
-                return true;
-              }
-              reply = "(no output)";
-            } else {
-              reply = cleaned;
-            }
+        const replyIsAnnounceSkip = isAnnounceSkip(reply);
+        if (replyIsAnnounceSkip || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+          if (hasVisibleFallback && cleanedFallbackReply) {
+            reply = cleanedFallbackReply;
           } else {
             warnIfCronAnnounceSkipped({
               reply,
               requesterSessionKey: targetRequesterSessionKey,
               childRunId: params.childRunId,
             });
+            const suppressCompletion =
+              replyIsAnnounceSkip ||
+              isAnnounceSkip(fallbackReply) ||
+              !expectsCompletionMessage ||
+              hasVisibleFallback;
+            if (managedArtifactReturn && suppressCompletion) {
+              reply = "(no output)";
+            } else if (suppressCompletion) {
+              skipAnnounceDelivery = true;
+            } else {
+              reply = undefined;
+            }
+          }
+        } else if (reply) {
+          reply = normalizeSubagentAnnounceReply(reply) ?? cleanedFallbackReply;
+          if (!reply) {
             if (managedArtifactReturn) {
               reply = "(no output)";
             } else {
               skipAnnounceDelivery = true;
             }
-          }
-        } else if (reply) {
-          const cleaned = normalizeSubagentAnnounceReply(reply);
-          if (cleaned === null) {
-            if (fallbackReply && !fallbackIsSilent) {
-              const cleanedFallback = normalizeSubagentAnnounceReply(fallbackReply);
-              if (cleanedFallback === null) {
-                if (!managedArtifactReturn) {
-                  return true;
-                }
-                reply = "(no output)";
-              } else {
-                reply = cleanedFallback;
-              }
-            } else {
-              if (!managedArtifactReturn) {
-                return true;
-              }
-              reply = "(no output)";
-            }
-          } else {
-            reply = cleaned;
           }
         }
       }
@@ -474,6 +466,13 @@ export async function runSubagentAnnounceFlow(params: {
     if (!childSessionEffectsAllowed()) {
       childCompletionFindings = undefined;
       reply = params.roundOneReply ?? params.fallbackReply;
+      if (
+        expectsCompletionMessage &&
+        (params.terminalReply?.disposition === "silent" ||
+          isSilentReplyText(reply, SILENT_REPLY_TOKEN))
+      ) {
+        reply = hasVisibleFallback ? cleanedFallbackReply : undefined;
+      }
       outcome = params.outcome ?? { status: "unknown" };
     }
 
