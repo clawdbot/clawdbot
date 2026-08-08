@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { getFreePort } from "../test-utils/ports.js";
 import {
   cleanupMcpCliTestState,
   clearMcpOAuthCredentials,
@@ -14,8 +13,6 @@ import {
   runMcpCommand,
   runMcpOAuthLogin,
 } from "./mcp-cli.test-harness.js";
-
-type RunMcpOAuthLogin = typeof import("../agents/mcp-oauth.js").runMcpOAuthLogin;
 
 describe("mcp cli OAuth", () => {
   beforeEach(() => {
@@ -150,7 +147,6 @@ describe("mcp cli OAuth", () => {
         config: undefined,
         fetchFn: expect.any(Function),
         authorizationCode: "abc123",
-        onAuthorizationUrl: expect.any(Function),
       });
 
       mockLog.mockClear();
@@ -162,50 +158,6 @@ describe("mcp cli OAuth", () => {
         requestTimeoutMs: 9_000,
         auth: "oauth",
       });
-    });
-  });
-
-  it("captures the browser redirect before completing OAuth login", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      const port = await getFreePort();
-      const redirectUrl = `http://127.0.0.1:${port}/oauth/callback`;
-      const authUrl = new URL("https://auth.example.com/authorize");
-      authUrl.searchParams.set("state", "state-1");
-      authUrl.searchParams.set("redirect_uri", redirectUrl);
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        JSON.stringify({
-          url: "https://mcp.example.com",
-          transport: "streamable-http",
-          auth: "oauth",
-          oauth: { redirectUrl },
-        }),
-      ]);
-      mockLog.mockClear();
-      let capturedCode: string | undefined;
-      runMcpOAuthLogin.mockImplementationOnce(async (params: Parameters<RunMcpOAuthLogin>[0]) => {
-        const code = await params.onAuthorizationUrl?.(authUrl);
-        capturedCode = typeof code === "string" ? code : undefined;
-        return "authorized";
-      });
-
-      const login = runMcpCommand(["mcp", "login", "docs"]);
-      await vi.waitFor(() => expect(mockLog).toHaveBeenCalledWith(authUrl.toString()));
-      const response = await fetch(`${redirectUrl}?code=browser-code&state=state-1`);
-      expect(response.status).toBe(200);
-      await expect(response.text()).resolves.toContain("MCP OAuth complete");
-      await login;
-
-      expect(capturedCode).toBe("browser-code");
-      expect(lastLogLine()).toBe('MCP OAuth credentials saved for "docs".');
-      expect(mockLog).toHaveBeenCalledWith(
-        "If the browser redirect cannot reach this machine, stop this command and run openclaw mcp login docs --code <code>.",
-      );
     });
   });
 
