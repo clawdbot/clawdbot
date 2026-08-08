@@ -430,6 +430,26 @@ export function updateRegistryWorktree(
   });
 }
 
+export function recordLiveRegistryWorktreeRunEndCleanup(
+  env: NodeJS.ProcessEnv,
+  id: string,
+  runEndCleanup: ManagedWorktreeRunEndCleanup,
+): void {
+  const db = dbFor(env);
+  runOpenClawStateWriteTransaction(() => {
+    // Busy is authoritative only while the row is live; this conditional write cannot
+    // overwrite a concurrent remover's terminal cleanup outcome after finalization.
+    executeSqliteQuerySync(
+      db,
+      kyselyFor(db)
+        .updateTable("worktrees")
+        .set({ run_end_cleanup_json: JSON.stringify(runEndCleanup) })
+        .where("id", "=", id)
+        .where("removed_at", "is", null),
+    );
+  });
+}
+
 export function deleteRegistryWorktree(env: NodeJS.ProcessEnv, id: string): void {
   const db = dbFor(env);
   runOpenClawStateWriteTransaction(() => {
@@ -447,7 +467,10 @@ const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
 
 export class WorktreeRemovalContentionError extends Error {
-  constructor(message: string) {
+  constructor(
+    readonly kind: "busy" | "finalized",
+    message: string,
+  ) {
     super(message);
     this.name = "WorktreeRemovalContentionError";
   }
@@ -599,16 +622,30 @@ export function claimWorktreeRemovalRow(
       const db = database.db;
       const k = kyselyLeaseFor(db);
       const scope = worktreeRunLeaseScope(params.worktreeId);
+      const record = executeSqliteQuerySync(
+        db,
+        k
+          .selectFrom("worktrees")
+          .select(["id", "path", "removed_at"])
+          .where("id", "=", params.worktreeId),
+      ).rows[0];
+      if (!record || record.removed_at != null) {
+        throw new WorktreeRemovalContentionError(
+          "finalized",
+          `managed worktree was removed: ${record?.path ?? params.worktreeId}`,
+        );
+      }
       const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
       if (!params.force && livePids.length > 0) {
         throw new WorktreeRemovalContentionError(
+          "busy",
           `worktree is busy: locked by live pid ${livePids[0]}`,
         );
       }
       // The removal claim is exclusive: a live marker owned by a different token means
       // another remover is mid-operation, so this remover must not enter it too.
       if (removingToken !== undefined && removingToken !== params.token) {
-        throw new WorktreeRemovalContentionError("worktree removal is already in progress");
+        throw new WorktreeRemovalContentionError("busy", "worktree removal is already in progress");
       }
       const payloadJson = JSON.stringify({
         pid: params.pid,

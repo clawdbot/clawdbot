@@ -43,6 +43,7 @@ import {
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
   listRegistryWorktrees,
+  recordLiveRegistryWorktreeRunEndCleanup,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
@@ -1064,9 +1065,17 @@ export class ManagedWorktreeService {
       claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
     } catch (error) {
       if (error instanceof WorktreeRemovalContentionError) {
+        if (error.kind === "finalized") {
+          // The winning remover owns the terminal cleanup fact; a late contender
+          // must return without replacing it with a false retained/failed outcome.
+          return false;
+        }
         // A live run lease or a competing remover holds the worktree; a lossless
         // auto-cleanup must not race it.
-        recordOutcome("retained-busy");
+        recordLiveRegistryWorktreeRunEndCleanup(this.env, id, {
+          outcome: "retained-busy",
+          at: this.now(),
+        });
         return false;
       }
       try {

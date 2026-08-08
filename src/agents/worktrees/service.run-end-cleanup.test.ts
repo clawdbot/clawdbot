@@ -5,8 +5,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree } from "./registry.js";
-import { acquireWorktreeRunLease } from "./run-lease.js";
+import { getRegistryWorktree, WorktreeRemovalContentionError } from "./registry.js";
+import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -65,6 +65,31 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
       runEndCleanup: { outcome: "removed-lossless", at: now },
     });
     await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves the winning removal outcome when a stale remover claims late", async () => {
+    const created = await materialize("late-claim");
+    await service.acquire(created.id);
+    const staleRecord = getRegistryWorktree(env, created.id)!;
+
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+
+    let contention: unknown;
+    try {
+      claimWorktreeRemoval(env, {
+        worktreeId: staleRecord.id,
+        token: "late-remover",
+        force: false,
+      });
+    } catch (error) {
+      contention = error;
+    }
+    expect(contention).toBeInstanceOf(WorktreeRemovalContentionError);
+    expect(contention).toMatchObject({ kind: "finalized" });
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      removedAt: now,
+      runEndCleanup: { outcome: "removed-lossless", at: now },
+    });
   });
 
   it("records dirty retention and keeps the checkout intact", async () => {
