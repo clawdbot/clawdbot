@@ -1,9 +1,10 @@
-// Telegram tests cover action runtime plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
+// Telegram tests cover action runtime plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -164,11 +165,19 @@ const sendDurableMessageBatch = vi.fn(
     } as const;
   },
 );
-const sendPollTelegram = vi.fn(async () => ({
-  messageId: "790",
-  chatId: "123",
-  pollId: "poll-1",
-}));
+const sendPollTelegram = vi.fn(
+  async (): Promise<{
+    messageId: string;
+    chatId: string;
+    pollId: string;
+    pollAnswerRouting?: "enabled" | "unavailable";
+    warning?: string;
+  }> => ({
+    messageId: "790",
+    chatId: "123",
+    pollId: "poll-1",
+  }),
+);
 const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
@@ -248,12 +257,7 @@ type MockCallSource = {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockCall(source: MockCallSource, callIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
@@ -1353,6 +1357,60 @@ describe("handleTelegramAction", () => {
     expect(details.messageId).toBe("790");
     expect(details.chatId).toBe("123");
     expect(details.pollId).toBe("poll-1");
+  });
+
+  it("returns a model-visible warning when public poll routing is unavailable", async () => {
+    sendPollTelegram.mockResolvedValueOnce({
+      messageId: "790",
+      chatId: "123",
+      pollId: "poll-1",
+      pollAnswerRouting: "unavailable",
+      warning: "Poll answers cannot reach the agent. Ask the user to reply in text.",
+    });
+
+    const result = await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        isAnonymous: false,
+      },
+      telegramConfig(),
+    );
+
+    expect(resultDetails(result)).toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: "Poll answers cannot reach the agent. Ask the user to reply in text.",
+    });
+  });
+
+  it("returns the public-poll opt-in for default anonymous polls", async () => {
+    sendPollTelegram.mockResolvedValueOnce({
+      messageId: "790",
+      chatId: "123",
+      pollId: "poll-1",
+      pollAnswerRouting: "unavailable",
+      warning:
+        "Poll sent anonymously, so Telegram does not identify voters and answers cannot reach the agent. Send a public poll to route votes into this conversation.",
+    });
+
+    const result = await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+      },
+      telegramConfig(),
+    );
+
+    const options = requireRecord(mockCall(sendPollTelegram, 0, "anonymous poll")[2], "options");
+    expect(options.isAnonymous).toBeUndefined();
+    expect(resultDetails(result)).toMatchObject({
+      pollAnswerRouting: "unavailable",
+      warning: expect.stringContaining("Send a public poll"),
+    });
   });
 
   it("rejects fractional poll durations before sending", async () => {
@@ -2497,6 +2555,19 @@ describe("handleTelegramAction", () => {
       ),
     ).rejects.toThrow(expectedMessage);
   });
+
+  it.each([[[{ text: "Yes", callback_data: "yes" }]], '[[{"text":"Yes","callback_data":"yes"}]]'])(
+    "rejects retired native button input before delivery",
+    async (buttons) => {
+      await expect(
+        handleTelegramAction(
+          { action: "sendMessage", to: "123456", content: "Choose", buttons },
+          telegramConfig({ capabilities: { inlineButtons: "all" } }),
+        ),
+      ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
+      expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
     await sendInlineButtonsMessage({

@@ -2,7 +2,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 /**
  * Agent-end side effect runner.
  *
- * Harnesses use this to trigger core research capture and plugin agent_end hooks
+ * Harnesses use this to trigger skill experience review and plugin agent_end hooks
  * either fire-and-forget or awaited during tests/shutdown.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -47,17 +47,6 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
   } catch (error) {
     // Side effects are observational; failures must not change the completed run result.
     log.warn(`skill experience review scheduling failed: ${String(error)}`);
-  }
-  try {
-    const { runSkillResearchAutoCapture } = await import("../../skills/research/autocapture.js");
-    await runSkillResearchAutoCapture({
-      event: params.event,
-      ctx: params.ctx,
-      ...(params.ctx.config ? { config: params.ctx.config } : {}),
-    });
-  } catch (error) {
-    // Side effects are observational; failures must not change the completed run result.
-    log.warn(`skill research auto-capture failed: ${String(error)}`);
   }
 }
 

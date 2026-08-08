@@ -101,6 +101,11 @@ on:
         required: false
         default: ""
         type: string
+      candidate_artifact_json:
+        description: Optional immutable full-release candidate tuple with companion plugins
+        required: false
+        default: ""
+        type: string
       openai_model:
         description: OpenAI model for release cross-OS agent-turn smoke
         required: false
@@ -205,6 +210,11 @@ on:
         required: false
         default: ""
         type: string
+      candidate_artifact_json:
+        description: Optional immutable full-release candidate tuple with companion plugins
+        required: false
+        default: ""
+        type: string
       openai_model:
         description: OpenAI model for release cross-OS agent-turn smoke
         required: false
@@ -255,7 +265,15 @@ jobs:
       candidate_file_name: ${{ steps.candidate_metadata.outputs.file_name }}
       candidate_sha256: ${{ steps.candidate_metadata.outputs.sha256 }}
       candidate_version: ${{ steps.candidate_metadata.outputs.version }}
+      codex_plugin_file_name: ${{ steps.codex_plugin_metadata.outputs.file_name }}
+      codex_plugin_sha256: ${{ steps.codex_plugin_metadata.outputs.sha256 }}
       matrix: ${{ steps.matrix.outputs.value }}
+      prepublish_plugin_registry_artifact_digest: ${{ steps.upload_generated_plugin_registry.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ steps.upload_generated_plugin_registry.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_name: ${{ steps.upload_generated_plugin_registry.outputs.artifact-id && format('openclaw-cross-os-release-checks-plugins-{0}-{1}', github.run_id, github.run_attempt) || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ steps.upload_generated_plugin_registry.outputs.artifact-id && github.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ steps.upload_generated_plugin_registry.outputs.artifact-id && github.run_id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ steps.create_codex_plugin_registry.outputs.manifest_sha256 || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       source_sha: ${{ steps.candidate_metadata.outputs.source_sha }}
       workflow_ref: ${{ steps.workflow_ref.outputs.value }}
     steps:
@@ -457,12 +475,34 @@ jobs:
               exit 1
             }
 
+      - name: Validate prerelease plugin registry artifact binding
+        if: fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId != ''
+        env:
+          ARTIFACT_DIGEST: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+          ARTIFACT_ID: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          ARTIFACT_NAME: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+          ARTIFACT_RUN_ATTEMPT: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+          ARTIFACT_RUN_ID: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Prerelease plugin registry manifest SHA-256 is missing or invalid." >&2
+            exit 1
+          }
+          bash workflow/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
       - name: Checkout public source ref
-        if: inputs.candidate_artifact_name == ''
+        if: inputs.candidate_artifact_name == '' || (inputs.provider == 'openai' && fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId == '')
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.candidate_artifact_name != '' && inputs.candidate_source_sha || inputs.ref }}
           path: source
           fetch-depth: 0
           filter: blob:none
@@ -492,6 +532,13 @@ jobs:
           CI: "true"
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
+      - name: Install companion plugin build dependencies
+        if: inputs.candidate_artifact_name != '' && inputs.provider == 'openai' && fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId == ''
+        working-directory: source
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Build candidate artifact once
         if: inputs.candidate_artifact_name == ''
         env:
@@ -509,6 +556,26 @@ jobs:
           artifact-ids: ${{ inputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/input
           run-id: ${{ inputs.candidate_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download prerelease plugin registry artifact
+        if: fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId != ''
+        id: download_prepublish_plugin_registry
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins
+          run-id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+          github-token: ${{ github.token }}
+
+      - name: Retry prerelease plugin registry artifact download
+        if: fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId != '' && steps.download_prepublish_plugin_registry.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins
+          run-id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           github-token: ${{ github.token }}
 
       - name: Resolve provided candidate package
@@ -635,6 +702,80 @@ jobs:
           process.stdout.write(`source_sha=${sourceSha}\n`);
           NODE
 
+      - name: Pack exact Codex companion plugin
+        id: create_codex_plugin_registry
+        if: inputs.provider == 'openai' && fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId == ''
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins
+          CANDIDATE_VERSION: ${{ steps.candidate_metadata.outputs.version }}
+          SOURCE_SHA: ${{ steps.candidate_metadata.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          result="$(
+            node workflow/scripts/prepublish-plugin-registry-artifact.mjs create \
+              --repo-root source \
+              --artifact-dir "$ARTIFACT_DIR" \
+              --source-sha "$SOURCE_SHA" \
+              --candidate-version "$CANDIDATE_VERSION" \
+              --required-packages-json '["@openclaw/codex"]'
+          )"
+          manifest_sha256="$(jq -er '.manifestSha256' <<< "$result")"
+          echo "manifest_sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve exact Codex companion plugin
+        id: codex_plugin_metadata
+        if: inputs.provider == 'openai'
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins
+          CANDIDATE_VERSION: ${{ steps.candidate_metadata.outputs.version }}
+          EXPECTED_MANIFEST_SHA256: ${{ steps.create_codex_plugin_registry.outputs.manifest_sha256 || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
+          SOURCE_SHA: ${{ steps.candidate_metadata.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="$ARTIFACT_DIR/prepublish-plugin-registry.json"
+          required_packages="$(jq -c '[.packages[].name]' "$manifest")"
+          jq -e '.packages | any(.name == "@openclaw/codex")' "$manifest" >/dev/null || {
+            echo "Prerelease plugin registry does not contain @openclaw/codex." >&2
+            exit 1
+          }
+          node workflow/scripts/prepublish-plugin-registry-artifact.mjs verify \
+            --artifact-dir "$ARTIFACT_DIR" \
+            --source-sha "$SOURCE_SHA" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --required-packages-json "$required_packages"
+          node <<'NODE' >>"$GITHUB_OUTPUT"
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(process.env.ARTIFACT_DIR, "prepublish-plugin-registry.json"), "utf8"),
+          );
+          const entry = manifest.packages.find((candidate) => candidate.name === "@openclaw/codex");
+          if (
+            typeof entry?.tarball !== "string" ||
+            !entry.tarball.endsWith(".tgz") ||
+            entry.tarball !== path.basename(entry.tarball) ||
+            entry.tarball !== path.win32.basename(entry.tarball) ||
+            !/^[a-f0-9]{64}$/u.test(entry.sha256 ?? "")
+          ) {
+            throw new Error("Codex companion plugin manifest entry is invalid.");
+          }
+          process.stdout.write(`file_name=${entry.tarball}\n`);
+          process.stdout.write(`sha256=${entry.sha256}\n`);
+          NODE
+
+      - name: Upload generated prerelease plugin registry artifact
+        id: upload_generated_plugin_registry
+        if: inputs.provider == 'openai' && steps.create_codex_plugin_registry.outputs.manifest_sha256 != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-cross-os-release-checks-plugins-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins/
+          if-no-files-found: error
+
       - name: Capture baseline metadata
         if: ${{ inputs.mode != 'fresh' }}
         id: baseline_metadata
@@ -758,7 +899,13 @@ jobs:
           CANDIDATE_SHA256: ${{ needs.prepare.outputs.candidate_sha256 }}
           CANDIDATE_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           CANDIDATE_VERSION: ${{ needs.prepare.outputs.candidate_version }}
+          CODEX_PLUGIN_FILE_NAME: ${{ needs.prepare.outputs.codex_plugin_file_name }}
           GH_TOKEN: ${{ github.token }}
+          PLUGIN_ARTIFACT_DIGEST: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_digest }}
+          PLUGIN_ARTIFACT_ID: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}
+          PLUGIN_ARTIFACT_NAME: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_name }}
+          PLUGIN_ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_attempt }}
+          PLUGIN_ARTIFACT_RUN_ID: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_id }}
           SUITE: ${{ matrix.suite }}
         shell: bash
         run: |
@@ -811,6 +958,16 @@ jobs:
               name: process.env.BASELINE_ARTIFACT_NAME,
               runAttempt: process.env.BASELINE_ARTIFACT_RUN_ATTEMPT,
               runId: process.env.BASELINE_ARTIFACT_RUN_ID,
+            });
+          }
+          if (process.env.CODEX_PLUGIN_FILE_NAME) {
+            tuples.push({
+              digest: process.env.PLUGIN_ARTIFACT_DIGEST,
+              id: process.env.PLUGIN_ARTIFACT_ID,
+              label: "prerelease plugin registry",
+              name: process.env.PLUGIN_ARTIFACT_NAME,
+              runAttempt: process.env.PLUGIN_ARTIFACT_RUN_ATTEMPT,
+              runId: process.env.PLUGIN_ARTIFACT_RUN_ID,
             });
           }
 
@@ -897,6 +1054,26 @@ jobs:
           run-id: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Download prerelease plugin registry artifact
+        if: needs.prepare.outputs.codex_plugin_file_name != ''
+        id: download_prepublish_plugin_registry
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
+          run-id: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Retry prerelease plugin registry artifact download
+        if: needs.prepare.outputs.codex_plugin_file_name != '' && steps.download_prepublish_plugin_registry.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
+          run-id: ${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Verify release-check inputs
         shell: bash
         env:
@@ -904,6 +1081,8 @@ jobs:
           EXPECTED_CANDIDATE_SHA256: ${{ needs.prepare.outputs.candidate_sha256 }}
           BASELINE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}
           EXPECTED_BASELINE_SHA256: ${{ needs.prepare.outputs.baseline_sha256 }}
+          CODEX_PLUGIN_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins/${{ needs.prepare.outputs.codex_plugin_file_name }}
+          EXPECTED_CODEX_PLUGIN_SHA256: ${{ needs.prepare.outputs.codex_plugin_sha256 }}
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
           SUITE: ${{ matrix.suite }}
         run: |
@@ -946,6 +1125,26 @@ jobs:
               exit 1
             fi
           fi
+          if [[ -n "$EXPECTED_CODEX_PLUGIN_SHA256" ]]; then
+            [[ -f "$CODEX_PLUGIN_TGZ" ]] || {
+              echo "::error::Codex companion plugin artifact missing: ${CODEX_PLUGIN_TGZ}"
+              exit 1
+            }
+            actual_codex_sha256="$(
+              node -e '
+                const crypto = require("node:crypto");
+                const fs = require("node:fs");
+                process.stdout.write(
+                  crypto.createHash("sha256").update(fs.readFileSync(process.env.CODEX_PLUGIN_TGZ)).digest("hex"),
+                );
+              '
+            )"
+            if [[ ! "$EXPECTED_CODEX_PLUGIN_SHA256" =~ ^[a-f0-9]{64}$ ||
+                  "$actual_codex_sha256" != "$EXPECTED_CODEX_PLUGIN_SHA256" ]]; then
+              echo "::error::Codex companion plugin SHA-256 does not match the prepared identity"
+              exit 1
+            fi
+          fi
 
       - name: Run cross-OS release checks
         shell: bash
@@ -969,7 +1168,15 @@ jobs:
           SUITE: ${{ matrix.suite }}
           REF: ${{ inputs.ref }}
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
+          CODEX_PLUGIN_FILE_NAME: ${{ needs.prepare.outputs.codex_plugin_file_name }}
+          CODEX_PLUGIN_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins/${{ needs.prepare.outputs.codex_plugin_file_name }}
         run: |
+          if [[ -n "$CODEX_PLUGIN_FILE_NAME" ]]; then
+            export OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1
+            export OPENCLAW_PLUGIN_INSTALL_OVERRIDES="$(
+              node -e 'process.stdout.write(JSON.stringify({ codex: `npm-pack:${process.env.CODEX_PLUGIN_TGZ}` }))'
+            )"
+          fi
           DISCORD_ARGS=()
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)

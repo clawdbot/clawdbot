@@ -56,6 +56,37 @@ export interface BeforeToolCallResult {
   reason?: string;
 }
 
+/** A validated call participating in an internal whole-batch admission check. */
+export interface InternalToolBatchCall {
+  toolCall: AgentToolCall;
+  args: unknown;
+  /** Resolved tool identity for OpenClaw-owned argument canonicalization. */
+  tool?: AgentTool;
+}
+
+/** Typed core signal used to recover once from a critical tool loop. */
+export interface ToolLoopIntervention {
+  kind: "critical-tool-loop";
+  toolCallId: string;
+  toolName: string;
+  actionKey: string;
+  detector: string;
+  count: number;
+  reason: string;
+}
+
+/** Context for OpenClaw-owned whole-batch tool admission. */
+export interface InternalBeforeToolBatchContext {
+  assistantMessage: AssistantMessage;
+  calls: InternalToolBatchCall[];
+  context: AgentContext;
+}
+
+/** Result of OpenClaw-owned whole-batch tool admission. */
+export interface InternalBeforeToolBatchResult {
+  intervention?: ToolLoopIntervention;
+}
+
 export interface DeferredToolCallContext {
   /** The assistant message that requested the deferred tool call. */
   assistantMessage: AssistantMessage;
@@ -165,6 +196,11 @@ export interface AgentLoopTurnUpdate {
 }
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
+
+/** @internal Mutable one-shot budget shared by prompt retries in one Agent run. */
+export type ToolLoopRecoveryState = {
+  criticalToolLoopSeen: boolean;
+};
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
@@ -299,6 +335,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+
+  /** @internal OpenClaw-owned batch admission. Not a plugin or session SDK hook. */
+  beforeToolBatch?: (
+    context: InternalBeforeToolBatchContext,
+    signal?: AbortSignal,
+  ) => Promise<InternalBeforeToolBatchResult | undefined>;
+
+  /** @internal Preserves the one-shot recovery budget across Agent.continue() retries. */
+  toolLoopRecoveryState?: ToolLoopRecoveryState;
 
   /**
    * Hydrates an already-authorized tool that was deferred out of the current

@@ -1,5 +1,6 @@
 // Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
 import { vi, type Mock } from "vitest";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
@@ -22,7 +23,7 @@ type TestSessionEntry = {
   updatedAt: number;
   startedAt?: number;
   endedAt?: number;
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  status?: SessionRunStatus;
 };
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;

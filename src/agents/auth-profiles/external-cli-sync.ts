@@ -276,12 +276,11 @@ function listScopedExternalCliProfileIds(params: {
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
-  if (requestedProfileIds.length > 0) {
-    return requestedProfileIds.filter((profileId) =>
-      externalCliProfileIdMatches(providerConfig, profileId, {
-        allowLegacyNamespace: true,
-      }),
-    );
+  const matchingRequestedProfileIds = requestedProfileIds.filter((profileId) =>
+    externalCliProfileIdMatches(providerConfig, profileId, { allowLegacyNamespace: true }),
+  );
+  if (matchingRequestedProfileIds.length > 0) {
+    return matchingRequestedProfileIds;
   }
 
   const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>

@@ -10,12 +10,13 @@ import type { CompactionEntry, ResetEntry, SessionContext, SessionTreeEntry } fr
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
-function appendContextMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
-  if (entry.type === "message") {
-    messages.push(entry.message);
-  } else if (entry.type === "custom_message") {
-    messages.push(
-      asAgentMessage(
+/** Project persisted session entries into the message shared by replay and summarization. */
+export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessage | undefined {
+  switch (entry.type) {
+    case "message":
+      return entry.message;
+    case "custom_message":
+      return asAgentMessage(
         createCustomMessage(
           entry.customType,
           entry.content,
@@ -23,12 +24,27 @@ function appendContextMessage(messages: AgentMessage[], entry: SessionTreeEntry)
           entry.details,
           entry.timestamp,
         ),
-      ),
-    );
-  } else if (entry.type === "branch_summary" && entry.summary) {
-    messages.push(
-      asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)),
-    );
+      );
+    case "branch_summary":
+      return asAgentMessage(
+        createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp),
+      );
+    case "compaction":
+      return asAgentMessage(
+        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+      );
+    default:
+      return undefined;
+  }
+}
+
+function appendContextMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
+  if (entry.type === "compaction" || (entry.type === "branch_summary" && !entry.summary)) {
+    return;
+  }
+  const message = projectSessionEntryMessage(entry);
+  if (message) {
+    messages.push(message);
   }
 }
 
@@ -68,15 +84,10 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   const messages: AgentMessage[] = [];
   if (boundary) {
     if (boundary.type === "compaction") {
-      messages.push(
-        asAgentMessage(
-          createCompactionSummaryMessage(
-            boundary.summary,
-            boundary.tokensBefore,
-            boundary.timestamp,
-          ),
-        ),
-      );
+      const summary = projectSessionEntryMessage(boundary);
+      if (summary) {
+        messages.push(summary);
+      }
     }
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
     // A reset kept tail mirrors the old cross-log replay contract: only user/assistant

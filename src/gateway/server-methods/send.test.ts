@@ -1304,9 +1304,7 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.healthInterval);
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
-      if (maintenance.mediaCleanup) {
-        clearInterval(maintenance.mediaCleanup);
-      }
+      await maintenance.stopMediaCleanup();
       maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }
@@ -1359,9 +1357,7 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.healthInterval);
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
-      if (maintenance.mediaCleanup) {
-        clearInterval(maintenance.mediaCleanup);
-      }
+      await maintenance.stopMediaCleanup();
       maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }

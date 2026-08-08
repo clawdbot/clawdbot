@@ -55,6 +55,7 @@ import {
   assistantGroupCanOwnActiveRunStatus,
   assistantMessageExpansionSignature,
   buildCachedChatItems,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
@@ -88,6 +89,7 @@ import {
   openChatHideConfirmation,
   openChatRewindConfirmation,
   renderMessageGroup,
+  renderActivityGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
@@ -192,7 +194,7 @@ type ChatPinnedMessagesProps = Pick<
   "paneId" | "sessionKey" | "messages" | "userName" | "userAvatar"
 >;
 
-type ChatRenderItem = ReturnType<typeof collapseCompletedTurnWork>[number];
+type ChatRenderItem = ReturnType<typeof coalesceActivityRuns>[number];
 
 type ChatTranscriptRow =
   | { kind: "item"; key: string; item: ChatRenderItem }
@@ -1107,6 +1109,22 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
   return false;
 }
 
+function chatGroupRowKeys(group: HTMLElement): string[] {
+  const serialized = group.dataset.chatRowKeys;
+  if (serialized) {
+    try {
+      const keys = JSON.parse(serialized);
+      if (Array.isArray(keys) && keys.every((key) => typeof key === "string")) {
+        return keys;
+      }
+    } catch {
+      // Fall through to the canonical single-row key.
+    }
+  }
+  const key = group.dataset.chatRowKey?.trim();
+  return key ? [key] : [];
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
@@ -1115,7 +1133,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (!bubble) {
     return;
   }
-  const group = bubble.closest(".chat-group");
+  const group = bubble.closest<HTMLElement>(".chat-group");
   if (!group) {
     return;
   }
@@ -1130,7 +1148,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
   const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
-  const groupKey = (group as HTMLElement).dataset.chatRowKey?.trim() ?? "";
+  const groupKeys = chatGroupRowKeys(group);
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
   // Grouped rows can contain several bubbles. Match the clicked bubble to its
   // own action owner so copy never targets a sibling message.
@@ -1140,7 +1158,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
-  const canHide = Boolean(groupKey);
+  const canHide = groupKeys.length > 0;
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
   if (!canReply && !canRewind && !canHide && !canCopy && !canFork) {
@@ -1217,7 +1235,10 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
       onClick: () => {
         openChatHideConfirmation(action.button, () => {
           removeReplyContextMenu();
-          getDeletedMessages(props.sessionKey).delete(groupKey);
+          const deleted = getDeletedMessages(props.sessionKey);
+          for (const key of groupKeys) {
+            deleted.delete(key);
+          }
           props.onRequestUpdate?.();
         });
       },
@@ -1381,6 +1402,9 @@ function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown
   }
   if (item.kind === "work-group") {
     return [item.key, item.durationMs, item.hasError, ...item.groups];
+  }
+  if (item.kind === "activity-run") {
+    return [item.key, ...item.groups];
   }
   return [item];
 }
@@ -1578,16 +1602,13 @@ function renderChatThreadContents(
     { parts: StreamGroupPart[]; options: StreamGroupOptions }
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
-  const renderGroupItem = (item: MessageGroup) => {
-    if (deleted.has(item.key)) {
-      return nothing;
-    }
+  const renderGroupOptions = (item: MessageGroup, onDelete: () => void) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
       item.role.toLowerCase() === "user" && lastMessage
         ? persistedMessageEntryId(lastMessage)
         : null;
-    return renderMessageGroup(item, {
+    return {
       onOpenSidebar: props.onOpenSidebar,
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       sessionKey: props.sessionKey,
@@ -1635,10 +1656,7 @@ function renderChatThreadContents(
       allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply,
-      onDelete: () => {
-        deleted.delete(item.key);
-        requestUpdate();
-      },
+      onDelete,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1652,7 +1670,19 @@ function renderChatThreadContents(
       rewindDisabled: Boolean(props.runActive || props.runWorking),
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
-    });
+    } satisfies Parameters<typeof renderMessageGroup>[1];
+  };
+  const renderGroupItem = (item: MessageGroup) => {
+    if (deleted.has(item.key)) {
+      return nothing;
+    }
+    return renderMessageGroup(
+      item,
+      renderGroupOptions(item, () => {
+        deleted.delete(item.key);
+        requestUpdate();
+      }),
+    );
   };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
@@ -1709,6 +1739,25 @@ function renderChatThreadContents(
         ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
       `;
     }
+    if (item.kind === "activity-run") {
+      const visibleGroups = item.groups.filter((group) => !deleted.has(group.key));
+      const firstGroup = visibleGroups[0];
+      if (!firstGroup) {
+        return nothing;
+      }
+      if (visibleGroups.length === 1) {
+        return renderGroupItem(firstGroup);
+      }
+      return renderActivityGroup(
+        visibleGroups,
+        renderGroupOptions(firstGroup, () => {
+          for (const group of item.groups) {
+            deleted.delete(group.key);
+          }
+          requestUpdate();
+        }),
+      );
+    }
     if (item.kind === "group") {
       return renderGroupItem(item);
     }
@@ -1719,11 +1768,14 @@ function renderChatThreadContents(
     }
     return nothing;
   });
-  const collapsedItems = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
-    sessionKey: props.sessionKey,
-    runWorking: Boolean(props.runWorking),
-    searchActive: searchFiltering,
-  });
+  const collapsedItems = coalesceActivityRuns(
+    collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
+      sessionKey: props.sessionKey,
+      runWorking: Boolean(props.runWorking),
+      searchActive: searchFiltering,
+    }),
+    { searchActive: searchFiltering },
+  );
   // Watch/settle on actual indicator visibility (not runWorking): queued
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.

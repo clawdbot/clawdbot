@@ -46,6 +46,7 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
         deps: context.deps,
         snapshot: params.snapshot,
         reason: params.reason,
+        prepareCandidate: context.prepareRecoveryBackupCandidate,
       }),
     preserveConfigSnapshotAsClobbered: (snapshot: ConfigFileSnapshot) =>
       preserveConfigSnapshotAsClobbered({ deps: context.deps, snapshot }),

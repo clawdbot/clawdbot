@@ -187,6 +187,28 @@ describe("cua-computer direct SDK commands", () => {
     ).rejects.toThrow("COMPUTER_REFUSED_desktop_unavailable");
   });
 
+  it("rejects a mismatched reference width before desktop input", async () => {
+    const { session, click } = driver();
+    const [snapshot, act] = commands(session);
+    const screen = JSON.parse(await snapshot!.handle('{"format":"png","maxWidth":100}')) as {
+      displayFrameId: string;
+      width: number;
+    };
+
+    await expect(
+      act!.handle(
+        JSON.stringify({
+          action: "left_click",
+          displayFrameId: screen.displayFrameId,
+          refWidth: screen.width + 1,
+          x: 10,
+          y: 20,
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_STALE_FRAME: the coordinate reference width changed");
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("lazily owns one session and closes it when node-host availability stops", async () => {
     const { session, dispose } = driver();
     const createDriver = vi.fn(() => session);

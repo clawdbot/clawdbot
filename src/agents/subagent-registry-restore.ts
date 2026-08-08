@@ -16,7 +16,7 @@ import {
 } from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSessionLifecycleChangedGatewayError } from "./subagent-session-cleanup.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
@@ -327,27 +327,18 @@ export function createSubagentRegistryRestorer(config: {
             if (!ownsCleanup()) {
               return false;
             }
-            try {
-              await deps().callGateway({
-                method: "sessions.delete",
-                params: {
-                  key: entry.childSessionKey,
-                  deleteTranscript: true,
-                  expectedSessionId,
-                  expectedLifecycleRevision,
-                  emitLifecycleHooks: false,
-                },
-                timeoutMs: 10_000,
-              });
-              sessionDeleted = true;
-              return true;
-            } catch (cleanupError) {
-              if (isSessionLifecycleChangedGatewayError(cleanupError)) {
-                sessionOwnershipChanged = true;
-                return true;
-              }
-              throw cleanupError;
-            }
+            const outcome = await deleteSubagentSessionForCleanup({
+              callGateway: deps().callGateway,
+              childSessionKey: entry.childSessionKey,
+              expectedSessionId,
+              expectedLifecycleRevision,
+              onError: (cleanupError) => {
+                throw cleanupError;
+              },
+            });
+            sessionDeleted = outcome === "deleted";
+            sessionOwnershipChanged = outcome === "changed";
+            return outcome !== "failed";
           },
           {
             shouldRetry: () => !launchTerminationConfirmed && ownsCleanup(),

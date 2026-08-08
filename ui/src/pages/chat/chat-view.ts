@@ -42,8 +42,10 @@ import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import type { ChatComposerPlusMenuProps } from "./components/chat-composer-plus-menu.ts";
-import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
+import type {
+  CapabilityMenuProps,
+  ChatComposerDisabledBanner,
+} from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
@@ -166,17 +168,7 @@ export type ChatProps = {
   onDismissWorkspaceConflict?: () => void;
   sessions: SessionsListResult | null;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: Omit<
-    ChatComposerPlusMenuProps,
-    | "attachments"
-    | "disabled"
-    | "open"
-    | "view"
-    | "toolOverrides"
-    | "onOpenChange"
-    | "onViewChange"
-    | "showCapabilities"
-  >;
+  capabilityMenu?: CapabilityMenuProps;
   swarmSessions?: readonly GatewaySessionRow[];
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;

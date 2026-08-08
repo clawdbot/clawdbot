@@ -185,7 +185,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   const now = options.now ?? Date.now;
-  const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
     options.retention === "standard"
@@ -583,7 +582,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     receivedAt: number;
   }): Promise<Awaited<ReturnType<Queue["enqueue"]>>> => {
     let lastError: unknown;
-    for (const delayMs of appendRetryDelaysMs) {
+    for (const delayMs of options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS) {
       if (delayMs > 0) {
         await sleep(delayMs);
       }

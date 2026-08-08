@@ -446,8 +446,6 @@ export async function runTuiPtyEvidenceProducer(
     codeRefs: scenario.codeRefs,
     docsRefs: scenario.docsRefs,
     id: scenario.id,
-    primaryCoverageIds: scenario.coverage?.primary ?? [],
-    secondaryCoverageIds: scenario.coverage?.secondary ?? [],
     sourcePath: SOURCE_PATH,
     title: scenario.title,
   };

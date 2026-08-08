@@ -87,6 +87,20 @@ describe("reply turn admission", () => {
     recoveryOwnerReleaseMocks.schedulePendingTarget.mockClear();
   });
 
+  it("binds the originating transcript leaf to the admitted operation", async () => {
+    const admission = await admitTestReplyTurn({
+      sessionKey: "agent:main:main",
+      sessionId: "session-originating-leaf",
+      originatingLeafEntryId: "leaf-before-run",
+    });
+
+    expect(admission.status).toBe("owned");
+    if (admission.status === "owned") {
+      expect(admission.operation.originatingLeafEntryId).toBe("leaf-before-run");
+      admission.operation.complete();
+    }
+  });
+
   it("rejects a reply when an archive commits before admission", async () => {
     const sessionKey = "agent:main:telegram:topic:archived";
     const sessionId = "session-before-archive";
@@ -1138,7 +1152,10 @@ describe("reply turn admission", () => {
       });
       active.attachBackend({
         kind: "embedded",
-        cancel,
+        cancel: (reason) => {
+          cancel(reason);
+          active.complete();
+        },
         isStreaming: () => true,
       });
       active.setPhase("running");
@@ -1213,7 +1230,10 @@ describe("reply turn admission", () => {
       });
       active.attachBackend({
         kind: "embedded",
-        cancel,
+        cancel: (reason) => {
+          cancel(reason);
+          active.complete();
+        },
         isStreaming: () => true,
       });
       active.setPhase("running");
@@ -1306,19 +1326,19 @@ describe("reply turn admission", () => {
   it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
     vi.useFakeTimers();
     try {
-      const startedAt = Date.now();
       const active = createTestReplyOperation({
         sessionKey: "agent:main:telegram:topic:terminal-unreleased",
         sessionId: "terminal-unreleased-session",
       });
       active.setPhase("running");
       active.abortByUser();
-      vi.setSystemTime(startedAt + REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
 
-      const result = await admitTestReplyTurn({
+      const admission = admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:terminal-unreleased",
         sessionId: "replacement-terminal-session",
       });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+      const result = await admission;
 
       expect(active.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
       expect(replyRunRegistry.get("agent:main:telegram:topic:terminal-unreleased")).not.toBe(

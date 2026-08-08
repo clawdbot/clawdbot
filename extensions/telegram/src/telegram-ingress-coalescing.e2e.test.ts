@@ -83,8 +83,9 @@ const { createTelegramTransportIngressMonitor } =
   await import("./telegram-ingress-drain-factory.js");
 const { setTelegramRuntime } = await import("./runtime.js");
 const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
-const { openTelegramIngressQueue, telegramQueueEventId, writeTelegramSpooledUpdate } =
+const { openTelegramIngressQueue, telegramQueueEventId } =
   await import("./telegram-ingress-spool.js");
+const { writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.test-support.js");
 
 const cfg = {
   channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },

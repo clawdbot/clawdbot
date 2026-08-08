@@ -154,31 +154,39 @@ export async function runTelegramDispatchTurn(params: {
             suppressTyping: isRoomEvent,
             onPartialReply:
               params.draft.answerLane.stream || params.draft.reasoningLane.stream
-                ? (payload) =>
-                    params.draft.enqueueEvent(async () => {
+                ? (payload) => {
+                    const queued = params.draft.enqueueEvent(async () => {
                       await params.draft.ingestDraftLaneSegments(payload);
-                    })
+                    });
+                    return queued.then(() => false);
+                  }
                 : undefined,
             onBlockReplyQueued: params.draft.answerLane.stream
-              ? (payload, blockContext) =>
-                  params.draft.enqueueEvent(async () => {
+              ? (payload, blockContext) => {
+                  const queued = params.draft.enqueueEvent(async () => {
                     await params.draft.prepareQueuedAnswerBlock(payload, blockContext);
-                  })
+                  });
+                  return queued.then(() => false);
+                }
               : undefined,
             onReasoningStream: params.draft.reasoningLane.stream
-              ? (payload) =>
-                  params.draft.enqueueEvent(async () => {
+              ? (payload) => {
+                  const queued = params.draft.enqueueEvent(async () => {
                     if (splitReasoningOnNextStream) {
                       params.draft.repositionLaneForNewMessage(params.draft.reasoningLane);
                       splitReasoningOnNextStream = false;
                     }
                     await params.draft.ingestDraftLaneSegments(payload, true);
-                  })
+                  });
+                  return queued.then(() => false);
+                }
               : params.draft.streamReasoningInProgressDraft
-                ? (payload) =>
-                    params.draft.enqueueEvent(async () => {
+                ? (payload) => {
+                    const queued = params.draft.enqueueEvent(async () => {
                       await params.progress.pushReasoningProgress(payload);
-                    })
+                    });
+                    return queued.then(() => false);
+                  }
                 : undefined,
             onReasoningProgress: params.draft.answerLane.stream
               ? (payload) =>
@@ -187,8 +195,8 @@ export async function runTelegramDispatchTurn(params: {
                   })
               : undefined,
             onAssistantMessageStart: params.draft.answerLane.stream
-              ? () =>
-                  params.draft.enqueueEvent(async () => {
+              ? () => {
+                  const queued = params.draft.enqueueEvent(async () => {
                     params.reply.reasoningStepState.resetForNextStep();
                     params.progress.setFinalAnswerDelivered(false);
                     if (params.streamMode !== "progress") {
@@ -203,16 +211,23 @@ export async function runTelegramDispatchTurn(params: {
                     ) {
                       params.draft.setRotateWhenQueuedBlocksSettle(true);
                     }
-                  })
+                  });
+                  return queued.then(() => false);
+                }
               : undefined,
             onReasoningEnd: params.draft.reasoningLane.stream
-              ? () =>
-                  params.draft.enqueueEvent(async () => {
+              ? () => {
+                  const queued = params.draft.enqueueEvent(async () => {
                     params.progress.closeReasoningBurst();
                     splitReasoningOnNextStream = params.draft.reasoningLane.hasStreamedMessage;
                     params.progress.reset();
-                  })
-              : () => params.progress.closeReasoningBurst(),
+                  });
+                  return queued.then(() => false);
+                }
+              : () => {
+                  params.progress.closeReasoningBurst();
+                  return false;
+                },
             onQueuedFollowupAdmitted: () => {
               params.draft.beginQueuedFollowup();
               params.progress.beginQueuedFollowup();
@@ -250,30 +265,36 @@ export async function runTelegramDispatchTurn(params: {
             onToolResult: async (payload) => {
               const text = payload.text?.trim();
               if (!text) {
-                return;
+                return false;
               }
               const updatedDraft = await params.progress.pushToolProgress(text, {
                 startImmediately: true,
               });
+              if (updatedDraft) {
+                return true;
+              }
               if (
-                !updatedDraft &&
                 isFastModeAutoProgressPayload(payload) &&
                 !params.progress.canPushToolProgress()
               ) {
                 await params.delivery.sendPayload(payload);
+                return true;
               }
+              return false;
             },
             onCommandOutput: params.progress.handleCommandOutput,
             onPatchSummary: params.progress.handlePatchSummary,
             onCompactionStart: params.statusReactionController
               ? async () => {
                   await params.statusReactionController?.setCompacting();
+                  return false;
                 }
               : undefined,
             onCompactionEnd: params.statusReactionController
               ? async () => {
                   params.statusReactionController?.cancelPending();
                   await params.statusReactionController?.setThinking();
+                  return false;
                 }
               : undefined,
             onModelSelected,

@@ -24,6 +24,12 @@ describe("createAgentCommandLifecycle", () => {
         yielded: true,
         replayInvalid: true,
         error: { message: `Authorization: Bearer ${secret}`, nested: { secret } },
+        terminalDelivery: {
+          status: "sent",
+          resultCount: 2,
+          errorMessage: secret,
+          target: "private-target",
+        },
         unsafeMetadata: { credential: secret },
       };
       const lifecycle = createAgentCommandLifecycle({
@@ -76,8 +82,10 @@ describe("createAgentCommandLifecycle", () => {
           }),
         }),
       );
-      expect(JSON.stringify(emitAgentEvent.mock.calls[0]?.[0])).not.toContain(secret);
-      expect(emitAgentEvent.mock.calls[0]?.[0]?.data).not.toHaveProperty("unsafeMetadata");
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.terminalDelivery).toEqual({ status: "sent", resultCount: 2 });
+      expect(JSON.stringify(event)).not.toContain(secret);
+      expect(event.data).not.toHaveProperty("unsafeMetadata");
     },
   );
 
@@ -105,7 +113,7 @@ describe("createAgentCommandLifecycle", () => {
       };
 
       if (source === "post-turn error") {
-        lifecycle.emitPostTurnError(new Error(error));
+        lifecycle.emitPostTurnError(new Error(error), terminal);
       } else {
         lifecycle.emitResultError(
           {
@@ -123,6 +131,60 @@ describe("createAgentCommandLifecycle", () => {
       expect(JSON.stringify(event)).not.toContain(secret);
     },
   );
+
+  it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
+    emitAgentEvent.mockClear();
+    const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "post-turn-delivery-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+    lifecycle.emitPostTurnError(new Error("delivery failed"), {
+      metadata: {
+        terminalDelivery: {
+          status: "failed",
+          resultCount: 0,
+          errorMessage: secret,
+        },
+        terminalReceipt: { runId: "unrelated-receipt", secret },
+        terminalReply: { disposition: "visible", text: secret },
+        unsafeMetadata: { secret },
+      },
+      outcome: buildAgentRunTerminalOutcome({
+        status: "timeout",
+        stopReason: "timeout",
+        livenessState: "blocked",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    });
+
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data).toMatchObject({
+      phase: "error",
+      error: "delivery failed",
+      terminalDelivery: { status: "failed", resultCount: 0 },
+    });
+    expect(JSON.stringify(event)).not.toContain(secret);
+    for (const field of [
+      "aborted",
+      "stopReason",
+      "livenessState",
+      "timeoutPhase",
+      "providerStarted",
+      "terminalReceipt",
+      "terminalReply",
+      "unsafeMetadata",
+    ]) {
+      expect(event.data).not.toHaveProperty(field);
+    }
+  });
 
   it.each(["finishing", "end", "error"] as const)(
     "rejects malformed canonical metadata on %s events",
@@ -149,6 +211,8 @@ describe("createAgentCommandLifecycle", () => {
           providerStarted: malicious,
           livenessState: malicious,
           replayInvalid: malicious,
+          terminalReceipt: malicious,
+          terminalDelivery: malicious,
           error: malicious,
           unknownMetadata: malicious,
         },
@@ -172,6 +236,8 @@ describe("createAgentCommandLifecycle", () => {
         "providerStarted",
         "livenessState",
         "replayInvalid",
+        "terminalDelivery",
+        "terminalReceipt",
         "unknownMetadata",
       ]) {
         expect(event.data).not.toHaveProperty(field);

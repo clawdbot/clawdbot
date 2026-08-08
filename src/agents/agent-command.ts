@@ -2,12 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -25,6 +23,7 @@ import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admissi
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
 import { executionIdentity } from "./agent-command-execution-identity.js";
+import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -599,43 +598,13 @@ async function agentCommandWithAdmissionIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const resolvedDeps = await measureAgentStartup("command-dependencies", () =>
-    resolveAgentCommandDeps(deps),
-  );
-  const lifecycleGeneration =
-    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    withLocalGatewayRequestScope(
-      {
-        deps: resolvedDeps,
-        getRuntimeConfig,
-      },
-      async () =>
-        await runWithAgentCommandRecoveryOwner({
-          lifecycleGeneration,
-          mode: "reject_uncoordinated",
-          opts: {
-            ...opts,
-            lifecycleGeneration,
-            // Only the local entrypoint may inherit trusted-operator defaults.
-            senderIsOwner: opts.senderIsOwner ?? true,
-            allowModelOverride: opts.allowModelOverride ?? true,
-          },
-          prepare: async (preparedOpts) =>
-            await measureAgentStartup("command-prepare", () =>
-              prepareAgentCommandExecution(preparedOpts, runtime),
-            ),
-          run: async (prepared) =>
-            await agentCommandInternal(
-              prepared,
-              prepared.opts,
-              admissionIngress,
-              runtime,
-              resolvedDeps,
-            ),
-        }),
-    ),
-  );
+  return await runLocalAgentCommand({
+    opts,
+    runtime,
+    deps,
+    run: async (prepared, resolvedDeps) =>
+      await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
+  });
 }
 
 export async function agentCommand(

@@ -340,17 +340,19 @@ async function killSubagentRun(params: {
   targetState?: SubagentKillTargetState;
   error?: string;
 }> {
+  const markKilledBestEffort = () =>
+    markSubagentRunTerminatedBestEffort({
+      runId: params.entry.runId,
+      reason: "killed",
+      suppressTaskDelivery: params.suppressTaskDelivery,
+    });
   const initialTargetState = resolveSubagentKillTargetState(params.entry);
   if (initialTargetState) {
     if (
       params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       params.entry.suppressAnnounceReason !== "steer-restart"
     ) {
-      markSubagentRunTerminatedBestEffort({
-        runId: params.entry.runId,
-        reason: "killed",
-        suppressTaskDelivery: params.suppressTaskDelivery,
-      });
+      markKilledBestEffort();
     }
     return { killed: false, targetState: initialTargetState };
   }
@@ -399,11 +401,7 @@ async function killSubagentRun(params: {
           params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
           params.entry.suppressAnnounceReason !== "steer-restart"
         ) {
-          markSubagentRunTerminatedBestEffort({
-            runId: params.entry.runId,
-            reason: "killed",
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
+          markKilledBestEffort();
         }
         return { killed: false, sessionId, targetState: targetStateAfterRuntimeLoad };
       }
@@ -535,11 +533,7 @@ async function killSubagentRun(params: {
           targetState.task.status === "cancelled" &&
           targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
         if (killedTarget) {
-          markSubagentRunTerminatedBestEffort({
-            runId: params.entry.runId,
-            reason: "killed",
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
+          markKilledBestEffort();
         } else {
           try {
             releaseSubagentRunKillClaim({
@@ -1166,8 +1160,8 @@ export async function steerControlledSubagentRun(params: {
       // chat.abort remains the primary cleanup; exact session deletion is only
       // the fallback when the accepted session row can be resolved.
     }
-    if (!isAgentEventLifecycleGenerationCurrent(steerLifecycleGeneration)) {
-      await terminateAcceptedCollectorRun({
+    const terminateUnownedSteer = () =>
+      terminateAcceptedCollectorRun({
         childSessionKey: params.entry.childSessionKey,
         gatewayRunId: runId,
         expectedSessionId: acceptedSessionEntry?.sessionId,
@@ -1175,6 +1169,8 @@ export async function steerControlledSubagentRun(params: {
         callGateway: subagentControlDeps.callGateway,
         timeoutMs: 10_000,
       });
+    if (!isAgentEventLifecycleGenerationCurrent(steerLifecycleGeneration)) {
+      await terminateUnownedSteer();
       clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
       return {
         status: "error",
@@ -1197,14 +1193,7 @@ export async function steerControlledSubagentRun(params: {
       task: params.message,
     });
     if (!replaced) {
-      await terminateAcceptedCollectorRun({
-        childSessionKey: params.entry.childSessionKey,
-        gatewayRunId: runId,
-        expectedSessionId: acceptedSessionEntry?.sessionId,
-        expectedLifecycleRevision: acceptedSessionEntry?.lifecycleRevision,
-        callGateway: subagentControlDeps.callGateway,
-        timeoutMs: 10_000,
-      });
+      await terminateUnownedSteer();
       clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
       return {
         status: "error",

@@ -48,6 +48,15 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
+// Nested overlays bubble lifecycle events through the dropdown. Only the
+// owner's completed hide may remove its menu or consume its Escape state.
+function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: boolean) => void) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  onClose(consumeDropdownKeyboardDismissal(event));
+}
+
 type AgentMenuAgent = {
   id: string;
   name?: string;
@@ -285,7 +294,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
           slot="trigger"
@@ -425,7 +434,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
           slot="trigger"
