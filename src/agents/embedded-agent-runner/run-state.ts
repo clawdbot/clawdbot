@@ -51,8 +51,6 @@ export type EmbeddedAgentQueueHandle = {
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
-export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
-
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
   messages?: unknown[];

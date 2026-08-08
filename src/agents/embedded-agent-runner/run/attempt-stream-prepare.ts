@@ -422,8 +422,8 @@ export function prepareEmbeddedAttemptStream(input: {
           input.trajectoryRecorder?.recordEvent("prompt.submitted", {
             prompt: text,
             messages: input.activeSession.messages,
-            imagesCount: options.images?.length ?? 0,
-            ...(options.inputProvenance ? { origin: options.inputProvenance } : {}),
+            imagesCount: options?.images?.length ?? 0,
+            ...(options?.inputProvenance ? { origin: options.inputProvenance } : {}),
           });
         } catch (error) {
           log.warn(`failed to record queued prompt trajectory: ${formatErrorMessage(error)}`);

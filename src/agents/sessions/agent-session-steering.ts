@@ -36,7 +36,7 @@ export class AgentSessionSteering {
         committed: committed.promise,
         cancel: () => this.cancel(item),
       },
-      admit: (preparedText, message, enqueue) => {
+      admit: (preparedText: string, message: AgentMessage, enqueue: () => QueueReceipt) => {
         if (!this.pending.includes(item) || item.enqueue || item.queueReceipt) {
           return false;
         }
@@ -45,7 +45,7 @@ export class AgentSessionSteering {
         this.onChange();
         return true;
       },
-      reject: (error) => {
+      reject: (error: unknown) => {
         if (this.pending.includes(item) && !item.queueReceipt) {
           this.fail(item, error);
           this.drain();

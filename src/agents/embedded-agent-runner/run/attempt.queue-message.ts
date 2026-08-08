@@ -127,6 +127,7 @@ async function steerWithCommitWait(
     }
     return error instanceof Error ? error.message : "queued steering commitment failed";
   }
+  return undefined;
 }
 
 export async function steerActiveSessionWithOptionalDeliveryWait(
@@ -148,7 +149,9 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       sessionKey,
       text,
       persist: options?.userTurnTranscriptRecorder
-        ? async () => await options.userTurnTranscriptRecorder?.persistApproved()
+        ? async () => {
+            await options.userTurnTranscriptRecorder?.persistApproved();
+          }
         : undefined,
     }))
   ) {

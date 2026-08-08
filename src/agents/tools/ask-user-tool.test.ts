@@ -505,14 +505,14 @@ describe("ask_user execution", () => {
     const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
     await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
+      { steer },
       "Use this image",
       { isInboundUserMessage: true, images },
       sessionKey,
     );
     finishRegistration?.({ id: questionId });
 
-    expect(steer).toHaveBeenCalledWith("Use this image", images);
+    expect(steer.mock.calls[0]?.slice(0, 2)).toEqual(["Use this image", images]);
     await expect(pending).resolves.toMatchObject({ details: { status: "no_answer" } });
     expect(
       gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
@@ -784,13 +784,13 @@ describe("ask_user execution", () => {
     const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
     await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
+      { steer },
       "Use this image",
       { isInboundUserMessage: true, images },
       sessionKey,
     );
 
-    expect(steer).toHaveBeenCalledWith("Use this image", images);
+    expect(steer.mock.calls[0]?.slice(0, 2)).toEqual(["Use this image", images]);
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
       { timeoutMs: 10_000 },
@@ -803,7 +803,7 @@ describe("ask_user execution", () => {
     if (cancelFails) {
       const followUpSteer = vi.fn(async () => undefined);
       await steerActiveSessionWithOptionalDeliveryWait(
-        { steer: followUpSteer, subscribe: vi.fn(() => () => undefined) },
+        { steer: followUpSteer },
         "Follow-up after image",
         { isInboundUserMessage: true },
         sessionKey,
@@ -847,7 +847,7 @@ describe("ask_user execution", () => {
     const persistApproved = vi.fn(async () => undefined);
 
     await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
+      { steer },
       "1",
       {
         isInboundUserMessage: true,
@@ -888,13 +888,13 @@ describe("ask_user execution", () => {
     const steer = vi.fn(async () => undefined);
 
     await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
+      { steer },
       "Follow-up message",
       { isInboundUserMessage: true },
       "agent:main:terminal-race",
     );
 
-    expect(steer).toHaveBeenCalledWith("Follow-up message", undefined);
+    expect(steer.mock.calls[0]?.slice(0, 2)).toEqual(["Follow-up message", undefined]);
     finishWait?.({ status: "cancelled" });
     await pending;
   });
