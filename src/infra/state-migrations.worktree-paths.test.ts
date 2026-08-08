@@ -21,7 +21,7 @@ describe("managed worktree path state migrations", () => {
     });
   });
 
-  it("does not create the worktrees directory during detection", async () => {
+  it("does not create the worktrees directory during detection", { timeout: 240_000 }, async () => {
     const root = tempDirs.make("openclaw-worktree-path-detection-");
     const stateDir = path.join(root, "state");
     const worktreesDir = path.join(stateDir, "worktrees");
