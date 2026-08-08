@@ -800,6 +800,7 @@ describe("fork publication transport", () => {
         "git() { touch .local/git-called; return 99; }",
         "setup_prhead_remote",
         'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
+        "test ! -e .local/git-called",
         "if remote_error=$(resolve_prhead_remote_sha topic 2>&1); then exit 97; fi",
         'test "$remote_error" = "Remote branch refs/heads/topic not found on prhead"',
         "test -e .local/git-called",

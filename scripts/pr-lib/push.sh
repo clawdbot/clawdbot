@@ -208,10 +208,8 @@ resolve_prhead_remote_sha() {
   local remote_sha
   remote_sha=$(git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
   if [ -z "$remote_sha" ]; then
-    if [ -z "$remote_sha" ]; then
-      echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
-      exit 1
-    fi
+    echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
+    exit 1
   fi
 
   PRHEAD_REMOTE_SHA="$remote_sha"
