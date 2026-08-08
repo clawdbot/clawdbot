@@ -6,6 +6,7 @@
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
 const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
+const RELAY_SECRET_PATTERN = /^[0-9a-f]{64}$/;
 
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
@@ -18,6 +19,47 @@ const CHROME_GROUP_COLORS = {
   cyan: [0, 188, 212],
   orange: [255, 112, 32],
 };
+
+function isLoopbackHost(hostname) {
+  const normalized = hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.+$/, "");
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+  const ipv4 = /^(\d{1,3})(?:\.\d{1,3}){3}$/.exec(normalized);
+  if (ipv4?.[1] === "127") {
+    return true;
+  }
+  // URL canonicalizes mapped loopback addresses to ::ffff:7fxx:xxxx.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalized);
+  return mapped ? Number.parseInt(mapped[1], 16) >> 8 === 0x7f : false;
+}
+
+function isAllowedWebSocketUrl(url) {
+  if (url.username || url.password) {
+    return false;
+  }
+  return url.protocol === "wss:" || (url.protocol === "ws:" && isLoopbackHost(url.hostname));
+}
+
+function parseGatewayHint(raw) {
+  const value = raw.trim();
+  if (!value) {
+    return null;
+  }
+  let gateway;
+  try {
+    gateway = new URL(value);
+  } catch {
+    return null;
+  }
+  if (!isAllowedWebSocketUrl(gateway) || gateway.search || gateway.hash) {
+    return null;
+  }
+  return value;
+}
 
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
@@ -32,8 +74,8 @@ export function parsePairingString(raw) {
     return null;
   }
   const relayUrl = trimmed.slice(0, hashIndex);
-  const token = trimmed.slice(hashIndex + 1).trim();
-  if (!token) {
+  const token = trimmed.slice(hashIndex + 1);
+  if (!RELAY_SECRET_PATTERN.test(token)) {
     return null;
   }
   let parsed;
@@ -42,17 +84,21 @@ export function parsePairingString(raw) {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+  if (!isAllowedWebSocketUrl(parsed)) {
     return null;
   }
   if (!parsed.pathname.endsWith("/extension")) {
     return null;
   }
-  const gatewayUrl = parsed.searchParams.get("gateway")?.trim() || undefined;
-  parsed.searchParams.delete("gateway");
-  if ([...parsed.searchParams].length > 0) {
+  const query = [...parsed.searchParams];
+  if (query.length > 1 || (query.length === 1 && query[0]?.[0] !== "gateway")) {
     return null;
   }
+  const gatewayUrl = query.length === 1 ? parseGatewayHint(query[0]?.[1] ?? "") : undefined;
+  if (query.length === 1 && !gatewayUrl) {
+    return null;
+  }
+  parsed.search = "";
   return {
     relayUrl: parsed.toString(),
     token,

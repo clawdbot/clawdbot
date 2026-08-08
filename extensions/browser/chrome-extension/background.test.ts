@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
 const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
 const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
+const RELAY_SECRET = "a".repeat(64);
+const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
 
 type SocketEvent = { data?: unknown };
 type SocketListener = (event: SocketEvent) => void;
@@ -28,6 +30,8 @@ async function loadBackground({
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
   let messageListener: RuntimeMessageListener | undefined;
+  let tabsUpdatedListener: ((tabId: number, changeInfo: { groupId?: number }) => void) | undefined;
+  const sharedTabIds = new Set<number>([1]);
 
   class FakeWebSocket {
     static readonly CONNECTING = 0;
@@ -121,7 +125,7 @@ async function loadBackground({
       local: {
         get: vi.fn(async () => ({
           relayUrl: "ws://127.0.0.1:18797/extension",
-          token: "test-token-placeholder",
+          token: RELAY_SECRET,
           groupColor: "orange",
         })),
         set: vi.fn(async () => undefined),
@@ -137,20 +141,44 @@ async function loadBackground({
     },
     tabGroups: {
       query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
+      get: vi.fn(async (groupId: number) => ({
+        id: groupId,
+        title: groupId === 7 ? "OpenClaw" : "Other",
+        windowId: 1,
+      })),
       update: vi.fn(async () => undefined),
       onUpdated: { addListener },
       onRemoved: { addListener },
     },
     tabs: {
       query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
-      get: vi.fn(async () => ({ id: 1, windowId: 1 })),
-      group: vi.fn(async () => 1),
-      ungroup: vi.fn(async () => undefined),
+      get: vi.fn(async (tabId: number) => ({
+        id: tabId,
+        windowId: 1,
+        groupId: sharedTabIds.has(tabId) ? 7 : -1,
+      })),
+      group: vi.fn(async ({ tabIds }: { tabIds: number[] }) => {
+        for (const tabId of tabIds) {
+          sharedTabIds.add(tabId);
+        }
+        return 7;
+      }),
+      ungroup: vi.fn(async (tabIds: number[]) => {
+        for (const tabId of tabIds) {
+          sharedTabIds.delete(tabId);
+        }
+      }),
       create: vi.fn(async () => ({ id: 1 })),
       remove: vi.fn(async () => undefined),
       update: vi.fn(async () => undefined),
       onRemoved: { addListener },
-      onUpdated: { addListener },
+      onUpdated: {
+        addListener: vi.fn(
+          (listener: (tabId: number, changeInfo: { groupId?: number }) => void) => {
+            tabsUpdatedListener = listener;
+          },
+        ),
+      },
     },
     windows: { update: vi.fn(async () => undefined) },
   };
@@ -180,21 +208,34 @@ async function loadBackground({
   if (!messageListener) {
     throw new Error("expected background worker to register a message listener");
   }
+  if (!tabsUpdatedListener) {
+    throw new Error("expected background worker to register a tabs update listener");
+  }
   return {
     alarmListener,
     clearAlarm,
     createAlarm,
     executeScript: chromeMock.scripting.executeScript,
+    debuggerAttach: chromeMock.debugger.attach,
+    debuggerDetach: chromeMock.debugger.detach,
+    debuggerSendCommand: chromeMock.debugger.sendCommand,
     messageListener,
     setBadgeText,
     sockets,
     storageRemove: chromeMock.storage.local.remove,
     storageSet: chromeMock.storage.local.set,
+    shareTab: (tabId: number) => sharedTabIds.add(tabId),
+    unshareTab: (tabId: number) => sharedTabIds.delete(tabId),
     tabGroupsQuery: chromeMock.tabGroups.query,
+    tabsCreate: chromeMock.tabs.create,
     tabsGet: chromeMock.tabs.get,
     tabsGroup: chromeMock.tabs.group,
     tabsQuery: chromeMock.tabs.query,
+    tabsRemove: chromeMock.tabs.remove,
     tabsUngroup: chromeMock.tabs.ungroup,
+    tabsUpdate: chromeMock.tabs.update,
+    tabsUpdatedListener,
+    windowsUpdate: chromeMock.windows.update,
   };
 }
 
@@ -396,7 +437,7 @@ describe("popup message failure responses", () => {
     {
       message: {
         type: "pair" as const,
-        pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
+        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
       },
       operation: "set" as const,
       error: "Could not save browser pairing.",
@@ -477,7 +518,7 @@ describe("page-share relay request lifecycle", () => {
       harness.messageListener(
         {
           type: "pair",
-          pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
+          pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
         },
         {},
         pairResponse,
@@ -564,5 +605,116 @@ describe("page-share relay request lifecycle", () => {
     });
     expect(original.response).toHaveBeenCalledOnce();
     expect(replacement.response).toHaveBeenCalledOnce();
+  });
+});
+
+describe("relay command authorization", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects every authority-bearing command after tab-group revocation", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    harness.shareTab(41);
+    harness.unshareTab(41);
+
+    socket.receive({ type: "attach", seq: 1, tabId: 41 });
+    socket.receive({ type: "cdp", seq: 2, tabId: 41, method: "Runtime.evaluate" });
+    socket.receive({ type: "closeTab", seq: 3, tabId: 41 });
+    socket.receive({ type: "activateTab", seq: 4, tabId: 41 });
+
+    await vi.waitFor(() => {
+      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+      expect(
+        frames
+          .filter((frame) => frame.type === "error")
+          .map((frame) => frame.seq)
+          .toSorted((left, right) => left - right),
+      ).toEqual([1, 2, 3, 4]);
+    });
+    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
+    expect(harness.tabsRemove).not.toHaveBeenCalled();
+    expect(harness.tabsUpdate).not.toHaveBeenCalled();
+    expect(harness.windowsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps detach available as the revocation cleanup command", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    harness.unshareTab(41);
+
+    socket.receive({ type: "detach", seq: 5, tabId: 41 });
+
+    await vi.waitFor(() => {
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 41 });
+      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+      expect(frames).toContainEqual({ type: "result", seq: 5, result: {} });
+    });
+  });
+
+  it("allows createTab and groups the new tab before reporting success", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    harness.tabsCreate.mockResolvedValueOnce({ id: 42 });
+
+    socket.receive({ type: "createTab", seq: 6, url: "https://example.com" });
+
+    await vi.waitFor(() => {
+      expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [42] });
+      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+      expect(frames).toContainEqual({ type: "result", seq: 6, result: { tabId: 42 } });
+    });
+  });
+
+  it("invalidates an attach that was in flight when the tab left the group", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    harness.shareTab(43);
+    let releaseAttach = () => {};
+    harness.debuggerAttach.mockImplementationOnce(
+      async () =>
+        await new Promise<undefined>((resolve) => {
+          releaseAttach = () => resolve(undefined);
+        }),
+    );
+
+    socket.receive({ type: "attach", seq: 7, tabId: 43 });
+    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalledOnce());
+    harness.unshareTab(43);
+    harness.tabsUpdatedListener(43, { groupId: -1 });
+    await Promise.resolve();
+    releaseAttach();
+
+    await vi.waitFor(() => {
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 43 });
+      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+      expect(frames).toContainEqual({
+        type: "error",
+        seq: 7,
+        message: "tab 43 access was revoked",
+      });
+    });
   });
 });

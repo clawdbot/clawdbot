@@ -20,6 +20,12 @@ import {
   reconnectDelayMs,
   toRelayTabInfo,
 } from "./modules/relay-core.js";
+import {
+  findOpenClawGroups,
+  isOpenClawGroupId,
+  listSharedTabs,
+  requireSharedTab,
+} from "./modules/relay-tab-groups.js";
 
 const BADGE = {
   off: { text: "", color: "#000000" },
@@ -48,8 +54,8 @@ let relayOpeningDeadlineAt = 0;
 const attachedTabs = new Set();
 /** Tabs denied to every relay attach while copilot run cleanup is pending. */
 const copilotDeniedTabs = new Set();
-/** Monotonic revocation epochs invalidate attaches already in flight. */
-const copilotAccessRevisions = new Map();
+/** Monotonic revocation epochs invalidate debugger attaches already in flight. */
+const tabAccessRevisions = new Map();
 /** In-flight attach promises per tab id (coalesces concurrent attaches). */
 const attachingTabs = new Map();
 /** Latest revocation task per tab; restoration waits for its exact epoch. */
@@ -118,24 +124,6 @@ async function getCopilotConfig() {
 // Tab group management (the consent boundary)
 // ---------------------------------------------------------------------------
 
-async function findOpenClawGroups() {
-  try {
-    return await chrome.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
-  } catch {
-    return [];
-  }
-}
-
-async function listSharedTabs() {
-  const groups = await findOpenClawGroups();
-  const tabs = [];
-  for (const group of groups) {
-    const groupTabs = await chrome.tabs.query({ groupId: group.id });
-    tabs.push(...groupTabs);
-  }
-  return tabs.filter((tab) => typeof tab.id === "number");
-}
-
 async function addTabToOpenClawGroup(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const groups = await findOpenClawGroups();
@@ -171,18 +159,6 @@ async function isTabShared(tabId) {
   return shared.some((tab) => tab.id === tabId);
 }
 
-async function isOpenClawGroupId(groupId) {
-  if (!Number.isInteger(groupId) || groupId < 0) {
-    return false;
-  }
-  try {
-    const group = await chrome.tabGroups.get(groupId);
-    return group.title === OPENCLAW_TAB_GROUP_TITLE;
-  } catch {
-    return false;
-  }
-}
-
 function scheduleTabsSync() {
   if (tabsSyncTimer) {
     return;
@@ -215,29 +191,40 @@ async function syncTabsToRelay() {
 
 async function attachDebugger(tabId) {
   await copilotCustodyReady;
+  const accessRevision = tabAccessRevisions.get(tabId) ?? 0;
+  const assertAccess = async () => {
+    if (copilotDeniedTabs.has(tabId)) {
+      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
+    }
+    if ((tabAccessRevisions.get(tabId) ?? 0) !== accessRevision) {
+      throw new Error(`tab ${tabId} access was revoked`);
+    }
+    await requireSharedTab(tabId);
+    if (copilotDeniedTabs.has(tabId)) {
+      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
+    }
+    if ((tabAccessRevisions.get(tabId) ?? 0) !== accessRevision) {
+      throw new Error(`tab ${tabId} access was revoked`);
+    }
+  };
+  await assertAccess();
   // Coalesce concurrent attaches for one tab. Two relay attach commands (or an
   // auto-attach racing an explicit share) would otherwise both call
   // chrome.debugger.attach and the second throws "Another debugger is already
   // attached". The bridge and this worker can also disagree after an MV3 restart.
   const inFlight = attachingTabs.get(tabId);
   if (inFlight) {
-    return await inFlight;
+    const result = await inFlight;
+    try {
+      await assertAccess();
+    } catch (error) {
+      await detachDebugger(tabId);
+      throw error;
+    }
+    return result;
   }
-  const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
-  const assertAccess = () => {
-    if (
-      copilotDeniedTabs.has(tabId) ||
-      (copilotAccessRevisions.get(tabId) ?? 0) !== accessRevision
-    ) {
-      throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
-    }
-  };
   const attach = (async () => {
-    assertAccess();
-    if (!(await isTabShared(tabId))) {
-      throw new Error(`tab ${tabId} is not in the ${OPENCLAW_TAB_GROUP_TITLE} tab group`);
-    }
-    assertAccess();
+    await assertAccess();
     if (!attachedTabs.has(tabId)) {
       try {
         await chrome.debugger.attach({ tabId }, "1.3");
@@ -248,7 +235,7 @@ async function attachDebugger(tabId) {
         }
       }
       try {
-        assertAccess();
+        await assertAccess();
       } catch (error) {
         await detachDebugger(tabId);
         throw error;
@@ -257,7 +244,7 @@ async function attachDebugger(tabId) {
     }
     const targets = await chrome.debugger.getTargets();
     try {
-      assertAccess();
+      await assertAccess();
     } catch (error) {
       await detachDebugger(tabId);
       throw error;
@@ -285,7 +272,7 @@ async function detachDebugger(tabId) {
 }
 
 async function revokeCopilotDebugger(tabId) {
-  copilotAccessRevisions.set(tabId, (copilotAccessRevisions.get(tabId) ?? 0) + 1);
+  tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
   copilotDeniedTabs.add(tabId);
   const previous = copilotRevocations.get(tabId) ?? Promise.resolve();
   const revocation = previous
@@ -305,9 +292,9 @@ async function revokeCopilotDebugger(tabId) {
 }
 
 async function restoreCopilotDebugger(tabId) {
-  const accessRevision = copilotAccessRevisions.get(tabId) ?? 0;
+  const accessRevision = tabAccessRevisions.get(tabId) ?? 0;
   await copilotRevocations.get(tabId);
-  if ((copilotAccessRevisions.get(tabId) ?? 0) === accessRevision) {
+  if ((tabAccessRevisions.get(tabId) ?? 0) === accessRevision) {
     copilotDeniedTabs.delete(tabId);
   }
 }
@@ -372,11 +359,14 @@ async function handleRelayCommand(msg) {
         return;
       }
       case "detach": {
+        // Detach is the cleanup primitive after consent is revoked, so it must
+        // remain available when the tab is no longer shared.
         await detachDebugger(msg.tabId);
         send({ type: "result", seq, result: {} });
         return;
       }
       case "cdp": {
+        await requireSharedTab(msg.tabId);
         const target = msg.sessionId
           ? { tabId: msg.tabId, sessionId: msg.sessionId }
           : { tabId: msg.tabId };
@@ -395,14 +385,17 @@ async function handleRelayCommand(msg) {
         return;
       }
       case "closeTab": {
+        await requireSharedTab(msg.tabId);
         await detachDebugger(msg.tabId);
+        await requireSharedTab(msg.tabId);
         await chrome.tabs.remove(msg.tabId);
         send({ type: "result", seq, result: {} });
         return;
       }
       case "activateTab": {
-        const tab = await chrome.tabs.get(msg.tabId);
+        const tab = await requireSharedTab(msg.tabId);
         await chrome.tabs.update(msg.tabId, { active: true });
+        await requireSharedTab(msg.tabId);
         await focusWindowForTab(tab);
         send({ type: "result", seq, result: {} });
         return;
@@ -727,7 +720,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  copilotAccessRevisions.set(tabId, (copilotAccessRevisions.get(tabId) ?? 0) + 1);
+  tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
   attachedTabs.delete(tabId);
   copilotDeniedTabs.delete(tabId);
   scheduleTabsSync();
@@ -741,9 +734,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
   // changeInfo.groupId is the event-time membership snapshot. Preserve a
   // revocation even if a later event re-shares the tab before async cleanup.
-  void isOpenClawGroupId(changeInfo.groupId).then((shared) =>
-    copilot.onConsentChanged(tabId, { revoked: !shared }),
-  );
+  void isOpenClawGroupId(changeInfo.groupId).then(async (shared) => {
+    if (!shared) {
+      tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
+      await detachDebugger(tabId);
+    }
+    await copilot.onConsentChanged(tabId, { revoked: !shared });
+  });
 });
 chrome.tabGroups.onUpdated.addListener(() => {
   scheduleTabsSync();
