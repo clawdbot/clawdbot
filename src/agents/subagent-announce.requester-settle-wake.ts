@@ -5,9 +5,14 @@
  * this module selects a drained wave and delivers its synthesized wake.
  */
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { getFallbackGatewayContext } from "../gateway/server-plugin-fallback-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import {
+  getFallbackGatewayContext,
+  onFallbackGatewayContextReady,
+} from "../gateway/server-plugin-fallback-context.js";
 import { logWarn } from "../logger.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -72,6 +77,23 @@ const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 // Spread the no-scope deferral so restored sessions cannot align on one retry.
 const REQUESTER_SETTLE_WAKE_NO_SCOPE_JITTER_MS = 15_000;
 const activeRequesterSettleWakeBatches = new Set<string>();
+
+/**
+ * Batches deferred solely because the Gateway request scope was not yet
+ * installed. Startup installs the fallback context independently of the retry
+ * deadline, so a deferred batch must be re-admitted as soon as the context is
+ * ready instead of waiting out the full no-scope backoff (30s + jitter).
+ */
+type NoScopeDeferredRequesterSettleWake = {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  settledEntry: SubagentRunRecord;
+  runIds: readonly string[];
+  state: RequesterSettleWakeBatchState;
+  transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+  completeBatch: (runIds: readonly string[], rearmGeneration?: number) => void;
+};
+const noScopeDeferredRequesterSettleWakes = new Map<string, NoScopeDeferredRequesterSettleWake>();
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
@@ -395,6 +417,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         transitionBatch: params.transitionBatch,
         jitterMs: Math.floor(Math.random() * REQUESTER_SETTLE_WAKE_NO_SCOPE_JITTER_MS),
       });
+      // Remember the batch so a later fallback-context installation can
+      // re-admit it immediately instead of waiting out the backoff.
+      noScopeDeferredRequesterSettleWakes.set(wakeKeyBase, {
+        requesterSessionKey,
+        requesterOrigin: params.requesterOrigin,
+        settledEntry: currentSettledEntry,
+        runIds: batchRunIds,
+        state,
+        transitionBatch: params.transitionBatch,
+        completeBatch,
+      });
       logWarn(
         `requester settle wake deferred: gateway request scope not ready; retrying in ${Math.round(
           (REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0] + REQUESTER_SETTLE_WAKE_NO_SCOPE_JITTER_MS) /
@@ -540,3 +573,52 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     activeRequesterSettleWakeBatches.delete(wakeKeyBase);
   }
 }
+
+/**
+ * Re-admits batches that were deferred because the Gateway request scope was
+ * missing. Called when the fallback context is installed: re-arms each durable
+ * batch to an immediate deadline and dispatches through the same guarded
+ * root-work path the lifecycle uses. Stale batches (already completed or
+ * retired) are safe: their transition no-ops and delivery is idempotent.
+ */
+export function rearmNoScopeDeferredRequesterSettleWakes(): void {
+  if (noScopeDeferredRequesterSettleWakes.size === 0) {
+    return;
+  }
+  const batches = [...noScopeDeferredRequesterSettleWakes.values()];
+  noScopeDeferredRequesterSettleWakes.clear();
+  for (const batch of batches) {
+    batch.transitionBatch(batch.runIds, {
+      ...batch.state,
+      nextAttemptAt: 0,
+    });
+    runWithoutOwnedSessionTranscriptWrites(() => {
+      void runWithGatewayIndependentRootWorkContinuation(() =>
+        maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey: batch.requesterSessionKey,
+          requesterOrigin: batch.requesterOrigin,
+          settledEntry: batch.settledEntry,
+          transitionBatch: batch.transitionBatch,
+          completeBatch: batch.completeBatch,
+        }),
+      ).catch((error: unknown) => {
+        logWarn(
+          `requester settle wake re-admission failed after gateway context ready: ${formatWakeError(
+            error,
+          )}`,
+        );
+      });
+    });
+  }
+}
+
+function formatWakeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// Startup installs the fallback gateway context independently of the retry
+// deadline, so a no-scope-deferred wake must re-admit as soon as it is ready
+// instead of waiting out the full backoff.
+onFallbackGatewayContextReady(() => {
+  rearmNoScopeDeferredRequesterSettleWakes();
+});
