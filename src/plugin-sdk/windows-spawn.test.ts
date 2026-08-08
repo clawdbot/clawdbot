@@ -1,7 +1,7 @@
 /**
  * Tests Windows spawn compatibility helpers.
  */
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -104,6 +104,81 @@ describe("resolveWindowsSpawnProgram", () => {
       leadingArgv: [],
       resolution: "shell-fallback",
       shell: true,
+    });
+  });
+
+  it("resolves pnpm-style CMD wrapper that launches .exe directly without @ENDLOCAL", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const targetPath = path.join(dir, "tool.exe");
+    const wrapperPath = path.join(dir, "wrapper.cmd");
+    await writeFile(targetPath, "", "utf8");
+    // pnpm generates CMD wrappers with @SETLOCAL, @IF NOT DEFINED, and direct .exe launch.
+    await writeFile(
+      wrapperPath,
+      [
+        "@SETLOCAL",
+        "@IF NOT DEFINED SOME_VAR (",
+        '  @SET "SOME_VAR=%~dp0\\some\\path"',
+        ") ELSE (",
+        '  @SET "SOME_VAR=%~dp0\\some\\path;%SOME_VAR%"',
+        ")",
+        '@"%~dp0\\tool.exe"   %*',
+        "",
+      ].join("\r\n"),
+      "utf8",
+    );
+
+    const resolved = resolveWindowsSpawnProgram({
+      command: wrapperPath,
+      platform: "win32",
+      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+      execPath: "C:\\node\\node.exe",
+      packageName: "tool",
+    });
+
+    expect(resolved).toEqual({
+      command: targetPath,
+      leadingArgv: [],
+      resolution: "exe-entrypoint",
+      windowsHide: true,
+    });
+  });
+
+  it("resolves pnpm-style CMD wrapper that launches via node with @SETLOCAL and @IF", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const targetDir = path.join(dir, "node_modules", "tool", "bin");
+    await mkdir(targetDir, { recursive: true });
+    const targetPath = path.join(targetDir, "tool.js");
+    const wrapperPath = path.join(dir, "tool.cmd");
+    await writeFile(targetPath, "console.log('hello')", "utf8");
+    // pnpm also generates wrappers that launch node with a .js entrypoint.
+    await writeFile(
+      wrapperPath,
+      [
+        "@SETLOCAL",
+        "@IF NOT DEFINED NODE_PATH (",
+        '  @SET "NODE_PATH=%~dp0\\node_modules"',
+        ") ELSE (",
+        '  @SET "NODE_PATH=%~dp0\\node_modules;%NODE_PATH%"',
+        ")",
+        '@"%~dp0\\node_modules\\tool\\bin\\tool.js"   %*',
+        "",
+      ].join("\r\n"),
+      "utf8",
+    );
+
+    const resolved = resolveWindowsSpawnProgram({
+      command: wrapperPath,
+      platform: "win32",
+      env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+      execPath: "C:\\node\\node.exe",
+    });
+
+    expect(resolved).toEqual({
+      command: "C:\\node\\node.exe",
+      leadingArgv: [targetPath],
+      resolution: "node-entrypoint",
+      windowsHide: true,
     });
   });
 

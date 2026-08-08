@@ -195,9 +195,18 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       significantLines.length === 2 &&
       /^@echo off$/iu.test(significantLines[0] ?? "") &&
       /^"%~?dp0%?[\\/][^"\r\n]+"\s+%\*$/iu.test(significantLines[1] ?? "");
+    const isPnpmCmdShim =
+      normalizedContent.includes("@setlocal") &&
+      significantLines.some((line) => /^@?if\s+/i.test(line)) &&
+      content.includes("%~dp0") &&
+      significantLines.some(
+        (line) =>
+          /"\s*%~?dp0%?[\/\\][^"]+\.(exe|cmd|bat|js|mjs|cjs)"/i.test(line) ||
+          /node\s+".*%~?dp0.*"/i.test(line),
+      );
     // Only known direct-forwarder shapes are safe to bypass; arbitrary batch
     // wrappers can depend on setup commands before dispatching their target.
-    if (!isNpmCmdShim && !isDirectForwarder) {
+    if (!isNpmCmdShim && !isDirectForwarder && !isPnpmCmdShim) {
       return null;
     }
     const candidates: string[] = [];
