@@ -179,6 +179,155 @@ describe("Crabbox worker provider", () => {
     ]);
   });
 
+  it.each([
+    {
+      kind: "newly warmed",
+      replay: false,
+      expectedCommands: ["inspect", "warmup", "inspect", "run", "inspect", "inspect"],
+    },
+    {
+      kind: "replayed",
+      replay: true,
+      expectedCommands: ["inspect", "run", "inspect", "inspect"],
+    },
+  ])(
+    "waits for post-setup SSH readiness on a $kind lease and returns its final endpoint",
+    async ({ replay, expectedCommands }) => {
+      const calls: string[][] = [];
+      let warmed = false;
+      let leaseInspections = 0;
+      let resolveFinalInspect!: (result: SpawnResult) => void;
+      let markFinalInspectStarted!: () => void;
+      const finalInspect = new Promise<SpawnResult>((resolve) => {
+        resolveFinalInspect = resolve;
+      });
+      const finalInspectStarted = new Promise<void>((resolve) => {
+        markFinalInspectStarted = resolve;
+      });
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        if (argv[1] === "warmup") {
+          warmed = true;
+          return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+        }
+        if (argv[1] === "run") {
+          return commandResult();
+        }
+        const id = argv[argv.indexOf("--id") + 1];
+        if (!replay && !warmed && id !== LEASE_ID) {
+          return commandResult({ code: 4, stderr: `lease/server not found: ${id}` });
+        }
+        leaseInspections += 1;
+        if (leaseInspections === 1) {
+          return commandResult({
+            stdout: inspectJson({
+              sshFallbackPorts: [22],
+              sshHost: "before-setup.example.test",
+              sshHostKey: HOST_KEY,
+            }),
+          });
+        }
+        if (leaseInspections === 2) {
+          return commandResult({
+            stdout: inspectJson({
+              ready: false,
+              sshFallbackPorts: [22],
+              sshHost: "restarting.example.test",
+              sshHostKey: HOST_KEY,
+            }),
+          });
+        }
+        markFinalInspectStarted();
+        return await finalInspect;
+      });
+
+      const provision = provider.provision(
+        { ...PROFILE, setup: "install-node" },
+        `provision:post-setup-${replay ? "replay" : "fresh"}`,
+      );
+      let settled = false;
+      void provision.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await finalInspectStarted;
+      expect(settled).toBe(false);
+      resolveFinalInspect(
+        commandResult({
+          stdout: inspectJson({
+            sshFallbackPorts: [22, 2222],
+            sshHost: "after-setup.example.test",
+            sshHostKey: "ssh-ed25519 BBBB",
+            sshPort: "2200",
+          }),
+        }),
+      );
+
+      await expect(provision).resolves.toMatchObject({
+        leaseId: LEASE_ID,
+        ssh: {
+          fallbackPorts: [22, 2222],
+          host: "after-setup.example.test",
+          hostKey: "ssh-ed25519 BBBB",
+          port: 2200,
+        },
+      });
+      expect(calls.map((argv) => argv[1])).toEqual(expectedCommands);
+    },
+  );
+
+  it("stops a lease that disappears after successful setup", async () => {
+    const calls: string[][] = [];
+    let inspections = 0;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "run" || argv[1] === "stop") {
+        return commandResult();
+      }
+      inspections += 1;
+      return inspections === 1
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${LEASE_ID}` });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, setup: "install-node" }, "provision:setup-disappeared"),
+    ).rejects.toThrow("disappeared while waiting for SSH readiness");
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "run", "inspect", "stop"]);
+    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+  });
+
+  it("re-attests security on the fresh post-setup inspect before polling", async () => {
+    const calls: string[][] = [];
+    let inspections = 0;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "run" || argv[1] === "stop") {
+        return commandResult();
+      }
+      inspections += 1;
+      return commandResult({
+        stdout: inspectJson({
+          providerMetadata: { instanceProfileAttached: inspections > 1 },
+          ready: inspections === 1,
+          sshHostKey: HOST_KEY,
+        }),
+      });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, setup: "install-node" }, "provision:setup-reattest"),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: "Crabbox AWS inspect must attest that no instance profile is attached",
+    });
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "run", "inspect", "stop"]);
+  });
+
   it("stops the lease when the profile setup command fails", async () => {
     const calls: string[][] = [];
     let warmed = false;

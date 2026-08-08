@@ -92,7 +92,7 @@ Crabbox inspect reports a primary SSH port and may advertise ordered fallback po
 
 ### The setup command
 
-`settings.setup` runs on the leased box after it is SSH-ready and before OpenClaw is installed. It runs on **every** provision attempt (including replays after an interrupted dispatch), so it must be idempotent — guard installs with a `command -v`/`test -x` check as in the example. If setup fails, the provider stops the lease and the dispatch fails closed; no half-configured box is left running.
+`settings.setup` runs on the leased box after it is SSH-ready and before OpenClaw is installed. After setup succeeds, OpenClaw performs a fresh Crabbox inspect and waits for SSH readiness again before bootstrap, because setup may restart SSH. It runs on **every** provision attempt (including replays after an interrupted dispatch), so it must be idempotent — guard installs with a `command -v`/`test -x` check as in the example. If setup fails, the provider stops the lease and the dispatch fails closed; no half-configured box is left running.
 
 ### Install channels
 
