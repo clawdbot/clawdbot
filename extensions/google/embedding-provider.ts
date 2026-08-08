@@ -44,17 +44,15 @@ export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-001": 2048,
+  "gemini-embedding-2": 8192,
   "gemini-embedding-2-preview": 8192,
 };
 
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
-// --- gemini-embedding-2-preview support ---
+// --- Gemini Embedding 2 support ---
 
-const GEMINI_EMBEDDING_2_MODELS = new Set([
-  "gemini-embedding-2-preview",
-  // Add the GA model name here once released.
-]);
+const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
 const GEMINI_EMBEDDING_2_VALID_DIMENSIONS = [768, 1536, 3072] as const;
@@ -75,6 +73,10 @@ export type GeminiTextEmbeddingRequest = GeminiEmbeddingRequest;
 
 function malformedGeminiEmbeddingResponse(): Error {
   return new Error("gemini embeddings failed: malformed JSON response");
+}
+
+function unexpectedGeminiEmbeddingDimensions(expected: number, actual: number): Error {
+  return new Error(`gemini embeddings failed: expected ${expected} dimensions, received ${actual}`);
 }
 
 function readGeminiEmbeddingValues(value: unknown): number[] {
@@ -159,8 +161,8 @@ export function buildGeminiEmbeddingRequest(params: {
  * Returns true if the given model name is a gemini-embedding-2 variant that
  * supports `outputDimensionality` and extended task types.
  */
-function isGeminiEmbedding2Model(model: string): boolean {
-  return GEMINI_EMBEDDING_2_MODELS.has(model);
+export function isGeminiEmbedding2Model(model: string): boolean {
+  return GEMINI_EMBEDDING_2_MODELS.has(normalizeGeminiModel(model));
 }
 
 /**
@@ -202,6 +204,13 @@ function normalizeGeminiModel(model: string): string {
     return withoutPrefix.slice("google/".length);
   }
   return withoutPrefix;
+}
+
+function sanitizeGeminiEmbedding(values: number[], expectedDimensions?: number): number[] {
+  if (expectedDimensions != null && values.length !== expectedDimensions) {
+    throw unexpectedGeminiEmbeddingDimensions(expectedDimensions, values.length);
+  }
+  return sanitizeAndNormalizeEmbedding(values);
 }
 
 async function fetchGeminiEmbeddingPayload(params: {
@@ -305,7 +314,10 @@ export async function createGeminiEmbeddingProvider(
       }),
       signal: callOptions?.signal,
     });
-    return sanitizeAndNormalizeEmbedding(readGeminiSingleEmbedding(payload));
+    return sanitizeGeminiEmbedding(
+      readGeminiSingleEmbedding(payload),
+      isV2 ? outputDimensionality : undefined,
+    );
   };
 
   const embedBatchInputs = async (
@@ -331,7 +343,9 @@ export async function createGeminiEmbeddingProvider(
       signal: callOptions?.signal,
     });
     const embeddings = readGeminiBatchEmbeddings(payload, inputs.length);
-    return embeddings.map((values) => sanitizeAndNormalizeEmbedding(values));
+    return embeddings.map((values) =>
+      sanitizeGeminiEmbedding(values, isV2 ? outputDimensionality : undefined),
+    );
   };
 
   const embedBatch = async (
