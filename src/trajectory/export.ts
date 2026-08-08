@@ -1088,14 +1088,19 @@ function buildArtifactsCapture(params: {
           .toSorted((left, right) => Number(left.data?.startedAt) - Number(right.data?.startedAt))
           .at(-1)
       : undefined;
+  const selectedEnd =
+    latestTimedEnd ??
+    (cohortStart < 0
+      ? params.runtimeEvents.findLast((event) => event.type === "session.ended")
+      : undefined);
   const cohortRunId =
     params.runtimeEvents[cohortStart]?.runId ??
-    latestTimedEnd?.runId ??
+    selectedEnd?.runId ??
     params.runtimeEvents.at(-1)?.runId;
-  const cohortEnd = latestTimedEnd
-    ? params.runtimeEvents.lastIndexOf(latestTimedEnd) + 1
+  const cohortEnd = selectedEnd
+    ? params.runtimeEvents.lastIndexOf(selectedEnd) + 1
     : params.runtimeEvents.length;
-  const partialStart = latestTimedEnd
+  const partialStart = selectedEnd
     ? params.runtimeEvents.findLastIndex(
         (event, index) =>
           index < cohortEnd - 1 && event.type === "session.ended" && event.runId === cohortRunId,

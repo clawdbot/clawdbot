@@ -673,8 +673,12 @@ describe("exportTrajectoryBundle", () => {
 
   it.each([
     {
-      name: "timed terminal-only tail with a delayed older terminal",
+      name: "timed tail with a delayed older same-run terminal",
       runtimeEvents: runtimeAttemptEvents([
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error", startedAt: 100 }],
+        ["model.completed", "shared-run", currentCompletion],
         [
           "session.ended",
           "shared-run",
@@ -682,21 +686,30 @@ describe("exportTrajectoryBundle", () => {
         ],
         ["session.ended", "shared-run", { status: "error", stopReason: "length", startedAt: 100 }],
       ]),
+      expectedUsage: true,
     },
     {
-      name: "timestamp-free terminal-only tail with stale earlier artifacts",
+      name: "timestamp-free tail with reused run id and stale artifacts",
       runtimeEvents: runtimeAttemptEvents([
-        ["model.completed", "old-run", staleCompletion],
-        ["trace.artifacts", "old-run", staleArtifacts],
-        ["session.ended", "old-run", { status: "error", stopReason: "length" }],
-        ["session.ended", "current-run", { status: "interrupted", stopReason: "aborted" }],
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error", stopReason: "length" }],
+        ["session.ended", "shared-run", { status: "interrupted", stopReason: "aborted" }],
       ]),
+      expectedUsage: false,
     },
-  ])("exports $name", async ({ runtimeEvents }) => {
+  ])("exports $name", async ({ runtimeEvents, expectedUsage }) => {
     const artifacts = await exportRuntimeArtifacts(runtimeEvents);
 
     expect(artifacts).toMatchObject({ finalStatus: "interrupted", stopReason: "aborted" });
-    expect(artifacts).not.toHaveProperty("usage");
+    if (expectedUsage) {
+      expect(artifacts).toMatchObject({
+        usage: { totalTokens: 2 },
+        assistantTexts: ["current completion"],
+      });
+    } else {
+      expect(artifacts).not.toHaveProperty("usage");
+    }
     expect(artifacts).not.toHaveProperty("itemLifecycle");
   });
 
