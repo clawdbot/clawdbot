@@ -34,7 +34,7 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
-import type { GatewayRequestContextWithClientLookup } from "./server-request-context.js";
+import type { GatewayClient } from "./server-methods/shared-types.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
@@ -969,7 +969,7 @@ function createDeferredGatewayUpdateCheck(params: {
   };
   isNixMode: boolean;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-  getClientConnIds: NonNullable<GatewayRequestContextWithClientLookup["getClientConnIds"]>;
+  getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   waitForPostReadyWork?: () => Promise<void>;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => void } {
@@ -1090,7 +1090,7 @@ export async function startGatewayPostAttachRuntime(
     isNixMode: boolean;
     startupStartedAt?: number;
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-    getClientConnIds: NonNullable<GatewayRequestContextWithClientLookup["getClientConnIds"]>;
+    getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
