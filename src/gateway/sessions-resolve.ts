@@ -132,6 +132,9 @@ function findVisibleShortIdMatches(params: {
     if (!uuid?.toLowerCase().replaceAll("-", "").startsWith(params.shortId)) {
       return [];
     }
+    if (resolveDeletedAgentIdFromSessionKey(params.cfg, key, entry) !== null) {
+      return [];
+    }
     const row = buildGatewaySessionInfo({
       cfg: params.cfg,
       storePath: params.storePath,
@@ -270,10 +273,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
       return { ok: true, ambiguous: true, candidates: narrowed.slice(0, 10) };
     }
     const selected = expectDefined(narrowed[0], "short session match at 0");
-    const agentCheckShortId = validateSessionAgentExists(cfg, selected.key, store[selected.key]);
-    if (agentCheckShortId) {
-      return agentCheckShortId;
-    }
     return { ok: true, key: selected.key };
   }
 

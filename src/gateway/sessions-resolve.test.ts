@@ -303,6 +303,46 @@ describe("resolveSessionKeyFromResolveParams", () => {
     ).resolves.toEqual({ ok: true, key: deployKey });
   });
 
+  it("ignores a deleted-agent short-id collision before resolving a unique match", async () => {
+    const survivingKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+    const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        [deletedKey]: { updatedAt: 2, displayName: "Deleted session" },
+        [survivingKey]: { updatedAt: 1, displayName: "Surviving session" },
+      },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "12345678", slugHint: "deleted-session" },
+      }),
+    ).resolves.toEqual({ ok: true, key: survivingKey });
+  });
+
+  it("reports a deleted-agent-only short-id match as missing", async () => {
+    const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: { [deletedKey]: { updatedAt: 1, displayName: "Deleted session" } },
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { shortId: "12345678" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: 12345678",
+      },
+    });
+  });
+
   it("returns at most ten recent candidates and ignores a stale slug hint", async () => {
     const store = Object.fromEntries(
       Array.from({ length: 12 }, (_, index) => {
