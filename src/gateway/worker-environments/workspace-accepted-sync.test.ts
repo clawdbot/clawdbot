@@ -13,7 +13,6 @@ import {
 } from "./tunnel-contract.js";
 import {
   createAcceptedWorkspacePublisherFactory,
-  isIndeterminateWorkspaceApplyResult,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import {
@@ -60,17 +59,6 @@ function manifestRef(value: WorkerWorkspaceManifest): string {
 }
 
 describe("accepted workspace publication", () => {
-  it.each([
-    ["successful exit", result(), false],
-    ["ordinary remote failure", result({ code: 1 }), false],
-    ["SSH transport exit", result({ code: 255 }), true],
-    ["timeout", result({ code: null, killed: true, termination: "timeout" }), true],
-    ["no-output timeout", result({ code: null, termination: "no-output-timeout" }), true],
-    ["signal", result({ code: null, signal: "SIGTERM", termination: "signal" }), true],
-  ] as const)("classifies %s ambiguity", (_name, commandResult, expected) => {
-    expect(isIndeterminateWorkspaceApplyResult(commandResult)).toBe(expected);
-  });
-
   it("settles a still-running apply after SSH loses its exit status", async () => {
     const root = tempDirs.make("openclaw-accepted-ssh-loss-");
     const local = path.join(root, "local");

@@ -19,7 +19,7 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
-export function isIndeterminateWorkspaceApplyResult(result: SpawnResult): boolean {
+function isIndeterminateWorkspaceApplyResult(result: SpawnResult): boolean {
   return result.termination !== "exit" || result.code === 255;
 }
 
