@@ -1186,6 +1186,7 @@
               "type": "string"
             },
             "deviceId": {
+              "description": "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
               "type": "string"
             },
             "duration": {
@@ -1259,6 +1260,7 @@
               "type": "string"
             },
             "panDegrees": {
+              "description": "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
               "type": "number"
             },
             "priority": {
@@ -1266,6 +1268,7 @@
               "type": "string"
             },
             "ptzOperation": {
+              "description": "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
               "enum": ["status", "set", "move", "home"],
               "type": "string"
             },
@@ -1285,6 +1288,7 @@
               "type": "string"
             },
             "tiltDegrees": {
+              "description": "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
               "type": "number"
             },
             "timeoutMs": {
@@ -1295,6 +1299,7 @@
               "type": "string"
             },
             "zoomPercent": {
+              "description": "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
               "type": "number"
             }
           },

@@ -138,6 +138,38 @@ struct CameraPTZServiceTests {
             deviceExists: { $0 == "camera-id" })
     }
 
+    private func videoControlDescriptors(
+        _ descriptors: [UInt8],
+        reportedLength: UInt16? = nil) -> [UInt8]
+    {
+        let actualLength = UInt16(13 + descriptors.count)
+        let totalLength = reportedLength ?? actualLength
+        return [
+            13, 0x24, 0x01, 0x10, 0x01,
+            UInt8(truncatingIfNeeded: totalLength),
+            UInt8(truncatingIfNeeded: totalLength >> 8),
+            0, 0, 0, 0, 1, 1,
+        ] + descriptors
+    }
+
+    private func cameraTerminal(
+        id: UInt8,
+        controls: UInt16,
+        controlSize: UInt8 = 2) -> [UInt8]
+    {
+        let requiredControls = [
+            UInt8(truncatingIfNeeded: controls),
+            UInt8(truncatingIfNeeded: controls >> 8),
+        ]
+        let controlBytes = controlSize < 2
+            ? Array(requiredControls.prefix(Int(controlSize)))
+            : requiredControls + Array(repeating: 0, count: Int(controlSize) - 2)
+        return [
+            UInt8(15 + controlBytes.count),
+            0x24, 0x02, id, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, controlSize,
+        ] + controlBytes
+    }
+
     @Test func `range clamps snaps and converts zoom percentages`() {
         let range = CameraPTZRawRange(min: 100, max: 500, step: 20, default: 100)
 
@@ -157,35 +189,59 @@ struct CameraPTZServiceTests {
         #expect(identity.productId == 0x4C06)
     }
 
-    @Test func `descriptor parser extracts input terminal controls`() throws {
-        let controls = UInt32(1 << 9 | 1 << 11)
-        let descriptor: [UInt8] = [
-            13, 0x24, 0x01, 0x10, 0x01, 31, 0, 0, 0, 0, 0, 1, 1,
-            18, 0x24, 0x02, 7, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 3,
-            UInt8(truncatingIfNeeded: controls),
-            UInt8(truncatingIfNeeded: controls >> 8),
-            UInt8(truncatingIfNeeded: controls >> 16),
-        ]
+    @Test func `descriptor parser extracts PTZ bits and camera terminal ID`() throws {
+        let controls = UInt16(1 << 9 | 1 << 11)
+        let descriptors = self.videoControlDescriptors(self.cameraTerminal(id: 7, controls: controls))
 
-        let parsed = try #require(CameraUVCDescriptorParser.parse(descriptor))
+        let parsed = try #require(CameraUVCDescriptorParser.parse(descriptors))
         #expect(parsed.terminalId == 7)
-        #expect(parsed.controls == controls)
+        #expect(parsed.controls == UInt32(controls))
     }
 
-    @Test func `descriptor parser skips non camera input terminals`() throws {
-        let controls = UInt32(1 << 11)
-        let descriptor: [UInt8] = [
-            13, 0x24, 0x01, 0x10, 0x01, 39, 0, 0, 0, 0, 0, 1, 1,
-            8, 0x24, 0x02, 4, 0x01, 0x01, 0, 0,
-            18, 0x24, 0x02, 9, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 3,
-            UInt8(truncatingIfNeeded: controls),
-            UInt8(truncatingIfNeeded: controls >> 8),
-            UInt8(truncatingIfNeeded: controls >> 16),
+    @Test func `descriptor parser bounds oversized VC total length by supplied buffer`() throws {
+        let controls = UInt16(1 << 9)
+        let descriptors = self.videoControlDescriptors(
+            self.cameraTerminal(id: 8, controls: controls),
+            reportedLength: .max)
+
+        let parsed = try #require(CameraUVCDescriptorParser.parse(descriptors))
+        #expect(parsed.terminalId == 8)
+        #expect(parsed.controls == UInt32(controls))
+    }
+
+    @Test func `descriptor parser rejects malformed camera controls`() {
+        let truncatedTerminal: [UInt8] = [
+            17, 0x24, 0x02, 7, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+        ]
+        let undersizedControls = self.cameraTerminal(id: 7, controls: 0, controlSize: 1)
+        let oversizedControls: [UInt8] = [
+            17, 0x24, 0x02, 7, 0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0,
         ]
 
-        let parsed = try #require(CameraUVCDescriptorParser.parse(descriptor))
+        #expect(CameraUVCDescriptorParser.parse(self.videoControlDescriptors(truncatedTerminal)) == nil)
+        #expect(CameraUVCDescriptorParser.parse(self.videoControlDescriptors(undersizedControls)) == nil)
+        #expect(CameraUVCDescriptorParser.parse(self.videoControlDescriptors(oversizedControls)) == nil)
+    }
+
+    @Test func `descriptor parser reads only required controls from oversized control size`() throws {
+        let controls = UInt16(1 << 9 | 1 << 11)
+        let descriptors = self.videoControlDescriptors(
+            self.cameraTerminal(id: 8, controls: controls, controlSize: 3))
+
+        let parsed = try #require(CameraUVCDescriptorParser.parse(descriptors))
+        #expect(parsed.terminalId == 8)
+        #expect(parsed.controls == UInt32(controls))
+    }
+
+    @Test func `descriptor parser skips a non camera input terminal`() throws {
+        let controls = UInt16(1 << 11)
+        let nonCameraTerminal: [UInt8] = [8, 0x24, 0x02, 4, 0x01, 0x01, 0, 0]
+        let descriptors = self.videoControlDescriptors(
+            nonCameraTerminal + self.cameraTerminal(id: 9, controls: controls))
+
+        let parsed = try #require(CameraUVCDescriptorParser.parse(descriptors))
         #expect(parsed.terminalId == 9)
-        #expect(parsed.controls == controls)
+        #expect(parsed.controls == UInt32(controls))
     }
 
     @Test func `control info requires the UVC set capability`() {

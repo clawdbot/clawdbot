@@ -39,12 +39,43 @@ describe("nodes camera_ptz", () => {
   it("advertises physical PTZ and its closed operation schema", () => {
     const tool = createNodesTool();
     const schema = tool.parameters as {
-      properties?: { ptzOperation?: { enum?: string[] }; panDegrees?: { type?: string } };
+      properties?: Record<
+        "deviceId" | "ptzOperation" | "panDegrees" | "tiltDegrees" | "zoomPercent",
+        { description?: string; enum?: string[]; type?: string }
+      >;
+      required?: string[];
     };
 
     expect(tool.description).toContain("physical camera pan/tilt/zoom");
-    expect(schema.properties?.ptzOperation?.enum).toEqual(["status", "set", "move", "home"]);
-    expect(schema.properties?.panDegrees?.type).toBe("number");
+    expect(schema.required).toEqual(["action"]);
+    expect(schema.properties).toMatchObject({
+      deviceId: {
+        description:
+          "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+        type: "string",
+      },
+      ptzOperation: {
+        description:
+          "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+        enum: ["status", "set", "move", "home"],
+        type: "string",
+      },
+      panDegrees: {
+        description:
+          "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+        type: "number",
+      },
+      tiltDegrees: {
+        description:
+          "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+        type: "number",
+      },
+      zoomPercent: {
+        description:
+          "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+        type: "number",
+      },
+    });
   });
 
   it("routes status to the safe command with an explicit device id", async () => {
@@ -112,6 +143,10 @@ describe("nodes camera_ptz", () => {
     [
       { deviceId: "camera-id", ptzOperation: "home", panDegrees: 1 },
       "home does not accept axis values",
+    ],
+    [
+      { deviceId: "camera-id", ptzOperation: "status", tiltDegrees: 1 },
+      "status does not accept axis values",
     ],
     [
       { deviceId: "camera-id", ptzOperation: "move", zoomPercent: Number.NaN },

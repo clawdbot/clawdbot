@@ -128,6 +128,32 @@ static IOUSBDeviceInterface **OpenClawUVCCreateDeviceInterface(
     return NULL;
 }
 
+static int OpenClawUVCParseCameraTerminalDescriptor(
+    const uint8_t *descriptor,
+    size_t descriptor_length,
+    uint8_t *terminal_id_out,
+    uint32_t *controls_out
+) {
+    // Absolute zoom and pan/tilt are bits 9 and 11. Read only their two bytes;
+    // IOUSBLib's associated-descriptor iterator exposes one descriptor at a time.
+    if (descriptor == NULL || terminal_id_out == NULL || controls_out == NULL || descriptor_length < 17 ||
+        descriptor[0] < 17 || descriptor[0] > descriptor_length ||
+        descriptor[1] != OpenClawUVCClassInterfaceDescriptor || descriptor[2] != OpenClawUVCInputTerminal) {
+        return 0;
+    }
+
+    uint16_t terminal_type = (uint16_t)descriptor[4] | ((uint16_t)descriptor[5] << 8);
+    size_t control_size = descriptor[14];
+    if (terminal_type != OpenClawUVCInputTerminalCamera || control_size < 2 ||
+        control_size > (size_t)descriptor[0] - 15) {
+        return 0;
+    }
+
+    *terminal_id_out = descriptor[3] == 0 ? 1 : descriptor[3];
+    *controls_out = (uint32_t)descriptor[15] | ((uint32_t)descriptor[16] << 8);
+    return 1;
+}
+
 int openclaw_uvc_parse_camera_terminal(
     const uint8_t *descriptors,
     size_t descriptors_length,
@@ -140,32 +166,22 @@ int openclaw_uvc_parse_camera_terminal(
         return 0;
     }
 
-    size_t total_length = (size_t)descriptors[5] | ((size_t)descriptors[6] << 8);
-    if (total_length > descriptors_length) {
-        total_length = descriptors_length;
+    size_t scan_length = (size_t)descriptors[5] | ((size_t)descriptors[6] << 8);
+    if (scan_length > descriptors_length) {
+        scan_length = descriptors_length;
     }
-    for (size_t offset = 0; offset < total_length;) {
+    for (size_t offset = 0; offset < scan_length;) {
         const uint8_t *descriptor = descriptors + offset;
         size_t length = descriptor[0];
-        if (length == 0 || offset + length > total_length) {
+        if (length == 0 || length > scan_length - offset) {
             return 0;
         }
-        uint16_t terminal_type = length >= 6
-            ? (uint16_t)descriptor[4] | ((uint16_t)descriptor[5] << 8)
-            : 0;
-        if (length >= 15 && descriptor[1] == OpenClawUVCClassInterfaceDescriptor &&
-            descriptor[2] == OpenClawUVCInputTerminal &&
-            terminal_type == OpenClawUVCInputTerminalCamera) {
-            size_t control_size = descriptor[14];
-            if (15 + control_size > length) {
-                return 0;
-            }
-            uint32_t controls = 0;
-            for (size_t index = 0; index < control_size && index < sizeof(controls); index++) {
-                controls |= (uint32_t)descriptor[15 + index] << (8 * index);
-            }
-            *terminal_id_out = descriptor[3] == 0 ? 1 : descriptor[3];
-            *controls_out = controls;
+        if (OpenClawUVCParseCameraTerminalDescriptor(
+                descriptor,
+                length,
+                terminal_id_out,
+                controls_out
+            )) {
             return 1;
         }
         offset += length;
@@ -187,18 +203,14 @@ static void OpenClawUVCReadTerminal(
                 current,
                 OpenClawUVCClassInterfaceDescriptor
             )) != NULL) {
-        const uint8_t *bytes = (const uint8_t *)current;
-        if (bytes[0] < 7 || bytes[2] != OpenClawUVCVideoControlHeader) {
-            continue;
+        if (OpenClawUVCParseCameraTerminalDescriptor(
+                (const uint8_t *)current,
+                current->bLength,
+                terminal_id_out,
+                controls_out
+            )) {
+            return;
         }
-        size_t total_length = (size_t)bytes[5] | ((size_t)bytes[6] << 8);
-        (void)openclaw_uvc_parse_camera_terminal(
-            bytes,
-            total_length,
-            terminal_id_out,
-            controls_out
-        );
-        return;
     }
 }
 

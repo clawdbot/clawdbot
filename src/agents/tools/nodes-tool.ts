@@ -113,12 +113,29 @@ const NodesToolSchema = Type.Object({
   maxWidth: optionalPositiveIntegerSchema(),
   quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
   delayMs: optionalNonNegativeIntegerSchema(),
-  deviceId: Type.Optional(Type.String()),
+  deviceId: Type.Optional(
+    Type.String({
+      description:
+        "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+    }),
+  ),
   // camera_ptz
-  ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS),
-  panDegrees: optionalFiniteNumberSchema(),
-  tiltDegrees: optionalFiniteNumberSchema(),
-  zoomPercent: optionalFiniteNumberSchema(),
+  ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
+    description:
+      "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+  }),
+  panDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  tiltDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  zoomPercent: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+  }),
   limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
