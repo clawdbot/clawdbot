@@ -46,6 +46,14 @@ If you save a plan instead of applying during `configure`, apply that saved plan
 
 If your plan includes exec SecretRef providers, add `--allow-exec` to the `configure` or `apply` step. Without it, write mode rejects plans containing exec SecretRefs/providers.
 
+For exec plans, also re-audit with exec resolution enabled. By default, `openclaw secrets audit --check` skips exec SecretRef resolvability checks to avoid command side effects, so it can report a clean result without verifying exec providers. Run the conditional re-audit after the standard re-audit:
+
+```bash
+openclaw secrets audit --check --allow-exec
+```
+
+`--allow-exec` executes exec provider commands during the audit, so a clean result confirms exec SecretRefs resolve as well as plaintext residue is gone.
+
 For supported credential fields, see [SecretRef Credential Surface](/reference/secretref-credential-surface). For command details, see [Audit and configure workflow](#audit-and-configure-workflow) below.
 
 ## Runtime model
