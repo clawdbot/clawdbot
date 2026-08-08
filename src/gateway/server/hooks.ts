@@ -306,16 +306,19 @@ export function createGatewayHooksRequestHandler(params: {
     let hookEventSessionKey: string | undefined;
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
+      const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
       enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-        sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
+        sessionKey: eventSessionKey,
       });
       if (value.wakeMode === "now") {
+        // Before config resolves, the error belongs to the fallback main session.
+        // Wake that exact session; the requested hook agent may not own it.
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
-          agentId: value.agentId,
-          sessionKey: hookEventSessionKey,
+          ...(hookEventSessionKey ? { agentId: value.agentId } : {}),
+          sessionKey: eventSessionKey,
         });
       }
     };

@@ -483,7 +483,7 @@ describe("dispatchAgentHook trust handling", () => {
       throw new Error("config exploded");
     });
 
-    const result = await dispatchAgentHook(buildAgentPayload("Config"));
+    const result = await dispatchAgentHook(buildAgentPayload("Config", "hooks"));
 
     expect(result).toMatchObject({
       ok: false,
@@ -497,6 +497,15 @@ describe("dispatchAgentHook trust handling", () => {
         { sessionKey: "main-session" },
       ),
     );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      sessionKey: "main-session",
+    });
+    expect(wake.agentId).toBeUndefined();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
