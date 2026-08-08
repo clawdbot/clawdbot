@@ -327,7 +327,7 @@ export const buildTelegramMessageContext = async ({
         sendChatActionHandler.sendChatAction(
           chatId,
           "typing",
-          buildTypingThreadParams(replyThreadId),
+          buildTypingThreadParams(replyThreadId, msg.business_connection_id),
         ),
     });
   };
@@ -340,7 +340,7 @@ export const buildTelegramMessageContext = async ({
           sendChatActionHandler.sendChatAction(
             chatId,
             "record_voice",
-            buildTypingThreadParams(replyThreadId),
+            buildTypingThreadParams(replyThreadId, msg.business_connection_id),
           ),
       });
     } catch (err) {

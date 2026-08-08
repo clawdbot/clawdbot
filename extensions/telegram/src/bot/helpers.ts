@@ -480,12 +480,20 @@ export function buildTelegramInboundOriginTarget(
 /**
  * Build thread params for typing indicators (sendChatAction).
  * Empirically, General topic (id=1) needs message_thread_id for typing to appear.
+ *
+ * Business-connected chats reject sendChatAction with PEER_ID_INVALID unless
+ * business_connection_id is threaded through alongside chat_id — mirrors the
+ * businessConnectionId handling in send-message.ts's sendReplyMessage.
  */
-export function buildTypingThreadParams(messageThreadId?: number) {
-  if (messageThreadId == null) {
-    return undefined;
+export function buildTypingThreadParams(messageThreadId?: number, businessConnectionId?: string) {
+  const params: { message_thread_id?: number; business_connection_id?: string } = {};
+  if (messageThreadId != null) {
+    params.message_thread_id = Math.trunc(messageThreadId);
   }
-  return { message_thread_id: Math.trunc(messageThreadId) };
+  if (businessConnectionId) {
+    params.business_connection_id = businessConnectionId;
+  }
+  return Object.keys(params).length > 0 ? params : undefined;
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {

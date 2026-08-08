@@ -299,6 +299,20 @@ describe("buildTypingThreadParams", () => {
   ])("builds typing params", ({ input, expected }) => {
     expect(buildTypingThreadParams(input)).toEqual(expected);
   });
+
+  it("threads business_connection_id through for business-connected chats", () => {
+    expect(buildTypingThreadParams(undefined, "conn-123")).toEqual({
+      business_connection_id: "conn-123",
+    });
+    expect(buildTypingThreadParams(1, "conn-123")).toEqual({
+      message_thread_id: 1,
+      business_connection_id: "conn-123",
+    });
+  });
+
+  it("omits business_connection_id when not provided", () => {
+    expect(buildTypingThreadParams(1, undefined)).toEqual({ message_thread_id: 1 });
+  });
 });
 
 describe("resolveTelegramDirectPeerId", () => {

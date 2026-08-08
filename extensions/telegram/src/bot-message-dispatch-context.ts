@@ -109,7 +109,7 @@ function buildRecoveredTelegramChatActionSender(params: {
           params.context.sendChatActionHandler.sendChatAction(
             params.context.chatId,
             params.action,
-            buildTypingThreadParams(params.threadId),
+            buildTypingThreadParams(params.threadId, params.context.msg.business_connection_id),
           ),
       });
     } catch (err) {
