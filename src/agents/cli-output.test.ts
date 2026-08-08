@@ -3492,5 +3492,113 @@ describe("createCliJsonlStreamingParser", () => {
 
     expect(commentaryTexts).toEqual(expectedCommentary);
   });
+
+  it("carries complete tool args from content_block_start input without input_json_delta chunks", () => {
+    // Regression: backends that deliver the whole tool input on the start block
+    // (instead of streaming input_json_delta parts) used to emit a start delta
+    // with empty args, dropping the resolved command/args from the Discord
+    // progress draft (name-only rows). See #120306.
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-input-on-start" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Bash",
+              input: { command: "ls -la", cwd: "/tmp" },
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      {
+        toolCallId: "toolu_1",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "ls -la", cwd: "/tmp" },
+      },
+    ]);
+  });
+
+  it("keeps streaming input_json_delta accumulation when the start block input is empty", () => {
+    // The streaming placeholder (input: {}) must not seed parts, otherwise the
+    // delta chunks concatenated after it would corrupt the JSON fragment.
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-input-deltas" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command": "ls' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: ' -la"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
+    ]);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
