@@ -254,15 +254,55 @@ vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
-const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
-  await import("./server-startup-post-attach.js");
+const {
+  startGatewayPostAttachRuntime: startGatewayPostAttachRuntimeImpl,
+  startGatewaySidecars,
+  testing,
+} = await import("./server-startup-post-attach.js");
 const { scheduleContextCachePrewarm } = await import("./server-startup-context-cache-prewarm.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { createChatRunState } = await import("./server-chat-state.js");
 
-type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
-type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
+type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
+type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntimeImpl>[1]>;
+type SidecarPublisher = NonNullable<PostAttachParams["onGatewayLifetimeSidecars"]>;
+type SidecarHandle = Parameters<SidecarPublisher>[0][number];
+
+const publishedGatewayLifetimeSidecars = new Set<SidecarHandle>();
+const publishedPostReadySidecars = new Set<SidecarHandle>();
+
+function composeSidecarPublisher(
+  publishedSidecars: Set<SidecarHandle>,
+  publisher: SidecarPublisher | undefined,
+): SidecarPublisher {
+  return (sidecars) => {
+    for (const sidecar of sidecars) {
+      publishedSidecars.add(sidecar);
+    }
+    publisher?.(sidecars);
+  };
+}
+
+function startGatewayPostAttachRuntime(
+  params: PostAttachParams,
+  runtimeDeps?: PostAttachRuntimeDeps,
+) {
+  return startGatewayPostAttachRuntimeImpl(
+    {
+      ...params,
+      onGatewayLifetimeSidecars: composeSidecarPublisher(
+        publishedGatewayLifetimeSidecars,
+        params.onGatewayLifetimeSidecars,
+      ),
+      onPostReadySidecars: composeSidecarPublisher(
+        publishedPostReadySidecars,
+        params.onPostReadySidecars,
+      ),
+    },
+    runtimeDeps,
+  );
+}
 
 async function waitForGatewayTestState<T>(
   assertion: () => T | Promise<T>,
@@ -381,7 +421,16 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.createTranscriptsAutoStartService.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Match Gateway shutdown order so lifetime work cannot outlive post-ready cleanup.
+    for (const sidecar of publishedGatewayLifetimeSidecars) {
+      await sidecar.stop();
+    }
+    publishedGatewayLifetimeSidecars.clear();
+    for (const sidecar of publishedPostReadySidecars) {
+      await sidecar.stop();
+    }
+    publishedPostReadySidecars.clear();
     resetGatewayWorkAdmission();
     closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
