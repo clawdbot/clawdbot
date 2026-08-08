@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 // Stores config health fingerprints in shared SQLite state.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -63,10 +64,6 @@ function stringifyConfigHealthFingerprint(
   value: ConfigHealthFingerprint | undefined,
 ): string | null {
   return value ? JSON.stringify(value) : null;
-}
-
-function formatConfigHealthStateError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function readConfigHealthStateFromStore(deps: ConfigHealthStateDeps): ConfigHealthState {
@@ -142,6 +139,6 @@ export function writeConfigHealthStateToStore(
       { env: resolveConfigHealthStateEnv(deps) },
     );
   } catch (error) {
-    deps.logger.warn(`Config health-state write failed: ${formatConfigHealthStateError(error)}`);
+    deps.logger.warn(`Config health-state write failed: ${formatErrorMessage(error)}`);
   }
 }

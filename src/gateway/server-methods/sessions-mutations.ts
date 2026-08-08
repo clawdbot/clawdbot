@@ -3,11 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  type SessionsArchiveManyResult,
+  validateSessionsArchiveManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   applySessionPatchProjection,
@@ -23,14 +26,16 @@ import {
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
+  SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionThinkingProjection,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
@@ -45,6 +50,7 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementPatchError,
@@ -54,6 +60,56 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
+  "sessions.archiveMany": async (options) => {
+    const { params, respond, context } = options;
+    if (
+      !assertValidParams(params, validateSessionsArchiveManyParams, "sessions.archiveMany", respond)
+    ) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const logicalTargets = new Set<string>();
+    for (const target of params.targets) {
+      const resolved = resolveGatewaySessionTargetFromKey(target.key.trim(), cfg, {
+        agentId: target.agentId,
+      });
+      const logicalId = `${resolved.storePath}\0${resolved.target.canonicalKey ?? target.key}`;
+      if (logicalTargets.has(logicalId)) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Duplicate target."));
+        return;
+      }
+      logicalTargets.add(logicalId);
+    }
+    const patchHandler = sessionMutationHandlers["sessions.patch"];
+    if (!patchHandler) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const outcomes = await Promise.all(
+      params.targets.map(async (target) => {
+        const identity = {
+          key: target.key,
+          ...(target.agentId ? { agentId: target.agentId } : {}),
+        };
+        let outcome: SessionsArchiveManyResult["outcomes"][number] | undefined;
+        try {
+          await patchHandler({
+            ...options,
+            params: { ...target, archived: params.archived },
+            respond: (ok, _payload, error) => {
+              outcome = ok ? { ok: true, ...identity } : { ok: false, ...identity, error: error! };
+            },
+          });
+        } catch (error) {
+          if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+            throw error;
+          }
+          outcome = { ok: false, ...identity, error: error.error };
+        }
+        return outcome!;
+      }),
+    );
+    respond(true, { outcomes } satisfies SessionsArchiveManyResult, undefined);
+  },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
@@ -76,6 +132,17 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     });
     const canonicalKey = target.canonicalKey ?? key;
     const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+    if (
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "patch",
+        client,
+        key: canonicalKey,
+        entry: lifecycleEntry,
+        respond,
+      })
+    ) {
+      return;
+    }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
       canonicalKey,
       lifecycleEntry,
@@ -103,20 +170,20 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+        errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
       );
       return;
     }
     let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
     const loadPatchModelCatalog = async () => {
-      const catalog = await context.loadGatewayModelCatalog();
+      const catalog = await context.loadGatewayModelCatalog({ agentId: target.agentId });
       patchModelCatalog = catalog;
       return catalog;
     };
     let wasArchivedBeforePatch = false;
     const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
       const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
         cfg,
         key,
         store,
@@ -126,6 +193,26 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+      // Recheck inside the lifecycle lock so a replaced row cannot switch
+      // plugin ownership between authorization and the committed patch.
+      if (
+        rejectPluginRuntimeSessionOwnershipMismatch({
+          action: "patch",
+          client,
+          key: canonicalKey,
+          entry: currentLifecycleEntry,
+          respond,
+        })
+      ) {
+        return null;
+      }
+      // applyPatch runs under runExclusiveSessionLifecycleMutation for every
+      // patch, so expected identities also guard non-archive metadata writes.
+      const expectedSessionChanged =
+        (p.expectedSessionId !== undefined &&
+          currentLifecycleEntry?.sessionId !== p.expectedSessionId) ||
+        (p.expectedLifecycleRevision !== undefined &&
+          currentLifecycleEntry?.lifecycleRevision !== p.expectedLifecycleRevision);
       // A reset queued ahead of archive can rotate the row before this mutation starts.
       // Never apply stale destructive intent to the replacement session identity.
       const lifecycleEntryRemoved =
@@ -137,7 +224,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           : currentLifecycleEntry !== undefined &&
             (currentLifecycleEntry.sessionId !== lifecycleEntry.sessionId ||
               currentLifecycleEntry.lifecycleRevision !== lifecycleEntry.lifecycleRevision));
-      if (lifecycleEntryRemoved || archiveTargetChanged) {
+      if (expectedSessionChanged || lifecycleEntryRemoved || archiveTargetChanged) {
         respond(
           false,
           undefined,
@@ -171,7 +258,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+            errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
           );
           return null;
         }
@@ -233,7 +320,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         try {
           await appendSessionAudit({
             cfg,
-            target: { agentId: target.agentId, entry: result.entry, storePath },
+            target: {
+              agentId: target.agentId,
+              entry: result.entry,
+              sessionKey: target.canonicalKey ?? key,
+              storePath,
+            },
             text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
             now: Date.now(),
           });
@@ -260,6 +352,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
 
     triggerSessionPatchHook({
       cfg,
@@ -271,8 +364,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     // Cron mutations are operator.admin surface while archive is write-scoped;
     // only cascade for internal callers (client == null) or admin operators so
     // write-scoped archiving cannot flip admin-managed schedules.
-    const callerScopes = client?.connect ? (client.connect.scopes ?? []) : null;
-    const callerCanManageCron = callerScopes === null || callerScopes.includes(ADMIN_SCOPE);
+    const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
     if (p.archived === true && callerCanManageCron) {
       // Archived sessions reject new work, so schedules bound to them would
       // only accumulate failing runs; disable them with the archive.
@@ -310,6 +402,18 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         : (parsed?.agentId ?? resolveDefaultAgentId(cfg)),
     );
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    if (
+      typeof p.model === "string" &&
+      callerScopes.includes(ADMIN_SCOPE) &&
+      applied.entry.modelOverrideSource === "user" &&
+      applied.entry.providerOverride &&
+      applied.entry.modelOverride
+    ) {
+      persistStickyModelSelectionBestEffort({
+        agentId,
+        model: `${resolved.provider}/${resolved.model}`,
+      });
+    }
     const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
       cfg,
       agentId,
@@ -450,6 +554,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
+      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {

@@ -8,6 +8,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
@@ -19,21 +20,27 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
+import { sessionClassificationForRow } from "./session-classification.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-readers.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
@@ -43,7 +50,6 @@ import {
   resolvePositiveNumber,
   resolveProjectableCompactionCheckpoints,
   resolveRuntimeChildSessionKeys,
-  resolveSessionRuntimeMs,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
@@ -55,17 +61,13 @@ import {
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
-import {
-  classifySessionKey,
-  isGroupOrChannelDisplaySession,
-  parseGroupKey,
-} from "./session-utils-store.js";
+import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-/** Adds the current human profile label without persisting rename-prone display data. */
+/** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(
   actor: SessionEntry["createdActor"],
-  userProfileLabelById: Map<string, string | undefined> = new Map(),
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
 ): SessionCreatedActor | undefined {
   if (!actor) {
     return undefined;
@@ -74,17 +76,19 @@ export function projectSessionActor(
   if (actor.type !== "human" || !id) {
     return { type: actor.type, ...(id ? { id } : {}) };
   }
-  let label = userProfileLabelById.get(id);
-  if (!userProfileLabelById.has(id)) {
-    try {
-      label = normalizeOptionalString(getUserProfileListItem(id).displayName);
-    } catch {
-      // Human actors can also be channel sender ids; only profile ids resolve here.
-      label = undefined;
-    }
-    userProfileLabelById.set(id, label);
+  let identity = userProfileIdentityById.get(id);
+  if (!userProfileIdentityById.has(id)) {
+    const display = resolveCurrentUserProfileDisplay(id);
+    identity =
+      display.kind === "unresolved"
+        ? undefined
+        : {
+            ...(display.label ? { label: display.label } : {}),
+            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
+          };
+    userProfileIdentityById.set(id, identity);
   }
-  return { type: actor.type, id, ...(label ? { label } : {}) };
+  return { type: actor.type, id, ...identity };
 }
 
 export function buildGatewaySessionRow(params: {
@@ -117,6 +121,10 @@ export function buildGatewaySessionRow(params: {
       : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
+  const sessionKind = classifySessionKind(key, entry);
+  // The older Gateway wire kind folds cron/spawn-child into direct.
+  const gatewayKind =
+    sessionKind === "cron" || sessionKind === "spawn-child" ? "direct" : sessionKind;
   const deliveryFields = projectSessionDeliveryFields(entry?.delivery);
   const channel = deliveryFields.channel ?? parsed?.channel;
   const subject = entry?.subject;
@@ -168,7 +176,7 @@ export function buildGatewaySessionRow(params: {
   const subagentRunState = subagentRun
     ? liveSubagentRunActive
       ? "active"
-      : typeof subagentRun.endedAt === "number" ||
+      : typeof subagentRun.execution.endedAt === "number" ||
           persistedSessionStatus === "done" ||
           persistedSessionStatus === "failed" ||
           persistedSessionStatus === "killed" ||
@@ -183,7 +191,7 @@ export function buildGatewaySessionRow(params: {
       : persistedSessionStatus === "running"
         ? undefined
         : (persistedSessionStatus ??
-          (typeof subagentRun.endedAt === "number"
+          (typeof subagentRun.execution.endedAt === "number"
             ? resolveSubagentSessionStatus(subagentRun)
             : undefined))
     : undefined;
@@ -194,15 +202,15 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const subagentEndedAt = subagentRun
     ? liveSubagentRunActive
-      ? subagentRun.endedAt
-      : (persistedSessionEndedAt ?? subagentRun.endedAt)
+      ? subagentRun.execution.endedAt
+      : (persistedSessionEndedAt ?? subagentRun.execution.endedAt)
     : undefined;
   const subagentRuntimeMs = subagentRun
     ? liveSubagentRunActive
-      ? resolveSessionRuntimeMs(subagentRun, now)
+      ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (persistedSessionRuntimeMs ??
-        (typeof subagentRun.endedAt === "number"
-          ? resolveSessionRuntimeMs(subagentRun, now)
+        (typeof subagentRun.execution.endedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
@@ -278,6 +286,7 @@ export function buildGatewaySessionRow(params: {
           goal: entry.goal,
           totalTokens,
           totalTokensFresh,
+          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
         },
         now,
         // Session listing is read-only; stale goal baselines are adopted only
@@ -357,7 +366,7 @@ export function buildGatewaySessionRow(params: {
       storePath,
     });
     if (params.includeDerivedTitles) {
-      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, displayName);
     }
     if (params.includeLastMessage && fields.lastMessagePreview) {
       lastMessagePreview = fields.lastMessagePreview;
@@ -409,14 +418,15 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileLabelById),
+    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileIdentityById),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
-    kind: classifySessionKey(key, entry),
+    kind: gatewayKind,
     label: entry?.label,
     category: entry?.category,
     boardFace: entry?.boardFace,
+    ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -429,7 +439,7 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileLabelById),
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     icon: entry?.icon,
@@ -456,6 +466,7 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,
     fastMode: entry?.fastMode,
+    toolOverrides: entry?.toolOverrides,
     effectiveFastMode: fastModeState.mode,
     effectiveFastModeSource: fastModeState.source,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,

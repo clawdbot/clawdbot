@@ -371,7 +371,7 @@ function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
-  const nativeStreamWasStarted = session.delivered;
+  const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
   session.pendingText = "";
   // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
   // Clear fallback-owned text before retrying stop(), or the SDK resends it.

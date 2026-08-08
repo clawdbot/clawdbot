@@ -7,6 +7,12 @@ export function extractChangelogSection(changelog: unknown, version: unknown): u
 export function releaseNotesVersionForTag(tag: unknown): unknown;
 export function formatShippedBaselineExclusions(baselines: ShippedBaselineExclusion[]): string;
 export function parseShippedBaselineExclusions(section: string): ShippedBaselineExclusion[];
+export function formatContributionRecordProvenance(
+  provenance: ContributionRecordProvenance,
+): string;
+export function parseContributionRecordProvenance(
+  section: string,
+): ContributionRecordProvenance | undefined;
 export function dedicatedSectionVersionForTag(tag: unknown): unknown;
 export function releaseNotesSectionForTag(
   changelog: unknown,
@@ -68,4 +74,11 @@ export type ShippedBaselineExclusion = {
   ref: string;
   count: number;
   pullRequests: number[];
+};
+export type ContributionRecordProvenance = {
+  base: string;
+  target: string;
+  inRangePullRequests?: number;
+  retainedSeedOnlyPullRequests?: number;
+  uniquePullRequests: number;
 };

@@ -1,8 +1,9 @@
-// Covers message-action media hydration, sandbox path normalization,
-// attachments, and channel/plugin media source aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Covers message-action media hydration, sandbox path normalization,
+// attachments, and channel/plugin media source aliases.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -70,6 +71,10 @@ const workspaceConfig = {
   },
 } as OpenClawConfig;
 
+function setTestPlugin(plugin: ChannelPlugin, pluginId: string) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId, source: "test", plugin }]));
+}
+
 function firstMockArg(
   mock: { mock: { calls: readonly unknown[][] } },
   label: string,
@@ -111,12 +116,7 @@ const runDrySend = (params: {
     sandboxRoot: params.sandboxRoot,
   });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireActionPayload(
   result: Awaited<ReturnType<typeof runMessageAction>>,
@@ -283,15 +283,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("forwards asVoice from send actions into core delivery", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     const result = await runDrySend({
       cfg: workspaceConfig,
@@ -307,6 +299,25 @@ describe("runMessageAction media behavior", () => {
     expect(result.kind).toBe("send");
     const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
     expect(sendArgs.asVoice).toBe(true);
+  });
+
+  it("copies the normalized idempotency key into send execution context", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+        idempotencyKey: " run-1:message-tool:send-1:fingerprint ",
+      },
+    });
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
+      "run-1:message-tool:send-1:fingerprint",
+    );
   });
 
   it("rejects plugin-declined attachment actions before loading media", async () => {
@@ -333,15 +344,7 @@ describe("runMessageAction media behavior", () => {
         handleAction,
       },
     };
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "textonly",
-          source: "test",
-          plugin: textOnlyPlugin,
-        },
-      ]),
-    );
+    setTestPlugin(textOnlyPlugin, "textonly");
     vi.mocked(loadWebMedia).mockResolvedValue({
       buffer: Buffer.from("should not load"),
       contentType: "image/png",
@@ -366,15 +369,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("materializes buffer-only send attachments into outbound media paths", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withTempOpenClawStateDir(async () => {
       const result = await runMessageAction({
@@ -408,15 +403,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("does not stage buffer-only send attachments before target validation passes", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withTempOpenClawStateDir(async (stateDir) => {
       await expect(
@@ -439,15 +426,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("rejects oversized buffer-only send attachments before channel dispatch", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withTempOpenClawStateDir(async () => {
       await expect(
@@ -469,15 +448,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("previews dry-run buffer-only sends without writing outbound media files", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withTempOpenClawStateDir(async (stateDir) => {
       const result = await runDrySend({
@@ -503,15 +474,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("treats top-level image param as a send media source", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withSandbox(async (sandboxDir) => {
       const result = await runDrySend({
@@ -535,15 +498,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("sends structured attachments as media urls", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withSandbox(async (sandboxDir) => {
       const result = await runDrySend({
@@ -570,15 +525,7 @@ describe("runMessageAction media behavior", () => {
   });
 
   it("sends structured mediaUrls arrays", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: workspacePlugin,
-        },
-      ]),
-    );
+    setTestPlugin(workspacePlugin, "workspace");
 
     await withSandbox(async (sandboxDir) => {
       const result = await runDrySend({
@@ -653,15 +600,7 @@ describe("runMessageAction media behavior", () => {
     };
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "attachmentchat",
-            source: "test",
-            plugin: attachmentPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(attachmentPlugin, "attachmentchat");
       vi.mocked(loadWebMedia).mockResolvedValue({
         buffer: Buffer.from("hello"),
         contentType: "image/png",
@@ -964,15 +903,7 @@ describe("runMessageAction media behavior", () => {
 
     beforeEach(() => {
       handleActionMock.mockReset();
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "replychat",
-            source: "test",
-            plugin: replyPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(replyPlugin, "replychat");
       vi.mocked(loadWebMedia).mockResolvedValue({
         buffer: Buffer.from("hello"),
         contentType: "image/png",
@@ -1203,15 +1134,7 @@ describe("runMessageAction media behavior", () => {
     };
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "profile-demo",
-            source: "test",
-            plugin: profilePlugin,
-          },
-        ]),
-      );
+      setTestPlugin(profilePlugin, "profile-demo");
     });
 
     afterEach(() => {
@@ -1294,15 +1217,7 @@ describe("runMessageAction media behavior", () => {
 
   describe("sandboxed media validation", () => {
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "workspace",
-            source: "test",
-            plugin: workspacePlugin,
-          },
-        ]),
-      );
+      setTestPlugin(workspacePlugin, "workspace");
     });
 
     afterEach(() => {

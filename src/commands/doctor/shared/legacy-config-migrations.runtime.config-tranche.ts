@@ -32,7 +32,12 @@ function stripRetiredPresentationPrefs(raw: Record<string, unknown>, changes: st
   if (!prefs) {
     return;
   }
-  const removed = ["chatMessageMaxWidth", "textScale", "sidebarLiveActivity"].filter((key) => {
+  const removed = [
+    "chatMessageMaxWidth",
+    "textScale",
+    "sidebarLiveActivity",
+    "showAdvancedSettings",
+  ].filter((key) => {
     if (!Object.hasOwn(prefs, key)) {
       return false;
     }

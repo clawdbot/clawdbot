@@ -754,10 +754,11 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     ).toEqual(input);
   });
 
-  it("drops replayable reasoning when requested even with following content", () => {
+  it("drops replayable reasoning at the switch boundary even with following content", () => {
     const input = [
       {
         role: "assistant",
+        timestamp: 2,
         content: [
           {
             type: "thinking",
@@ -772,9 +773,9 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     expect(
       downgradeOpenAIReasoningBlocks(
         input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoning: true },
+        { dropReplayableReasoningBefore: 2 },
       ),
-    ).toEqual([{ role: "assistant", content: [{ type: "text", text: "answer" }] }]);
+    ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
   });
 
   it("drops the paired message id when replayable reasoning is dropped", () => {
@@ -799,7 +800,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     expect(
       downgradeOpenAIReasoningBlocks(
         input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoning: true },
+        { dropReplayableReasoningBefore: 2 },
       ),
     ).toEqual([{ role: "assistant", content: [{ type: "text", text: "answer" }] }]);
   });
@@ -832,6 +833,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     const input = [
       {
         role: "assistant",
+        timestamp: 1,
         content: [
           {
             type: "thinking",
@@ -854,11 +856,12 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     expect(
       downgradeOpenAIReasoningBlocks(
         input as Parameters<typeof downgradeOpenAIReasoningBlocks>[0],
-        { dropReplayableReasoning: true },
+        { dropReplayableReasoningBefore: 2 },
       ),
     ).toEqual([
       {
         role: "assistant",
+        timestamp: 1,
         content: [
           {
             type: "text",
@@ -1100,6 +1103,17 @@ describe("isMessagingToolDuplicate", () => {
       input: "This is completely different content.",
       sentTexts: ["Hello, this is a test message!"],
       expected: false,
+    },
+    {
+      input:
+        "Checking the deploy logs now. The deploy failed because the migration step timed out after 300 seconds while the database was mid-vacuum, which held the lock the migration needed. I re-ran the deploy after the vacuum finished and it completed cleanly. All services are healthy and the new version is serving traffic.",
+      sentTexts: ["Checking the deploy logs now."],
+      expected: false,
+    },
+    {
+      input: "Checking the deploy logs now. All good!",
+      sentTexts: ["Checking the deploy logs now."],
+      expected: true,
     },
   ])("returns $expected for duplicate check", ({ input, sentTexts, expected }) => {
     expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);

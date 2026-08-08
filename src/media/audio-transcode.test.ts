@@ -2,7 +2,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const runFfmpegMock = vi.hoisted(() => vi.fn());
@@ -11,7 +11,18 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfmpeg: runFfmpegMock,
 }));
 
-import { transcodeAudioBuffer, transcodeAudioBufferToOpus } from "./audio-transcode.js";
+let transcodeAudioBuffer: typeof import("./audio-transcode.js").transcodeAudioBuffer;
+let transcodeAudioBufferToOpus: typeof import("./audio-transcode.js").transcodeAudioBufferToOpus;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ transcodeAudioBuffer, transcodeAudioBufferToOpus } = await import("./audio-transcode.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("./ffmpeg-exec.js");
+  vi.resetModules();
+});
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 

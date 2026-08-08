@@ -49,6 +49,87 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     vi.clearAllMocks();
   });
 
+  it("re-arms the scheduler when resolving the default reaper agent fails", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const job = createDueIsolatedJob({ id: "recover-default-agent", nowMs: now });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    let defaultAgentAvailable = false;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      resolveDefaultAgentId: () => {
+        if (!defaultAgentAvailable) {
+          throw new Error("default agent temporarily unavailable");
+        }
+        return "main";
+      },
+      sessionStorePath: path.join(path.dirname(store.storePath), "sessions", "sessions.json"),
+    });
+    state.store = { version: 1, jobs: [job] };
+
+    await withCronServiceStateForTest(state, async () => {
+      await expect(onTimer(state)).rejects.toThrow("default agent temporarily unavailable");
+      expect(state.running).toBe(false);
+      expect(state.timer).not.toBeNull();
+
+      defaultAgentAvailable = true;
+      await expect(onTimer(state)).resolves.toBeUndefined();
+      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(state.running).toBe(false);
+    });
+  });
+
+  it.each([
+    { name: "agent discovery", failedOperation: "agents" },
+    { name: "session-store resolution", failedOperation: "store" },
+  ] as const)(
+    "keeps the scheduler running after reaper $name fails",
+    async ({ failedOperation }) => {
+      const store = await makeStorePath();
+      const now = Date.parse("2026-02-10T10:00:00.000Z");
+      const job = createDueIsolatedJob({ id: `recover-reaper-${failedOperation}`, nowMs: now });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+      const state = createCronServiceState({
+        storePath: store.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+        defaultAgentId: "main",
+        resolveSessionStoreAgentIds: () => {
+          if (failedOperation === "agents") {
+            throw new Error("agent discovery temporarily unavailable");
+          }
+          return ["main"];
+        },
+        resolveSessionStorePath: () => {
+          if (failedOperation === "store") {
+            throw new Error("session store temporarily unavailable");
+          }
+          return path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+        },
+      });
+
+      await withCronServiceStateForTest(state, async () => {
+        await expect(onTimer(state)).resolves.toBeUndefined();
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect(state.running).toBe(false);
+        expect(state.timer).not.toBeNull();
+        expect(noopLogger.warn).toHaveBeenCalled();
+      });
+    },
+  );
+
   it("session reaper runs even when job execution throws", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");

@@ -27,6 +27,7 @@ function createDefaultSessionStoreEntry() {
     cacheWrite: 1_000,
     totalTokens: 5_000,
     totalTokensFresh: true as boolean,
+    totalTokensVersion: 1 as const,
     contextTokens: 10_000,
     model: "test:opus",
     sessionId: "abc123",
@@ -230,6 +231,8 @@ function createSessionStatusRows() {
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const total = typeof entry.totalTokens === "number" ? entry.totalTokens : null;
+      const freshTotal =
+        total !== null && entry.totalTokensFresh && entry.totalTokensVersion === 1 ? total : null;
       return {
         agentId: agent.id,
         key,
@@ -242,13 +245,17 @@ function createSessionStatusRows() {
         inputTokens: entry.inputTokens,
         outputTokens: entry.outputTokens,
         totalTokens: total,
-        totalTokensFresh: typeof entry.totalTokens === "number" ? entry.totalTokensFresh : false,
+        totalTokensFresh: freshTotal !== null,
         cacheRead: entry.cacheRead,
         cacheWrite: entry.cacheWrite,
         remainingTokens:
-          total !== null && contextTokens !== null ? Math.max(0, contextTokens - total) : null,
+          freshTotal !== null && contextTokens !== null
+            ? Math.max(0, contextTokens - freshTotal)
+            : null,
         percentUsed:
-          total !== null && contextTokens ? Math.round((total / contextTokens) * 100) : null,
+          freshTotal !== null && contextTokens
+            ? Math.round((freshTotal / contextTokens) * 100)
+            : null,
         model: typeof entry.model === "string" ? entry.model : null,
         contextTokens,
         flags: [
@@ -569,12 +576,11 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
     })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
-  resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
-    typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
-  ),
   resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+    (entry?: { totalTokens?: number; totalTokensFresh?: boolean; totalTokensVersion?: number }) =>
+      typeof entry?.totalTokens === "number" &&
+      entry?.totalTokensFresh === true &&
+      entry.totalTokensVersion === 1
         ? entry.totalTokens
         : undefined,
   ),
@@ -767,8 +773,8 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("./status.scan.fast-json.js", () => ({
-  scanStatusJsonFast: vi.fn(async () =>
-    createMockStatusScanResult({ includePluginCompatibility: false }),
+  scanStatusJsonFast: vi.fn(async (opts: { all?: boolean }) =>
+    createMockStatusScanResult({ includePluginCompatibility: opts.all === true }),
   ),
 }));
 
@@ -1011,7 +1017,7 @@ describe("statusCommand", () => {
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
 
-  it("prints JSON and includes security audit only when all is requested", async () => {
+  it("prints JSON and includes full diagnostics only when all is requested", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
@@ -1034,10 +1040,7 @@ describe("statusCommand", () => {
     expect(payload.securityAudit).toBeUndefined();
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
-    expect(payload.pluginCompatibility).toEqual({
-      count: 0,
-      warnings: [],
-    });
+    expect(payload.pluginCompatibility).toBeUndefined();
     expect(payload.tasks.total).toBe(0);
     expect(payload.tasks.active).toBe(0);
     expect(payload.tasks.byStatus.queued).toBe(0);
@@ -1050,6 +1053,10 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
+    expect(allPayload.pluginCompatibility).toEqual({
+      count: 1,
+      warnings: [createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" })],
+    });
     const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
@@ -1092,6 +1099,13 @@ describe("statusCommand", () => {
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
   });
 
+  it("includes the security audit for deep JSON status", async () => {
+    await statusCommand({ json: true, deep: true }, runtime as never);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    expect(JSON.parse(getRuntimeLog(0)).securityAudit.summary.critical).toBe(1);
+  });
+
   it("passes deep mode through to the text status scan", async () => {
     const { scanStatus } = await import("./status.scan.js");
     vi.mocked(scanStatus).mockClear();
@@ -1131,8 +1145,8 @@ describe("statusCommand", () => {
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
-    expect(payload.sessions.recent[0].percentUsed).toBe(50);
-    expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
+    expect(payload.sessions.recent[0].percentUsed).toBeNull();
+    expect(payload.sessions.recent[0].remainingTokens).toBeNull();
   });
 
   it("prints formatted lines with verbose cache details", async () => {

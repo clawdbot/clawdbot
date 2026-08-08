@@ -231,6 +231,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Build private QA harness runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: |
+          set -euo pipefail
+          node scripts/build-all.mjs qaRuntime
+          test -f dist/plugin-sdk/qa-runtime.js
+          test -f dist/extensions/qa-lab/runtime-api.js
+
       - name: Validate inputs and secrets
         env:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
@@ -352,7 +362,7 @@ jobs:
           }
           attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
           if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
-            jq -e '(.status == "queued" or .status == "in_progress") and .conclusion == null' \
+            jq -e '(.status == "pending" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "in_progress") and .conclusion == null' \
               <<< "$attempt_json" >/dev/null || {
               echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
               exit 1

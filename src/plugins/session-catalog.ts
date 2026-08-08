@@ -7,6 +7,7 @@ import type {
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -16,8 +17,10 @@ export type SessionCatalogListProviderParams = {
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
-  /** Request-owned session entries. Providers must not retain this past `list`. */
+  /** Request-owned shared entries. Providers must not mutate or retain them past `list`. */
   sessionEntries?: SessionCatalogEntrySnapshot;
+  /** Lazily lists Gateway nodes once per catalog request. Providers must not retain this past `list`. */
+  listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
 };
@@ -55,13 +58,16 @@ export type SessionCatalogCreateTarget = {
   agentRuntime: string;
 };
 
-export type SessionCatalogEntrySummary = ReturnType<
-  PluginRuntime["agent"]["session"]["listSessionEntries"]
->[number];
+export interface SessionCatalogEntrySummary {
+  sessionKey: string;
+  entry: SessionEntry;
+}
 
-/** Mutable store contents captured lazily and reused only within one catalog request. */
+/** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
   entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
+  /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
+  entriesForCatalog?: () => SessionCatalogAgentEntry[];
 };
 
 type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
@@ -133,7 +139,7 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
-  /** Resolves the current core new-session target for the requested agent. */
+  /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
   resolveCreateSession?: (
     params: SessionCatalogCreateParams,
   ) => SessionCatalogCreateTarget | undefined;
@@ -158,6 +164,12 @@ export function listSessionCatalogEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): SessionCatalogAgentEntry[] {
+  const requestEntries = params.sessionEntries?.entriesForCatalog?.();
+  if (requestEntries) {
+    // Keep the shipped SDK helper as the compatibility entry point while the
+    // Gateway snapshot owns the one request-wide flatten.
+    return requestEntries;
+  }
   const defaultAgentId = resolveDefaultAgentId(params.config);
   const agentIds = [
     defaultAgentId,

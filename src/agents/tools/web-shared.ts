@@ -9,6 +9,7 @@ import {
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -72,12 +73,7 @@ export function writeCache<T>(
   if (expiresAt === undefined) {
     return;
   }
-  if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (!oldest.done) {
-      cache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(cache, DEFAULT_CACHE_MAX_ENTRIES - 1);
   cache.set(key, {
     value,
     expiresAt,

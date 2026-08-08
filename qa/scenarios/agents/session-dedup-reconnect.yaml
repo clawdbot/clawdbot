@@ -1,0 +1,27 @@
+title: Agent session deduplication across reconnect
+
+scenario:
+  id: session-dedup-reconnect
+  surface: agent-runtime
+  category: agent-runtime.agent-turn-execution
+  coverage:
+    primary:
+      - agent-runtime.session-dedup
+      - agent-runtime.session-reconnect
+  objective: Verify a disconnected agent RPC can be replayed from a new authenticated client without rerunning the embedded agent turn.
+  successCriteria:
+    - Client A starts one fixed-session agent RPC, observes acceptance, and disconnects while the deterministic provider response is paused.
+    - Client B reconnects and repeats the same idempotency key, receiving the same in-flight run identity.
+    - The provider is invoked once, agent.wait resolves the canonical terminal result, and a changed-message replay returns that cached result.
+    - The session transcript contains exactly one user turn and one terminal assistant turn.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/server-methods/agent-dedupe.ts
+    - src/gateway/server-methods/agent-wait.ts
+    - test/e2e/qa-lab/runtime/agent-session-dedup-reconnect.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/agent-session-dedup-reconnect.e2e.test.ts
+    summary: Run one real child Gateway and gated mock provider while two authenticated clients reconnect and replay one embedded agent turn.

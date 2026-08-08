@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
@@ -349,7 +349,7 @@ describe("buildStatusText thinking facts", () => {
       includeTranscriptUsage: false,
     });
 
-    expect(text).toContain("Think: high");
-    expect(text).not.toMatch(/Think:\s*off\b/);
+    expect(text).toContain("think high");
+    expect(text).not.toMatch(/think\s+off\b/);
   });
 });

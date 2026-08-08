@@ -9,10 +9,12 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -23,13 +25,14 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarPluginTab, shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
@@ -83,7 +86,8 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const cardAvatarText =
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
-    (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    (deriveAvatarInitial(cardName || cardAgentId) || "?");
+  const newSessionAccess = host.readNewSessionAccess();
   // The sidebar action follows gateway availability; collapsed native chrome
   // keeps its separate offline-tolerant ⌘N mirror.
   return html`
@@ -100,19 +104,28 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        @contextmenu=${(event: MouseEvent) => {
+          event.preventDefault();
+          if (host.sidebarMenus.agentMenuPosition !== null) {
+            return;
+          }
+          const card = event.currentTarget as HTMLElement;
+          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+          host.sidebarMenus.toggleAgentMenu(trigger);
+        }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
         <openclaw-tooltip
-          .content=${host.connected
+          .content=${newSessionAccess.allowed
             ? t("chat.runControls.newSession")
-            : t("chat.runControls.newSessionDisconnected")}
+            : newSessionAccess.reason}
         >
           <button
             class="sidebar-brand__icon sidebar-brand__new-thread"
             type="button"
-            @click=${() => host.onOpenNewSession?.(host.expandedAgentId())}
+            @click=${() => host.requestOpenNewSession(host.expandedAgentId())}
             aria-label=${t("chat.runControls.newSession")}
-            ?disabled=${!host.connected}
+            ?disabled=${!newSessionAccess.allowed}
           >
             ${icons.plus}
           </button>
@@ -232,11 +245,17 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     watchedSessions: [],
   };
   const gateway = host.offline ? null : readSidebarNativeGateway();
+  const buildSubtitle = formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
   // Health is visual-only here by budget decision; the header picker owns health accessibility.
   const gatewayPrimaryTag = gateway?.isPrimary
     ? t("chat.sessionHeader.gatewayPicker.primaryTag")
     : null;
   const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
+  const identityDetail = host.offline
+    ? t("connection.reconnecting")
+    : gateway
+      ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+      : buildSubtitle;
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -245,8 +264,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${gateway
-            ? `${identityMenuLabel}: ${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+          aria-label=${identityDetail
+            ? `${identityMenuLabel}: ${identityDetail}`
             : identityMenuLabel}
           @click=${(event: MouseEvent) =>
             host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
@@ -274,7 +293,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                         >`
                       : nothing}
                   </span>`
-                : nothing}
+                : buildSubtitle
+                  ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
+                      >${buildSubtitle}</span
+                    >`
+                  : nothing}
           </span>
           <span class="sidebar-identity-card__chevron" aria-hidden="true"
             >${icons.chevronDown}</span

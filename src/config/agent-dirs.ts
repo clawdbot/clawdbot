@@ -1,9 +1,11 @@
+import fs from "node:fs";
 // Resolves agent-specific config and workspace directories.
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
@@ -25,13 +27,43 @@ export class DuplicateAgentDirError extends Error {
   }
 }
 
-function canonicalizeAgentDir(agentDir: string): string {
+function realpathAgentDir(agentDir: string, seen = new Set<string>()): string {
   const resolved = path.resolve(agentDir);
-  if (process.platform === "darwin" || process.platform === "win32") {
-    // Agent dirs collide case-insensitively on the common macOS/Windows filesystems.
-    return normalizeLowercaseStringOrEmpty(resolved);
+  if (seen.has(resolved)) {
+    return resolved;
   }
-  return resolved;
+  seen.add(resolved);
+  const missingSegments: string[] = [];
+  let cursor = resolved;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(cursor), ...missingSegments.toReversed());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return resolved;
+      }
+      try {
+        if (fs.lstatSync(cursor).isSymbolicLink()) {
+          const target = path.resolve(path.dirname(cursor), fs.readlinkSync(cursor));
+          return realpathAgentDir(path.join(target, ...missingSegments.toReversed()), seen);
+        }
+      } catch {
+        // This component is missing; continue with its parent.
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      missingSegments.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function canonicalizeAgentDir(agentDir: string): string {
+  const resolved = realpathAgentDir(agentDir);
+  return isPathCaseInsensitive(resolved) ? normalizeLowercaseStringOrEmpty(resolved) : resolved;
 }
 
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {

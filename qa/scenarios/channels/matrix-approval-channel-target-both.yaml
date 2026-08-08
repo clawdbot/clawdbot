@@ -6,9 +6,10 @@ scenario:
     primary:
       - channels.channel-native-approval-prompts
   execution:
-    profiles: { "matrix:all": 30, "matrix:transport": 29 }
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Asserts fresh channel and DM approval fan-out and cannot inherit shared Matrix approval routing state.
     timeoutMs: 90000
     retryCount: 0
     config:

@@ -442,7 +442,7 @@ const runnerHoisted = vi.hoisted(() => ({
   throttlerSpy: vi.fn(() => "throttler"),
 }));
 export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
-export let sequentializeKey: ((ctx: unknown) => string) | undefined;
+export let sequentializeKey: ((ctx: unknown) => string | string[] | undefined) | undefined;
 export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
 const telegramBotRuntimeForTest = {
   Bot: class {
@@ -457,6 +457,7 @@ const telegramBotRuntimeForTest = {
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
       getChat: grammySpies.getChatSpy,
+      getChatMember: grammySpies.getChatSpy,
       sendMessage: grammySpies.sendMessageSpy,
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
@@ -492,7 +493,7 @@ const telegramBotRuntimeForTest = {
       );
     }
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: ((keyFn: (ctx: unknown) => string) => {
+  sequentialize: ((keyFn: (ctx: unknown) => string | string[] | undefined) => {
     sequentializeKey = keyFn;
     return (
       runnerHoisted.sequentializeSpy as unknown as () => ReturnType<

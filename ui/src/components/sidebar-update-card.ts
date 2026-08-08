@@ -56,6 +56,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) refreshRequired = false;
+  @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @state() private dismissedUpdateKey: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
   private nativeUpdateDeclined = false;
@@ -68,7 +70,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   private readonly handleNativeUpdateDeclined = () => {
     this.nativeUpdateDeclined = true;
     this.nativeUpdateAvailable = false;
-    if (this.updateAvailable && !this.updateRunning) {
+    if (this.updateAvailable && !this.updateRunning && !this.refreshRequired) {
       this.onUpdate();
     }
   };
@@ -93,6 +95,25 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   }
 
   override render() {
+    // A stale client cannot trust its own update metadata, so refresh takes precedence
+    // over any available update it may still report.
+    if (this.refreshRequired) {
+      return html`
+        <div class="sidebar-update-card" role="status" aria-live="polite">
+          <button class="sidebar-update-card__action" type="button" @click=${this.onRefresh}>
+            <span class="sidebar-update-card__icon" aria-hidden="true">${icons.refresh}</span>
+            <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
+              <span class="sidebar-update-card__title"
+                >${t("chat.sidebar.serverUpdatedTitle")}</span
+              >
+              <span class="sidebar-update-card__subtitle"
+                >${t("chat.sidebar.serverUpdatedRefresh")}</span
+              >
+            </span>
+          </button>
+        </div>
+      `;
+    }
     const update = this.updateAvailable;
     if (
       !update ||
@@ -107,6 +128,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       : this.nativeUpdateAvailable
         ? t("chat.sidebar.updateMacAndGateway")
         : t("chat.sidebar.updateGateway");
+    const betaChannelSuffix = update.channel === "beta" ? " (beta)" : "";
     return html`
       <div class="sidebar-update-card" role="status" aria-live="polite">
         <button
@@ -120,7 +142,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           }}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
-          <span class="sidebar-update-card__text">${title} · v${update.latestVersion}</span>
+          <span class="sidebar-update-card__text"
+            >${title} · v${update.latestVersion}${betaChannelSuffix}</span
+          >
         </button>
         <button
           class="sidebar-update-card__dismiss"

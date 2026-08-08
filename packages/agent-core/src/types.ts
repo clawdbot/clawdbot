@@ -56,6 +56,37 @@ export interface BeforeToolCallResult {
   reason?: string;
 }
 
+/** A validated call participating in an internal whole-batch admission check. */
+export interface InternalToolBatchCall {
+  toolCall: AgentToolCall;
+  args: unknown;
+  /** Resolved tool identity for OpenClaw-owned argument canonicalization. */
+  tool?: AgentTool;
+}
+
+/** Typed core signal used to recover once from a critical tool loop. */
+export interface ToolLoopIntervention {
+  kind: "critical-tool-loop";
+  toolCallId: string;
+  toolName: string;
+  actionKey: string;
+  detector: string;
+  count: number;
+  reason: string;
+}
+
+/** Context for OpenClaw-owned whole-batch tool admission. */
+export interface InternalBeforeToolBatchContext {
+  assistantMessage: AssistantMessage;
+  calls: InternalToolBatchCall[];
+  context: AgentContext;
+}
+
+/** Result of OpenClaw-owned whole-batch tool admission. */
+export interface InternalBeforeToolBatchResult {
+  intervention?: ToolLoopIntervention;
+}
+
 export interface DeferredToolCallContext {
   /** The assistant message that requested the deferred tool call. */
   assistantMessage: AssistantMessage;
@@ -116,6 +147,32 @@ export interface AfterToolCallContext {
   context: AgentContext;
 }
 
+/**
+ * Context passed to `afterToolOutcome` after every finalized tool outcome.
+ *
+ * Unlike `afterToolCall`, this hook also observes failures that prevented
+ * execution. `args` contains validated arguments when execution reached the
+ * prepared state, otherwise the raw model arguments.
+ */
+export interface AfterToolOutcomeContext {
+  /** The assistant message that requested the tool call. */
+  assistantMessage: AssistantMessage;
+  /** The tool call whose final result is being emitted. */
+  toolCall: AgentToolCall;
+  /** Validated arguments when available, otherwise the raw model arguments. */
+  args: unknown;
+  /** Final result after any executed-only `afterToolCall` override. */
+  result: AgentToolResult<unknown>;
+  /** Whether the finalized result is currently treated as an error. */
+  isError: boolean;
+  /** Whether the tool implementation started executing. */
+  executionStarted: boolean;
+  /** Typed pre-execution failure provenance when available. */
+  errorKind?: "argument-validation";
+  /** Current agent context at the time the tool outcome is finalized. */
+  context: AgentContext;
+}
+
 /** Context passed to `shouldStopAfterTurn`. */
 export interface ShouldStopAfterTurnContext {
   /** The assistant message that completed the turn. */
@@ -139,6 +196,11 @@ export interface AgentLoopTurnUpdate {
 }
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
+
+/** @internal Mutable one-shot budget shared by prompt retries in one Agent run. */
+export type ToolLoopRecoveryState = {
+  criticalToolLoopSeen: boolean;
+};
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
@@ -274,6 +336,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
 
+  /** @internal OpenClaw-owned batch admission. Not a plugin or session SDK hook. */
+  beforeToolBatch?: (
+    context: InternalBeforeToolBatchContext,
+    signal?: AbortSignal,
+  ) => Promise<InternalBeforeToolBatchResult | undefined>;
+
+  /** @internal Preserves the one-shot recovery budget across Agent.continue() retries. */
+  toolLoopRecoveryState?: ToolLoopRecoveryState;
+
   /**
    * Hydrates an already-authorized tool that was deferred out of the current
    * provider-visible tool set. Return undefined for every other unknown name so
@@ -299,6 +370,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    */
   afterToolCall?: (
     context: AfterToolCallContext,
+    signal?: AbortSignal,
+  ) => Promise<AfterToolCallResult | undefined>;
+
+  /**
+   * Called after every tool outcome is finalized, including failures that
+   * prevented execution. It runs after `afterToolCall` for executed tools.
+   */
+  afterToolOutcome?: (
+    context: AfterToolOutcomeContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
 }
@@ -455,6 +535,9 @@ export interface AgentToolResult<T> {
 /** Callback used by tools to stream partial execution updates. */
 export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
 
+/** Origin class for tool output that can taint later model-authored content in the same turn. */
+export type ToolResultContentSource = "network";
+
 /** Tool definition used by the agent runtime. */
 export interface AgentTool<
   TParameters extends TSchema = TSchema,
@@ -466,6 +549,8 @@ export interface AgentTool<
   outputSchema?: TSchema;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Tool results contain externally controlled network content. */
+  resultContentSource?: ToolResultContentSource;
   /**
    * Optional compatibility shim for raw tool-call arguments before schema validation.
    * Must return an object that matches `TParameters`.

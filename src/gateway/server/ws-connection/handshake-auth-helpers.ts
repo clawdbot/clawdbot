@@ -89,6 +89,7 @@ export function resolveHandshakeBrowserSecurityContext(params: {
 }
 
 export function shouldAllowSilentLocalPairing(params: {
+  autoApproveLocal?: boolean;
   locality: PairingLocalityKind;
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
@@ -100,6 +101,12 @@ export function shouldAllowSilentLocalPairing(params: {
     return false;
   }
   if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  // Operators can require explicit approval for pairing and access upgrades.
+  // Metadata-only reconnect refreshes stay automatic to avoid approval churn
+  // after benign client or OS metadata changes.
+  if (params.autoApproveLocal === false && params.reason !== "metadata-upgrade") {
     return false;
   }
   if (

@@ -5,6 +5,8 @@
  */
 import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
@@ -16,6 +18,7 @@ import {
   normalizeBundleMcpServerConfig,
   normalizeStringRecord,
 } from "./bundle-mcp-adapter.js";
+import { prepareOwnedBundleMcpDataDirs } from "./bundle-mcp-config.js";
 import type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
@@ -104,6 +107,28 @@ function applyCodexToolFilter(
   if (exclude.length > 0) {
     next.disabled_tools = exclude;
   }
+}
+
+/** Adds exact session denials to a server's configured filter before Codex projection. */
+export function applyCodexSessionMcpToolDenials(
+  name: string,
+  server: BundleMcpServerConfig,
+  toolOverrides?: Pick<SessionToolOverrides, "mcpToolsDeny">,
+): BundleMcpServerConfig {
+  const denialMap = toolOverrides?.mcpToolsDeny;
+  const denied = denialMap && Object.hasOwn(denialMap, name) ? denialMap[name] : undefined;
+  if (!denied?.length) {
+    return server;
+  }
+  const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
+  const existing = normalizeToolFilterList(toolFilter.exclude);
+  return {
+    ...server,
+    toolFilter: {
+      ...toolFilter,
+      exclude: [...new Set([...existing, ...denied])].toSorted(),
+    },
+  };
 }
 
 /** Normalizes one bundle MCP server into Codex's mcp_servers shape. */
@@ -203,10 +228,35 @@ export function loadCodexBundleMcpThreadConfig(
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
   });
-  const mcpServers = buildCodexMcpServersConfig(bundleMcp.config);
+  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const serverOverrides = params.toolOverrides?.mcpServers;
+  const effectiveConfig: BundleMcpConfig = {
+    mcpServers: Object.fromEntries(
+      Object.entries(bundleMcp.config.mcpServers)
+        .filter(([name]) => {
+          const override =
+            serverOverrides && Object.hasOwn(serverOverrides, name)
+              ? serverOverrides[name]
+              : undefined;
+          return (
+            override !== false && (override === true || configuredMcp[name]?.enabled !== false)
+          );
+        })
+        .map(([name, server]) => [
+          name,
+          applyCodexSessionMcpToolDenials(name, server, params.toolOverrides),
+        ]),
+    ),
+  };
+  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+    config: effectiveConfig,
+    prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
+  });
+  const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
+  const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config);
   if (Object.keys(mcpServers).length === 0) {
     return {
-      diagnostics: bundleMcp.diagnostics,
+      diagnostics,
       evaluated: true,
     };
   }
@@ -214,7 +264,7 @@ export function loadCodexBundleMcpThreadConfig(
     configPatch: {
       mcp_servers: mcpServers,
     },
-    diagnostics: bundleMcp.diagnostics,
+    diagnostics,
     evaluated: true,
     fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
   };

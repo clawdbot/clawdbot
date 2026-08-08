@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 /**
  * Converts raw provider/transport errors into concise user-facing copy.
  */
@@ -23,10 +24,10 @@ import {
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
+import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
-import { stableStringify } from "../stable-stringify.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
@@ -453,6 +454,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     : withoutPlaceholder;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
+    { resolveProtectedRanges: findCodeRegions },
   );
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {

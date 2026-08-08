@@ -12,12 +12,14 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
+  reconcileLoopCallExecutionParams,
   recordLoopOutcome,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
@@ -26,7 +28,10 @@ import {
   resolveToolTerminalPresentation,
   summarizeToolParams,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
+import {
+  consumeFinalClientVoiceToolConfirmation,
+  runBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.policy.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -59,7 +64,11 @@ import {
 } from "./code-mode-control-tools.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
+import {
+  formatToolExecutionErrorMessage,
+  isTrustedToolExecutionPreflightError,
+  protectNetworkToolExecutionError,
+} from "./tool-result-error.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -184,12 +193,7 @@ export function recordAdjustedParamsForToolCall(
   }
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
   adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
-  if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = adjustedParamsByToolCallId.keys().next().value;
-    if (oldest) {
-      adjustedParamsByToolCallId.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
 }
 
 function cloneParamsForAdjustedReplay(
@@ -343,6 +347,44 @@ export function wrapToolWithBeforeToolCallHook(
           terminalReason: disposition,
         });
       };
+      const blockToolCall = async (blockedCall: {
+        reason: string;
+        deniedReason: HookBlockedReason;
+        toolParams: unknown;
+      }) => {
+        const eventBase = buildEventBase(blockedCall.toolParams);
+        if (hookOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.blocked",
+            ...eventBase,
+            reason: blockedCall.reason,
+            deniedReason: blockedCall.deniedReason,
+          });
+          emitToolBlockedSecurityEvent({
+            ctx,
+            deniedReason: blockedCall.deniedReason,
+            toolIdentity: diagnosticIdentity,
+            toolName: normalizedToolName,
+            trace,
+            paramsSummary: eventBase.paramsSummary,
+          });
+        }
+        const blockedResult = buildBlockedToolResult({
+          reason: blockedCall.reason,
+          deniedReason: blockedCall.deniedReason,
+          toolCallId,
+          runId: ctx?.runId,
+        });
+        await recordLoopOutcome({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: blockedCall.toolParams,
+          toolCallId,
+          result: blockedResult,
+          toolCallOrdinal,
+        });
+        return blockedResult;
+      };
       let preparedParams: unknown;
       try {
         preparedParams = await prepareBeforeToolCallExecutionParams({
@@ -383,38 +425,11 @@ export function wrapToolWithBeforeToolCallHook(
           );
           throw new BeforeToolCallFailureError(outcome.reason, outcome.disposition);
         }
-        const eventBase = buildEventBase(outcome.params ?? hookParams);
-        if (hookOptions.emitDiagnostics) {
-          emitTrustedDiagnosticEvent({
-            type: "tool.execution.blocked",
-            ...eventBase,
-            reason: outcome.reason,
-            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-          });
-          emitToolBlockedSecurityEvent({
-            ctx,
-            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-            toolIdentity: diagnosticIdentity,
-            toolName: normalizedToolName,
-            trace,
-            paramsSummary: eventBase.paramsSummary,
-          });
-        }
-        const blockedResult = buildBlockedToolResult({
+        return await blockToolCall({
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-          toolCallId,
-          runId: ctx?.runId,
-        });
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
           toolParams: outcome.params ?? hookParams,
-          toolCallId,
-          result: blockedResult,
-          toolCallOrdinal,
         });
-        return blockedResult;
       }
       let executeParams: unknown;
       try {
@@ -427,9 +442,29 @@ export function wrapToolWithBeforeToolCallHook(
           adjustedParams: outcome.params,
           finalizerMode: "wrapped",
         });
+        // A voice grant binds the post-finalizer execution shape. Consuming it
+        // earlier would let later alias or tool-owned rewrites escape the grant.
+        const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+          toolName,
+          params: executeParams,
+          ctx,
+        });
+        if (!voiceConfirmation.allowed) {
+          return await blockToolCall({
+            reason: voiceConfirmation.reason,
+            deniedReason: "client-voice-confirmation",
+            toolParams: executeParams,
+          });
+        }
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
+        await reconcileLoopCallExecutionParams({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: executeParams,
+          toolCallId,
+        });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
@@ -445,13 +480,21 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const startedAt = Date.now();
       try {
-        const result = await (execute as ForwardedToolExecution)(
-          toolCallId,
-          executeParams,
-          signal,
-          onUpdate,
-          ...executionArgs,
-        );
+        let result: Awaited<ReturnType<ForwardedToolExecution>>;
+        try {
+          result = await (execute as ForwardedToolExecution)(
+            toolCallId,
+            executeParams,
+            signal,
+            onUpdate,
+            ...executionArgs,
+          );
+        } catch (error) {
+          throw tool.resultContentSource === "network" &&
+            getBeforeToolCallFailureDisposition(error) === undefined
+            ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
+            : error;
+        }
         const durationMs = Date.now() - startedAt;
         const terminalPresentation = resolveToolTerminalPresentation({
           tool,
@@ -464,6 +507,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           result,
+          resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
           terminalPresentation,
         });
@@ -523,6 +567,10 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           error: err,
+          resultContentSource:
+            isTrustedToolExecutionPreflightError(err) || (signal?.aborted && err === signal.reason)
+              ? undefined
+              : tool.resultContentSource,
           toolCallOrdinal,
         });
         throw err;

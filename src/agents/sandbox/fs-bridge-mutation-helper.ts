@@ -4,6 +4,11 @@
  * Performs symlink-resistant create/replace/delete operations inside a previously validated sandbox boundary.
  */
 import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
+import {
+  SANDBOX_CREATE_EXCLUSIVE_PYTHON,
+  SANDBOX_CREATE_STAGING_PYTHON,
+  SANDBOX_RENAME_NO_REPLACE_PYTHON,
+} from "./fs-bridge-native-mutation-python.js";
 import type {
   PathSafetyCheck,
   PinnedSandboxDirectoryEntry,
@@ -18,7 +23,14 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/bin/python3",
 ] as const;
 
+// Exit code the pinned helper reserves for "create target already exists" so
+// callers can tell a lost exclusive-create race from a real failure. Any other
+// nonzero exit stays an error.
+export const SANDBOX_CREATE_EXISTS_EXIT_CODE = 17;
+
 export const SANDBOX_PINNED_MUTATION_PYTHON = [
+  `SANDBOX_CREATE_EXISTS_EXIT_CODE = ${SANDBOX_CREATE_EXISTS_EXIT_CODE}`,
+  "import ctypes",
   "import errno",
   "import os",
   "import secrets",
@@ -94,6 +106,8 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            continue",
   "    raise RuntimeError('failed to allocate sandbox temp directory')",
   "",
+  SANDBOX_CREATE_STAGING_PYTHON,
+  "",
   "def existing_regular_file_mode(parent_fd, basename):",
   "    try:",
   "        target_stat = os.lstat(basename, dir_fd=parent_fd)",
@@ -110,6 +124,8 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        if written <= 0:",
   "            raise OSError(errno.EIO, 'failed to write copied file')",
   "        view = view[written:]",
+  "",
+  SANDBOX_RENAME_NO_REPLACE_PYTHON,
   "",
   "def copy_regular_file(src_parent_fd, src_basename, dst_parent_fd, dst_basename):",
   "    src_fd = os.open(src_basename, READ_FLAGS, dir_fd=src_parent_fd)",
@@ -201,7 +217,9 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            except FileNotFoundError:",
   "                pass",
   "",
-  "def read_file(parent_fd, basename):",
+  SANDBOX_CREATE_EXCLUSIVE_PYTHON,
+  "",
+  "def read_file_impl(parent_fd, basename, max_bytes):",
   "    file_fd = os.open(basename, READ_FLAGS, dir_fd=parent_fd)",
   "    try:",
   "        file_stat = os.fstat(file_fd)",
@@ -209,13 +227,28 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            raise OSError(errno.EPERM, 'only regular files are allowed', basename)",
   "        if file_stat.st_nlink > 1:",
   "            raise OSError(errno.EPERM, 'hardlinked file is not allowed', basename)",
+  "        if max_bytes is not None and file_stat.st_size > max_bytes:",
+  "            raise OSError(errno.EFBIG, 'file exceeds bounded read limit', basename)",
+  "        bytes_read = 0",
   "        while True:",
-  "            chunk = os.read(file_fd, 65536)",
+  "            read_size = 65536 if max_bytes is None else min(65536, max_bytes - bytes_read + 1)",
+  "            chunk = os.read(file_fd, read_size)",
   "            if not chunk:",
   "                break",
-  "            os.write(1, chunk)",
+  "            bytes_read += len(chunk)",
+  "            if max_bytes is not None and bytes_read > max_bytes:",
+  "                raise OSError(errno.EFBIG, 'file exceeds bounded read limit', basename)",
+  "            write_all(1, chunk)",
   "    finally:",
   "        os.close(file_fd)",
+  "",
+  "def read_file(parent_fd, basename):",
+  "    read_file_impl(parent_fd, basename, None)",
+  "",
+  "def read_file_bounded(parent_fd, basename, max_bytes):",
+  "    if max_bytes < 0:",
+  "        raise OSError(errno.EINVAL, 'read limit must be non-negative', basename)",
+  "    read_file_impl(parent_fd, basename, max_bytes)",
   "",
   "def remove_tree(parent_fd, basename):",
   "    entry_stat = os.lstat(basename, dir_fd=parent_fd)",
@@ -239,6 +272,9 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        getattr(entry_stat, 'st_mtime_ns', int(entry_stat.st_mtime * 1000000000)),",
   "        getattr(entry_stat, 'st_ctime_ns', int(entry_stat.st_ctime * 1000000000)),",
   "    )",
+  "",
+  "def inode_identity(entry_stat):",
+  "    return (entry_stat.st_dev, entry_stat.st_ino)",
   "",
   "def same_identity(expected, entry_stat):",
   "    return expected == entry_identity(entry_stat)",
@@ -410,12 +446,28 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
   "        os.close(root_fd)",
+  "elif operation == 'create':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    parent_fd = None",
+  "    try:",
+  "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
+  "        try:",
+  "            create_exclusive(parent_fd, sys.argv[4], sys.stdin.buffer)",
+  "        except FileExistsError:",
+  "            sys.exit(SANDBOX_CREATE_EXISTS_EXIT_CODE)",
+  "    finally:",
+  "        if parent_fd is not None:",
+  "            os.close(parent_fd)",
+  "        os.close(root_fd)",
   "elif operation == 'read':",
   "    root_fd = open_dir(sys.argv[2])",
   "    parent_fd = None",
   "    try:",
   "        parent_fd = walk_dir(root_fd, sys.argv[3], False)",
-  "        read_file(parent_fd, sys.argv[4])",
+  "        if len(sys.argv) > 5:",
+  "            read_file_bounded(parent_fd, sys.argv[4], int(sys.argv[5]))",
+  "        else:",
+  "            read_file(parent_fd, sys.argv[4])",
   "    finally:",
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
@@ -510,6 +562,23 @@ export function buildPinnedWritePlan(params: {
     checks: [params.check],
     args: [
       "write",
+      params.pinned.mountRootPath,
+      params.pinned.relativeParentPath,
+      params.pinned.basename,
+      params.mkdir ? "1" : "0",
+    ],
+  });
+}
+
+export function buildPinnedCreatePlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxEntry;
+  mkdir: boolean;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: [
+      "create",
       params.pinned.mountRootPath,
       params.pinned.relativeParentPath,
       params.pinned.basename,

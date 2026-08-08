@@ -6,6 +6,8 @@ import type {
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -22,12 +24,19 @@ import type {
   SessionCreatedVia,
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
-import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
+
+export type SessionToolOverrides = {
+  mcpServers?: Record<string, boolean>;
+  mcpToolsDeny?: Record<string, string[]>;
+  skills?: Record<string, boolean>;
+  webSearch?: boolean;
+};
 
 export type SessionOrigin = {
   label?: string;
@@ -53,6 +62,42 @@ export type SessionDeliveryState =
       origin: SessionOrigin;
     };
 
+type PendingFinalDeliveryState = {
+  createdAt: number;
+  context?: DeliveryContext;
+  intentId?: string;
+} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
+
+/**
+ * Durable transcript-repair record: an assistant final that was delivered to
+ * the user but could not be appended to the canonical transcript. Kept
+ * separate from `pendingFinalDelivery` so transport-replay cleanup never drops
+ * the only copy of the missing assistant turn.
+ */
+export type PendingTranscriptRepairState = {
+  /** Stable identity for retry-safe transcript insertion. */
+  id: string;
+  text: string;
+  provider?: string;
+  model?: string;
+  createdAt: number;
+};
+
+type FallbackNoticeState = {
+  kind: "active";
+  selectedModel: string;
+  activeModel: string;
+  reason?: string;
+};
+
+type MemoryFlushState =
+  | { kind: "succeeded"; compactionCount: number }
+  | {
+      kind: "failed";
+      compactionCount?: number;
+      failureCount: number;
+    };
+
 export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
 export type CliSessionReseedReceipt = {
@@ -60,6 +105,15 @@ export type CliSessionReseedReceipt = {
   promptHash: string;
   localSessionId: string;
   userTurnDisposition: "persisted" | "omitted";
+};
+
+export type SessionDiffBaseline = {
+  version: 1;
+  sessionId: string;
+  root: string;
+  files: Array<{ path: string; fingerprint: string }>;
+  /** Some checkout entries could not be fingerprinted without exceeding diff safety caps. */
+  truncated?: true;
 };
 
 export type CliSessionBinding = {
@@ -110,6 +164,7 @@ export type SessionCompactionCheckpoint = {
   reason: SessionCompactionCheckpointReason;
   tokensBefore?: number;
   tokensAfter?: number;
+  tokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
   summary?: string;
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
@@ -240,17 +295,12 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
-export type PendingSkillSuggestion = {
-  skillName: string;
-  detectedAt: number;
-};
-
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = SessionRestartRecoveryState &
+type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
@@ -306,7 +356,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
     lastActivityAt?: number;
-    sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
     /** Immutable session key authorized to receive this child's completion handoff. */
@@ -315,6 +364,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
+    /** Content-free fingerprints for checkout changes that predate this session generation. */
+    sessionDiffBaseline?: SessionDiffBaseline;
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -358,10 +409,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
     goal?: SessionGoal;
-    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-    pendingSkillSuggestion?: PendingSkillSuggestion;
-    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-    skillCaptureSignalHashes?: string[];
     /** Timestamp (ms) when the current sessionId first became active. */
     sessionStartedAt?: number;
     /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -377,7 +424,7 @@ export type SessionEntry = SessionRestartRecoveryState &
     /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
-    status?: "running" | "done" | "failed" | "killed" | "timeout";
+    status?: SessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
     /**
@@ -415,6 +462,7 @@ export type SessionEntry = SessionRestartRecoveryState &
       };
     };
     fastMode?: FastMode;
+    toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
     swarmGroupId?: string;
     /** Marks non-interactive collector-mode child sessions. */
@@ -468,31 +516,29 @@ export type SessionEntry = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
-    queueMode?: "steer" | "followup" | "collect" | "interrupt";
+    queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
-    /** Durable marker that final user reply delivery still needs a retry/resume pass. */
-    pendingFinalDelivery?: boolean;
-    pendingFinalDeliveryCreatedAt?: number;
-    pendingFinalDeliveryLastAttemptAt?: number;
-    pendingFinalDeliveryAttemptCount?: number;
-    pendingFinalDeliveryLastError?: string | null;
-    /** Frozen reply text that needs delivery. */
-    pendingFinalDeliveryText?: string | null;
-    /** Original delivery context (channel, recipient, etc). */
-    pendingFinalDeliveryContext?: DeliveryContext;
-    /** Durable send intent backing pending final delivery, when already created. */
-    pendingFinalDeliveryIntentId?: string | null;
+    pendingFinalDelivery?: PendingFinalDeliveryState;
+    /**
+     * Ordered durable backlog of delivered assistant finals that failed to
+     * reach the canonical transcript. Session admission restores each item
+     * before another turn can extend that transcript. Kept as a list so
+     * independently admitted writers never overwrite an earlier reply.
+     */
+    pendingTranscriptRepair?: PendingTranscriptRepairState[];
     /**
      * Whether totalTokens reflects a fresh context snapshot for the latest run.
      * Undefined means legacy/unknown freshness; false forces consumers to treat
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
+    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
+    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -509,26 +555,12 @@ export type SessionEntry = SessionRestartRecoveryState &
      * incompatible runtime harnesses.
      */
     agentHarnessId?: string;
-    /**
-     * Last selected/runtime model pair for which a fallback notice was emitted.
-     * Used to avoid repeating the same fallback notice every turn.
-     */
-    fallbackNoticeSelectedModel?: string;
-    fallbackNoticeActiveModel?: string;
-    fallbackNoticeReason?: string;
+    fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
-    memoryFlushAt?: number;
-    memoryFlushCompactionCount?: number;
-    memoryFlushContextHash?: string;
-    /** Consecutive memory flush failures since the last successful flush. */
-    memoryFlushFailureCount?: number;
-    /** Timestamp (ms) of the last failed memory flush attempt. */
-    memoryFlushLastFailedAt?: number;
-    /** Last memory flush failure error message, truncated for durable metadata. */
-    memoryFlushLastFailureError?: string;
+    memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;
     /** Initialization fence for seeding canonical ACP metadata; cleared after creation. */
@@ -558,10 +590,16 @@ export type SessionEntry = SessionRestartRecoveryState &
     acp?: SessionAcpMeta;
   };
 
+export interface SessionEntry extends SessionEntryCore {}
+
 /** Internal durable fields excluded from public/plugin session projections. */
-export type InternalSessionEntry = SessionEntry & {
+export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Run that owns the current non-terminal Gateway lifecycle projection. */
+  lifecycleRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
+
+export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -694,12 +732,14 @@ function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({
-      ...patch,
-      sessionId,
-      updatedAt,
-      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
-    });
+    return stripRetiredSessionEntryLocators(
+      normalizeSessionRuntimeModelFields({
+        ...patch,
+        sessionId,
+        updatedAt,
+        sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+      }),
+    );
   }
   const next = {
     ...existing,
@@ -725,20 +765,6 @@ function mergeSessionEntryWithPolicy(
     next.forkSource = existing.forkSource;
   }
 
-  if (existing.sessionId !== sessionId) {
-    // Session id rotations should move transcript paths when they match known reset/fork shapes.
-    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
-    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
-    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-      sessionFile: candidateSessionFile,
-      previousSessionId: existing.sessionId,
-      nextSessionId: sessionId,
-    });
-    if (rewrittenSessionFile) {
-      next.sessionFile = rewrittenSessionFile;
-    }
-  }
-
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
@@ -748,7 +774,14 @@ function mergeSessionEntryWithPolicy(
       delete next.modelProvider;
     }
   }
-  return normalizeSessionRuntimeModelFields(next);
+  return stripRetiredSessionEntryLocators(normalizeSessionRuntimeModelFields(next));
+}
+
+function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
+  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+  delete mutable.sessionFile;
+  delete mutable.transcriptPath;
+  return entry;
 }
 
 export function mergeSessionEntry(
@@ -767,9 +800,7 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
+export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return undefined;
@@ -778,13 +809,16 @@ export function resolveSessionTotalTokens(
 }
 
 export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion"> | null,
 ): number | undefined {
   const total = resolveSessionTotalTokens(entry);
   if (total === undefined) {
     return undefined;
   }
-  if (entry?.totalTokensFresh === false) {
+  if (
+    entry?.totalTokensFresh !== true ||
+    entry.totalTokensVersion !== SESSION_TOTAL_TOKENS_VERSION
+  ) {
     return undefined;
   }
   return total;

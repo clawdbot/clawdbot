@@ -14,6 +14,7 @@ import {
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
@@ -114,9 +115,13 @@ export function providerHasGenericConfig(params: {
   const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (params.cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
   const ttsProviders = (params.cfg.tts?.providers ?? {}) as Record<string, unknown>;
-  const envConfigured = (params.envVars ?? []).some((envVar) =>
-    Boolean(process.env[envVar]?.trim()),
-  );
+  const envVars =
+    params.envVars ??
+    getProviderEnvVars(params.providerId, {
+      config: params.cfg,
+      includeUntrustedWorkspacePlugins: false,
+    });
+  const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
   return (
     getAuthProfileIdsForProvider(params.cfg, params.providerId).length > 0 ||
     hasOwnKeys(modelsProviders[params.providerId]) ||

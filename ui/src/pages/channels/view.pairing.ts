@@ -59,6 +59,7 @@ function renderFilters(props: ChannelsProps) {
       <label>
         <span>${t("channels.pairing.channelFilter")}</span>
         <select
+          class="settings-select"
           .value=${props.pairingChannelFilter ?? ""}
           @change=${(event: Event) => props.onPairingFilterChange(selectValue(event), null)}
         >
@@ -69,6 +70,7 @@ function renderFilters(props: ChannelsProps) {
       <label>
         <span>${t("channels.pairing.accountFilter")}</span>
         <select
+          class="settings-select"
           .value=${props.pairingAccountFilter ?? ""}
           ?disabled=${!props.pairingChannelFilter}
           @change=${(event: Event) =>
@@ -181,13 +183,28 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
           `,
         },
         !props.canManagePairing
-          ? html`<div class="callout warn">${t("channels.pairing.missingPermission")}</div>`
+          ? html`
+              <div class="settings-row channels-pairing-feedback">
+                ${renderSettingsStatus({
+                  kind: "warn",
+                  label: t("channels.pairing.missingPermission"),
+                })}
+              </div>
+            `
           : html`
               ${props.pairingError
-                ? html`<div class="callout danger">${props.pairingError}</div>`
+                ? html`
+                    <div class="settings-row channels-pairing-feedback" role="alert">
+                      ${renderSettingsStatus({ kind: "danger", label: props.pairingError })}
+                    </div>
+                  `
                 : nothing}
               ${props.pairingNotice
-                ? html`<div class="callout info" role="status">${props.pairingNotice}</div>`
+                ? html`
+                    <div class="settings-row channels-pairing-feedback" role="status">
+                      ${renderSettingsStatus({ kind: "ok", label: props.pairingNotice })}
+                    </div>
+                  `
                 : nothing}
               ${snapshot ? renderFilters(props) : nothing}
               ${props.pairingLoading && !snapshot

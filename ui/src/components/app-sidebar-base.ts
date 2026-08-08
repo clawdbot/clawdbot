@@ -11,6 +11,9 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
+import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
+import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -29,6 +32,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
+  @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   @property({ attribute: false }) workboardBoards: readonly SidebarWorkboardBoard[] = [];
@@ -45,6 +49,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) refreshRequired = false;
+  @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
@@ -73,5 +79,46 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
       sessionKey,
       agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
     });
+  }
+
+  prepareSessionNavigation(sessionKey: string, pathname: string): void {
+    if (this.context) {
+      prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
+    }
+  }
+
+  protected bindLiteralSession(
+    sessionKey: string,
+    fallbackAgentId: string,
+    options: ApplicationNavigationOptions,
+  ): void {
+    if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
+      this.setApplicationSession(sessionKey, fallbackAgentId);
+    }
+  }
+
+  readNewSessionAccess(): SessionMethodAccess {
+    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
+      method: "sessions.create",
+      params: {},
+    });
+  }
+
+  readSessionMutationAccess(request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  }): SessionMethodAccess {
+    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
+  }
+
+  requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {
+    if (this.readNewSessionAccess().allowed) {
+      if (target) {
+        this.onOpenNewSession?.(agentId, target);
+      } else {
+        this.onOpenNewSession?.(agentId);
+      }
+    }
   }
 }

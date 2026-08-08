@@ -1,5 +1,6 @@
 // Slack plugin module implements sent thread cache behavior.
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "./runtime.js";
 
 /**
@@ -30,15 +31,14 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     openStore: (options) => getOptionalSlackRuntime()?.state.openKeyedStore(options),
-    logError: (error) => {
-      try {
-        getOptionalSlackRuntime()
-          ?.logging.getChildLogger({ plugin: "slack", feature: "thread-participation-state" })
-          .warn("Slack persistent thread participation state failed", { error: String(error) });
-      } catch {
-        // Best effort only: persistent state must never break Slack message handling.
-      }
-    },
+    logError: createPluginStateErrorReporter(
+      getOptionalSlackRuntime,
+      "slack",
+      "thread-participation-state",
+      "Slack persistent thread participation state failed",
+    ),
+    // Restoring participation must not extend its original mention-bypass window.
+    readTimestamp: ({ repliedAt }) => repliedAt,
   },
 });
 

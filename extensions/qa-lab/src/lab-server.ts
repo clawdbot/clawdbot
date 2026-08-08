@@ -50,7 +50,10 @@ import type {
 } from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
-import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
+import {
+  qaTransportSupportsModuleFlows,
+  type QaTransportAdapterFactory,
+} from "./qa-transport-registry.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -60,6 +63,10 @@ import {
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
+import {
+  readQaSuiteFailedOrSkippedScenarioCountFromFile,
+  resolveQaReportOnlyOptionalScenarioNames,
+} from "./suite-summary.js";
 
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
@@ -344,6 +351,13 @@ export async function startQaLabServer(
                 adapterFactories.some((factory) =>
                   factory.matches({ channelId: channel, driver: "live" }),
                 ),
+              resolveModuleFlowSupport: (channel?: string) =>
+                channel
+                  ? qaTransportSupportsModuleFlows(adapterFactories, {
+                      channelId: channel,
+                      driver: "live",
+                    })
+                  : false,
             }
           : {}),
     });
@@ -781,6 +795,8 @@ export async function startQaLabServer(
             error: null,
           };
           activeSuiteRun = (async () => {
+            // Keep generated artifacts visible when authenticated verdict validation fails.
+            let artifacts: ReturnType<typeof createIdleQaRunnerSnapshot>["artifacts"] = null;
             try {
               const [{ runQaSuite }, channelDriverSelection] = await Promise.all([
                 import("./suite-launch.runtime.js"),
@@ -795,6 +811,7 @@ export async function startQaLabServer(
               const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
+                controlUiEnabled: true,
                 repoRoot,
                 outputDir: createQaRunOutputDir(repoRoot),
                 channelDriver: selection.channelDriver,
@@ -813,28 +830,40 @@ export async function startQaLabServer(
               });
               const result = runtimeResult.result;
               const finishedAt = new Date().toISOString();
+              artifacts = {
+                outputDir: result.outputDir,
+                evidencePath: result.evidencePath,
+                reportPath: result.reportPath,
+                summaryPath: result.summaryPath,
+                watchUrl:
+                  "watchUrl" in result && typeof result.watchUrl === "string"
+                    ? result.watchUrl
+                    : (labHandle?.baseUrl ?? publicBaseUrl),
+              };
               latestReport = {
                 outputPath: result.reportPath,
                 markdown: result.report,
                 generatedAt: finishedAt,
               };
+              const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+                result.summaryPath,
+                {
+                  optionalScenarioNames: plan.explicitScenarioSelection
+                    ? undefined
+                    : resolveQaReportOnlyOptionalScenarioNames(scenarioCatalog.scenarios),
+                },
+              );
               runnerSnapshot = {
-                status: "completed",
+                status: blockingScenarioCount > 0 ? "failed" : "completed",
                 selection,
                 plan,
                 startedAt,
                 finishedAt,
-                artifacts: {
-                  outputDir: result.outputDir,
-                  evidencePath: result.evidencePath,
-                  reportPath: result.reportPath,
-                  summaryPath: result.summaryPath,
-                  watchUrl:
-                    "watchUrl" in result && typeof result.watchUrl === "string"
-                      ? result.watchUrl
-                      : (labHandle?.baseUrl ?? publicBaseUrl),
-                },
-                error: null,
+                artifacts,
+                error:
+                  blockingScenarioCount > 0
+                    ? `QA suite reported ${blockingScenarioCount} failed or skipped scenario(s).`
+                    : null,
               };
             } catch (error) {
               const finishedAt = new Date().toISOString();
@@ -860,7 +889,7 @@ export async function startQaLabServer(
                 plan,
                 startedAt,
                 finishedAt,
-                artifacts: null,
+                artifacts,
                 error: message,
               };
             } finally {

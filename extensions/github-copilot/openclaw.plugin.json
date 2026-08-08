@@ -32,7 +32,8 @@
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 128000,
-            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 }
+            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "claude-opus-5",
@@ -42,7 +43,8 @@
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 128000,
-            "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 }
+            "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "claude-sonnet-5",
@@ -52,7 +54,8 @@
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 128000,
-            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 }
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "claude-haiku-4.5",
@@ -131,7 +134,8 @@
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
-            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 }
+            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "gpt-5.6-terra",
@@ -141,7 +145,8 @@
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
-            "cost": { "input": 2.5, "output": 15, "cacheRead": 0.25, "cacheWrite": 0 }
+            "cost": { "input": 2.5, "output": 15, "cacheRead": 0.25, "cacheWrite": 0 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "gpt-5.6-luna",
@@ -151,7 +156,8 @@
             "contextWindow": 1050000,
             "contextTokens": 922000,
             "maxTokens": 128000,
-            "cost": { "input": 1, "output": 6, "cacheRead": 0.1, "cacheWrite": 0 }
+            "cost": { "input": 1, "output": 6, "cacheRead": 0.1, "cacheWrite": 0 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "gpt-5.3-codex",
@@ -184,7 +190,8 @@
             "contextWindow": 1050000,
             "contextTokens": 272000,
             "maxTokens": 128000,
-            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 }
+            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
+            "compat": { "codeMode": "capable" }
           },
           {
             "id": "gpt-5.4-mini",

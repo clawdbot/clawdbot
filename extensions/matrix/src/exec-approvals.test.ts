@@ -154,6 +154,22 @@ describe("matrix exec approvals", () => {
     ).toBe(true);
   });
 
+  it("enables explicit auto mode only when Matrix approvers can be resolved", () => {
+    expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig({ enabled: "auto" }) })).toBe(
+      false,
+    );
+    expect(
+      isMatrixExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto" }, { dm: { allowFrom: ["@owner:example.org"] } }),
+      }),
+    ).toBe(true);
+    expect(
+      isMatrixExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto", approvers: ["@owner:example.org"] }),
+      }),
+    ).toBe(true);
+  });
+
   it("prefers explicit approvers when configured", () => {
     const cfg = buildConfig(
       { enabled: true, approvers: ["user:@override:example.org"] },

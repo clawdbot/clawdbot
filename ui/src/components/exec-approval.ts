@@ -1,9 +1,11 @@
 // Control UI modal queues approvals that are not currently inline in chat.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import { modalApprovalQueue } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
+import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
@@ -26,7 +28,7 @@ type ExecApprovalProps = {
 
 function compactCommand(command: string): string {
   const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${singleLine.slice(0, 61)}…` : singleLine;
+  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
 function renderApprovalQueueList(params: {
@@ -85,7 +87,7 @@ function shortcutDecision(event: KeyboardEvent): ExecApprovalDecision | null {
   if (event.key === "Enter") {
     return event.shiftKey ? "allow-always" : "allow-once";
   }
-  return !event.shiftKey && event.key.toLowerCase() === "d" ? "deny" : null;
+  return !event.shiftKey && resolveAsciiShortcutKey(event) === "d" ? "deny" : null;
 }
 
 class ExecApproval extends OpenClawLightDomContentsElement {
@@ -151,10 +153,13 @@ class ExecApproval extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const decisions = resolveApprovalDecisions(active);
-    const handleCancel = () => {
-      if (!props.busy && decisions.includes("deny")) {
-        void props.onDecision(active.id, "deny");
+    const handleCancel = (event: Event) => {
+      if (props.busy || !decisions.includes("deny")) {
+        // Dismissal must never hide an approval that cannot yet be resolved.
+        event.preventDefault();
+        return;
       }
+      void props.onDecision(active.id, "deny");
     };
     return html`
       <openclaw-modal-dialog

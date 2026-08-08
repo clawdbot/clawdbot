@@ -20,6 +20,10 @@ export const selectedCodexAppServerJsonSchemas = [
   "v2/TurnStartResponse.json",
 ] as const;
 
+export const codexAppServerSharedDefinitionsSchema = "v2/CodexAppServerProtocolDefinitions.json";
+
+const localDefinitionRefPrefix = "#/definitions/";
+
 type GeneratedCodexAppServerProtocolSource = {
   root: string;
   codexRepo: string;
@@ -402,6 +406,161 @@ export function normalizeCodexAppServerProtocolJsonText(text: string): string {
 
 export function formatCodexAppServerProtocolJsonText(text: string): string {
   return `${JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)), null, 2)}\n`;
+}
+
+/**
+ * Factors definitions shared by the selected Codex schemas into one generated
+ * document. Each compact schema remains standard JSON Schema by referencing
+ * that sibling document; consumers can expand it back to the upstream shape.
+ */
+export function compactCodexAppServerProtocolJsonSchemas(
+  schemas: ReadonlyMap<string, unknown>,
+): Map<string, unknown> {
+  const sharedDefinitions: Record<string, unknown> = {};
+  const compacted = new Map<string, unknown>();
+
+  for (const schemaPath of selectedCodexAppServerJsonSchemas) {
+    const schema = schemas.get(schemaPath);
+    if (!isPlainObject(schema)) {
+      throw new Error(`Codex app-server schema ${schemaPath} must be a JSON object`);
+    }
+    const definitions = schema.definitions;
+    if (definitions !== undefined && !isPlainObject(definitions)) {
+      throw new Error(`Codex app-server schema ${schemaPath} definitions must be an object`);
+    }
+    for (const [name, definition] of Object.entries(definitions ?? {})) {
+      const existing = sharedDefinitions[name];
+      if (
+        existing !== undefined &&
+        JSON.stringify(canonicalizeCodexAppServerProtocolJson(existing)) !==
+          JSON.stringify(canonicalizeCodexAppServerProtocolJson(definition))
+      ) {
+        throw new Error(`Codex app-server shared definition ${name} differs across schemas`);
+      }
+      sharedDefinitions[name] = definition;
+    }
+
+    const { definitions: _definitions, ...root } = schema;
+    const relativeBundlePath = path.posix.relative(
+      path.posix.dirname(schemaPath),
+      codexAppServerSharedDefinitionsSchema,
+    );
+    const bundleRefPrefix = `${relativeBundlePath.startsWith(".") ? "" : "./"}${relativeBundlePath}${localDefinitionRefPrefix}`;
+    compacted.set(
+      schemaPath,
+      canonicalizeCodexAppServerProtocolJson(
+        rewriteSchemaRefs(root, localDefinitionRefPrefix, bundleRefPrefix),
+      ),
+    );
+  }
+
+  compacted.set(
+    codexAppServerSharedDefinitionsSchema,
+    canonicalizeCodexAppServerProtocolJson({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      definitions: sharedDefinitions,
+      title: "CodexAppServerProtocolDefinitions",
+      type: "object",
+    }),
+  );
+  return compacted;
+}
+
+/** Reconstructs one compact schema exactly as emitted by the pinned exporter. */
+export function expandCodexAppServerProtocolJsonSchema(params: {
+  schema: unknown;
+  schemaPath: string;
+  sharedSchema: unknown;
+}): unknown {
+  if (!isPlainObject(params.schema) || !isPlainObject(params.sharedSchema)) {
+    throw new Error(`Codex app-server compact schema ${params.schemaPath} must be a JSON object`);
+  }
+  const sharedDefinitions = params.sharedSchema.definitions;
+  if (!isPlainObject(sharedDefinitions)) {
+    throw new Error("Codex app-server shared definitions schema must contain definitions");
+  }
+
+  const relativeBundlePath = path.posix.relative(
+    path.posix.dirname(params.schemaPath),
+    codexAppServerSharedDefinitionsSchema,
+  );
+  const bundleRefPrefix = `${relativeBundlePath.startsWith(".") ? "" : "./"}${relativeBundlePath}${localDefinitionRefPrefix}`;
+  const root = rewriteSchemaRefs(params.schema, bundleRefPrefix, localDefinitionRefPrefix);
+  if (!isPlainObject(root)) {
+    throw new Error(
+      `Codex app-server compact schema ${params.schemaPath} must remain a JSON object`,
+    );
+  }
+  const reachable = collectDefinitionNames(root, localDefinitionRefPrefix);
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined) {
+      continue;
+    }
+    const definition = sharedDefinitions[name];
+    if (definition === undefined) {
+      throw new Error(`Codex app-server shared definition ${name} is missing`);
+    }
+    for (const dependency of collectDefinitionNames(definition, localDefinitionRefPrefix)) {
+      if (!reachable.has(dependency)) {
+        reachable.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+
+  if (reachable.size === 0) {
+    return canonicalizeCodexAppServerProtocolJson(root);
+  }
+  const definitions = Object.fromEntries(
+    Object.entries(sharedDefinitions).filter(([name]) => reachable.has(name)),
+  );
+  return canonicalizeCodexAppServerProtocolJson({ ...root, definitions });
+}
+
+function rewriteSchemaRefs(value: unknown, fromPrefix: string, toPrefix: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteSchemaRefs(entry, fromPrefix, toPrefix));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "$ref" && typeof entry === "string" && entry.startsWith(fromPrefix)
+        ? `${toPrefix}${entry.slice(fromPrefix.length)}`
+        : rewriteSchemaRefs(entry, fromPrefix, toPrefix),
+    ]),
+  );
+}
+
+function collectDefinitionNames(
+  value: unknown,
+  refPrefix: string,
+  names = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDefinitionNames(entry, refPrefix, names);
+    }
+    return names;
+  }
+  if (!isPlainObject(value)) {
+    return names;
+  }
+  const reference = value.$ref;
+  if (typeof reference === "string" && reference.startsWith(refPrefix)) {
+    const encodedName = reference.slice(refPrefix.length).split("/", 1)[0];
+    if (encodedName) {
+      names.add(encodedName.replaceAll("~1", "/").replaceAll("~0", "~"));
+    }
+  }
+  for (const entry of Object.values(value)) {
+    collectDefinitionNames(entry, refPrefix, names);
+  }
+  return names;
 }
 
 function sortCodexProtocolJsonArrayByType(items: unknown[]): unknown[] {

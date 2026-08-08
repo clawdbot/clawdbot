@@ -1,11 +1,11 @@
-// Tests for the experimental grouped Claws CLI.
-import { mkdir, realpath, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawInstallRecord } from "../claws/provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
 const mocks = vi.hoisted(() => {
   const logs: string[] = [];
@@ -37,6 +37,8 @@ const mocks = vi.hoisted(() => {
     applyClawUpdatePlan: vi.fn(),
     buildClawUpdatePlan: vi.fn(),
     exportClawAgent: vi.fn(),
+    callGatewayFromCli: vi.fn(),
+    sleep: vi.fn(),
   };
 });
 
@@ -56,6 +58,14 @@ vi.mock("../config/config.js", async () => ({
 vi.mock("../config/mcp-config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/mcp-config.js")>("../config/mcp-config.js")),
   listConfiguredMcpServers: mocks.listConfiguredMcpServers,
+}));
+
+vi.mock("./gateway-rpc.js", () => ({
+  callGatewayFromCli: mocks.callGatewayFromCli,
+}));
+
+vi.mock("../utils/sleep.js", () => ({
+  sleep: mocks.sleep,
 }));
 
 vi.mock("../state/openclaw-state-db.js", async () => ({
@@ -95,17 +105,13 @@ vi.mock("../claws/update-apply.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
+const { waitUntilGatewayConfigApplied } = await import("./claws-cli.gateway-readiness.js");
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 const { ClawUpdateMutationError } = await import("../claws/update-apply.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const minimalManifest = { schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } };
-
-async function writeManifest(value: unknown = minimalManifest): Promise<string> {
-  const dir = tempDirs.make("openclaw-claws-cli-");
-  const path = join(dir, "openclaw.claw.json");
-  await writeFile(path, JSON.stringify(value), "utf8");
-  return path;
+async function writeManifest(value: unknown = cliTestHelpers.minimalManifest): Promise<string> {
+  return await cliTestHelpers.writeManifestFile(tempDirs, value);
 }
 
 async function writePackage(): Promise<{ root: string; workspace: string }> {
@@ -143,10 +149,6 @@ async function writePackage(): Promise<{ root: string; workspace: string }> {
   return { root, workspace: join(root, "target-workspace") };
 }
 
-async function canonicalFuturePath(target: string): Promise<string> {
-  return join(await realpath(dirname(target)), basename(target));
-}
-
 async function runCli(args: string[]) {
   const program = new Command();
   program.exitOverride();
@@ -178,12 +180,23 @@ describe("claws cli", () => {
       config: {},
       mcpServers: {},
     });
+    mocks.callGatewayFromCli.mockReset();
+    mocks.sleep.mockReset();
+    mocks.sleep.mockResolvedValue(undefined);
     mocks.closeReadOnlyDatabase.mockReset();
     mocks.stateTableGet.mockReset();
     mocks.stateTableGet.mockReturnValue({ 1: 1 });
     mocks.openExistingOpenClawStateDatabaseReadOnly.mockReset();
     mocks.openExistingOpenClawStateDatabaseReadOnly.mockReturnValue({
-      db: { prepare: () => ({ get: mocks.stateTableGet }) },
+      db: {
+        prepare: (sql: string) => ({
+          get: sql.includes("sqlite_master") ? mocks.stateTableGet : vi.fn(() => undefined),
+          all: vi.fn(() => [
+            { name: "bootstrap_source_path" },
+            { name: "bootstrap_content_digest" },
+          ]),
+        }),
+      },
       path: "state.sqlite",
       walMaintenance: { checkpoint: () => false, close: mocks.closeReadOnlyDatabase },
     });
@@ -277,6 +290,7 @@ describe("claws cli", () => {
           desired: { summary: "all", digest: "sha256:desired" },
         },
       ],
+      readiness: cliTestHelpers.pluginSetupReadiness,
       blockers: [],
       diagnostics: [],
     });
@@ -312,6 +326,7 @@ describe("claws cli", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -339,6 +354,49 @@ describe("claws cli", () => {
     ]);
   });
 
+  it("accepts an already-applied Gateway config revision", async () => {
+    mocks.callGatewayFromCli.mockResolvedValue({
+      configRevisionHash: "revision-new",
+      appliedConfigHash: "revision-new",
+    });
+
+    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("config.get", { timeout: "5000" }, {});
+    expect(mocks.sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries until the Gateway applies the persisted config revision", async () => {
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-old",
+      })
+      .mockResolvedValueOnce({
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+      });
+
+    await expect(waitUntilGatewayConfigApplied()).resolves.toBeUndefined();
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(2);
+    expect(mocks.sleep).toHaveBeenCalledOnce();
+    expect(mocks.sleep).toHaveBeenCalledWith(100);
+  });
+
+  it("reports the last Gateway error after the reload deadline", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15_000);
+    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
+
+    await expect(waitUntilGatewayConfigApplied()).rejects.toThrow(
+      "Gateway did not apply the Claw agent configuration in time: gateway unavailable",
+    );
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.sleep).toHaveBeenCalledOnce();
+  });
+
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
 
@@ -355,7 +413,7 @@ describe("claws cli", () => {
 
   it("takes identity from package.json and plans one new agent", async () => {
     const { root, workspace } = await writePackage();
-    const expectedWorkspace = await canonicalFuturePath(workspace);
+    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
 
@@ -441,7 +499,6 @@ describe("claws cli", () => {
       JSON.stringify({
         schemaVersion: 1,
         agent: { id: "demo-agent" },
-        metadata: { "openclaw.config": "profiles/openclaw.yml" },
         mcpServers: {
           docs: {
             command: "node",
@@ -465,7 +522,7 @@ describe("claws cli", () => {
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
-    const expectedWorkspace = await canonicalFuturePath(workspace);
+    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -768,7 +825,7 @@ describe("claws cli", () => {
 
     const output = mocks.logs.join("\n");
     expect(output).toContain("Capability changes: 1; escalations requiring explicit review: 1");
-    expect(output).toContain("Plan integrity: sha256:update-plan");
+    expect(output).toContain("MARKET_DATA_TOKEN");
     expect(output).toContain(
       "Capability consent: the exact plan-integrity token binds every ! change disclosed below.",
     );
@@ -801,6 +858,7 @@ describe("claws cli", () => {
         capabilityEscalations: 0,
       },
       capabilityChanges: [],
+      readiness: { ready: true, requirements: [] },
       actions: [
         {
           kind: "workspaceFile",

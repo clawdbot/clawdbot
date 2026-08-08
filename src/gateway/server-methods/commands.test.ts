@@ -11,6 +11,7 @@ const mockSkillCommands = [
     skillName: "code-review",
     name: "code_review",
     description: "Run code review",
+    modelVisible: true,
     acceptsArgs: true,
   },
 ];
@@ -297,10 +298,10 @@ function providerFilteredPluginRegistrations(params: { nativeName?: string } = {
       },
     },
     {
-      pluginId: "phone-control",
+      pluginId: "demo-control",
       command: {
-        name: "phone",
-        description: "Control paired phones",
+        name: "demo",
+        description: "Demo command",
         ...(params.nativeName ? { nativeNames: { discord: params.nativeName } } : {}),
         channels: ["discord"],
       },
@@ -372,6 +373,7 @@ describe("commands.list handler", () => {
     const commands = listCommands();
     const skill = commands.find((c) => c.name === "code_review");
     expect(skill?.source).toBe("skill");
+    expect(skill?.skillModelVisible).toBe(true);
     expect(skill?.category).toBe("tools");
   });
 
@@ -464,34 +466,34 @@ describe("commands.list handler", () => {
   it("reads plugin commands from the gateway registry before the global command table", () => {
     setGatewayRegistry([
       {
-        pluginId: "phone-control",
+        pluginId: "demo-control",
         command: {
-          name: "  phone  ",
-          description: "  Control paired phones  ",
+          name: "  demo  ",
+          description: "  Demo command  ",
           acceptsArgs: true,
         },
       },
     ]);
 
     const commands = listCommands();
-    const phone = commands.find((c) => c.source === "plugin");
+    const demo = commands.find((c) => c.source === "plugin");
 
-    expect(phone?.name).toBe("phone");
-    expect(phone?.description).toBe("Control paired phones");
-    expect(phone?.textAliases).toEqual(["/phone"]);
-    expect(phone?.acceptsArgs).toBe(true);
+    expect(demo?.name).toBe("demo");
+    expect(demo?.description).toBe("Demo command");
+    expect(demo?.textAliases).toEqual(["/demo"]);
+    expect(demo?.acceptsArgs).toBe(true);
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
   });
 
   it("keeps provider-filtered native plugin names paired with their text aliases", () => {
-    setGatewayRegistry(providerFilteredPluginRegistrations({ nativeName: "discord_phone" }));
+    setGatewayRegistry(providerFilteredPluginRegistrations({ nativeName: "discord_demo" }));
 
     const commands = listCommands({ provider: "discord" });
     const plugin = pluginCommand({ provider: "discord" });
 
-    expect(plugin?.name).toBe("discord_phone");
-    expect(plugin?.nativeName).toBe("discord_phone");
-    expect(plugin?.textAliases).toEqual(["/phone"]);
+    expect(plugin?.name).toBe("discord_demo");
+    expect(plugin?.nativeName).toBe("discord_demo");
+    expect(plugin?.textAliases).toEqual(["/demo"]);
     expect(
       commands.find((c) => c.source === "plugin" && c.name === "android_only"),
     ).toBeUndefined();
@@ -505,7 +507,7 @@ describe("commands.list handler", () => {
     expect(
       commands.find((c) => c.source === "plugin" && c.name === "android_only"),
     ).toBeUndefined();
-    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/phone"]);
+    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/demo"]);
   });
 
   it("returns provider-specific plugin command names", () => {

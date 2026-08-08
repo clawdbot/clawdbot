@@ -5,6 +5,7 @@
  * resolves agent routes, and handles replies.
  */
 
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -28,7 +29,7 @@ type TwitchMonitorOptions = {
   config: unknown; // OpenClawConfig
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 type TwitchMonitorResult = {
@@ -49,7 +50,7 @@ async function processTwitchMessage(params: {
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
   turnAdoptionLifecycle: TwitchIngressLifecycle;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
     params;
@@ -241,7 +242,7 @@ export async function monitorTwitchProvider(
     debug: logVerboseMessage,
   };
 
-  const clientManager = getOrCreateClientManager(accountId, logger);
+  const clientManager = getOrCreateClientManager(accountId, logger, statusSink);
 
   try {
     await clientManager.getClient(

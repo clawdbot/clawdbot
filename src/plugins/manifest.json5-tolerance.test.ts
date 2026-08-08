@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveMemorySlotDecision } from "./config-state.js";
 import { loadPluginManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -119,6 +120,100 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.manifest.id).toBe("unquoted-keys");
+    }
+  });
+
+  it.each([
+    {
+      name: "a supported memory kind",
+      rawKind: "memory",
+      expectedKind: "memory",
+    },
+    {
+      name: "a supported context-engine kind",
+      rawKind: "context-engine",
+      expectedKind: "context-engine",
+    },
+    {
+      name: "both supported kinds in declaration order",
+      rawKind: ["context-engine", "memory"],
+      expectedKind: ["context-engine", "memory"],
+    },
+    {
+      name: "duplicate memory kinds collapsed into one kind",
+      rawKind: ["memory", "memory"],
+      expectedKind: "memory",
+    },
+    {
+      name: "duplicate context-engine kinds collapsed into one kind",
+      rawKind: ["context-engine", "context-engine"],
+      expectedKind: "context-engine",
+    },
+    {
+      name: "supported kinds filtered from invalid and duplicate array entries",
+      rawKind: ["memory", "unknown-kind", 42, "memory", "context-engine", null],
+      expectedKind: ["memory", "context-engine"],
+    },
+    {
+      name: "a valid memory kind retained alongside invalid entries",
+      rawKind: ["unknown-kind", 42, "memory", null],
+      expectedKind: "memory",
+    },
+    {
+      name: "an unsupported scalar kind",
+      rawKind: "unknown-kind",
+      expectedKind: undefined,
+    },
+    {
+      name: "an array containing only unsupported kinds",
+      rawKind: ["unknown-kind", 42, null],
+      expectedKind: undefined,
+    },
+  ])("normalizes $name", ({ rawKind, expectedKind }) => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "kind-normalization",
+        kind: rawKind,
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.kind).toEqual(expectedKind);
+    }
+  });
+
+  it("keeps duplicate memory declarations subject to the exclusive memory slot", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "duplicate-memory",
+        kind: ["memory", "memory"],
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.kind).toBe("memory");
+      expect(
+        resolveMemorySlotDecision({
+          id: result.manifest.id,
+          kind: result.manifest.kind,
+          slot: "memory-core",
+          selectedId: "memory-core",
+        }),
+      ).toEqual({ enabled: false, reason: 'memory slot set to "memory-core"' });
     }
   });
 

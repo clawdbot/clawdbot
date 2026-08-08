@@ -8,21 +8,28 @@ const loadDoctorStateIntegrityModule = async () =>
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
-  await maybeRepairLegacyPluginManifestContracts({
+  const pluginInventoryChanged = await maybeRepairLegacyPluginManifestContracts({
     config: ctx.cfg,
     env: process.env,
     runtime: ctx.runtime,
     prompter: ctx.prompter,
   });
+  if (pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
 }
 
 export async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
-  ctx.cfg = await maybeRepairPluginRegistryState({
+  const result = await maybeRepairPluginRegistryState({
     config: ctx.cfg,
     env: process.env,
     prompter: ctx.prompter,
   });
+  ctx.cfg = result.config;
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -40,6 +47,9 @@ export async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.pluginInventoryChanged) {
+    ctx.invalidatePluginMetadataSnapshot?.();
+  }
   if (result.postInstallDoctorResult) {
     ctx.postInstallDoctorResult = result.postInstallDoctorResult;
   }
@@ -71,6 +81,15 @@ export async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Prom
   noteSqliteDatabaseBloat(ctx.cfg);
 }
 
+export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteDoctorAgentMemorySchemaHealth } =
+    await import("../commands/doctor-agent-memory-schema.js");
+  await noteDoctorAgentMemorySchemaHealth({
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 export async function runChannelIngressDeadLettersHealth(): Promise<void> {
   const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
   noteChannelIngressDeadLetters();
@@ -78,7 +97,9 @@ export async function runChannelIngressDeadLettersHealth(): Promise<void> {
 
 export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
-  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
+  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
+    stateDirExistedAtStart: ctx.stateDirExistedAtStart,
+  });
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -91,6 +112,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+      : {}),
+    ...(ctx.configResult.openAICodexAuthProfileIdMap?.size
+      ? { authProfileIdMap: ctx.configResult.openAICodexAuthProfileIdMap }
       : {}),
   });
   if (result.changes.length > 0) {
@@ -113,6 +137,18 @@ export async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promi
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
+export async function runSessionTranscriptHeadersHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  const { noteSessionTranscriptHeaderHealth } =
+    await import("../commands/doctor-session-transcript-headers.js");
+  await noteSessionTranscriptHeaderHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,

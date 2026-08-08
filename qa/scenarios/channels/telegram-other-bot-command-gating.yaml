@@ -6,7 +6,7 @@ scenario:
   category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
-      - channels.channel-native-commands
+      - telegram.other-bot-command-gating
   objective: Verify a command addressed to another Telegram bot does not wake OpenClaw.
   successCriteria:
     - The driver sends a native status command addressed to another bot.
@@ -15,13 +15,6 @@ scenario:
     - extensions/telegram/src/bot-message-context.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
-    profiles:
-      {
-        "telegram:adapter": 10,
-        "telegram:all": 9,
-        "telegram:mock-release": 9,
-        "telegram:release": 9,
-      }
     kind: flow
     channel: telegram
     summary: Address a command to another bot and verify OpenClaw ignores it.
@@ -39,6 +32,7 @@ flow:
             senderId: qa-command-operator
             senderName: QA Command Operator
             text: /status@OpenClawQaOtherBot
+            nativeCommand: { name: status }
         - waitForNoOutbound:
             quietMs: 8000
             sinceIndex: { ref: outboundStartIndex }

@@ -84,6 +84,37 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips a signed visible-session spawn policy", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: [" read ", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionSpawnContext: {
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "sessions_spawn"],
+          deny: ["exec"],
+        },
+      },
+    });
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
@@ -159,6 +190,7 @@ describe("agent runtime identity token", () => {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
@@ -179,6 +211,7 @@ describe("agent runtime identity token", () => {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",

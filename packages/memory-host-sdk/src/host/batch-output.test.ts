@@ -173,6 +173,39 @@ describe("applyEmbeddingBatchOutputLine", () => {
     expect(byCustomId.get("req-1")).toEqual([0.1, 0.2]);
   });
 
+  it.each([
+    { name: "non-array", embedding: "poison" },
+    { name: "array-like object", embedding: { length: 1 } },
+    { name: "boolean", embedding: false },
+    { name: "string coordinate", embedding: ["poison"] },
+    { name: "null coordinate", embedding: [null] },
+    { name: "NaN coordinate", embedding: [Number.NaN] },
+    { name: "positive infinity coordinate", embedding: [Number.POSITIVE_INFINITY] },
+    { name: "negative infinity coordinate", embedding: [Number.NEGATIVE_INFINITY] },
+  ])("rejects a $name instead of storing it as a valid vector", ({ embedding }) => {
+    const remaining = new Set(["req-invalid"]);
+    const errors: string[] = [];
+    const byCustomId = new Map<string, number[]>();
+
+    applyEmbeddingBatchOutputLine({
+      line: {
+        custom_id: "req-invalid",
+        response: {
+          status_code: 200,
+          body: { data: [{ embedding: embedding as unknown as number[] }] },
+        },
+      },
+      remaining,
+      errors,
+      byCustomId,
+    });
+
+    expect(remaining.has("req-invalid")).toBe(false);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^req-invalid: (?:empty|invalid) embedding$/);
+    expect(byCustomId.size).toBe(0);
+  });
+
   it("records provider error from line.error", () => {
     const remaining = new Set(["req-2"]);
     const errors: string[] = [];

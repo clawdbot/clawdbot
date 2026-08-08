@@ -6,6 +6,7 @@ import {
   installAssistantTranscriptRoleMarkdown,
 } from "./markdown-assistant-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
+import { installMarkdownDetails } from "./markdown-details.ts";
 import {
   isHostLocalMarkdownFileHref,
   MARKDOWN_FILE_LINK_SCAN_RE,
@@ -50,6 +51,7 @@ export function createMarkdownParser(): MarkdownIt {
   // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
+  installMarkdownDetails(markdownParser);
 
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
@@ -268,6 +270,8 @@ export function createMarkdownParser(): MarkdownIt {
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
                 token.attrJoin("class", "markdown-file-link");
+                token.attrSet("role", "button");
+                token.attrSet("tabindex", "0");
                 token.attrSet("data-file-path", target.path);
                 if (target.line !== null) {
                   token.attrSet("data-file-line", String(target.line));
@@ -311,6 +315,8 @@ export function createMarkdownParser(): MarkdownIt {
           const open = new state.Token("link_open", "a", 1);
           open.markup = "file-link";
           open.attrSet("class", "markdown-file-link");
+          open.attrSet("role", "button");
+          open.attrSet("tabindex", "0");
           open.attrSet("data-file-path", target.path);
           if (target.line !== null) {
             open.attrSet("data-file-line", String(target.line));
@@ -384,7 +390,7 @@ export function createMarkdownParser(): MarkdownIt {
     }
     const lineAttribute =
       target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-    return `<a class="markdown-file-link" data-file-path="${escapeMarkdownHtml(target.path)}"${lineAttribute}>${rendered}</a>`;
+    return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}"${lineAttribute}>${rendered}</a>`;
   };
 
   // Override image to only allow base64 data URIs (#15437).

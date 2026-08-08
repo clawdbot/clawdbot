@@ -15,8 +15,8 @@ export type SubagentRegistryLifecycleParams = {
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
   getRuntimeConfig(): OpenClawConfig;
-  persist(): void;
-  persistOrThrow(): void;
+  persist(...runIds: string[]): void;
+  persistOrThrow(...runIds: string[]): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
@@ -33,12 +33,15 @@ export type SubagentRegistryLifecycleParams = {
     isCurrent?: () => boolean;
   }): Promise<void>;
   emitSubagentProgressEndedForRun(entry: SubagentRunRecord): Promise<void>;
-  notifyContextEngineSubagentEnded(args: {
-    childSessionKey: string;
-    reason: "completed" | "deleted";
-    agentDir?: string;
-    workspaceDir?: string;
-  }): Promise<void>;
+  notifyContextEngineSubagentEnded(
+    args: {
+      childSessionKey: string;
+      reason: "completed" | "deleted";
+      agentDir?: string;
+      workspaceDir?: string;
+    },
+    options?: { isCurrent?: () => boolean },
+  ): Promise<void>;
   retireSupersededRun(runId: string, entry: SubagentRunRecord): Promise<void>;
   resumeSubagentRun(runId: string): void;
   callGateway: typeof defaultCallGateway;

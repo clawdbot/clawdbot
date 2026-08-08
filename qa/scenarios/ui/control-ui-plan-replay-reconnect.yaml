@@ -4,7 +4,7 @@ scenario:
   id: control-ui-plan-replay-reconnect
   surface: control-ui
   coverage:
-    primary:
+    secondary:
       - control-ui.gateway-hosted-ui-control
   objective: >-
     Prove a client that connects or refreshes mid-run renders the active plan

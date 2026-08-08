@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -47,6 +48,15 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
+// Nested overlays bubble lifecycle events through the dropdown. Only the
+// owner's completed hide may remove its menu or consume its Escape state.
+function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: boolean) => void) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  onClose(consumeDropdownKeyboardDismissal(event));
+}
+
 type AgentMenuAgent = {
   id: string;
   name?: string;
@@ -55,6 +65,7 @@ type AgentMenuAgent = {
 
 type SidebarAgentMenuParams = {
   position: { x: number; top: number } | null;
+  basePath: string;
   activeId: string;
   activeName: string;
   agents: readonly AgentMenuAgent[];
@@ -265,7 +276,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               params.onAskCapabilities(activeId);
               break;
             case `${COMMAND_VALUE_PREFIX}agent-settings`:
-              params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
+              params.onNavigate("agents", {
+                pathname: pathForAgentPanel(activeId, null, params.basePath),
+              });
               break;
             case `${COMMAND_VALUE_PREFIX}new-agent`:
               params.onNavigate("custodian", { search: "?intent=new-agent" });
@@ -281,7 +294,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
           slot="trigger"
@@ -403,7 +416,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
               params.onNavigate("profile", { hash: "#settings-profile-identity" });
               break;
             case `${COMMAND_VALUE_PREFIX}settings`:
-              params.onNavigate("config");
+              params.onNavigate("appearance");
               break;
             case `${COMMAND_VALUE_PREFIX}usage`:
               params.onNavigate("usage");
@@ -421,7 +434,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         }}
         @keydown=${(event: KeyboardEvent) =>
           trackDropdownKeyboardDismissal(event, params.onTabAway)}
-        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+        @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
           slot="trigger"

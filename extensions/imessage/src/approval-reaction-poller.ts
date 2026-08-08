@@ -12,6 +12,7 @@ import {
   type PendingIMessageApprovalReactionPollTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
@@ -227,6 +228,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
   cfg: OpenClawConfig;
   accountId: string;
   allowRecentChatDiscovery?: boolean;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   const targets = listPendingIMessageApprovalReactionPollTargets({
@@ -291,6 +293,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
           accountId: params.accountId,
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
+          gatewayRuntime: params.gatewayRuntime,
           logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {

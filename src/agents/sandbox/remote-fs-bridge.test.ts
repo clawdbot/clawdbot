@@ -27,7 +27,7 @@ function createStatRuntime(
         return shellResult("1\n");
       }
       if (command.script.includes('readlink -f -- "$cursor"')) {
-        return shellResult(`${workspaceDir}/note.txt\n`);
+        return shellResult(`${workspaceDir}/note.txt\n${workspaceDir}\n`);
       }
       if (command.script.includes('stat -c "%F|%h"')) {
         return shellResult(`${outputs.hardlinks(command.script)}\n`);
@@ -101,6 +101,121 @@ function createWorkspaceReadBridge(workspaceDir: string) {
 
 describe("remote sandbox fs bridge", () => {
   it.runIf(process.platform !== "win32")(
+    "creates files exclusively and preserves existing entries",
+    async () => {
+      await withTempDir("openclaw-remote-fs-create-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+        const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+        expect(createFileExclusive).toBeTypeOf("function");
+
+        await expect(
+          createFileExclusive!({ filePath: "nested/note.txt", data: "first" }),
+        ).resolves.toBe("created");
+        await expect(
+          createFileExclusive!({ filePath: "nested/note.txt", data: "replacement" }),
+        ).resolves.toBe("exists");
+        await expect(
+          fs.readFile(path.join(workspaceDir, "nested", "note.txt"), "utf8"),
+        ).resolves.toBe("first");
+
+        const outcomes = await Promise.all([
+          createFileExclusive!({ filePath: "race.txt", data: "one" }),
+          createFileExclusive!({ filePath: "race.txt", data: "two" }),
+        ]);
+        expect(outcomes.toSorted()).toEqual(["created", "exists"]);
+        await expect(fs.readFile(path.join(workspaceDir, "race.txt"), "utf8")).resolves.toMatch(
+          /^(one|two)$/u,
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "treats a symlink destination as existing without changing its target",
+    async () => {
+      await withTempDir("openclaw-remote-fs-create-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "target.txt"), "keep", "utf8");
+        await fs.symlink("target.txt", path.join(workspaceDir, "link.txt"));
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+        const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+        expect(createFileExclusive).toBeTypeOf("function");
+
+        await expect(
+          createFileExclusive!({ filePath: "link.txt", data: "replacement" }),
+        ).resolves.toBe("exists");
+        await expect(fs.readFile(path.join(workspaceDir, "target.txt"), "utf8")).resolves.toBe(
+          "keep",
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "accepts a symlinked mount root while rejecting escapes through it",
+    async () => {
+      await withTempDir("openclaw-remote-fs-linked-root-", async (stateDir) => {
+        const realWorkspaceDir = path.join(stateDir, "real-workspace");
+        const linkedWorkspaceDir = path.join(stateDir, "linked-workspace");
+        const outsideDir = path.join(stateDir, "outside");
+        await fs.mkdir(realWorkspaceDir);
+        await fs.mkdir(outsideDir);
+        await fs.symlink(realWorkspaceDir, linkedWorkspaceDir, "dir");
+        await fs.symlink(outsideDir, path.join(realWorkspaceDir, "escape"), "dir");
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: linkedWorkspaceDir,
+          remoteAgentWorkspaceDir: linkedWorkspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir: linkedWorkspaceDir,
+            agentWorkspaceDir: linkedWorkspaceDir,
+          }),
+          runtime,
+        });
+        const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+        expect(createFileExclusive).toBeTypeOf("function");
+
+        await expect(
+          createFileExclusive!({ filePath: "inside.txt", data: "inside" }),
+        ).resolves.toBe("created");
+        await expect(bridge.readFile({ filePath: "inside.txt" })).resolves.toEqual(
+          Buffer.from("inside"),
+        );
+        await expect(bridge.mkdirp({ filePath: "nested/dir" })).resolves.toBeUndefined();
+        await expect(fs.readFile(path.join(realWorkspaceDir, "inside.txt"), "utf8")).resolves.toBe(
+          "inside",
+        );
+        await expect(
+          fs
+            .stat(path.join(realWorkspaceDir, "nested", "dir"))
+            .then((entry) => entry.isDirectory()),
+        ).resolves.toBe(true);
+        await expect(
+          createFileExclusive!({ filePath: "escape/outside.txt", data: "blocked" }),
+        ).rejects.toThrow(/escapes allowed mounts/);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "reads files with the pinned mutation helper",
     async () => {
       await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
@@ -124,11 +239,50 @@ describe("remote sandbox fs bridge", () => {
         await expect(bridge.readFile({ filePath: "note.txt" })).resolves.toEqual(
           Buffer.from("hello"),
         );
-        expect(calls).toHaveLength(1);
-        expect(calls[0]?.args?.[0]).toBe("read");
-        expect(calls[0]?.script).toContain("python3 /dev/fd/3 \"$@\" 3<<'PY'");
-        expect(calls[0]?.script).toContain("read_file(parent_fd, basename)");
-        expect(calls[0]?.script).not.toContain('cat -- "$1"');
+        expect(calls).toHaveLength(2);
+        const readCall = calls.find((call) => call.args?.[0] === "read");
+        expect(readCall?.script).toContain("python3 /dev/fd/3 \"$@\" 3<<'PY'");
+        expect(readCall?.script).toContain("read_file(parent_fd, basename)");
+        expect(readCall?.script).not.toContain('cat -- "$1"');
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "forwards and enforces bounded pinned file reads",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bounded-read-", async (stateDir) => {
+        const workspacePath = path.join(stateDir, "workspace");
+        await fs.mkdir(workspacePath, { recursive: true });
+        const workspaceDir = await fs.realpath(workspacePath);
+        await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello", "utf8");
+
+        const { calls, runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+
+        await expect(bridge.readFile({ filePath: "note.txt", maxBytes: 5 })).resolves.toEqual(
+          Buffer.from("hello"),
+        );
+        expect(calls.find((call) => call.args?.[0] === "read")?.args).toEqual([
+          "read",
+          workspaceDir,
+          "",
+          "note.txt",
+          "5",
+        ]);
+        await expect(bridge.readFile({ filePath: "note.txt", maxBytes: 4 })).rejects.toThrow(
+          /bounded read limit/i,
+        );
+        await expect(bridge.readFile({ filePath: "note.txt", maxBytes: -1 })).rejects.toThrow(
+          /non-negative safe integer/i,
+        );
+        expect(calls).toHaveLength(4);
       });
     },
   );

@@ -289,6 +289,51 @@ describe("commitment SQLite store", () => {
     expect(byId.cm_raceB?.status).toBe("dismissed");
   });
 
+  it("reports only active rows updated in first-seen requested order", async () => {
+    await useTempStateDir();
+    seedCommitmentsForTest([
+      commitment({ id: "cm_first", dedupeKey: "first" }),
+      commitment({ id: "cm_second", dedupeKey: "second", status: "snoozed" }),
+      commitment({
+        id: "cm_terminal",
+        dedupeKey: "terminal",
+        status: "dismissed",
+        dismissedAtMs: nowMs - 60_000,
+      }),
+    ]);
+
+    await expect(
+      markCommitmentsStatus({
+        ids: [" cm_second ", "cm_missing", "cm_first", "cm_second", "cm_terminal"],
+        status: "dismissed",
+        nowMs,
+      }),
+    ).resolves.toStrictEqual(["cm_second", "cm_first"]);
+
+    const byId = Object.fromEntries(readCommitmentsForTest().map((record) => [record.id, record]));
+    expect(byId.cm_first).toMatchObject({ status: "dismissed", dismissedAtMs: nowMs });
+    expect(byId.cm_second).toMatchObject({ status: "dismissed", dismissedAtMs: nowMs });
+    expect(byId.cm_terminal?.dismissedAtMs).toBe(nowMs - 60_000);
+  });
+
+  it("returns an empty update list without opening SQLite for empty ids", async () => {
+    await expect(
+      markCommitmentsStatus({ ids: ["", "   "], status: "dismissed", nowMs }),
+    ).resolves.toStrictEqual([]);
+  });
+
+  it("lets only one competing status transition claim the same commitment", async () => {
+    await useTempStateDir();
+    seedCommitmentsForTest([commitment({ id: "cm_race_claim" })]);
+
+    await expect(
+      Promise.all([
+        markCommitmentsStatus({ ids: ["cm_race_claim"], status: "dismissed", nowMs }),
+        markCommitmentsStatus({ ids: ["cm_race_claim"], status: "dismissed", nowMs }),
+      ]),
+    ).resolves.toStrictEqual([["cm_race_claim"], []]);
+  });
+
   it("increments concurrent attempt bumps without losing a write", async () => {
     await useTempStateDir();
     seedCommitmentsForTest([commitment({ id: "cm_race_attempts", attempts: 0 })]);

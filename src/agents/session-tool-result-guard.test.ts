@@ -313,6 +313,29 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("preserves opaque canonical tool-call ids while repairing result metadata", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: " opaque-call ", name: "read", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: " opaque-call ",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe(" opaque-call ");
+  });
+
   it("drops malformed tool calls missing input before persistence", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
@@ -729,6 +752,27 @@ describe("installSessionToolResultGuard", () => {
 
     expect(persistedErrors).toHaveLength(1);
     expect(persistedErrors[0]?.stopReason).toBe("error");
+  });
+
+  it("reports the exact persisted user entry id", () => {
+    const sm = SessionManager.inMemory();
+    const persisted: Array<{ entryId: string; message: AgentMessage }> = [];
+    installSessionToolResultGuard(sm, {
+      onUserMessagePersisted: (message, context) => {
+        persisted.push({ entryId: context.entryId, message });
+      },
+    });
+
+    const entryId = sm.appendMessage(
+      asAppendMessage({ role: "user", content: "exact admission", timestamp: 1 }),
+    );
+
+    expect(persisted).toEqual([
+      {
+        entryId,
+        message: expect.objectContaining({ role: "user", content: "exact admission" }),
+      },
+    ]);
   });
 
   it("models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry", () => {

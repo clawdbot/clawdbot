@@ -25,6 +25,7 @@ type AnthropicCatalogModel = {
   thinkingLevelMap?: Record<string, string | null>;
   status?: string;
   replacedBy?: string;
+  compat?: { codeMode?: string };
 };
 
 type AnthropicManifest = {
@@ -42,6 +43,14 @@ const manifest = JSON.parse(
 ) as AnthropicManifest;
 
 describe("Anthropic plugin manifest", () => {
+  it("flags every static Anthropic API model as code-mode preferred", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    expect(models.length).toBeGreaterThan(0);
+    for (const model of models) {
+      expect(model.compat?.codeMode, model.id).toBe("preferred");
+    }
+  });
+
   it("publishes the exact Claude Opus 5 API contract", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     expect(models.find((model) => model.id === "claude-opus-5")).toEqual({
@@ -56,6 +65,7 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
     });
   });
 
@@ -73,6 +83,7 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
     });
   });
 
@@ -90,6 +101,7 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { codeMode: "preferred" },
     });
     // Opus 5's 1M window is the model default, so the CLI row is not clamped to 200k.
     const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
@@ -134,6 +146,7 @@ describe("Anthropic plugin manifest", () => {
       },
       contextWindow: 200000,
       maxTokens: 64000,
+      compat: { codeMode: "preferred" },
     });
     expect(models.find((model) => model.id === "claude-haiku-4-5-20251001")).toBeUndefined();
   });

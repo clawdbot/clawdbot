@@ -240,9 +240,17 @@ only for behavior that really belongs to the backend.
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
+| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
+
+`liveSessionRequirement` declares one exact capability that the CLI must
+advertise in its initialization record before OpenClaw trusts streamed output.
+It also supplies the first known compatible version, version-probe arguments,
+and update command used by setup and Doctor. Runtime support remains
+capability-based, so a compatible backport or wrapper is not rejected only
+because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
@@ -303,6 +311,23 @@ preserves it through the `2026.8.x` line. New and updated plugins should use can
 `ctx.toolAvailability.openClaw` names and declare
 `toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
 compatibility path is scheduled for removal after that window.
+
+### `parseJsonlEvent`: provider-specific JSONL streams
+
+Set `parseJsonlEvent` when a backend emits line-delimited JSON that does not
+match the built-in Claude, Codex, or Gemini dialects. The hook receives one raw
+line plus the resolved backend id and config, and returns one normalized event,
+multiple events, or `null` to let the built-in parser try the line.
+
+Supported events are incremental assistant text, incremental thinking, native
+tool start/result display, session ids, and terminal results. Terminal results
+may include final text, usage, an error, and a successor session id. Session ids
+reported by either event shape participate in resumed-session and fork
+persistence.
+
+Tool events describe work the backend already performed. OpenClaw renders and
+summarizes them, but does not treat them as host tool execution, trusted
+diagnostics, loopback correlation, or message-delivery evidence.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
@@ -33,8 +34,7 @@ async function loadDashboardsRoute(context: ApplicationContext): Promise<Dashboa
 }
 
 export const page = definePage({
-  id: "dashboards",
-  path: "/dashboards",
+  ...routePageSpec("dashboards"),
   loaderDeps: (context: ApplicationContext) =>
     `${context.agentSelection.state.scopeId ?? "all"}\u0000${context.sessions.canonicalListRevision}`,
   loader: (context: ApplicationContext) => loadDashboardsRoute(context),

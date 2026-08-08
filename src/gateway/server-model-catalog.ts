@@ -82,3 +82,18 @@ export async function loadGatewayModelCatalog(
 ): Promise<GatewayModelChoice[]> {
   return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }
+
+/** Reads the already-published startup catalog without starting provider discovery. */
+export async function readPreparedGatewayModelCatalog(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelChoice[] | undefined> {
+  const { getPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
+  const config = (params?.getConfig ?? getRuntimeConfig)();
+  return getPreparedModelCatalogSnapshot({
+    ...(params?.agentId ? { agentId: params.agentId } : {}),
+    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+    config,
+    readOnly: true,
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  })?.entries;
+}

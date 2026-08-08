@@ -5,6 +5,11 @@ import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import {
+  classifyMcpAppStandalonePath,
+  MCP_APP_STANDALONE_PATH,
+  MCP_APP_STANDALONE_VIEW_PATH,
+} from "./gateway-http-route-contracts.js";
 import { readJsonBodyOrError, sendJson } from "./http-common.js";
 import {
   executeMcpAppOperation,
@@ -13,8 +18,6 @@ import {
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
 
-const MCP_APP_STANDALONE_PATH = "/__openclaw__/mcp-app";
-const MCP_APP_STANDALONE_VIEW_PATH = `${MCP_APP_STANDALONE_PATH}/view`;
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
 const MCP_APP_STANDALONE_TICKET_TTL_MS = 2 * 60_000;
 const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
@@ -559,7 +562,8 @@ export async function handleMcpAppStandaloneHttpRequest(
   } catch {
     return false;
   }
-  if (url.pathname !== MCP_APP_STANDALONE_PATH && url.pathname !== MCP_APP_STANDALONE_VIEW_PATH) {
+  const route = classifyMcpAppStandalonePath(url.pathname);
+  if (route === "namespace" || route === "outside") {
     return false;
   }
   if (
@@ -587,7 +591,7 @@ export async function handleMcpAppStandaloneHttpRequest(
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  if (url.pathname === MCP_APP_STANDALONE_PATH) {
+  if (route === "shell") {
     const frameOrigin = resolveShellSandboxOrigin({
       req,
       sandboxOrigin: options.sandboxOrigin,

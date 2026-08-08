@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
@@ -6,7 +6,10 @@ import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
 } from "../../lib/board/provider.ts";
-import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -18,33 +21,6 @@ import {
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
-
-type SidebarNativeGatewayTestSnapshot = {
-  gateways: Array<{
-    id: string;
-    name: string;
-    isPrimary: boolean;
-    health: "ok" | "error" | "unknown";
-  }>;
-  currentId: string;
-};
-
-type SidebarNativeGatewayTestWindow = Window & {
-  __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-  __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewayTestSnapshot;
-};
-
-function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): void {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-  nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
-}
-
-afterEach(() => {
-  const nativeWindow = window as SidebarNativeGatewayTestWindow;
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_WEB_CHROME__");
-  Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_GATEWAYS__");
-});
 
 describe("AppSidebar update card wiring", () => {
   it("keeps OpenClaw out of the workspace sidebar", async () => {
@@ -58,12 +34,14 @@ describe("AppSidebar update card wiring", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
+    const onRefresh = vi.fn();
     sidebar.updateAvailable = {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
       channel: "stable",
     };
     sidebar.onUpdate = onUpdate;
+    sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
@@ -72,6 +50,17 @@ describe("AppSidebar update card wiring", () => {
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    sidebar.refreshRequired = true;
+    await sidebar.updateComplete;
+    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-sidebar-update-card",
+    );
+    await refreshCard?.updateComplete;
+    expect(refreshCard?.textContent).toContain("Server updated");
+    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
@@ -252,95 +241,13 @@ describe("AppSidebar viewer presence", () => {
   });
 });
 
-describe("AppSidebar gateway footer subtitle", () => {
-  const twoGateways = {
-    gateways: [
-      { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
-      { id: "remote", name: "Remote Gateway", isPrimary: false, health: "unknown" },
-    ],
-    currentId: "local",
-  } satisfies SidebarNativeGatewayTestSnapshot;
-
-  it("stays hidden outside native chrome", async () => {
-    const nativeWindow = window as SidebarNativeGatewayTestWindow;
-    nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = twoGateways;
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-  });
-
-  it("stays hidden with one configured gateway", async () => {
-    setNativeGatewayTestState({ gateways: [twoGateways.gateways[0]!], currentId: "local" });
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-  });
-
-  it("shows the current gateway health, name, and primary suffix", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("ok");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Local Gateway",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")?.textContent).toBe(
-      "· primary",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Account: Local Gateway, primary",
-    );
-  });
-
-  it("keeps the reconnecting subtitle while offline", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.offline = true;
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-identity-card__subtitle")?.textContent).toBe(
-      "Reconnecting…",
-    );
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")).toBeNull();
-  });
-
-  it("updates when the native gateway snapshot changes", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    setNativeGatewayTestState({
-      gateways: [
-        { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },
-        { id: "remote", name: "Remote Gateway", isPrimary: false, health: "error" },
-      ],
-      currentId: "remote",
-    });
-    window.dispatchEvent(new CustomEvent("openclaw:native-gateways-changed"));
-    await sidebar.updateComplete;
-
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-name")?.textContent).toBe(
-      "Remote Gateway",
-    );
-    expect(
-      sidebar.querySelector(".sidebar-identity-card__gateway-health")?.getAttribute("data-health"),
-    ).toBe("error");
-    expect(sidebar.querySelector(".sidebar-identity-card__gateway-primary")).toBeNull();
-  });
-});
-
 describe("AppSidebar brand actions", () => {
   it("starts a thread for the expanded agent from the brand action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const agentsList = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "research" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -447,8 +354,11 @@ describe("AppSidebar agent chip", () => {
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
-    expect(setSessionKey).toHaveBeenCalledWith(taskKey);
-    expect(onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/00000002" });
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/00000002",
+      search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
+    });
   });
 
   it("keeps agent ids distinct from utility command values", async () => {
@@ -459,7 +369,7 @@ describe("AppSidebar agent chip", () => {
     const agents = {
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "per-sender",
       agents: [{ id: "main" }, { id: "settings" }],
     } as AgentsListResult;
     const { sidebar } = await mountSidebar(
@@ -491,7 +401,7 @@ describe("AppSidebar agent chip", () => {
       pathname: "/chat/settings",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
-    expect(onNavigate).not.toHaveBeenCalledWith("config");
+    expect(onNavigate).not.toHaveBeenCalledWith("appearance");
   });
 
   it("keeps the identity card available offline with reconnect and retry actions", async () => {

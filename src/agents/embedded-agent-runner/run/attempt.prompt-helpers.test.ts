@@ -264,6 +264,29 @@ describe("resolvePromptSubmissionSkipReason", () => {
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  it("preserves an explicit empty per-turn tool allowlist", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+    const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "answer without tools",
+      messages: [],
+      hookCtx: { runId: "tools-allow-run", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild,
+      },
+    });
+
+    expect(result.toolsAllow).toEqual([]);
+    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+    forgetPromptBuildDrainCacheForRun("tools-allow-run");
+  });
+
   it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
     const runAgentTurnPrepare = vi.fn(async () => ({ prependContext: "turn policy" }));

@@ -68,6 +68,69 @@ CREATE TABLE IF NOT EXISTS skill_curator_state (
   last_result_json TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
+  proposal_id TEXT NOT NULL PRIMARY KEY,
+  record_json TEXT NOT NULL,
+  owner_agent_id TEXT,
+  workspace_dir TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  draft_hash TEXT NOT NULL,
+  origin_agent_id TEXT,
+  origin_session_key TEXT,
+  origin_run_id TEXT,
+  origin_message_id TEXT,
+  applied_at TEXT,
+  rejected_at TEXT,
+  quarantined_at TEXT,
+  stale_at TEXT,
+  status_reason TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
+  proposal_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  mutation_count INTEGER NOT NULL CHECK (mutation_count > 0),
+  PRIMARY KEY (proposal_id, run_id),
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
+  proposal_id TEXT NOT NULL PRIMARY KEY,
+  written_at TEXT NOT NULL,
+  target_skill_file TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'update')),
+  previous_content_hash TEXT,
+  previous_content TEXT,
+  support_files_json TEXT,
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  proposal_id TEXT NOT NULL,
+  proposed_version TEXT NOT NULL,
+  revision_hash TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN (
+    'created',
+    'revised',
+    'evaluation_completed',
+    'applied',
+    'rejected',
+    'quarantined',
+    'stale'
+  )),
+  occurred_at TEXT NOT NULL,
+  actor_json TEXT NOT NULL,
+  correlation_id TEXT,
+  payload_json TEXT,
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -132,6 +195,21 @@ CREATE TABLE IF NOT EXISTS audit_identity_keys (
   key BLOB NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS execution_identity_contexts (
+  context_id TEXT NOT NULL PRIMARY KEY CHECK (length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT NOT NULL UNIQUE CHECK (length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  coverage_state TEXT NOT NULL CHECK (
+    coverage_state IN ('attribution-only', 'unattributed', 'unknown', 'unsupported')
+  ),
+  context_bytes INTEGER NOT NULL CHECK (context_bytes BETWEEN 1 AND 16384),
+  context_json TEXT NOT NULL CHECK (length(context_json) > 0),
+  UNIQUE (created_at, context_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
+  ON execution_identity_contexts (run_id, created_at, execution_id);
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2040,6 +2118,8 @@ CREATE TABLE IF NOT EXISTS claw_installs (
   workspace TEXT NOT NULL UNIQUE,
   agent_config_digest TEXT NOT NULL,
   agent_owned_paths_json TEXT NOT NULL,
+  bootstrap_source_path TEXT,
+  bootstrap_content_digest TEXT,
   status TEXT NOT NULL CHECK (
     status IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial')
   ),
@@ -2073,6 +2153,12 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
   origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  extension_id TEXT,
+  extension_format TEXT,
+  extension_detected_format TEXT,
+  extension_mapped_json TEXT,
+  extension_unavailable_json TEXT,
+  extension_adapter_identity TEXT,
   installed_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)

@@ -2,9 +2,10 @@
 import {
   buildChannelInboundEventContext,
   formatInboundEnvelope,
+  formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   toHistoryMediaEntries,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
@@ -167,11 +168,24 @@ export async function buildDiscordMessageProcessContext(params: {
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
   let visibleChannelHistory: DiscordHistoryEntry[] | undefined;
+  // Failed downloads (CDN error, SSRF block, size cap, timeout) produce
+  // path-less facts that core drops from the media projection. Record the
+  // outcome in the body like sibling channels so the turn never silently
+  // ignores an attachment the user sent.
+  const unavailableMediaCount = mediaList.filter((media) => !media.path).length;
+  const appendMediaUnavailableNotice = (body: string | undefined) =>
+    unavailableMediaCount > 0
+      ? formatInboundMediaUnavailableText({
+          body,
+          notice: `[discord ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
+        })
+      : body;
+  const bodyWithMediaNotice = appendMediaUnavailableNotice(text) ?? text;
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(message.timestamp),
-    body: text,
+    body: bodyWithMediaNotice,
     chatType: isDirectMessage ? "direct" : "channel",
     senderLabel,
     previousTimestamp,
@@ -392,7 +406,9 @@ export async function buildDiscordMessageProcessContext(params: {
       inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
       rawBody: preflightAudioTranscript ?? baseText,
-      bodyForAgent: preflightAudioTranscript ?? baseText ?? text,
+      // BodyForAgent wins over Body for the model's text, so the notice has to
+      // ride the agent-facing source too — keeping transcript precedence.
+      bodyForAgent: appendMediaUnavailableNotice(preflightAudioTranscript ?? baseText ?? text),
       commandBody: preflightAudioTranscript ?? baseText,
       inboundHistory,
     },
@@ -417,7 +433,7 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: preflightAudioTranscript ?? baseText,
     },
-    media: toInboundMediaFacts(mediaList, {
+    media: await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
     supplemental: {
@@ -443,7 +459,7 @@ export async function buildDiscordMessageProcessContext(params: {
                 );
                 return isContextAborted(abortSignal)
                   ? []
-                  : toInboundMediaFacts(referencedReplyMediaList);
+                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList);
               },
             }
           : undefined,

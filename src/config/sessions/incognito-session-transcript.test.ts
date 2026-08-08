@@ -3,8 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { createSessionEntryWithTranscript, loadSessionEntry } from "./session-accessor.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import { resolveStorePath } from "./paths.js";
+import {
+  createSessionEntryWithTranscript,
+  listSessionEntries,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  patchSessionEntry,
+} from "./session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 
@@ -43,7 +54,13 @@ describe("incognito transcript access", () => {
       ).toBe(true);
       expect(fs.existsSync(durableStorePath)).toBe(false);
 
-      const firstTurn = SessionManager.open(created.sessionFile, cwd, cwd);
+      const target = {
+        agentId: "main",
+        sessionId: created.entry.sessionId,
+        sessionKey,
+        storePath: resolveStorePath(undefined, { agentId: "main" }),
+      };
+      const firstTurn = SessionManager.open(target, cwd);
       firstTurn.appendMessage({ role: "user", content: "first question", timestamp: 1 });
       firstTurn.appendMessage({
         role: "assistant",
@@ -63,7 +80,7 @@ describe("incognito transcript access", () => {
         timestamp: 2,
       });
 
-      const secondTurn = SessionManager.open(created.sessionFile, cwd, cwd);
+      const secondTurn = SessionManager.open(target, cwd);
       secondTurn.appendMessage({ role: "user", content: "second question", timestamp: 3 });
       const messages = secondTurn.buildSessionContext().messages;
 
@@ -72,6 +89,85 @@ describe("incognito transcript access", () => {
       expect(messages[2]).toMatchObject({ content: "second question" });
     } finally {
       fs.rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+
+  it("prunes incognito transcripts in process without publishing a disk archive", async () => {
+    const stateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "incognito-maintenance-")),
+    );
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    const archiveDirectory = path.join(path.dirname(path.dirname(storePath)), "sessions");
+    const staleScope = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:dashboard:incognito-stale",
+      storePath,
+    };
+    const activeScope = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:dashboard:incognito-active",
+      storePath,
+    };
+    const now = Date.now();
+
+    try {
+      await patchSessionEntry(
+        staleScope,
+        () => ({ sessionId: "incognito-stale-session", updatedAt: now }),
+        {
+          fallbackEntry: { sessionId: "incognito-stale-session", updatedAt: now },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+      await replaceSqliteTranscriptEvents({ ...staleScope, sessionId: "incognito-stale-session" }, [
+        {
+          id: "incognito-stale-event",
+          timestamp: new Date(now).toISOString(),
+          type: "metadata",
+        },
+      ]);
+      await patchSessionEntry(
+        activeScope,
+        () => ({ sessionId: "incognito-active-session", updatedAt: now + 1 }),
+        {
+          fallbackEntry: { sessionId: "incognito-active-session", updatedAt: now + 1 },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+
+      await patchSessionEntry(activeScope, () => ({ model: "gpt-test" }), {
+        maintenanceConfig: {
+          highWaterBytes: null,
+          maxDiskBytes: null,
+          maxEntries: 1,
+          mode: "enforce",
+          modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
+          pruneAfterMs: 365 * 24 * 60 * 60 * 1000,
+          resetArchiveRetentionMs: null,
+        },
+      });
+
+      expect(
+        listSessionEntries({ agentId: "main", env, storePath }).map(
+          (summary) => summary.sessionKey,
+        ),
+      ).toEqual([activeScope.sessionKey]);
+      await expect(
+        loadTranscriptEvents({
+          ...staleScope,
+          sessionId: "incognito-stale-session",
+        }),
+      ).resolves.toEqual([]);
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(fs.existsSync(archiveDirectory)).toBe(false);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(stateDir, { force: true, recursive: true });
     }
   });
 });

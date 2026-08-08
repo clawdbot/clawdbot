@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
+  collectChannelAccountScopes,
   defineKeyMoveMigration,
   normalizeChannelConfigEntries,
   stripRetiredChannelKeys,
@@ -11,6 +12,26 @@ function cfgWith(entry: Record<string, unknown>): OpenClawConfig {
 }
 
 describe("runtime-doctor channel helpers", () => {
+  it("collects the channel root and object-shaped accounts in config order", () => {
+    expect(
+      collectChannelAccountScopes({
+        cfg: cfgWith({ accounts: { work: { enabled: true }, invalid: "skip" } }),
+        channelId: "sample",
+      }),
+    ).toEqual([
+      {
+        prefix: "channels.sample",
+        pathSegments: ["channels", "sample"],
+        account: { accounts: { work: { enabled: true }, invalid: "skip" } },
+      },
+      {
+        prefix: "channels.sample.accounts.work",
+        pathSegments: ["channels", "sample", "accounts", "work"],
+        account: { enabled: true },
+      },
+    ]);
+  });
+
   it("moves nested keys across wildcard entries and preserves canonical values", () => {
     const migration = defineKeyMoveMigration({
       scope: ["groups", "*"],

@@ -133,9 +133,8 @@ export function buildWorkerAgentMeta(params: {
   const lastAssistant = assistants.at(-1);
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator,
-    lastAssistantUsage: lastAssistant?.usage,
+    latestUsage: lastAssistant?.usage,
     lastRunPromptUsage,
-    lastTurnTotal: lastRunPromptUsage?.total,
   });
   const reportedModelRef = resolveReportedModelRef({
     ...params.modelRef,

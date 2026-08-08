@@ -8,12 +8,14 @@ class FakeSocket {
   readonly sent: unknown[] = [];
   closed = false;
   closeCode?: number;
+  closeReason?: string;
   send(data: string): void {
     this.sent.push(JSON.parse(data));
   }
-  close(code?: number): void {
+  close(code?: number, reason?: string): void {
     this.closed = true;
     this.closeCode = code;
+    this.closeReason = reason;
   }
   /** Frames of a given method (client CDP responses/events). */
   frames(): Array<Record<string, unknown>> {
@@ -572,5 +574,174 @@ describe("ExtensionRelayBridge", () => {
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     expect(socket.closed).toBe(true);
     expect(bridge.extensionConnected).toBe(false);
+  });
+
+  it("keeps the active extension while a candidate is pending, malformed, or closed", () => {
+    const bridge = new ExtensionRelayBridge();
+    const active = wireExtension(bridge);
+    sendHello(active.handlers);
+
+    const pendingSocket = new FakeSocket();
+    const pending = bridge.attachExtensionSocket(pendingSocket);
+    expect(active.socket.closed).toBe(false);
+    expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
+
+    pending.onClose();
+    sendHello(pending);
+    expect(bridge.extensionConnected).toBe(true);
+    expect(active.socket.closed).toBe(false);
+
+    const malformedSocket = new FakeSocket();
+    const malformed = bridge.attachExtensionSocket(malformedSocket);
+    malformed.onMessage(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "candidate",
+        browserVersion: "Chrome/145.0.0.0",
+        extensionVersion: "2.0.0",
+      }),
+    );
+    expect(malformedSocket).toMatchObject({
+      closed: true,
+      closeCode: 4001,
+      closeReason: "expected valid hello",
+    });
+    expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
+    expect(active.socket.closed).toBe(false);
+  });
+
+  it("replaces the active extension only after the candidate sends a valid hello", () => {
+    const bridge = new ExtensionRelayBridge();
+    const active = wireExtension(bridge);
+    sendHello(active.handlers);
+
+    const candidateSocket = new FakeSocket();
+    const candidate = bridge.attachExtensionSocket(candidateSocket);
+    sendHello(candidate, [
+      { tabId: 2, url: "https://candidate.example", title: "Candidate", active: true },
+    ]);
+
+    expect(active.socket).toMatchObject({
+      closed: true,
+      closeCode: 4000,
+      closeReason: "replaced by newer extension connection",
+    });
+    expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
+    expect(bridge.sharedTabs()).toEqual([
+      { tabId: 2, url: "https://candidate.example", title: "Candidate", active: true },
+    ]);
+
+    active.handlers.onClose();
+    expect(bridge.extensionConnected).toBe(true);
+    expect(bridge.sharedTabs()).toHaveLength(1);
+  });
+
+  it("rejects an older candidate when a newer candidate promotes first", () => {
+    const bridge = new ExtensionRelayBridge();
+    const active = wireExtension(bridge);
+    sendHello(active.handlers);
+
+    const firstSocket = new FakeSocket();
+    const first = bridge.attachExtensionSocket(firstSocket);
+    const secondSocket = new FakeSocket();
+    const second = bridge.attachExtensionSocket(secondSocket);
+    expect(active.socket.closed).toBe(false);
+
+    second.onMessage(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "second",
+        browserVersion: "Chrome/146.0.0.0",
+        extensionVersion: "2.0.0",
+        tabs: [],
+      }),
+    );
+    expect(active.socket.closed).toBe(true);
+    expect(firstSocket.closed).toBe(false);
+    expect(secondSocket.closed).toBe(false);
+    expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
+
+    first.onMessage(
+      JSON.stringify({
+        type: "hello",
+        userAgent: "first",
+        browserVersion: "Chrome/145.0.0.0",
+        extensionVersion: "2.0.0",
+        tabs: [],
+      }),
+    );
+    expect(firstSocket).toMatchObject({
+      closed: true,
+      closeCode: 4000,
+      closeReason: "superseded by newer extension connection",
+    });
+    expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
+
+    first.onClose();
+    active.handlers.onClose();
+    expect(bridge.extensionConnected).toBe(true);
+    expect(secondSocket.closed).toBe(false);
+  });
+
+  it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
+    // The exact browser-scoped sequence puppeteer.connect() issues before any
+    // page work (chrome-devtools-mcp --browserUrl/--wsEndpoint rides this).
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
+      { id: 1, method: "Browser.getVersion" },
+      { id: 2, method: "Target.setDiscoverTargets", params: { discover: true } },
+      {
+        id: 3,
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+      },
+      { id: 4, method: "Target.getBrowserContexts" },
+    ];
+    for (const message of bootstrap) {
+      cdp.onMessage(JSON.stringify(message));
+    }
+    await flush();
+
+    for (const message of bootstrap) {
+      const response = client.frames().find((frame) => frame.id === message.id);
+      expect(response, `response for ${message.method}`).toBeTruthy();
+      expect(response?.error, `error for ${message.method}`).toBeUndefined();
+    }
+    const contexts = client.frames().find((frame) => frame.id === 4);
+    // Only createBrowserContext-made contexts belong here; the relay drives the
+    // real profile's default context, so the list is always empty (as in Chrome).
+    expect(contexts?.result).toEqual({ browserContextIds: [] });
+  });
+
+  it("lists shared tabs as DevTools-style target descriptors", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    expect(bridge.devtoolsTargetDescriptors()).toEqual([
+      {
+        tabId: 1,
+        url: "https://example.com",
+        title: "Example",
+        active: true,
+        id: "tab-1",
+        type: "page",
+      },
+    ]);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+
+    // Once the debugger attaches, descriptors carry the live targetId.
+    expect(bridge.devtoolsTargetDescriptors()[0]).toMatchObject({ id: "target-1", type: "page" });
   });
 });

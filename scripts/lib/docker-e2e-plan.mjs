@@ -5,15 +5,18 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../e2e/lib/upgrade-survivor/config-recipe.mjs";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   mainLanes,
   normalizeReleaseProfile,
+  publicInstallerLanes,
   releasePathChunkLanes,
   tailLanes,
 } from "./docker-e2e-scenarios.mjs";
+import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
 
 export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
@@ -95,6 +98,10 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
   ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
 ]);
+
+// Upgrade recipes select an OpenAI model whose runtime is supplied by the
+// version-matched Codex companion after the candidate replaces the baseline.
+const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
@@ -496,6 +503,63 @@ function applyLiveRetries(poolLanes, retries) {
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
+const PNPM_NON_SCRIPT_COMMANDS = new Set([
+  "add",
+  "audit",
+  "config",
+  "dlx",
+  "exec",
+  "fetch",
+  "install",
+  "pack",
+  "publish",
+  "rebuild",
+  "remove",
+]);
+
+function candidatePackageScripts(candidatePackageRoot) {
+  if (!candidatePackageRoot) {
+    return undefined;
+  }
+  const packageJson = JSON.parse(
+    readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"),
+  );
+  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+    throw new Error("Candidate package manifest must be an object");
+  }
+  if (
+    packageJson.scripts !== undefined &&
+    (!packageJson.scripts ||
+      typeof packageJson.scripts !== "object" ||
+      Array.isArray(packageJson.scripts))
+  ) {
+    throw new Error("Candidate package manifest has an invalid scripts field");
+  }
+  return new Set(
+    Object.entries(packageJson.scripts ?? {})
+      .filter(([, command]) => typeof command === "string")
+      .map(([name]) => name),
+  );
+}
+
+function requiredPackageScripts(poolLane) {
+  return [...poolLane.command.matchAll(/\bpnpm\s+(?:run\s+)?([a-z][a-z0-9:-]*)/giu)]
+    .map(([, script]) => script)
+    .filter((script) => !PNPM_NON_SCRIPT_COMMANDS.has(script));
+}
+
+function filterUnavailableCandidateScriptLanes(poolLanes, candidatePackageRoot) {
+  const scripts = candidatePackageScripts(candidatePackageRoot);
+  if (!scripts) {
+    return poolLanes;
+  }
+  // The trusted catalog can add lanes before a frozen candidate has their scripts.
+  // Only schedule package-script commands the selected candidate can execute.
+  return poolLanes.filter((poolLane) =>
+    requiredPackageScripts(poolLane).every((script) => scripts.has(script)),
+  );
+}
+
 export function laneWeight(poolLane) {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -528,7 +592,12 @@ export function lanesNeedOpenClawPackage(poolLanes) {
 export function findLaneByName(name) {
   return dedupeLanes(
     expandUpgradeSurvivorBaselineLanes(
-      [...allReleasePathLanes({ includeOpenWebUI: true }), ...mainLanes, ...tailLanes],
+      [
+        ...allReleasePathLanes({ includeOpenWebUI: true }),
+        ...publicInstallerLanes,
+        ...mainLanes,
+        ...tailLanes,
+      ],
       process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
       undefined,
       process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
@@ -573,11 +642,78 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function upgradeSurvivorScenarioForLane(poolLane) {
+  if (!poolLane.upgradeSurvivorScenario) {
+    return undefined;
+  }
+  const match = /(?:^|\s)OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=(?:'([^']+)'|"([^"]+)"|([^\s]+))/u.exec(
+    poolLane.command,
+  );
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? poolLane.upgradeSurvivorScenario;
+}
+
+function upgradeSurvivorBaselineVersionForLane(poolLane) {
+  const match =
+    /(?:^|\s)OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=(?:'([^']+)'|"([^"]+)"|([^\s]+))/u.exec(
+      poolLane.command,
+    );
+  const spec = match?.[1] ?? match?.[2] ?? match?.[3];
+  return /(?:^|\/|@)(\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(spec ?? "")?.[1] ?? null;
+}
+
+function configuredChannelIdsForLane(poolLane, scenario) {
+  const channelIds = new Set();
+  const baselineVersion = upgradeSurvivorBaselineVersionForLane(poolLane);
+  for (const step of resolveUpgradeSurvivorConfigStepsForBaseline(scenario, baselineVersion)) {
+    if (step.argv?.[0] !== "config" || step.argv?.[1] !== "set") {
+      continue;
+    }
+    const match = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "");
+    if (match) {
+      channelIds.add(match[1]);
+    }
+  }
+  return channelIds;
+}
+
+export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
+  const configuredChannelIds = new Set();
+  const requiredPackages = new Set();
+  for (const poolLane of poolLanes) {
+    const scenario = upgradeSurvivorScenarioForLane(poolLane);
+    if (!scenario) {
+      continue;
+    }
+    for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
+      requiredPackages.add(packageName);
+    }
+    for (const channelId of configuredChannelIdsForLane(poolLane, scenario)) {
+      configuredChannelIds.add(channelId);
+    }
+  }
+  for (const packageName of (officialExternalChannelCatalog.entries ?? [])
+    .filter((entry) => {
+      const channelId = entry.openclaw?.channel?.id;
+      const install = entry.openclaw?.install;
+      return (
+        typeof entry.name === "string" &&
+        configuredChannelIds.has(channelId) &&
+        install?.defaultChoice === "npm" &&
+        install?.npmSpec === entry.name
+      );
+    })
+    .map((entry) => entry.name)) {
+    requiredPackages.add(packageName);
+  }
+  return [...requiredPackages].toSorted((a, b) => a.localeCompare(b));
+}
+
 function buildPlanJson(params) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),
   );
+  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(scheduledLanes);
   return {
     chunk: params.releaseChunk || undefined,
     credentials: unique(scheduledLanes.flatMap(laneCredentialRequirements)).toSorted((a, b) =>
@@ -598,12 +734,14 @@ function buildPlanJson(params) {
     })),
     mainLanes: params.orderedLanes.map((poolLane) => poolLane.name),
     omittedUnsupportedLanes: params.omittedUnsupportedLaneNames,
+    requiredPrepublishPluginPackages,
     needs: {
       bareImage: imageKinds.includes("bare"),
       e2eImage: imageKinds.length > 0,
       functionalImage: imageKinds.includes("functional"),
       liveImage: scheduledLanes.some((poolLane) => poolLane.needsLiveImage),
       package: lanesNeedOpenClawPackage(scheduledLanes),
+      prepublishPluginRegistry: requiredPrepublishPluginPackages.length > 0,
     },
     profile: params.profile,
     releaseProfile: params.releaseProfile,
@@ -624,6 +762,7 @@ export function resolveDockerE2ePlan(options) {
       includeOpenWebUI: options.includeOpenWebUI,
       releaseProfile: "full",
     }),
+    ...publicInstallerLanes,
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);
@@ -719,8 +858,16 @@ export function resolveDockerE2ePlan(options) {
       : options.liveMode === "only"
         ? []
         : applyLiveMode(retriedTailLanes, options.liveMode);
-  const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
-  const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
+  const availableLanes = filterUnavailableCandidateScriptLanes(
+    configuredLanes,
+    options.candidatePackageRoot,
+  );
+  const availableTailLanes = filterUnavailableCandidateScriptLanes(
+    configuredTailLanes,
+    options.candidatePackageRoot,
+  );
+  const orderedLanes = options.orderLanes(availableLanes, options.timingStore);
+  const orderedTailLanes = options.orderLanes(availableTailLanes, options.timingStore);
   return {
     omittedUnsupportedLaneNames: [...omittedUnsupportedLaneNames],
     orderedLanes,

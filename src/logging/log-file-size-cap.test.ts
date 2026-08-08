@@ -9,6 +9,7 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { testApi } from "./logger.js";
 
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-cap-");
@@ -58,7 +59,7 @@ describe("log file size cap", () => {
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(2048);
   });
 
-  it("rotates file writes after cap is reached and keeps logging", () => {
+  it("rotates file writes after cap is reached and keeps logging", async () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
       () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
     );
@@ -67,6 +68,7 @@ describe("log file size cap", () => {
 
     logger.error(`network-failure-${"x".repeat(400)}`);
     logger.error("post-rotation-diagnostic");
+    await testApi.flushFileLogQueueForTests();
 
     const currentContent = fs.readFileSync(logPath, "utf8");
     const archiveContent = fs.readFileSync(rotatedLogPath(logPath, 1), "utf8");
@@ -79,7 +81,7 @@ describe("log file size cap", () => {
     expect(rotationWarnings).toHaveLength(0);
   });
 
-  it("structures rotation failure diagnostics for JSON console output", () => {
+  it("structures rotation failure diagnostics for JSON console output", async () => {
     fs.writeFileSync(logPath, "seed");
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("rotation denied");
@@ -96,6 +98,7 @@ describe("log file size cap", () => {
     });
 
     getLogger().error("rotation diagnostic");
+    await testApi.flushFileLogQueueForTests();
 
     const warning = stderrSpy.mock.calls
       .map(([firstArg]) => String(firstArg))
@@ -106,7 +109,7 @@ describe("log file size cap", () => {
     });
   });
 
-  it("keeps cached default rolling loggers on the current-day file", () => {
+  it("keeps cached default rolling loggers on the current-day file", async () => {
     const logDir = path.dirname(logPath);
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
     const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
@@ -118,13 +121,14 @@ describe("log file size cap", () => {
     logger.info({ message: "first day" });
     vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
     logger.info({ message: "second day" });
+    await testApi.flushFileLogQueueForTests();
 
     expect(fs.readFileSync(firstDay, "utf8")).toContain("first day");
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day");
   });
 
-  it("keeps an explicit profile-shaped log path stable across date changes", () => {
+  it("keeps an explicit profile-shaped log path stable across date changes", async () => {
     const logDir = path.dirname(logPath);
     const configured = path.join(logDir, "openclaw-dev-2026-01-01.log");
     const inferredNextDay = path.join(logDir, "openclaw-dev-2026-01-02.log");
@@ -136,6 +140,7 @@ describe("log file size cap", () => {
     logger.info({ message: "first day" });
     vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
     logger.info({ message: "second day" });
+    await testApi.flushFileLogQueueForTests();
 
     expect(fs.readFileSync(configured, "utf8")).toContain("first day");
     expect(fs.readFileSync(configured, "utf8")).toContain("second day");

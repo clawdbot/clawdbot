@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { buildAnnotationPrompt } from "./browser-annotation.ts";
+import { buildAnnotationPrompt, composeAnnotatedImage } from "./browser-annotation.ts";
 import { inspectBrowserElementAt, type BrowserInspectedNode } from "./browser-client.ts";
 
 function node(overrides: Partial<BrowserInspectedNode> = {}): BrowserInspectedNode {
@@ -131,5 +131,20 @@ describe("buildAnnotationPrompt", () => {
         Reflect.deleteProperty(document, "elementFromPoint");
       }
     }
+  });
+});
+
+describe("composeAnnotatedImage", () => {
+  it("uses localized copy when the browser cannot create a canvas context", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+
+    expect(() =>
+      composeAnnotatedImage({
+        image: document.createElement("img"),
+        width: 320,
+        height: 200,
+        strokes: [],
+      }),
+    ).toThrow("Canvas 2D context unavailable.");
   });
 });

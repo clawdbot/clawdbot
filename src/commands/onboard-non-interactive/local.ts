@@ -199,20 +199,8 @@ export async function runNonInteractiveLocalSetup(params: {
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
-  const { ensureOnboardingAgent } = await import("../onboard-agent.js");
-  const created = await ensureOnboardingAgent({
-    config: nextConfig,
-    workspace: workspaceDir,
-    baseConfig,
-  });
-  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
-  // Creating the first roster agent writes the config file, so the hash captured
-  // before this step no longer matches. Adopt the post-create hash; foreign
-  // writes are still rejected because we only trust the write we just made.
-  const effectiveBaseHash = created.configHash ?? baseHash;
-  if (opts.skipBootstrap) {
-    nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
+  // Workspace defaults are already staged above; provider discovery must use
+  // that requested owner before first-agent creation is allowed to write.
   const authTarget = resolveOnboardingAgentTarget(nextConfig);
 
   const inferredAuthChoice = opts.authChoice
@@ -236,6 +224,21 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice?.choice ?? "skip";
+
+  // Validate the complete Gateway proposal before provider methods or first-
+  // agent creation can write credentials, config, or workspace state.
+  const gatewayResult = applyNonInteractiveGatewayConfig({
+    nextConfig,
+    opts,
+    runtime,
+    defaultPort: resolveGatewayPort(baseConfig),
+  });
+  if (!gatewayResult) {
+    return;
+  }
+  nextConfig = gatewayResult.nextConfig;
+  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+
   if (authChoice !== "skip") {
     // Auth-choice handling is loaded only when needed so skip-only onboarding
     // avoids provider plugin discovery and credential helper imports.
@@ -254,21 +257,22 @@ export async function runNonInteractiveLocalSetup(params: {
     nextConfig = nextConfigAfterAuth;
   }
 
-  const gatewayBasePort = resolveGatewayPort(baseConfig);
-  const gatewayResult = applyNonInteractiveGatewayConfig({
-    nextConfig,
-    opts,
-    runtime,
-    defaultPort: gatewayBasePort,
-  });
-  if (!gatewayResult) {
-    return;
-  }
-  nextConfig = gatewayResult.nextConfig;
-
-  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
   if (!opts.skipHooks) {
     nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
+  }
+
+  const { ensureOnboardingAgent } = await import("../onboard-agent.js");
+  const created = await ensureOnboardingAgent({
+    config: nextConfig,
+    workspace: workspaceDir,
+    baseConfig,
+  });
+  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
+  // First-agent creation is the first permitted config mutation. Preserve its
+  // resulting hash so the canonical wizard write still rejects foreign edits.
+  const effectiveBaseHash = created.configHash ?? baseHash;
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
   }
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });

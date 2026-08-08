@@ -10,6 +10,7 @@ import type {
 } from "@openclaw/llm-core";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
+import { getInternalBeforeToolBatch } from "./internal-hooks.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -20,6 +21,7 @@ import {
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
+  AfterToolOutcomeContext,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -130,6 +132,11 @@ export interface AgentOptions {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Hook that may alter any finalized tool outcome, including pre-execution failures. */
+  afterToolOutcome?: (
+    context: AfterToolOutcomeContext,
+    signal?: AbortSignal,
+  ) => Promise<AfterToolCallResult | undefined>;
   /** Hook that may update model, reasoning, or context after a turn. */
   prepareNextTurn?: (
     signal?: AbortSignal,
@@ -211,6 +218,7 @@ export class Agent {
   >();
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
+  private readonly toolLoopRecoveryState = { criticalToolLoopSeen: false };
 
   public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
   public transformContext?: (
@@ -229,6 +237,10 @@ export class Agent {
   public resolveDeferredTool?: AgentLoopConfig["resolveDeferredTool"];
   public afterToolCall?: (
     context: AfterToolCallContext,
+    signal?: AbortSignal,
+  ) => Promise<AfterToolCallResult | undefined>;
+  public afterToolOutcome?: (
+    context: AfterToolOutcomeContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
   public prepareNextTurn?: (
@@ -262,6 +274,7 @@ export class Agent {
     this.beforeToolCall = options.beforeToolCall;
     this.resolveDeferredTool = options.resolveDeferredTool;
     this.afterToolCall = options.afterToolCall;
+    this.afterToolOutcome = options.afterToolOutcome;
     this.prepareNextTurn = options.prepareNextTurn;
     this.prepareNextTurnWithContext = options.prepareNextTurnWithContext;
     this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
@@ -374,6 +387,7 @@ export class Agent {
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
+    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
     this.clearFollowUpQueue();
     this.clearSteeringQueue();
   }
@@ -390,6 +404,7 @@ export class Agent {
         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
       );
     }
+    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
     const messages = this.normalizePromptInput(input, images);
     await this.runPromptMessages(messages);
   }
@@ -498,8 +513,11 @@ export class Agent {
       maxRetryDelayMs: this.maxRetryDelayMs,
       toolExecution: this.toolExecution,
       beforeToolCall: this.beforeToolCall,
+      beforeToolBatch: getInternalBeforeToolBatch(this),
+      toolLoopRecoveryState: this.toolLoopRecoveryState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
+      afterToolOutcome: this.afterToolOutcome,
       prepareNextTurn:
         this.prepareNextTurnWithContext || this.prepareNextTurn
           ? async (context) => {

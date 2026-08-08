@@ -26,6 +26,9 @@ function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[]
   if (config.gatewayEndpoint) {
     argv.push("--gateway-endpoint", config.gatewayEndpoint);
   }
+  if (config.workspace) {
+    argv.push("--workspace", config.workspace);
+  }
   return argv;
 }
 

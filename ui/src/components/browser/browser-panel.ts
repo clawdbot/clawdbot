@@ -42,6 +42,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
   @property({ type: Boolean }) available = false;
+  /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
+  @property({ type: Boolean }) suppressed = false;
   /** Control UI base path, used for the authenticated media fetch. */
   @property({ attribute: false }) basePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
@@ -60,6 +62,9 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    // A settings takeover can already own the viewport when the panel mounts.
+    // Suppress before the restored open state refreshes a dock nobody can see.
+    this.dockLayout.setSuppressed(this.suppressed);
     if (this.dockLayout.open) {
       void this.browserPanelController.refreshAll();
     }
@@ -71,6 +76,9 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
+      void this.browserPanelController.refreshAll();
+    }
     this.browserPanelController.synchronizeHostProperties(changed);
     if (changed.has("client") || changed.has("available")) {
       if (!this.available && this.dockLayout.open) {

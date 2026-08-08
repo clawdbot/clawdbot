@@ -34,8 +34,9 @@ describe("engine/tools/remind-logic", () => {
       if (!("deleteAfterRun" in call.job)) {
         throw new Error("expected one-shot reminder job");
       }
-      expect(call.job.schedule.atMs).toBeGreaterThanOrEqual(before + 5 * 60_000);
-      expect(call.job.schedule.atMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000);
+      const scheduledAtMs = Date.parse(call.job.schedule.at);
+      expect(scheduledAtMs).toBeGreaterThanOrEqual(before + 5 * 60_000);
+      expect(scheduledAtMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000);
       expect(call.job.sessionTarget).toBe("isolated");
       expect(call.job.wakeMode).toBe("now");
       expect(call.job.deleteAfterRun).toBe(true);
@@ -55,6 +56,54 @@ describe("engine/tools/remind-logic", () => {
         action: "add",
         summary: '⏰ Reminder in 5m: "test reminder"',
         cronResult: { id: "job-1" },
+      });
+    });
+
+    it.each([
+      {
+        name: "uses the Gateway timezone when omitted",
+        timezone: undefined,
+        expectedSchedule: { kind: "cron", expr: "0 9 * * *" },
+        expectedSummary: '⏰ Recurring reminder: "test reminder" (0 9 * * *, tz=gateway local)',
+      },
+      {
+        name: "preserves an explicit IANA timezone",
+        timezone: " America/New_York ",
+        expectedSchedule: {
+          kind: "cron",
+          expr: "0 9 * * *",
+          tz: "America/New_York",
+        },
+        expectedSummary: '⏰ Recurring reminder: "test reminder" (0 9 * * *, tz=America/New_York)',
+      },
+    ])("$name for recurring reminders", async ({ timezone, expectedSchedule, expectedSummary }) => {
+      const calls: RemindCronAction[] = [];
+      const result = await executeScheduledRemind(
+        {
+          action: "add",
+          content: "test reminder",
+          to: "qqbot:c2c:123",
+          time: "0 9 * * *",
+          ...(timezone ? { timezone } : {}),
+        },
+        {},
+        async (params) => {
+          calls.push(params);
+          return { id: "job-cron" };
+        },
+      );
+
+      const call = calls[0];
+      expect(call?.action).toBe("add");
+      if (call?.action !== "add") {
+        throw new Error("expected add cron action");
+      }
+      expect(call.job.schedule).toEqual(expectedSchedule);
+      expect(result.details).toEqual({
+        ok: true,
+        action: "add",
+        summary: expectedSummary,
+        cronResult: { id: "job-cron" },
       });
     });
 

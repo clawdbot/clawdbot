@@ -1,5 +1,7 @@
 // Verifies cloud-worker provider profile config parsing.
 import { describe, expect, it } from "vitest";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { CLOUD_WORKER_FIELD_HELP, CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 function parseCloudWorkers(value: unknown) {
@@ -11,6 +13,46 @@ function parseCloudWorkers(value: unknown) {
 }
 
 describe("OpenClawSchema cloudWorkers config", () => {
+  it("derives cloud worker labels and help from the field schemas", () => {
+    const response = computeBaseConfigSchemaResponse({ generatedAt: "cloud-worker-metadata" });
+    const properties = (
+      response.schema as {
+        properties?: {
+          cloudWorkers?: {
+            title?: string;
+            description?: string;
+            properties?: {
+              profiles?: {
+                title?: string;
+                description?: string;
+                additionalProperties?: {
+                  title?: string;
+                  description?: string;
+                  properties?: Record<string, { title?: string; description?: string }>;
+                };
+              };
+            };
+          };
+        };
+      }
+    ).properties?.cloudWorkers;
+    const profiles = properties?.properties?.profiles;
+    const profile = profiles?.additionalProperties;
+
+    for (const [path, schema] of [
+      ["cloudWorkers.profiles", profiles],
+      ["cloudWorkers.profiles.*", profile],
+      ["cloudWorkers.profiles.*.provider", profile?.properties?.provider],
+      ["cloudWorkers.profiles.*.install", profile?.properties?.install],
+      ["cloudWorkers.profiles.*.settings", profile?.properties?.settings],
+    ] as const) {
+      expect(schema?.title, path).toBe(CLOUD_WORKER_FIELD_LABELS[path]);
+      expect(schema?.description, path).toBe(CLOUD_WORKER_FIELD_HELP[path]);
+      expect(response.uiHints[path]?.label, path).toBe(schema?.title);
+      expect(response.uiHints[path]?.help, path).toBe(schema?.description);
+    }
+  });
+
   it("is absent by default and accepts an empty opt-in block", () => {
     expect(OpenClawSchema.parse({}).cloudWorkers).toBeUndefined();
     expect(parseCloudWorkers({})).toStrictEqual({});

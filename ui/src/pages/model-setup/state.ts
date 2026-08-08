@@ -27,7 +27,7 @@ export type ModelSetupActivationState =
       status: Exclude<NonNullable<SystemAgentSetupActivateResult["status"]>, "ok">;
       error: string;
     }
-  | { phase: "success"; modelRef: string; latencyMs?: number };
+  | { phase: "success"; modelRef: string; latencyMs?: number; warning?: string };
 
 type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false }>;
 
@@ -47,7 +47,7 @@ export type ModelSetupWizardState =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string }
+  | { phase: "done"; authChoice: string; preparedModelRef?: string }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
@@ -108,7 +108,11 @@ export function wizardStateFromResult(
     };
   }
   if (result.status === "done") {
-    return { phase: "done", authChoice };
+    return {
+      phase: "done",
+      authChoice,
+      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
+    };
   }
   if (result.status === "cancelled") {
     return { phase: "cancelled", message: result.error?.trim() || fallbackError };

@@ -4,11 +4,16 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
@@ -71,6 +76,26 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
+  it("patches a canonical global session on the selected agent", async () => {
+    const patch = vi.fn(async () => ({}));
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "research",
+      agentsList: null,
+      hello: null,
+    } as ChatPageHost;
+
+    const sessions = { patch } as unknown as Pick<SessionCapability, "patch">;
+
+    await patchChatSessionLabel(state, sessions, "global", "Research thread");
+
+    expect(patch).toHaveBeenCalledWith(
+      "global",
+      { label: "Research thread" },
+      { agentId: "research" },
+    );
+  });
+
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list } = contextFor(({ agentId, search }) =>
@@ -110,6 +135,11 @@ describe("gateway-backed session route resolution", () => {
       draft: undefined,
       face: "dashboard",
       canonicalLocation: { pathname: "/dashboard/research", search: "", hash: "" },
+      canonicalLocationSource: {
+        pathname: "/chat/research",
+        search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+        hash: "",
+      },
     });
     expect(list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research", search: "global" }),
@@ -161,6 +191,7 @@ describe("gateway-backed session route resolution", () => {
       draft: undefined,
       face: "chat",
       canonicalLocation: { pathname: "/chat/roboclaw", search: "", hash: "" },
+      canonicalLocationSource: targetLocation(target),
     });
   });
 
@@ -221,6 +252,7 @@ describe("gateway-backed session route resolution", () => {
         search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1",
         hash: "",
       },
+      canonicalLocationSource: targetLocation(target),
     });
   });
 
@@ -388,6 +420,235 @@ describe("gateway-backed session route resolution", () => {
       "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
       "/chat/research/default-mode-with-rare-surprises-123456780b",
     ]);
+  });
+
+  it("settles a shared short-id prefix with the slug the link carries", async () => {
+    const rows = [
+      row({ key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001" }),
+      row({
+        key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
+        displayName: "Deploy monitor",
+      }),
+    ];
+    const { context } = contextFor(() => result(rows));
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    // Both ids start with 12345678; the slug says which one, so the short link still
+    // resolves instead of bouncing to the chooser.
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: rows[1]?.key });
+  });
+
+  it("uses the sidebar-carried full key without issuing a session search", async () => {
+    const storedRow = row({ displayName: "Deploy monitor" });
+    const { context, list } = contextFor(() => result([storedRow]));
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: storedRow.key,
+      fallbackAgentId: "roboclaw",
+      row: storedRow,
+    });
+    prepareSessionNavigationHandoff(context.gateway, target.options.pathname, storedRow.key);
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: target.options.pathname, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({
+      kind: "session",
+      sessionKey: storedRow.key,
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      connectionChange: "gateway client replacement",
+      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+        snapshot.client = {} as NonNullable<typeof snapshot.client>;
+      },
+    },
+    {
+      connectionChange: "hello replacement on the same gateway client",
+      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+        snapshot.hello = {
+          snapshot: { sessionDefaults: { mainKey: "main" } },
+        } as NonNullable<typeof snapshot.hello>;
+      },
+    },
+  ])("does not trust a carried session after $connectionChange", async ({ replaceConnection }) => {
+    const oldSession = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const currentSession = row({
+      key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
+      displayName: "Deploy monitor",
+    });
+    const { context, list } = contextFor(() => result([currentSession]));
+    context.gateway.snapshot.hello = {
+      snapshot: { sessionDefaults: { mainKey: "main" } },
+    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    const pathname = "/chat/roboclaw/deploy-monitor-12345678";
+
+    prepareSessionNavigationHandoff(context.gateway, pathname, oldSession.key);
+    replaceConnection(context.gateway.snapshot);
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: currentSession.key });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("prefers the current location key over a residual colliding handoff", async () => {
+    const current = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const residual = row({
+      key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
+      displayName: "Deploy monitor",
+    });
+    const { context, list } = contextFor(() => result([current, residual]), [current, residual]);
+    const pathname = "/chat/roboclaw/deploy-monitor-12345678";
+    prepareSessionNavigationHandoff(context.gateway, pathname, residual.key);
+
+    const loaded = await loadChatRoute(
+      context,
+      {
+        pathname,
+        search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(current.key)}`,
+        hash: "",
+      },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: current.key });
+    expect(list).not.toHaveBeenCalled();
+
+    const canonicalReload = await loadChatRoute(
+      context,
+      { pathname, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+    expect(canonicalReload).toMatchObject({ kind: "session", sessionKey: current.key });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("does not trust a URL-only full key that is absent from cached rows", async () => {
+    const expected = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const staleKey = "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002";
+    const { context, list } = contextFor(() => result([expected]));
+
+    const loaded = await loadChatRoute(
+      context,
+      {
+        pathname: "/chat/roboclaw/deploy-monitor-12345678",
+        search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(staleKey)}`,
+        hash: "",
+      },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: expected.key });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a cold cached short route on the authoritative resolution path", async () => {
+    const storedRow = row({ displayName: "Deploy monitor" });
+    const { context, list } = contextFor(() => result([storedRow]), [storedRow]);
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the gateway ambiguity check when cached rows share the uuid and slug", async () => {
+    const rows = [
+      row({ key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001" }),
+      row({ key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002" }),
+    ];
+    const { context, list } = contextFor(() => result(rows), rows);
+
+    const loaded = await loadChatRoute(
+      context,
+      {
+        pathname: "/chat/roboclaw/default-mode-with-rare-surprises-12345678",
+        search: "",
+        hash: "",
+      },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678" });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the chooser when the slug matches neither or both tied sessions", async () => {
+    const rows = [
+      row({ key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001" }),
+      row({ key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002" }),
+    ];
+    const { context } = contextFor(() => result(rows));
+    for (const pathname of [
+      // Stale slug: the session was renamed since the link was made.
+      "/chat/roboclaw/an-old-name-12345678",
+      // Both tied sessions share the slug, so it cannot decide.
+      "/chat/roboclaw/default-mode-with-rare-surprises-12345678",
+    ]) {
+      const loaded = await loadChatRoute(
+        context,
+        { pathname, search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      );
+
+      expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678" });
+    }
+  });
+
+  it("does not settle a slug tie while the bounded search is incomplete", async () => {
+    // Only one loaded row carries the slug, but pagination stopped early: an unexamined
+    // page could hold the same prefix under the same name, so the chooser has to stand.
+    const storedRow = row({
+      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
+      displayName: "Deploy monitor",
+    });
+    const { context } = contextFor(({ offset = 0 }) =>
+      result(offset === 0 ? [storedRow] : [], { hasMore: true, nextOffset: offset + 20, offset }),
+    );
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat/roboclaw/deploy-monitor-12345678", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({ kind: "ambiguous", shortId: "12345678", truncated: true });
   });
 
   it("prefers an exact literal key over slug matches", async () => {

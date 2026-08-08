@@ -45,8 +45,15 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
+    const key = "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d";
+
+    expect(resolveSessionDisplayName(key)).toBe("New thread");
     expect(
-      resolveSessionDisplayName("agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"),
+      resolveSessionDisplayName(key, {
+        label: undefined,
+        displayName: undefined,
+        derivedTitle: undefined,
+      }),
     ).toBe("New thread");
   });
 
@@ -121,7 +128,16 @@ describe("resolveSessionDisplayName", () => {
           includeSubagentPrefix: false,
         },
       ),
-    ).toBe("Cron: Daily");
+    ).toBe("Automation: Daily");
+  });
+
+  it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron: daily-report" }),
+    ).toBe("Automation: daily-report");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron Job: nightly" })).toBe(
+      "Automation: nightly",
+    );
   });
 });
 

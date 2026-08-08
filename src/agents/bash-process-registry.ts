@@ -15,6 +15,8 @@ const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
 const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
+const MAX_FINISHED_SESSION_COUNT = 50;
+const MAX_FINISHED_SESSION_OUTPUT_CHARS = 2_000_000;
 
 function clampTtl(value: number | undefined) {
   if (value === undefined || Number.isNaN(value)) {
@@ -112,6 +114,7 @@ interface FinishedSession {
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
 const activeBackgroundExecSessionIds = new Set<string>();
+let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
 
@@ -142,10 +145,39 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
+function deleteFinishedSession(id: string): boolean {
+  const session = finishedSessions.get(id);
+  if (!session) {
+    return false;
+  }
+  finishedSessions.delete(id);
+  finishedSessionOutputChars -= session.aggregated.length;
+  return true;
+}
+
 /** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
   runningSessions.delete(id);
-  finishedSessions.delete(id);
+  deleteFinishedSession(id);
+}
+
+/** Removes completed process records belonging to retired session identities. */
+export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): void {
+  const retiredScopes = new Set<string>();
+  for (const scopeKey of scopeKeys) {
+    const normalizedScope = scopeKey.trim();
+    if (normalizedScope) {
+      retiredScopes.add(normalizedScope);
+    }
+  }
+  if (retiredScopes.size === 0) {
+    return;
+  }
+  for (const [id, session] of finishedSessions) {
+    if (session.scopeKey && retiredScopes.has(session.scopeKey)) {
+      deleteFinishedSession(id);
+    }
+  }
 }
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
@@ -261,6 +293,9 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   if (!session.backgrounded) {
     return;
   }
+  // Keep full completed logs; evict older records rather than silently
+  // truncating the process poll/log contract or dropping the newest result.
+  deleteFinishedSession(session.id);
   finishedSessions.set(session.id, {
     id: session.id,
     command: session.command,
@@ -280,6 +315,17 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
   });
+  finishedSessionOutputChars += session.aggregated.length;
+  while (
+    finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
+    (finishedSessions.size > 1 && finishedSessionOutputChars > MAX_FINISHED_SESSION_OUTPUT_CHARS)
+  ) {
+    const oldestSessionId = finishedSessions.keys().next().value;
+    if (oldestSessionId === undefined) {
+      break;
+    }
+    deleteFinishedSession(oldestSessionId);
+  }
 }
 
 /** Returns the last `max` characters of text without adding ellipses. */
@@ -353,6 +399,7 @@ export function listFinishedSessions() {
 function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
+  finishedSessionOutputChars = 0;
   activeBackgroundExecSessionIds.clear();
   stopSweeper();
 }
@@ -376,7 +423,7 @@ function pruneFinishedSessions() {
   const cutoff = Date.now() - jobTtlMs;
   for (const [id, session] of finishedSessions.entries()) {
     if (session.endedAt < cutoff) {
-      finishedSessions.delete(id);
+      deleteFinishedSession(id);
     }
   }
 }

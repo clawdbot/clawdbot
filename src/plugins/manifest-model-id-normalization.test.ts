@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
@@ -50,7 +49,6 @@ function writeInstallIndex(params: { stateDir: string; pluginDir: string }): voi
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -101,7 +99,6 @@ describe("manifest model id normalization", () => {
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
     restoreEnv();
@@ -110,7 +107,7 @@ describe("manifest model id normalization", () => {
     }
   });
 
-  it("reflects manifest and state-dir changes without a prepared snapshot", () => {
+  it("reflects manifest edits and state directory changes without a prepared snapshot", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });

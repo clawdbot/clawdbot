@@ -96,6 +96,16 @@ struct GatewayCommandResolution {
 }
 
 enum GatewayEnvironment {
+    private enum CommandSource {
+        case executable(String)
+        case project(runtime: RuntimeResolution, entrypoint: String)
+    }
+
+    private struct EnvironmentResolution {
+        let status: GatewayEnvironmentStatus
+        let commandSource: CommandSource?
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
 
@@ -132,7 +142,12 @@ enum GatewayEnvironment {
         Semver.parse(versionString)
     }
 
-    static func check() -> GatewayEnvironmentStatus {
+    static func check() async -> GatewayEnvironmentStatus {
+        let searchPaths = await CommandResolver.preferredPathsAsync()
+        return await self.resolveEnvironment(searchPaths: searchPaths).status
+    }
+
+    private static func resolveEnvironment(searchPaths: [String]) async -> EnvironmentResolution {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
@@ -148,43 +163,51 @@ enum GatewayEnvironment {
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
 
-        switch RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths()) {
+        switch await RuntimeLocator.resolve(searchPaths: searchPaths) {
         case let .failure(err):
-            return GatewayEnvironmentStatus(
-                kind: .missingNode,
-                nodeVersion: nil,
-                gatewayVersion: nil,
-                requiredGateway: expectedString,
-                message: RuntimeLocator.describeFailure(err))
-        case let .success(runtime):
-            let gatewayBin = CommandResolver.openclawExecutable()
-
-            if gatewayBin == nil, projectEntrypoint == nil {
-                return GatewayEnvironmentStatus(
-                    kind: .missingGateway,
-                    nodeVersion: runtime.version.description,
+            return EnvironmentResolution(
+                status: GatewayEnvironmentStatus(
+                    kind: .missingNode,
+                    nodeVersion: nil,
                     gatewayVersion: nil,
                     requiredGateway: expectedString,
-                    message: "openclaw CLI not found in PATH; install the CLI.")
+                    message: RuntimeLocator.describeFailure(err)),
+                commandSource: nil)
+        case let .success(runtime):
+            let gatewayBin = CommandResolver.openclawExecutable(searchPaths: searchPaths)
+
+            if gatewayBin == nil, projectEntrypoint == nil {
+                return EnvironmentResolution(
+                    status: GatewayEnvironmentStatus(
+                        kind: .missingGateway,
+                        nodeVersion: runtime.version.description,
+                        gatewayVersion: nil,
+                        requiredGateway: expectedString,
+                        message: "openclaw CLI not found in PATH; install the CLI."),
+                    commandSource: nil)
             }
 
-            let installedRaw = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
-                ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
+            let installedRaw = await self.installedGatewayVersion(
+                gatewayBin: gatewayBin,
+                projectRoot: projectRoot,
+                searchPaths: searchPaths)
             let installed = Semver.parse(installedRaw)
 
             if let expected, let installedRaw, installed != nil,
                !Semver.satisfiesExpectedGatewayVersion(installed: installedRaw, expected: expectedString)
             {
                 let expectedText = expectedString ?? expected.description
-                return GatewayEnvironmentStatus(
-                    kind: .incompatible(found: installedRaw, required: expectedText),
-                    nodeVersion: runtime.version.description,
-                    gatewayVersion: installedRaw,
-                    requiredGateway: expectedText,
-                    message: """
-                    Gateway version \(installedRaw) is incompatible with app \(expectedText);
-                    install or update the global package.
-                    """)
+                return EnvironmentResolution(
+                    status: GatewayEnvironmentStatus(
+                        kind: .incompatible(found: installedRaw, required: expectedText),
+                        nodeVersion: runtime.version.description,
+                        gatewayVersion: installedRaw,
+                        requiredGateway: expectedText,
+                        message: """
+                        Gateway version \(installedRaw) is incompatible with app \(expectedText);
+                        install or update the global package.
+                        """),
+                    commandSource: nil)
             }
 
             let gatewayLabel = gatewayBin != nil ? "global" : "local"
@@ -196,16 +219,28 @@ enum GatewayEnvironment {
             let gatewayLabelText = gatewayBin != nil
                 ? "(\(gatewayLabel))"
                 : localPathHint.isEmpty ? "(\(gatewayLabel))" : localPathHint
-            return GatewayEnvironmentStatus(
-                kind: .ok,
-                nodeVersion: runtime.version.description,
-                gatewayVersion: gatewayVersionText,
-                requiredGateway: expectedString,
-                message: "Node \(runtime.version.description); gateway \(gatewayVersionText) \(gatewayLabelText)")
+            let commandSource: CommandSource? = if let gatewayBin {
+                CommandSource.executable(gatewayBin)
+            } else if let projectEntrypoint {
+                CommandSource.project(runtime: runtime, entrypoint: projectEntrypoint)
+            } else {
+                nil
+            }
+            return EnvironmentResolution(
+                status: GatewayEnvironmentStatus(
+                    kind: .ok,
+                    nodeVersion: runtime.version.description,
+                    gatewayVersion: gatewayVersionText,
+                    requiredGateway: expectedString,
+                    message: "Node \(runtime.version.description); gateway \(gatewayVersionText) \(gatewayLabelText)"),
+                commandSource: commandSource)
         }
     }
 
-    static func resolveGatewayCommand() -> GatewayCommandResolution {
+    static func resolveGatewayCommand(
+        searchPathsProvider: @Sendable () async -> [String] = CommandResolver.preferredPathsAsync) async
+        -> GatewayCommandResolution
+    {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
@@ -215,32 +250,25 @@ enum GatewayEnvironment {
                 self.logger.debug("gateway command resolve ok (\(elapsedMs, privacy: .public)ms)")
             }
         }
-        let projectRoot = CommandResolver.projectRoot()
-        let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
-        let status = self.check()
-        let gatewayBin = CommandResolver.openclawExecutable()
-        let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
+        let searchPaths = await searchPathsProvider()
+        let environment = await self.resolveEnvironment(searchPaths: searchPaths)
 
-        guard case .ok = status.kind else {
-            return GatewayCommandResolution(status: status, command: nil)
+        guard case .ok = environment.status.kind else {
+            return GatewayCommandResolution(status: environment.status, command: nil)
         }
 
         let port = self.gatewayPort()
-        if let gatewayBin {
-            let bind = self.preferredGatewayBind() ?? "loopback"
+        let bind = self.preferredGatewayBind() ?? "loopback"
+        switch environment.commandSource {
+        case let .executable(gatewayBin):
             let cmd = [gatewayBin, "gateway", "--port", "\(port)", "--bind", bind]
-            return GatewayCommandResolution(status: status, command: cmd)
+            return GatewayCommandResolution(status: environment.status, command: cmd)
+        case let .project(runtime, entrypoint):
+            let cmd = [runtime.path, entrypoint, "gateway", "--port", "\(port)", "--bind", bind]
+            return GatewayCommandResolution(status: environment.status, command: cmd)
+        case nil:
+            return GatewayCommandResolution(status: environment.status, command: nil)
         }
-
-        if let entry = projectEntrypoint,
-           case let .success(resolvedRuntime) = runtime
-        {
-            let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [resolvedRuntime.path, entry, "gateway", "--port", "\(port)", "--bind", bind]
-            return GatewayCommandResolution(status: status, command: cmd)
-        }
-
-        return GatewayCommandResolution(status: status, command: nil)
     }
 
     private static func preferredGatewayBind() -> String? {
@@ -284,18 +312,27 @@ enum GatewayEnvironment {
         return normalized
     }
 
-    private static func readGatewayVersion(binary: String) -> String? {
-        let start = Date()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--version"]
-        process.environment = ["PATH": CommandResolver.preferredPaths().joined(separator: ":")]
+    static func installedGatewayVersion(
+        gatewayBin: String?,
+        projectRoot: URL,
+        searchPaths: [String]) async -> String?
+    {
+        if let gatewayBin,
+           let version = await self.readGatewayVersion(binary: gatewayBin, searchPaths: searchPaths)
+        {
+            return version
+        }
+        return self.readLocalGatewayVersion(projectRoot: projectRoot)
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+    private static func readGatewayVersion(binary: String, searchPaths: [String]) async -> String? {
+        let start = Date()
         do {
-            let data = try process.runAndReadToEnd(from: pipe)
+            let result = try await BoundedProcess.run(
+                path: binary,
+                arguments: ["--version"],
+                environment: ["PATH": searchPaths.joined(separator: ":")],
+                timeout: 2)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
@@ -310,7 +347,7 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let raw = String(data: data, encoding: .utf8)
+            let raw = String(data: result.output, encoding: .utf8)
             guard let normalized = self.normalizeGatewayVersionOutput(raw),
                   Semver.parse(normalized) != nil
             else { return nil }

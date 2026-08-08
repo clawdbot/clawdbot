@@ -58,8 +58,13 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   Recovery never replays a hook interrupted mid-call. Once an unhandled hook
   finishes, its checkpoint records that result, but recovery still fails closed
   while that hook remains active: a checkpoint cannot prove that the same
-  plugin code and configuration loaded after the restart. Handled text and
-  silent results are checkpointed separately for deterministic settlement.
+  plugin code and configuration loaded after the restart. A
+  `before_agent_reply` hook may declare a host-enforced
+  `eligibleTriggers` scope; a hook limited to scheduled `heartbeat` or `cron`
+  turns is not active for a recovered user turn and therefore does not block
+  it. Unscoped or invalid registrations remain active for this safety check.
+  Handled text and silent results are checkpointed separately for deterministic
+  settlement.
   Durable recovery claims written by older versions have no source-ownership
   marker, so they receive the same fail-closed hook check during an upgrade.
 - **At shutdown:** during the restart drain, every session with an active run
@@ -177,16 +182,18 @@ restart handling continues.
 
 - **Crash-loop breaker:** 3 unclean boots within 5 minutes trip a breaker that
   suppresses auto-start side services on the next boot, so a crashing gateway
-  does not amplify itself. A later boot recovers once the unclean-boot window
-  drains.
+  does not amplify itself. A continuously stable safe-mode gateway rechecks the
+  breaker after the full unclean-boot window drains and then resumes deferred
+  channel auto-start without requiring another gateway restart.
 
   When the breaker is tripped, the **control plane still starts**, but channel
-  plugins (and other auto-started side services) stay down for the current boot
-  unless an operator manually overrides the suppression. Automatic startup
-  resumes on a later boot after the unclean-boot window drains. Gateway logs
-  look like:
+  plugins (and other auto-started side services) stay down until an operator
+  manually overrides the suppression or the full window drains with no unclean
+  boots. Recovery preserves channels that an operator manually stopped and any
+  separate development-mode suppression. Gateway logs look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
-start for <channel>… Use channels.start to override.`
+start for <channel>… Start a channel manually with: openclaw gateway call
+channels.start --params '{"channel":"<id>"}'`
 
   Operator recovery SOP:
 
@@ -208,8 +215,12 @@ start for <channel>… Use channels.start to override.`
      `channels.start` is a **manual** override; it does not disable the
      breaker for other channels.
 
-  5. Or wait for the unclean-boot window to drain, then restart the gateway.
-     The next boot logs whether channel auto-start is restored.
+  5. Or leave the healthy gateway running until the full unclean-boot window
+     drains. The same process logs that the restart-loop breaker recovered and
+     starts the deferred configured channels.
+     If that message does not appear after the window plus one health-monitor
+     interval, inspect the gateway logs and run `openclaw doctor` before
+     restarting.
 
   See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
   vs channel-autostart split.
@@ -223,6 +234,9 @@ start for <channel>… Use channels.start to override.`
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `subagent-interrupted-resume`
   subsystems.
+- **Reply hooks:** automatically delivered replies from resumed main-session
+  turns run the normal `reply_payload_sending` hook before channel delivery,
+  with the recovered session, run, account, and conversation context.
 
 ## What is not resumed
 

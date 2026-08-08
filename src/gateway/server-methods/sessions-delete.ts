@@ -24,7 +24,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { chatHandlers } from "./chat.js";
@@ -32,7 +32,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
-  rejectPluginRuntimeDeleteMismatch,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
@@ -181,7 +181,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      rejectPluginRuntimeDeleteMismatch({
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "delete",
         client,
         key: target.canonicalKey ?? key,
         entry: initialDeleteEntry,
@@ -304,7 +305,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (
-          rejectPluginRuntimeDeleteMismatch({
+          rejectPluginRuntimeSessionOwnershipMismatch({
+            action: "delete",
             client,
             key: canonicalKey ?? key,
             entry,

@@ -1,14 +1,13 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import type { NativeHookRelayEvent, NativeHookRelayProvider } from "./native-hook-relay-types.js";
 import {
   normalizeOptionalPositiveInteger,
   normalizePositiveInteger,
   shellQuoteArgs,
 } from "./native-hook-relay-utils.js";
-
-export const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
 
 function resolveNativeHookRelayNicePrefix(value: number | false | undefined): string[] {
   if (process.platform === "win32" || value === false || value === undefined) {

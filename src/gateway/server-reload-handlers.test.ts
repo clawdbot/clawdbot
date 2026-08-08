@@ -1,11 +1,19 @@
 /**
  * Gateway config reload handler tests.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import {
+  clearCurrentProviderAuthState as clearWarmedProviderAuthState,
+  getCurrentProviderAuthStates,
+  publishProviderAuthWarmSnapshot,
+} from "../agents/model-provider-auth-state.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import {
@@ -22,10 +30,7 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-} from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -59,6 +64,9 @@ import {
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
+import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
+import { applyHookMappings } from "./hooks-mapping.js";
+import { commitHooksConfigReload } from "./hooks.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
@@ -85,6 +93,9 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
+const tempDirs: string[] = [];
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const restartTesting = {
   resetSigusr1State() {
     resetGatewayRestartStateForInProcessRestart();
@@ -109,10 +120,7 @@ function createGatewayReloadHandlers(
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     stopPostReadySidecars: vi.fn(),
-    reloadPlugins: vi.fn(async () => ({
-      restartChannels: new Set<ChannelKind>(),
-      activeChannels: new Set<ChannelKind>(),
-    })),
+    reloadPlugins: vi.fn(async () => makePluginReloadResult()),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
@@ -129,7 +137,9 @@ function createGatewayReloadHandlers(
   });
 }
 
-function createDefaultGatewayReloadState() {
+function createDefaultGatewayReloadState(
+  overrides: Partial<ReturnType<ReloadHandlerParams["getState"]>> = {},
+) {
   return {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
@@ -140,6 +150,7 @@ function createDefaultGatewayReloadState() {
       cronEnabled: false,
     } as never,
     channelHealthMonitor: null,
+    ...overrides,
   };
 }
 
@@ -156,23 +167,15 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     setState: vi.fn(),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
-    reloadPlugins: vi.fn(async () => ({
-      restartChannels: new Set<ChannelKind>(),
-      activeChannels: new Set<ChannelKind>(),
-    })),
+    reloadPlugins: vi.fn(async () => makePluginReloadResult()),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     channelManager: {} as never,
-    activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
-      sourceConfig: config,
-      config,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    })) as never,
+    activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) =>
+      makePreparedSecretsSnapshot(config),
+    ) as never,
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     sharedGatewaySessionGenerationState: { current: undefined, required: null },
     clients: [],
@@ -390,6 +393,61 @@ function createRecordedChannelHandlers(events: string[]) {
   };
 }
 
+function makePreparedSecretsSnapshot(
+  config: OpenClawConfig,
+  overrides: Partial<PreparedSecretsRuntimeSnapshot> = {},
+): PreparedSecretsRuntimeSnapshot {
+  return {
+    sourceConfig: config,
+    config,
+    authStores: [],
+    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    warnings: [],
+    webTools: createEmptyRuntimeWebToolsMetadata(),
+    ...overrides,
+  };
+}
+
+function makeActiveTaskBlocker(
+  overrides: Partial<(typeof hoisted.activeTaskBlockers)[number]> = {},
+): (typeof hoisted.activeTaskBlockers)[number] {
+  return {
+    taskId: "task-blocking-reload",
+    status: "running",
+    runtime: "subagent",
+    ...overrides,
+  };
+}
+
+function makePluginReloadResult(
+  overrides: Partial<GatewayPluginReloadResult> = {},
+): GatewayPluginReloadResult {
+  return {
+    restartChannels: new Set(),
+    activeChannels: new Set(),
+    ...overrides,
+  };
+}
+
+function enableChannelReloadsForTest() {
+  const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+  const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+  delete process.env.OPENCLAW_SKIP_CHANNELS;
+  delete process.env.OPENCLAW_SKIP_PROVIDERS;
+  return () => {
+    if (previousSkipChannels === undefined) {
+      delete process.env.OPENCLAW_SKIP_CHANNELS;
+    } else {
+      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+    }
+    if (previousSkipProviders === undefined) {
+      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    } else {
+      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+    }
+  };
+}
+
 function createTestCronReconciliation() {
   const complete = vi.fn<() => Promise<void>>(async () => {});
   return {
@@ -588,14 +646,7 @@ function createManagedRestartSequenceHarness(
     },
   } as OpenClawConfig;
   setRuntimeConfigSnapshot(initialConfig, initialConfig);
-  activateSecretsRuntimeSnapshot({
-    sourceConfig: initialConfig,
-    config: initialConfig,
-    authStores: [],
-    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-    warnings: [],
-    webTools: createEmptyRuntimeWebToolsMetadata(),
-  });
+  activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
   const deferredConfig = {
     gateway: {
       port: 18790,
@@ -704,14 +755,7 @@ function createManagedRestartSequenceHarness(
         throw new Error(`required SecretRef ${secretInput.id} is unavailable`);
       }
     }
-    return {
-      sourceConfig: config,
-      config,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    };
+    return makePreparedSecretsSnapshot(config);
   });
   const requestRecoveryRestart = vi.fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>(
     () => ({ status: "emitted" }),
@@ -758,16 +802,11 @@ function createManagedRestartSequenceHarness(
     }
     snapshotConfig = config;
     snapshotHash = hash;
-    listener({
-      configPath: "/tmp/openclaw.json",
-      sourceConfig: config,
-      runtimeConfig,
-      persistedHash: hash,
-      revision,
-      fingerprint: `runtime-${hash}`,
-      sourceFingerprint: `source-${hash}`,
-      writtenAtMs: Date.now(),
-    });
+    listener(
+      createConfigWriteNotification(config, hash, revision, `runtime-${hash}`, `source-${hash}`, {
+        runtimeConfig,
+      }),
+    );
   };
 
   return {
@@ -849,6 +888,9 @@ afterEach(() => {
   hoisted.buildGatewayCronService.mockClear();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 async function runManagedOwnershipScenario(params: {
@@ -872,14 +914,7 @@ async function runManagedOwnershipScenario(params: {
     },
   } satisfies OpenClawConfig;
   const configB = structuredClone(initialConfig);
-  const snapshot = (config: OpenClawConfig): PreparedSecretsRuntimeSnapshot => ({
-    sourceConfig: config,
-    config,
-    authStores: [],
-    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-    warnings: [],
-    webTools: createEmptyRuntimeWebToolsMetadata(),
-  });
+  const snapshot = (config: OpenClawConfig) => makePreparedSecretsSnapshot(config);
   const writeListenerRef = createConfigWriteListenerRef();
   let resolveAccepted: (() => void) | undefined;
   const accepted = new Promise<void>((resolve) => {
@@ -960,7 +995,161 @@ describe("managed reload transaction ownership", () => {
   );
 });
 
+describe("provider auth hot reload path ownership", () => {
+  it.each([
+    "auth",
+    "auth.profiles.openai.provider",
+    "auth.order.openai",
+    "env",
+    "env.vars.OPENAI_API_KEY",
+    "models",
+    "models.providers.openai.api",
+    "models.providers.anthropic",
+    "plugins",
+    "plugins.entries.openai.enabled",
+    "secrets",
+    "secrets.providers.default.path",
+    "agent.model",
+    "agent.model.default",
+    "agents",
+    "agents.list",
+    "agents.defaults",
+    "agents.defaults.model",
+    "agents.defaults.models.provider.agentRuntime.id",
+    "agents.defaults.modelPolicy",
+    "agents.defaults.utilityModel",
+    "agents.defaults.agentRuntime",
+    "agents.defaults.runtime",
+    "agents.defaults.imageModel.primary",
+    "agents.defaults.mediaModels.video.primary",
+    "agents.defaults.voiceModel.primary",
+    "agents.defaults.pdfModel.primary",
+    "agents.defaults.heartbeat",
+    "agents.defaults.heartbeat.model",
+    "agents.defaults.compaction",
+    "agents.defaults.compaction.model",
+    "agents.defaults.compaction.provider",
+    "agents.defaults.compaction.memoryFlush",
+    "agents.defaults.compaction.memoryFlush.model",
+    "agents.defaults.workspace",
+    "agents.defaults.agentDir",
+    "agents.defaults.subagents",
+    "agents.defaults.subagents.model.primary",
+    "agents.entries",
+    "agents.entries.main",
+    "agents.entries.main.id",
+    "agents.entries.main.default",
+    "agents.entries.main.model",
+    "agents.entries.main.models.provider.agentRuntime.id",
+    "agents.entries.main.modelPolicy",
+    "agents.entries.main.utilityModel",
+    "agents.entries.main.agentRuntime",
+    "agents.entries.main.runtime",
+    "agents.entries.main.heartbeat",
+    "agents.entries.main.heartbeat.model",
+    "agents.entries.main.workspace",
+    "agents.entries.main.agentDir",
+    "agents.entries.main.subagents",
+    "agents.entries.main.subagents.model.primary",
+  ])("rewarm remains required for auth-relevant config path %s", (changedPath) => {
+    expect(shouldRewarmProviderAuthState(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    "agents.defaults.heartbeat.target",
+    "agents.defaults.heartbeat.delivery.target",
+    "agents.defaults.heartbeat.every",
+    "agents.defaults.heartbeat.activeHours.start",
+    "agents.entries.main.heartbeat.delivery.target",
+    "agents.entries.main.heartbeat.every",
+    "agents.entries.main.heartbeat.lightContext",
+    "agents.defaults.compaction.enabled",
+    "agents.defaults.compaction.mode",
+    "agents.defaults.compaction.keepRecentTokens",
+    "agents.defaults.compaction.timeoutSeconds",
+    "agents.defaults.compaction.memoryFlush.enabled",
+    "agents.defaults.compaction.memoryFlush.softThresholdTokens",
+    "agent.heartbeat",
+    "agents.entries.main.cron",
+    "agents.entries.main.ui",
+    "agents.entries.main.tools",
+    "agents.entries.main.skills",
+    "agents.entries.main.memory",
+    "agents.entries.main.systemPrompt",
+    "agents.defaults.systemPrompt",
+    "agents.defaults.subagents.thinking",
+    "agents.entries.main.subagents.thinking",
+    "agents.defaults.subagents.archiveAfterMinutes",
+    "mcp.servers.context7.command",
+    "hooks.gmail",
+    "hooks.path",
+    "logging.level",
+    "channels.telegram",
+    "channels.discord.accounts.bot",
+    "gateway.port",
+    "cron.schedules.daily",
+  ])("skips provider auth scans for unrelated config path %s", (changedPath) => {
+    expect(shouldRewarmProviderAuthState(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
+      false,
+    );
+  });
+
+  it("rewarm remains required when plugins reload without a config path", () => {
+    expect(
+      shouldRewarmProviderAuthState(createHotTailPlan({ changedPaths: [], reloadPlugins: true })),
+    ).toBe(true);
+  });
+
+  it("retains auth-relevant changes mixed with unrelated config paths", () => {
+    expect(
+      shouldRewarmProviderAuthState(
+        createHotTailPlan({
+          changedPaths: ["logging.level", "agents.defaults.workspace"],
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("gateway hot reload model state", () => {
+  it.each([
+    "agents.defaults.compaction.model",
+    "agents.defaults.compaction.maxActiveTranscriptBytes",
+  ])("refreshes prepared model runtime without restarting subsystems: %s", async (changedPath) => {
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const channels = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+    const { applyHotReload, heartbeatRunner, cron } = createReloadHandlersForTest(
+      logReload,
+      channels,
+    );
+    const nextConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            model: "mock-openai/gpt-5.6-luna-new",
+            maxActiveTranscriptBytes: "10b",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan([changedPath]), nextConfig);
+
+    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+    });
+    expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
+    expect(cron.stop).not.toHaveBeenCalled();
+    expect(channels.start).not.toHaveBeenCalled();
+    expect(channels.stop).not.toHaveBeenCalled();
+    expect(hoisted.disposeAllSessionMcpRuntimes).not.toHaveBeenCalled();
+    expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
+  });
+
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
     const newCron = {
@@ -1132,26 +1321,22 @@ describe("gateway hot reload model state", () => {
   });
 
   it("restarts when the replacement cron fails after runtime commit", async () => {
-    restartTesting.resetSigusr1State();
-    resetGatewayWorkAdmission();
-    const signalSpy = vi.fn();
-    process.once("SIGUSR1", signalSpy);
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    hoisted.buildGatewayCronService.mockReturnValueOnce({
-      cron: {
-        start: vi.fn(async () => {
-          throw new Error("cron start failed");
-        }),
-        stop: vi.fn(),
-      },
-      storePath: "/tmp/rebuilt-cron.json",
-      cronEnabled: true,
-      reconcileExitWatchers: vi.fn(async () => {}),
-      stopExitWatchers: vi.fn(),
-    });
-    const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
+    await withGatewayRestartSignal(async (signalSpy) => {
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      hoisted.buildGatewayCronService.mockReturnValueOnce({
+        cron: {
+          start: vi.fn(async () => {
+            throw new Error("cron start failed");
+          }),
+          stop: vi.fn(),
+        },
+        storePath: "/tmp/rebuilt-cron.json",
+        cronEnabled: true,
+        reconcileExitWatchers: vi.fn(async () => {}),
+        stopExitWatchers: vi.fn(),
+      });
+      const { applyHotReload, setState } = createReloadHandlersForTest(logReload);
 
-    try {
       await expect(
         applyHotReload(createCronRestartPlan(), { cron: { enabled: true } }),
       ).resolves.toBeUndefined();
@@ -1163,11 +1348,7 @@ describe("gateway hot reload model state", () => {
       );
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
       markGatewaySigusr1RestartHandled();
-    } finally {
-      process.removeListener("SIGUSR1", signalSpy);
-      restartTesting.resetSigusr1State();
-      resetGatewayWorkAdmission();
-    }
+    });
   });
 
   it("ignores a delayed cron failure after a newer reload supersedes it", async () => {
@@ -1214,18 +1395,14 @@ describe("gateway hot reload model state", () => {
   });
 
   it("restarts instead of rolling back when cron teardown fails after runtime commit", async () => {
-    restartTesting.resetSigusr1State();
-    resetGatewayWorkAdmission();
-    const signalSpy = vi.fn();
-    process.once("SIGUSR1", signalSpy);
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
-    const { applyHotReload, cron, setState } = createReloadHandlersForTest(logReload);
-    cron.stop.mockImplementation(() => {
-      throw new Error("cron stop failed");
-    });
+    await withGatewayRestartSignal(async (signalSpy) => {
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
+      const { applyHotReload, cron, setState } = createReloadHandlersForTest(logReload);
+      cron.stop.mockImplementation(() => {
+        throw new Error("cron stop failed");
+      });
 
-    try {
       await expect(
         applyHotReload(
           createCronRestartPlan(),
@@ -1245,11 +1422,7 @@ describe("gateway hot reload model state", () => {
       expect(signalSpy).toHaveBeenCalledOnce();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
       markGatewaySigusr1RestartHandled();
-    } finally {
-      process.removeListener("SIGUSR1", signalSpy);
-      restartTesting.resetSigusr1State();
-      resetGatewayWorkAdmission();
-    }
+    });
   });
 
   it("resets prepared model runtime state for every hot reload and rewarms after plugin reload", async () => {
@@ -1257,10 +1430,7 @@ describe("gateway hot reload model state", () => {
       hoisted.reloadEvents.push("prepare-plugins");
       await params.commitRuntime();
       hoisted.reloadEvents.push("replace-plugins");
-      return {
-        restartChannels: new Set(),
-        activeChannels: new Set(),
-      };
+      return makePluginReloadResult();
     });
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createGatewayReloadHandlers({
@@ -1289,6 +1459,7 @@ describe("gateway hot reload model state", () => {
       { waitForReplacement: true },
     );
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
       catalogMode: "static",
     });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
@@ -1319,6 +1490,133 @@ describe("gateway hot reload model state", () => {
     expect(logReload.warn).toHaveBeenCalledWith(
       "bundle-mcp runtime disposal during config reload failed: Error: dispose failed",
     );
+    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+  });
+
+  it("skips provider-auth rewarm for unrelated agent heartbeat hot reloads", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      agents: { defaults: { heartbeat: { target: "telegram" } } },
+    } as OpenClawConfig;
+
+    await applyHotReload(
+      createHotTailPlan({
+        changedPaths: ["agents.defaults.heartbeat.target"],
+        hotReasons: ["agents.defaults.heartbeat.target"],
+        restartHeartbeat: true,
+      }),
+      nextConfig,
+    );
+
+    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps unrelated heartbeat reloads lazy and authenticates the next user lookup once", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      agents: { defaults: { heartbeat: { target: "telegram" } } },
+    } satisfies OpenClawConfig;
+    const readProfiles = vi.fn(() => ({
+      "openai:fixture": {
+        type: "api_key" as const,
+        provider: "openai",
+        key: "provider-auth-test-fixture",
+      },
+    }));
+    publishProviderAuthWarmSnapshot({
+      agents: [
+        {
+          agentId: "main",
+          configFingerprint: "previous-config-fingerprint",
+          providers: [["openai", false]],
+        },
+      ],
+    });
+    hoisted.clearCurrentProviderAuthState.mockImplementationOnce(clearWarmedProviderAuthState);
+
+    try {
+      await applyHotReload(
+        createHotTailPlan({
+          changedPaths: ["agents.defaults.heartbeat.target"],
+          hotReasons: ["agents.defaults.heartbeat.target"],
+          restartHeartbeat: true,
+        }),
+        nextConfig,
+      );
+
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledOnce();
+      expect(getCurrentProviderAuthStates()).toBeNull();
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      const { hasAuthForModelProvider } = await vi.importActual<
+        typeof import("../agents/model-provider-auth.js")
+      >("../agents/model-provider-auth.js");
+      await expect(
+        hasAuthForModelProvider({
+          provider: "openai",
+          cfg: nextConfig,
+          agentDir: "/virtual/provider-auth-agent",
+          workspaceDir: "/virtual/provider-auth-workspace",
+          env: {},
+          allowPluginSyntheticAuth: false,
+          discoverExternalCliAuth: false,
+          store: {
+            version: 1,
+            get profiles() {
+              return readProfiles();
+            },
+          },
+        }),
+      ).resolves.toBe(true);
+      expect(readProfiles).toHaveBeenCalledOnce();
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+    } finally {
+      clearWarmedProviderAuthState();
+    }
+  });
+
+  it("keeps provider-auth rewarm for model-provider hot reloads", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      models: { providers: { openai: { api: "openai" } } },
+    } as unknown as OpenClawConfig;
+
+    await applyHotReload(
+      createHotTailPlan({
+        changedPaths: ["models.providers.openai.api"],
+        hotReasons: ["models.providers.openai.api"],
+        restartHeartbeat: true,
+      }),
+      nextConfig,
+    );
+
+    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
+  });
+
+  it.each([
+    "auth.profiles.openai.provider",
+    "env.vars.OPENAI_API_KEY",
+    "agents.list",
+    "agents.defaults.imageModel.primary",
+    "agents.defaults.heartbeat.model",
+    "agents.entries.main.heartbeat.model",
+    "agents.defaults.compaction.model",
+    "agents.defaults.compaction.provider",
+    "agents.defaults.compaction.memoryFlush.model",
+    "agents.entries.main.default",
+    "agents.entries.main.runtime.id",
+  ])("runs provider-auth rewarm for previously missed auth owner %s", async (changedPath) => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {} satisfies OpenClawConfig;
+
+    await applyHotReload(
+      createHotTailPlan({
+        changedPaths: [changedPath],
+        hotReasons: [changedPath],
+      }),
+      nextConfig,
+    );
+
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 
@@ -1615,7 +1913,7 @@ describe("gateway hot reload superseded tail recovery", () => {
       });
 
       expect(handlers.setState).toHaveBeenCalledTimes(2);
-      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(0);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
     },
   );
@@ -1742,6 +2040,70 @@ describe("gateway hot reload commit policy", () => {
     ).rejects.toThrow("hooks.enabled requires hooks.token");
 
     expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
+  });
+
+  it("preserves the active hook transform cache when hook preparation rejects the config", async () => {
+    const configDir = autoCleanupTempDirs.make("openclaw-rejected-hook-reload-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const transformPath = path.join(transformsRoot, "reloadable.mjs");
+    fs.writeFileSync(transformPath, 'export default () => ({ kind: "wake", text: "accepted" });');
+    const activeMappings = [
+      {
+        id: "reloadable",
+        matchPath: "reloadable",
+        action: "agent" as const,
+        messageTemplate: "unused",
+        transform: { modulePath: transformPath },
+      },
+    ];
+    commitHooksConfigReload();
+    const applyActiveTransform = () =>
+      applyHookMappings(activeMappings, {
+        payload: {},
+        headers: {},
+        url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
+        path: "reloadable",
+      });
+
+    const first = await applyActiveTransform();
+    expect(first?.ok).toBe(true);
+    if (first?.ok && first.action?.kind === "wake") {
+      expect(first.action.text).toBe("accepted");
+    }
+
+    const { applyHotReload } = createReloadHandlersForTest();
+
+    fs.writeFileSync(transformPath, 'export default () => ({ kind: "wake", text: "candidate" });');
+    const nextTime = new Date(Date.now() + 5_000);
+    fs.utimesSync(transformPath, nextTime, nextTime);
+
+    await expect(
+      applyHotReload(
+        {
+          changedPaths: ["hooks.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["hooks.token"],
+          reloadHooks: true,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        { hooks: { enabled: true } },
+      ),
+    ).rejects.toThrow("hooks.enabled requires hooks.token");
+
+    const afterRejectedReload = await applyActiveTransform();
+    expect(afterRejectedReload?.ok).toBe(true);
+    if (afterRejectedReload?.ok && afterRejectedReload.action?.kind === "wake") {
+      expect(afterRejectedReload.action.text).toBe("accepted");
+    }
   });
 });
 
@@ -1956,11 +2318,9 @@ describe("gateway restart deferral preflight", () => {
     const channels = {
       stop: vi.fn(async () => {}),
       start: vi.fn(async () => {
-        hoisted.activeTaskBlockers.push({
-          taskId: "discord-recovery-blocker",
-          status: "running",
-          runtime: "subagent",
-        });
+        hoisted.activeTaskBlockers.push(
+          makeActiveTaskBlocker({ taskId: "discord-recovery-blocker" }),
+        );
         throw new Error("discord restart failed");
       }),
     };
@@ -2053,11 +2413,9 @@ describe("gateway restart deferral preflight", () => {
     const channels = {
       stop: vi.fn(async () => {}),
       start: vi.fn(async () => {
-        hoisted.activeTaskBlockers.push({
-          taskId: "discord-recovery-clear-blocker",
-          status: "running",
-          runtime: "subagent",
-        });
+        hoisted.activeTaskBlockers.push(
+          makeActiveTaskBlocker({ taskId: "discord-recovery-clear-blocker" }),
+        );
         throw new Error("discord restart failed");
       }),
     };
@@ -2338,10 +2696,7 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("defers channel hot reload until active embedded work drains", async () => {
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const restoreChannelReloadEnv = enableChannelReloadsForTest();
     const startChannel = vi.fn(async () => {});
     const stopChannel = vi.fn(async () => {});
     const setState = vi.fn();
@@ -2389,16 +2744,7 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(500).catch(() => {});
       vi.useRealTimers();
       await reloadPromise.catch(() => {});
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      if (previousSkipProviders === undefined) {
-        delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      } else {
-        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-      }
+      restoreChannelReloadEnv();
     }
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
@@ -2408,10 +2754,7 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("uses the default channel reload deferral timeout when config omits deferralTimeoutMs", async () => {
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const restoreChannelReloadEnv = enableChannelReloadsForTest();
     const startChannel = vi.fn(async () => {});
     const stopChannel = vi.fn(async () => {});
     const logReload = { info: vi.fn(), warn: vi.fn() };
@@ -2445,16 +2788,7 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(500).catch(() => {});
       vi.useRealTimers();
       await reloadPromise.catch(() => {});
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      if (previousSkipProviders === undefined) {
-        delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      } else {
-        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-      }
+      restoreChannelReloadEnv();
     }
 
     expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
@@ -2471,14 +2805,15 @@ describe("gateway restart deferral preflight", () => {
     hoisted.activeTaskCount.value = 1;
     hoisted.activeEmbeddedRunSessionIds.push("session-issue-82433");
     hoisted.activeEmbeddedRunSessionKeys.push("agent:main:issue-82433");
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-nightly",
-      runId: "run-nightly",
-      status: "running",
-      runtime: "cron",
-      label: "nightly sync",
-      title: "refresh all accounts",
-    });
+    hoisted.activeTaskBlockers.push(
+      makeActiveTaskBlocker({
+        taskId: "task-nightly",
+        runId: "run-nightly",
+        runtime: "cron",
+        label: "nightly sync",
+        title: "refresh all accounts",
+      }),
+    );
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
     vi.useFakeTimers();
@@ -2533,11 +2868,7 @@ describe("gateway restart deferral preflight", () => {
     restartTesting.resetSigusr1State();
     const { requestGatewayRestart } = createReloadHandlersForTest();
     hoisted.activeTaskCount.value = 1;
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-running-1",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "task-running-1" }));
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
     vi.useFakeTimers();
@@ -2570,23 +2901,11 @@ describe("gateway channel hot reload handlers", () => {
   }
 
   async function withChannelReloadsEnabled(run: () => Promise<void>) {
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const restoreChannelReloadEnv = enableChannelReloadsForTest();
     try {
       await run();
     } finally {
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      if (previousSkipProviders === undefined) {
-        delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      } else {
-        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-      }
+      restoreChannelReloadEnv();
     }
   }
 
@@ -2619,11 +2938,11 @@ describe("gateway channel hot reload handlers", () => {
         source: "test",
       },
     ]);
-    pinActivePluginChannelRegistry(registry);
+    setActivePluginRegistry(registry);
     try {
       await run();
     } finally {
-      releasePinnedPluginChannelRegistry(registry);
+      resetPluginRuntimeStateForTest();
     }
   }
 
@@ -2867,10 +3186,7 @@ describe("gateway channel hot reload handlers", () => {
     const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
       await params.beforeReplace(new Set());
       hoisted.activeEmbeddedRunCount.value = 1;
-      return {
-        restartChannels: new Set(),
-        activeChannels: new Set(["discord"]),
-      };
+      return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
     });
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createReloadHandlersForTest(logReload, channels, reloadPlugins);
@@ -2964,7 +3280,7 @@ describe("gateway channel hot reload handlers", () => {
       }),
     };
 
-    pinActivePluginChannelRegistry(registry);
+    setActivePluginRegistry(registry);
     try {
       const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
       const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
@@ -2975,7 +3291,7 @@ describe("gateway channel hot reload handlers", () => {
 
       expect(events).toEqual(["stop:whatsapp", "start:whatsapp"]);
     } finally {
-      releasePinnedPluginChannelRegistry(registry);
+      resetPluginRuntimeStateForTest();
     }
   });
 
@@ -3068,22 +3384,18 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it("restarts when post-ready sidecar teardown fails after runtime commit", async () => {
-    restartTesting.resetSigusr1State();
-    resetGatewayWorkAdmission();
-    const signalSpy = vi.fn();
-    process.once("SIGUSR1", signalSpy);
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const stopPostReadySidecars = vi.fn(async () => {
-      throw new Error("sidecar stop failed");
-    });
-    const { applyHotReload, setState } = createReloadHandlersForTest(
-      logReload,
-      undefined,
-      undefined,
-      stopPostReadySidecars,
-    );
+    await withGatewayRestartSignal(async (signalSpy) => {
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      const stopPostReadySidecars = vi.fn(async () => {
+        throw new Error("sidecar stop failed");
+      });
+      const { applyHotReload, setState } = createReloadHandlersForTest(
+        logReload,
+        undefined,
+        undefined,
+        stopPostReadySidecars,
+      );
 
-    try {
       await expect(
         applyHotReload(createGmailReloadPlan(), createGmailConfig("next@example.com")),
       ).resolves.toBeUndefined();
@@ -3096,11 +3408,7 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(signalSpy).toHaveBeenCalledOnce();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
       markGatewaySigusr1RestartHandled();
-    } finally {
-      process.removeListener("SIGUSR1", signalSpy);
-      restartTesting.resetSigusr1State();
-      resetGatewayWorkAdmission();
-    }
+    });
   });
 
   it("passes a cancellable signal to Gmail watcher restarts", async () => {
@@ -3134,14 +3442,7 @@ describe("gateway Gmail hot reload handlers", () => {
       gateway: { reload: {} },
       messages: { visibleReplies: "message_tool" },
     };
-    const snapshot = (config: OpenClawConfig): PreparedSecretsRuntimeSnapshot => ({
-      sourceConfig: config,
-      config,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    });
+    const snapshot = (config: OpenClawConfig) => makePreparedSecretsSnapshot(config);
     const failurePublicationEligibility: boolean[] = [];
     let preparationAttempt = 0;
     const activateRuntimeSecrets = vi.fn(
@@ -3171,17 +3472,15 @@ describe("gateway Gmail hot reload handlers", () => {
       initialConfig,
       readSnapshot: vi.fn(async () => createValidConfigSnapshot(nextConfig, "hash-next")) as never,
       subscribeToWrites: captureConfigWriteListener(writeListenerRef),
-      getState: () => ({
-        hooksConfig: {} as never,
-        hookClientIpConfig: {} as never,
-        heartbeatRunner: heartbeatRunner as never,
-        cronState: {
-          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
-          storePath: "/tmp/cron.json",
-          cronEnabled: false,
-        } as never,
-        channelHealthMonitor: null,
-      }),
+      getState: () =>
+        createDefaultGatewayReloadState({
+          heartbeatRunner: heartbeatRunner as never,
+          cronState: {
+            cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+            storePath: "/tmp/cron.json",
+            cronEnabled: false,
+          } as never,
+        }),
       activateRuntimeSecrets: activateRuntimeSecrets as never,
       commitTerminalConfig,
       acceptTerminalConfig,
@@ -3248,97 +3547,94 @@ describe("gateway Gmail hot reload handlers", () => {
       path: "tts.providers.elevenlabs.apiKey",
       message: "Text-to-speech remains unavailable.",
     };
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: initialSourceConfig,
-      config: runtimeConfig,
-      authStores: [
-        {
-          agentDir: authAgentDir,
-          store: {
-            version: 1,
-            profiles: {
-              [authProfileId]: {
-                type: "api_key",
-                provider: "openai",
-                key: String(42),
-                keyRef: { source: "env", provider: "default", id: "AUTH_FIRST" },
+    activateSecretsRuntimeSnapshot(
+      makePreparedSecretsSnapshot(initialSourceConfig, {
+        config: runtimeConfig,
+        authStores: [
+          {
+            agentDir: authAgentDir,
+            store: {
+              version: 1,
+              profiles: {
+                [authProfileId]: {
+                  type: "api_key",
+                  provider: "openai",
+                  key: String(42),
+                  keyRef: { source: "env", provider: "default", id: "AUTH_FIRST" },
+                },
               },
             },
           },
-        },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [activeWarning],
-      degradedOwners: [
-        {
-          ownerKind: "capability",
-          ownerId: "tts",
-          state: "unavailable",
-          paths: ["tts.providers.elevenlabs.apiKey"],
-          refKeys: ["env:default:TTS_FIRST"],
-          reason: "secret reference was not found",
-        },
-        {
-          ownerKind: "account",
-          ownerId: authOwnerId,
-          state: "unavailable",
-          paths: [`${authAgentDir}.auth-profiles.${authProfileId}.key`],
-          refKeys: ["env:default:AUTH_FIRST"],
-          reason: "secret provider failed",
-        },
-      ],
-      secretOwners: [
-        {
-          ownerKind: "capability",
-          ownerId: "tts",
-          refKeys: ["env:default:TTS_FIRST"],
-          contractDigest: ttsContractDigest,
-        },
-        {
-          ownerKind: "account",
-          ownerId: authOwnerId,
-          refKeys: ["env:default:AUTH_FIRST"],
-        },
-      ],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    });
+        ],
+        warnings: [activeWarning],
+        degradedOwners: [
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            refKeys: ["env:default:TTS_FIRST"],
+            reason: "secret reference was not found",
+          },
+          {
+            ownerKind: "account",
+            ownerId: authOwnerId,
+            state: "unavailable",
+            paths: [`${authAgentDir}.auth-profiles.${authProfileId}.key`],
+            refKeys: ["env:default:AUTH_FIRST"],
+            reason: "secret provider failed",
+          },
+        ],
+        secretOwners: [
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            refKeys: ["env:default:TTS_FIRST"],
+            contractDigest: ttsContractDigest,
+          },
+          {
+            ownerKind: "account",
+            ownerId: authOwnerId,
+            refKeys: ["env:default:AUTH_FIRST"],
+          },
+        ],
+      }),
+    );
     const writeListenerRef = createConfigWriteListenerRef();
-    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig, _params: unknown) => ({
-      sourceConfig: config,
-      config: runtimeConfig,
-      authStores: [
-        {
-          agentDir: authAgentDir,
-          store: {
-            version: 1,
-            profiles: {
-              [authProfileId]: {
-                type: "api_key" as const,
-                provider: "openai",
-                key: String(42),
-                keyRef: { source: "env" as const, provider: "default", id: "AUTH_SECOND" },
+    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig, _params: unknown) =>
+      makePreparedSecretsSnapshot(config, {
+        config: runtimeConfig,
+        authStores: [
+          {
+            agentDir: authAgentDir,
+            store: {
+              version: 1,
+              profiles: {
+                [authProfileId]: {
+                  type: "api_key" as const,
+                  provider: "openai",
+                  key: String(42),
+                  keyRef: { source: "env" as const, provider: "default", id: "AUTH_SECOND" },
+                },
               },
             },
           },
-        },
-      ],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      secretOwners: [
-        {
-          ownerKind: "capability" as const,
-          ownerId: "tts",
-          refKeys: ["env:default:TTS_SECOND"],
-          contractDigest: ttsContractDigest,
-        },
-        {
-          ownerKind: "account" as const,
-          ownerId: authOwnerId,
-          refKeys: ["env:default:AUTH_SECOND"],
-        },
-      ],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    }));
+        ],
+        secretOwners: [
+          {
+            ownerKind: "capability" as const,
+            ownerId: "tts",
+            refKeys: ["env:default:TTS_SECOND"],
+            contractDigest: ttsContractDigest,
+          },
+          {
+            ownerKind: "account" as const,
+            ownerId: authOwnerId,
+            refKeys: ["env:default:AUTH_SECOND"],
+          },
+        ],
+      }),
+    );
     const reloader = startManagedGatewayConfigReloader({
       initialConfig: runtimeConfig,
       readSnapshot: vi.fn(async () => ({
@@ -3373,16 +3669,16 @@ describe("gateway Gmail hot reload handlers", () => {
         ...initialSourceConfig,
         logging: { level: "info" as const },
       };
-      listener({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: unrelatedSourceConfig,
-        runtimeConfig,
-        persistedHash: "same-secrets-new-source",
-        revision: 1,
-        fingerprint: "same-runtime",
-        sourceFingerprint: "same-secrets-new-source",
-        writtenAtMs: Date.now(),
-      });
+      listener(
+        createConfigWriteNotification(
+          unrelatedSourceConfig,
+          "same-secrets-new-source",
+          1,
+          "same-runtime",
+          "same-secrets-new-source",
+          { runtimeConfig },
+        ),
+      );
       await vi.runAllTimersAsync();
 
       expect(activateRuntimeSecrets).not.toHaveBeenCalled();
@@ -3402,16 +3698,16 @@ describe("gateway Gmail hot reload handlers", () => {
         },
       ]);
 
-      listener({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: nextSourceConfig,
-        runtimeConfig,
-        persistedHash: "same-runtime-next-source",
-        revision: 2,
-        fingerprint: "same-runtime",
-        sourceFingerprint: "next-source",
-        writtenAtMs: Date.now(),
-      });
+      listener(
+        createConfigWriteNotification(
+          nextSourceConfig,
+          "same-runtime-next-source",
+          2,
+          "same-runtime",
+          "next-source",
+          { runtimeConfig },
+        ),
+      );
       await vi.runAllTimersAsync();
 
       expect(activateRuntimeSecrets.mock.calls[0]?.[1]).toMatchObject({
@@ -3449,32 +3745,29 @@ describe("gateway Gmail hot reload handlers", () => {
         }),
       ).toBe("stale");
 
-      activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => ({
-        sourceConfig: config,
-        config: { ...runtimeConfig, logging: { level: "debug" } },
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        secretOwners: [
-          {
-            ownerKind: "capability" as const,
-            ownerId: "tts",
-            refKeys: ["env:default:TTS_THIRD"],
-            contractDigest: ttsContractDigest,
-          },
-        ],
-        webTools: createEmptyRuntimeWebToolsMetadata(),
-      }));
-      listener({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: sourceConfig(thirdRef),
-        runtimeConfig,
-        persistedHash: "changed-second-resolution",
-        revision: 2,
-        fingerprint: "same-runtime",
-        sourceFingerprint: "changed-second-resolution",
-        writtenAtMs: Date.now(),
-      });
+      activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) =>
+        makePreparedSecretsSnapshot(config, {
+          config: { ...runtimeConfig, logging: { level: "debug" } },
+          secretOwners: [
+            {
+              ownerKind: "capability" as const,
+              ownerId: "tts",
+              refKeys: ["env:default:TTS_THIRD"],
+              contractDigest: ttsContractDigest,
+            },
+          ],
+        }),
+      );
+      listener(
+        createConfigWriteNotification(
+          sourceConfig(thirdRef),
+          "changed-second-resolution",
+          2,
+          "same-runtime",
+          "changed-second-resolution",
+          { runtimeConfig },
+        ),
+      );
       await vi.runAllTimersAsync();
 
       expect(getActiveSecretsRuntimeSnapshot()?.secretOwners).toEqual([
@@ -3502,12 +3795,8 @@ describe("gateway Gmail hot reload handlers", () => {
       activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
         markPreparationStarted?.();
         await preparationGate;
-        return {
-          sourceConfig: config,
+        return makePreparedSecretsSnapshot(config, {
           config: runtimeConfig,
-          authStores: [],
-          authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-          warnings: [],
           secretOwners: [
             {
               ownerKind: "capability" as const,
@@ -3516,38 +3805,34 @@ describe("gateway Gmail hot reload handlers", () => {
               contractDigest: ttsContractDigest,
             },
           ],
-          webTools: createEmptyRuntimeWebToolsMetadata(),
-        };
+        });
       });
-      listener({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: sourceConfig(thirdRef),
-        runtimeConfig,
-        persistedHash: "superseded-source-owner",
-        revision: 3,
-        fingerprint: "same-runtime",
-        sourceFingerprint: "superseded-source-owner",
-        writtenAtMs: Date.now(),
-      });
+      listener(
+        createConfigWriteNotification(
+          sourceConfig(thirdRef),
+          "superseded-source-owner",
+          3,
+          "same-runtime",
+          "superseded-source-owner",
+          { runtimeConfig },
+        ),
+      );
       await vi.advanceTimersByTimeAsync(0);
       await preparationStarted;
 
       const concurrentSourceConfig = sourceConfig(fourthRef);
-      activateSecretsRuntimeSnapshot({
-        sourceConfig: concurrentSourceConfig,
-        config: runtimeConfig,
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        secretOwners: [
-          {
-            ownerKind: "capability",
-            ownerId: "tts",
-            refKeys: ["env:default:TTS_FOURTH"],
-          },
-        ],
-        webTools: createEmptyRuntimeWebToolsMetadata(),
-      });
+      activateSecretsRuntimeSnapshot(
+        makePreparedSecretsSnapshot(concurrentSourceConfig, {
+          config: runtimeConfig,
+          secretOwners: [
+            {
+              ownerKind: "capability",
+              ownerId: "tts",
+              refKeys: ["env:default:TTS_FOURTH"],
+            },
+          ],
+        }),
+      );
       releasePreparation();
       await vi.runAllTimersAsync();
 
@@ -3590,14 +3875,9 @@ describe("gateway Gmail hot reload handlers", () => {
     const writeListenerRef = createConfigWriteListenerRef();
     let snapshotConfig = initialConfig;
     let snapshotHash = "initial";
-    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) => ({
-      sourceConfig: config,
-      config,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    }));
+    const activateRuntimeSecrets = vi.fn(async (config: OpenClawConfig) =>
+      makePreparedSecretsSnapshot(config),
+    );
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
       readSnapshot: vi.fn(async () =>
@@ -3623,16 +3903,9 @@ describe("gateway Gmail hot reload handlers", () => {
       snapshotConfig = config;
       snapshotHash = hash;
       revision += 1;
-      listener({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: config,
-        runtimeConfig: config,
-        persistedHash: hash,
-        revision,
-        fingerprint: `runtime-${hash}`,
-        sourceFingerprint: `source-${hash}`,
-        writtenAtMs: Date.now(),
-      });
+      listener(
+        createConfigWriteNotification(config, hash, revision, `runtime-${hash}`, `source-${hash}`),
+      );
     };
 
     try {
@@ -3747,24 +4020,10 @@ describe("gateway Gmail hot reload handlers", () => {
       if (config.gateway?.port === rejectedConfig.gateway?.port) {
         throw new Error("restart secrets preflight failed");
       }
-      return {
-        sourceConfig: config,
-        config,
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: createEmptyRuntimeWebToolsMetadata(),
-      };
+      return makePreparedSecretsSnapshot(config);
     });
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: initialConfig,
-      config: initialConfig,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    });
+    activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
       readSnapshot: vi.fn(async () =>
@@ -3847,11 +4106,7 @@ describe("gateway Gmail hot reload handlers", () => {
   it("cancels a deferred restart when a newer config fails required SecretRef preflight", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
-    hoisted.activeTaskBlockers.push({
-      taskId: "restart-sequence-blocker",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "restart-sequence-blocker" }));
 
     try {
       const deferredPromotion = harness.nextPromotion();
@@ -3938,14 +4193,7 @@ describe("gateway Gmail hot reload handlers", () => {
     harness.activateRuntimeSecrets.mockImplementationOnce(async (config: OpenClawConfig) => {
       markPreflightStarted?.();
       await preflightBlocked;
-      return {
-        sourceConfig: config,
-        config,
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: createEmptyRuntimeWebToolsMetadata(),
-      };
+      return makePreparedSecretsSnapshot(config);
     });
 
     harness.writeConfig(harness.deferredConfig, "shutdown-restart", 1);
@@ -3983,11 +4231,7 @@ describe("gateway Gmail hot reload handlers", () => {
         diffConfigPaths(harness.deferredConfig, invalidConfig),
       );
       expect(invalidPlan.restartGateway).toBe(false);
-      hoisted.activeTaskBlockers.push({
-        taskId: "hot-noop-secret-blocker",
-        status: "running",
-        runtime: "subagent",
-      });
+      hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "hot-noop-secret-blocker" }));
 
       try {
         const deferredPromotion = harness.nextPromotion();
@@ -4071,11 +4315,9 @@ describe("gateway Gmail hot reload handlers", () => {
   it("revalidates deferred restart SecretRefs again before emission and retry", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
-    hoisted.activeTaskBlockers.push({
-      taskId: "restart-emission-preflight-blocker",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(
+      makeActiveTaskBlocker({ taskId: "restart-emission-preflight-blocker" }),
+    );
 
     try {
       const promotion = harness.nextPromotion();
@@ -4125,11 +4367,7 @@ describe("gateway Gmail hot reload handlers", () => {
       }
       return await originalActivateRuntimeSecrets(...args);
     });
-    hoisted.activeTaskBlockers.push({
-      taskId: "restart-pre-emit-blocker",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "restart-pre-emit-blocker" }));
 
     try {
       const deferredPromotion = harness.nextPromotion();
@@ -4162,11 +4400,7 @@ describe("gateway Gmail hot reload handlers", () => {
   it("revalidates paused restart secrets before rearming an exact config revert", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
-    hoisted.activeTaskBlockers.push({
-      taskId: "restart-sequence-blocker",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "restart-sequence-blocker" }));
 
     try {
       const deferredPromotion = harness.nextPromotion();
@@ -4211,11 +4445,7 @@ describe("gateway Gmail hot reload handlers", () => {
   it("lets a newer valid restart config replace the deferred restart owner", async () => {
     vi.useFakeTimers();
     const harness = createManagedRestartSequenceHarness();
-    hoisted.activeTaskBlockers.push({
-      taskId: "restart-sequence-blocker",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "restart-sequence-blocker" }));
 
     try {
       const deferredPromotion = harness.nextPromotion();
@@ -4258,14 +4488,7 @@ describe("gateway Gmail hot reload handlers", () => {
       gateway: { reload: {} },
       hooks: { enabled: true, token: "test-token", path: "/next" },
     } as OpenClawConfig;
-    const initialSnapshot: PreparedSecretsRuntimeSnapshot = {
-      sourceConfig: initialConfig,
-      config: initialConfig,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    };
+    const initialSnapshot = makePreparedSecretsSnapshot(initialConfig);
     const refreshedSnapshot: PreparedSecretsRuntimeSnapshot = {
       ...initialSnapshot,
       authStores: [
@@ -4305,14 +4528,7 @@ describe("gateway Gmail hot reload handlers", () => {
             ),
           ).toBe(true);
         }
-        return {
-          sourceConfig: config,
-          config,
-          authStores: [],
-          authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-          warnings: [],
-          webTools: createEmptyRuntimeWebToolsMetadata(),
-        };
+        return makePreparedSecretsSnapshot(config);
       }),
       { activatePreparedSnapshotIfCurrent },
     );
@@ -4438,14 +4654,7 @@ describe("gateway Gmail hot reload handlers", () => {
       models: { providers: {} },
     };
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: initialConfig,
-      config: initialConfig,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      warnings: [],
-      webTools: createEmptyRuntimeWebToolsMetadata(),
-    });
+    activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
     hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("start failed"));
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
@@ -4497,14 +4706,7 @@ describe("gateway Gmail hot reload handlers", () => {
       activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => {
         secretsEntered?.();
         await releaseSecretsPromise;
-        return {
-          sourceConfig: config,
-          config,
-          authStores: [],
-          authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-          warnings: [],
-          webTools: {},
-        };
+        return makePreparedSecretsSnapshot(config, { webTools: {} as never });
       }) as never,
     });
     const registeredWriteListener = writeListenerRef.current;
@@ -4704,10 +4906,10 @@ describe("gateway plugin hot reload handlers", () => {
         events.push(`lookup:${params.env[envKey]}:${targetEnv[envKey]}`);
         await params.commitRuntime();
         events.push(`plugin:${targetEnv[envKey]}`);
-        return {
+        return makePluginReloadResult({
           restartChannels: new Set(["discord"]),
           activeChannels: new Set(["discord"]),
-        };
+        });
       },
     );
     const reloader = startManagedGatewayConfigReloader({
@@ -4753,7 +4955,7 @@ describe("gateway plugin hot reload handlers", () => {
         await params.beforeReplace(new Set(["discord"]));
         await params.commitRuntime();
         events.push("registry:replace");
-        return { restartChannels: new Set(), activeChannels: new Set() };
+        return makePluginReloadResult();
       },
     );
     const handlers = createReloadHandlersForTest(
@@ -4799,34 +5001,30 @@ describe("gateway plugin hot reload handlers", () => {
   });
 
   it("keeps a committed plugin generation when a later channel restart fails", async () => {
-    restartTesting.resetSigusr1State();
-    resetGatewayWorkAdmission();
-    const signalSpy = vi.fn();
-    process.once("SIGUSR1", signalSpy);
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const reloadPlugins = vi.fn(
-      async (params: {
-        commitRuntime: () => Promise<void>;
-      }): Promise<GatewayPluginReloadResult> => {
-        await params.commitRuntime();
-        return {
-          restartChannels: new Set(["discord"]),
-          activeChannels: new Set(["discord"]),
-        };
-      },
-    );
-    const handlers = createReloadHandlersForTest(
-      logReload,
-      {
-        start: vi.fn(async () => {
-          throw new Error("start failed");
-        }),
-        stop: vi.fn(async () => {}),
-      },
-      reloadPlugins,
-    );
+    await withGatewayRestartSignal(async (signalSpy) => {
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      const reloadPlugins = vi.fn(
+        async (params: {
+          commitRuntime: () => Promise<void>;
+        }): Promise<GatewayPluginReloadResult> => {
+          await params.commitRuntime();
+          return makePluginReloadResult({
+            restartChannels: new Set(["discord"]),
+            activeChannels: new Set(["discord"]),
+          });
+        },
+      );
+      const handlers = createReloadHandlersForTest(
+        logReload,
+        {
+          start: vi.fn(async () => {
+            throw new Error("start failed");
+          }),
+          stop: vi.fn(async () => {}),
+        },
+        reloadPlugins,
+      );
 
-    try {
       await expect(
         handlers.applyHotReload(
           createPluginReloadPlan(),
@@ -4842,30 +5040,22 @@ describe("gateway plugin hot reload handlers", () => {
       expect(signalSpy).toHaveBeenCalledOnce();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
       markGatewaySigusr1RestartHandled();
-    } finally {
-      process.removeListener("SIGUSR1", signalSpy);
-      restartTesting.resetSigusr1State();
-      resetGatewayWorkAdmission();
-    }
+    });
   });
 
   it("restarts instead of rolling back when plugin swap throws after runtime commit", async () => {
-    restartTesting.resetSigusr1State();
-    resetGatewayWorkAdmission();
-    const signalSpy = vi.fn();
-    process.once("SIGUSR1", signalSpy);
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
-    const handlers = createReloadHandlersForTest(
-      logReload,
-      undefined,
-      vi.fn(async (params: { commitRuntime: () => Promise<void> }) => {
-        await params.commitRuntime();
-        throw new Error("swap failed");
-      }),
-    );
+    await withGatewayRestartSignal(async (signalSpy) => {
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
+      const handlers = createReloadHandlersForTest(
+        logReload,
+        undefined,
+        vi.fn(async (params: { commitRuntime: () => Promise<void> }) => {
+          await params.commitRuntime();
+          throw new Error("swap failed");
+        }),
+      );
 
-    try {
       await expect(
         handlers.applyHotReload(
           createPluginReloadPlan(),
@@ -4882,11 +5072,7 @@ describe("gateway plugin hot reload handlers", () => {
       expect(signalSpy).toHaveBeenCalledOnce();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
       markGatewaySigusr1RestartHandled();
-    } finally {
-      process.removeListener("SIGUSR1", signalSpy);
-      restartTesting.resetSigusr1State();
-      resetGatewayWorkAdmission();
-    }
+    });
   });
 
   it.each([
@@ -4980,7 +5166,7 @@ describe("gateway plugin hot reload handlers", () => {
       }): Promise<GatewayPluginReloadResult> => {
         await params.beforeReplace(new Set(["discord"]));
         await params.commitRuntime();
-        return { restartChannels: new Set(), activeChannels: new Set(["discord"]) };
+        return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
       },
     );
     const handlers = createReloadHandlersForTest(
@@ -5017,7 +5203,7 @@ describe("gateway plugin hot reload handlers", () => {
       }): Promise<GatewayPluginReloadResult> => {
         await params.beforeReplace(new Set(["discord"]));
         expect(params.isAborted?.()).toBe(false);
-        return { restartChannels: new Set(), activeChannels: new Set(), cancelled: true };
+        return makePluginReloadResult({ cancelled: true });
       },
     );
     const handlers = createReloadHandlersForTest(
@@ -5042,15 +5228,8 @@ describe("gateway plugin hot reload handlers", () => {
   });
 
   it("rolls back stopped channels when plugin pre-replace stop fails", async () => {
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-    const heartbeatRunner = {
-      stop: vi.fn(),
-      updateConfig: vi.fn(),
-    };
+    const restoreChannelReloadEnv = enableChannelReloadsForTest();
+    const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
@@ -5072,20 +5251,11 @@ describe("gateway plugin hot reload handlers", () => {
         events.push("reload:start");
         await params.beforeReplace(new Set(["telegram", "discord"]));
         events.push("registry:replace");
-        return {
-          restartChannels: new Set(),
-          activeChannels: new Set(),
-        };
+        return makePluginReloadResult();
       },
     );
     const { applyHotReload } = createGatewayReloadHandlers({
-      getState: () => ({
-        hooksConfig: {} as never,
-        hookClientIpConfig: {} as never,
-        heartbeatRunner: heartbeatRunner as never,
-        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
-        channelHealthMonitor: null,
-      }),
+      getState: () => gatewayState,
       setState,
       startChannel,
       stopChannel,
@@ -5107,16 +5277,7 @@ describe("gateway plugin hot reload handlers", () => {
       ).rejects.toThrow("failed to stop channels before plugin reload: discord");
     } finally {
       root?.release();
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      if (previousSkipProviders === undefined) {
-        delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      } else {
-        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-      }
+      restoreChannelReloadEnv();
     }
 
     expect(events).toEqual([
@@ -5136,15 +5297,8 @@ describe("gateway plugin hot reload handlers", () => {
   });
 
   it("stops removed channel plugins from broad activation before swapping plugin runtime", async () => {
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-    const heartbeatRunner = {
-      stop: vi.fn(),
-      updateConfig: vi.fn(),
-    };
+    const restoreChannelReloadEnv = enableChannelReloadsForTest();
+    const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
     const startChannel = vi.fn(async () => {});
     const events: string[] = [];
@@ -5158,20 +5312,11 @@ describe("gateway plugin hot reload handlers", () => {
         events.push("reload:start");
         await params.beforeReplace(new Set(["discord"]));
         events.push("registry:replace");
-        return {
-          restartChannels: new Set(),
-          activeChannels: new Set(),
-        };
+        return makePluginReloadResult();
       },
     );
     const { applyHotReload } = createGatewayReloadHandlers({
-      getState: () => ({
-        hooksConfig: {} as never,
-        hookClientIpConfig: {} as never,
-        heartbeatRunner: heartbeatRunner as never,
-        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
-        channelHealthMonitor: null,
-      }),
+      getState: () => gatewayState,
       setState,
       startChannel,
       stopChannel,
@@ -5185,16 +5330,7 @@ describe("gateway plugin hot reload handlers", () => {
         },
       });
     } finally {
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      if (previousSkipProviders === undefined) {
-        delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      } else {
-        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-      }
+      restoreChannelReloadEnv();
     }
 
     const [reloadParams] = reloadPlugins.mock.calls.at(-1) ?? [];
@@ -5214,15 +5350,8 @@ describe("gateway plugin hot reload handlers", () => {
   });
 
   it("stops manually started channels before plugin replacement while autostart is suppressed", async () => {
-    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-    const heartbeatRunner = {
-      stop: vi.fn(),
-      updateConfig: vi.fn(),
-    };
+    const restoreChannelReloadEnv = enableChannelReloadsForTest();
+    const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const events: string[] = [];
@@ -5239,20 +5368,14 @@ describe("gateway plugin hot reload handlers", () => {
         events.push("reload:start");
         await params.beforeReplace(new Set(["discord"]));
         events.push("registry:replace");
-        return {
+        return makePluginReloadResult({
           restartChannels: new Set(["discord"]),
           activeChannels: new Set(["discord"]),
-        };
+        });
       },
     );
     const { applyHotReload } = createGatewayReloadHandlers({
-      getState: () => ({
-        hooksConfig: {} as never,
-        hookClientIpConfig: {} as never,
-        heartbeatRunner: heartbeatRunner as never,
-        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
-        channelHealthMonitor: null,
-      }),
+      getState: () => gatewayState,
       setState,
       startChannel,
       stopChannel,
@@ -5271,16 +5394,7 @@ describe("gateway plugin hot reload handlers", () => {
         },
       });
     } finally {
-      if (previousSkipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
-      } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-      }
-      if (previousSkipProviders === undefined) {
-        delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      } else {
-        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
-      }
+      restoreChannelReloadEnv();
     }
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
@@ -5331,11 +5445,7 @@ describe("deferred channel reload abort generation", () => {
     };
     const { applyHotReload } = createTestHandlers(logChannels, channels);
 
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-reload",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker());
     vi.useFakeTimers();
 
     try {
@@ -5367,11 +5477,9 @@ describe("deferred channel reload abort generation", () => {
     };
     const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
       await params.beforeReplace(new Set(["whatsapp"]));
-      return {
-        restartChannels: new Set(),
-        activeChannels: new Set(),
+      return makePluginReloadResult({
         cancelled: params.isAborted?.() === true,
-      };
+      });
     };
     const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
 
@@ -5394,11 +5502,9 @@ describe("deferred channel reload abort generation", () => {
     };
     const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
       await params.beforeReplace(new Set(["whatsapp"]));
-      return {
-        restartChannels: new Set(),
-        activeChannels: new Set(),
+      return makePluginReloadResult({
         cancelled: params.isAborted?.() === true,
-      };
+      });
     };
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const { applyHotReload } = createTestHandlers(logChannels, channels, {
@@ -5425,11 +5531,9 @@ describe("deferred channel reload abort generation", () => {
     };
     const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
       await params.beforeReplace(new Set(["whatsapp"]));
-      return {
-        restartChannels: new Set(),
-        activeChannels: new Set(),
+      return makePluginReloadResult({
         cancelled: true,
-      };
+      });
     };
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const { applyHotReload } = createTestHandlers(logChannels, channels, {
@@ -5453,11 +5557,9 @@ describe("deferred channel reload abort generation", () => {
       stop: vi.fn(async () => {}),
     };
     const { applyHotReload } = createTestHandlers(logChannels, channels);
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-superseded-reload",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(
+      makeActiveTaskBlocker({ taskId: "task-blocking-superseded-reload" }),
+    );
     let transactionCurrent = true;
     vi.useFakeTimers();
 
@@ -5514,7 +5616,7 @@ describe("deferred channel reload abort generation", () => {
       warn: vi.fn(),
       error: vi.fn(),
     };
-    pinActivePluginChannelRegistry(registry);
+    setActivePluginRegistry(registry);
     const reloader = startManagedGatewayConfigReloader({
       initialConfig,
       readSnapshot: vi.fn() as never,
@@ -5527,11 +5629,7 @@ describe("deferred channel reload abort generation", () => {
     if (!registeredWriteListener) {
       throw new Error("Expected config write listener to be registered");
     }
-    hoisted.activeTaskBlockers.push({
-      taskId: "managed-reload-blocker",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "managed-reload-blocker" }));
     vi.useFakeTimers();
     let reloaderStopped = false;
 
@@ -5561,7 +5659,7 @@ describe("deferred channel reload abort generation", () => {
       if (!reloaderStopped) {
         await reloader.stop();
       }
-      releasePinnedPluginChannelRegistry(registry);
+      resetPluginRuntimeStateForTest();
     }
   });
 
@@ -5579,11 +5677,7 @@ describe("deferred channel reload abort generation", () => {
     // Create gen 2 — should not carry over the abort from gen 1
     const h2 = createTestHandlers(logChannels, channels);
 
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-reload-g2",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "task-blocking-reload-g2" }));
     vi.useFakeTimers();
 
     try {
@@ -5629,9 +5723,9 @@ describe("deferred channel reload abort generation", () => {
         await params.beforeReplace(new Set(["whatsapp"]));
         if (params.isAborted?.()) {
           reloadWasCancelled = true;
-          return { restartChannels: new Set(), activeChannels: new Set(), cancelled: true };
+          return makePluginReloadResult({ cancelled: true });
         }
-        return { restartChannels: new Set(), activeChannels: new Set() };
+        return makePluginReloadResult();
       },
     );
     const { applyHotReload } = createGatewayReloadHandlers({
@@ -5643,11 +5737,7 @@ describe("deferred channel reload abort generation", () => {
 
     const pluginReloadPlan: GatewayReloadPlan = createPluginReloadPlan();
 
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-reload",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker());
     vi.useFakeTimers();
 
     try {

@@ -13,6 +13,9 @@ type DeleteConfirmDismissOptions = { restoreFocus?: boolean };
 type DeleteConfirmDismisser = (options?: DeleteConfirmDismissOptions) => void;
 
 const deleteConfirmDismissers = new WeakMap<Element, DeleteConfirmDismisser>();
+const deleteConfirmOwners = new WeakMap<Element, Element>();
+const deleteConfirmPopovers = new Set<HTMLElement>();
+const deleteConfirmPopoversByOwner = new WeakMap<Element, HTMLElement>();
 
 function shouldSkipActionConfirm(preferenceName: string): boolean {
   try {
@@ -32,9 +35,12 @@ function dismissDeleteConfirm(element: Element, options?: DeleteConfirmDismissOp
 }
 
 export function dismissConfirmedActionPopovers(owner: ParentNode): void {
-  owner.querySelectorAll(".chat-delete-confirm").forEach((popover) => {
-    dismissDeleteConfirm(popover);
-  });
+  for (const popover of deleteConfirmPopovers) {
+    const popoverOwner = deleteConfirmOwners.get(popover);
+    if (popoverOwner && owner instanceof Node && owner.contains(popoverOwner)) {
+      dismissDeleteConfirm(popover);
+    }
+  }
 }
 
 function resolveViewportBounds() {
@@ -179,7 +185,8 @@ function openConfirmedActionPopover(
   if (!wrap) {
     return;
   }
-  const existing = wrap.querySelector(".chat-delete-confirm");
+  const owner = wrap;
+  const existing = deleteConfirmPopoversByOwner.get(owner);
   if (existing) {
     dismissDeleteConfirm(existing, { restoreFocus: true });
     return;
@@ -208,22 +215,33 @@ function openConfirmedActionPopover(
   if (confirmButton) {
     confirmButton.textContent = params.confirmLabel;
   }
-  wrap.appendChild(popover);
+  // Virtual transcript rows use transforms for positioning, which makes fixed
+  // descendants relative to the row instead of the viewport. Portal the dialog
+  // so the viewport-clamped coordinates stay correct in web and native hosts.
+  owner.ownerDocument.body.appendChild(popover);
+  deleteConfirmOwners.set(popover, owner);
+  deleteConfirmPopovers.add(popover);
+  deleteConfirmPopoversByOwner.set(owner, popover);
   placeDeleteConfirmPopover(btn, popover, params.side);
 
   const cancel = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")!;
   const yes = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!;
   const check = popover.querySelector<HTMLInputElement>(".chat-delete-confirm__check")!;
   let dismissed = false;
+  let ownerObserver: MutationObserver | null = null;
   function dismissPopover(options?: DeleteConfirmDismissOptions) {
     if (dismissed) {
       return;
     }
     dismissed = true;
+    ownerObserver?.disconnect();
     document.removeEventListener("click", closeOnOutside, true);
     document.removeEventListener("contextmenu", closeOnContextMenu, true);
     window.removeEventListener("keydown", closeOnEscape, true);
     deleteConfirmDismissers.delete(popover);
+    deleteConfirmOwners.delete(popover);
+    deleteConfirmPopovers.delete(popover);
+    deleteConfirmPopoversByOwner.delete(owner);
     popover.remove();
     if (options?.restoreFocus && btn.isConnected) {
       btn.focus({ preventScroll: true });
@@ -277,6 +295,12 @@ function openConfirmedActionPopover(
   popover.addEventListener("keydown", containKeyboardFocus);
   document.addEventListener("contextmenu", closeOnContextMenu, true);
   window.addEventListener("keydown", closeOnEscape, true);
+  ownerObserver = new MutationObserver(() => {
+    if (!wrap.isConnected || !btn.isConnected) {
+      dismissPopover();
+    }
+  });
+  ownerObserver.observe(wrap.ownerDocument.body, { childList: true, subtree: true });
   cancel.focus({ preventScroll: true });
   requestAnimationFrame(() => {
     if (!dismissed && popover.isConnected) {

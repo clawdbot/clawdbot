@@ -179,6 +179,8 @@ describe("resolve-openclaw-package-candidate", () => {
       packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
       packageUrl: "",
+      pluginRegistryOutputDir: "",
+      requiredPluginPackagesJson: "[]",
       source: "npm",
       trustedSourceId: "",
       trustedSourcePolicy: ".github/package-trusted-sources.json",
@@ -388,6 +390,20 @@ describe("resolve-openclaw-package-candidate", () => {
       ),
     ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
     await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("package");
+  });
+
+  it("reads npm 12 name-keyed package candidate filenames", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, "openclaw-2026.6.17.tgz"), "package");
+
+    await expect(
+      moveNewestPackedTarballForTest(
+        dir,
+        JSON.stringify({ openclaw: { filename: "openclaw-2026.6.17.tgz" } }),
+        "openclaw-current.tgz",
+      ),
+    ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
   });
 
   it("rejects path-like npm pack filenames instead of renaming outside the output directory", async () => {

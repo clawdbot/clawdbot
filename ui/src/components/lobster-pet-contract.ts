@@ -1,3 +1,5 @@
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
@@ -6,19 +8,47 @@ export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff
 
 export type LobsterPetPaletteId =
   | "crimson"
-  | "coral"
-  | "teal"
-  | "violet"
-  | "ink"
   | "blue"
   | "gold"
-  | "calico"
-  | "abyss"
   | "lumen"
+  | "magma"
+  | "oilslick"
+  | "aurora"
+  | "nebula"
+  | "banana"
+  | "mood"
+  | "bee"
+  | "rubberduck"
+  | "watermelon"
+  | "clawtron"
+  | "selene"
+  | "geode"
   | "ghost"
+  | "glass"
   | "split"
+  | "sourdough"
+  | "zombie"
+  | "plush"
+  | "balloon"
   | "cottoncandy"
-  | "retro";
+  | "cryptid"
+  | "flatpack"
+  | "tinfoil"
+  | "actual"
+  | "disco"
+  | "chimera"
+  | "pixel"
+  | "blueprint"
+  | "phosphor"
+  | "ascii"
+  | "portal"
+  | "notexture"
+  | "loading"
+  | "eclipse"
+  | "heisenbug"
+  | "invisible"
+  | "retro"
+  | "goldenretro";
 
 // Pass-through ledge visitors. Strangers are other lobsters; everyone else
 // is, at best, lobster-adjacent. None of them count for the Lobsterdex.
@@ -74,6 +104,14 @@ export type LobsterPetLook = {
   // Seeded eye-glint tint for common palettes; rare palettes keep their
   // signature glints via CSS, and null keeps the default teal.
   glint: string | null;
+  // Chimera deliberately mixes four donor palettes. Other variants keep this
+  // null so palette swaps cannot accidentally leak mismatched part colors.
+  chimeraParts: {
+    body: string;
+    clawLeft: string;
+    clawRight: string;
+    antennae: string;
+  } | null;
 };
 
 // One salt per page load: revisiting the UI re-rolls every session's lobster,
@@ -89,7 +127,7 @@ export function lobsterPetSeed(sessionKey: string): number {
 export function resolveLobsterRunOutcome(
   sessions:
     | ReadonlyArray<{
-        status?: "running" | "done" | "failed" | "killed" | "timeout";
+        status?: SessionRunStatus;
         endedAt?: number | null;
         lastActivityAt?: number | null;
         updatedAt?: number | null;

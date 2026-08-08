@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
-import OpenClawChatUI
 import Testing
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 @Suite(.serialized)
 @MainActor
@@ -39,6 +39,18 @@ struct WebChatSwiftUISmokeTests {
         }
 
         func setActiveSessionKey(_: String) async throws {}
+    }
+
+    @Test func `response and thinking headings keep their semantic typography`() {
+        #expect(ChatMarkdownRenderer.Typography.response.headingStyle == .hierarchy)
+        #expect(ChatMarkdownRenderer.Typography.thinking.headingStyle == .prose)
+    }
+
+    @Test func `assistant segments select one complete markdown typography profile`() {
+        let segments = AssistantTextParser.segments(
+            from: "<think># Internal plan</think><final># Final answer</final>")
+
+        #expect(segments.map(\.kind.markdownTypography) == [.thinking, .response])
     }
 
     @Test func `session observer remains visible until the last shared gateway window closes`() {
@@ -131,7 +143,6 @@ struct WebChatSwiftUISmokeTests {
         }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
-            presentation: .window,
             transport: TestTransport(),
             windowTitle: "Studio — OpenClaw")
         let window = try #require(controller._testWindow)
@@ -143,6 +154,7 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.toolbarStyle == .unified)
         #expect(window.titlebarSeparatorStyle == .none)
         #expect(window.isMovableByWindowBackground)
+        #expect(window.isRestorable == false)
         #expect(window.title == "Studio — OpenClaw")
         window.title = "main"
         #expect(window.title == "Studio — OpenClaw")
@@ -159,20 +171,9 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func `panel controller present and close`() {
-        let anchor = { NSRect(x: 200, y: 400, width: 40, height: 40) }
-        let controller = WebChatSwiftUIWindowController(
-            sessionKey: "main",
-            presentation: .panel(anchorProvider: anchor),
-            transport: TestTransport())
-        controller.presentAnchored(anchorProvider: anchor)
-        controller.close()
-    }
-
     @Test func `closing a full window releases it and notifies its owner once`() {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
-            presentation: .window,
             transport: TestTransport())
         var closeCount = 0
         var visibilityChanges: [Bool] = []
@@ -209,7 +210,6 @@ struct WebChatSwiftUISmokeTests {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             initialDraft: "Wake up, my friend!",
-            presentation: .window,
             transport: TestTransport())
 
         #expect(controller._testDraft == "Wake up, my friend!")
@@ -226,13 +226,11 @@ struct WebChatSwiftUISmokeTests {
         let explicit = WebChatSwiftUIWindowController(
             sessionKey: "global",
             agentID: " Work ",
-            presentation: .window,
             cachedRoutingIdentity: cachedIdentity,
             store: nil)
         let fallback = WebChatSwiftUIWindowController(
             sessionKey: "global",
             agentID: nil,
-            presentation: .window,
             cachedRoutingIdentity: cachedIdentity,
             store: nil)
 
