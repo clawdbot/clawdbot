@@ -101,8 +101,9 @@ function classifyCompactionFallbackResult(result: EmbeddedAgentCompactResult) {
     reason: failoverReasonFromCompactionFailure(failure),
     status: failure.status,
     preserveResultOnExhaustion: true,
-    // Terminal identity wins over a later transient fallback failure.
-    preserveResultPriority: failure.disposition === "terminal" ? 1 : 0,
+    // Owner-fallback and terminal identities win over a later transient model
+    // failure if all configured compaction candidates are exhausted.
+    preserveResultPriority: failure.disposition === "retryable" ? 0 : 1,
   };
 }
 

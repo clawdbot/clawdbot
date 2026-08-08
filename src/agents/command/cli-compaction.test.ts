@@ -939,6 +939,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       compacted: false,
       reason: "thread not found: thread-1",
       failure: {
+        disposition: "fallback",
         reason: "stale_thread_binding",
       },
     }));
@@ -982,6 +983,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       compacted: false,
       reason: "thread not found: thread-1",
       failure: {
+        disposition: "fallback",
         reason: "stale_thread_binding",
       },
     }));

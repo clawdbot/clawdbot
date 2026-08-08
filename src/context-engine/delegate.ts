@@ -197,7 +197,9 @@ export async function delegateCompactionToRuntime(
       })
     : undefined;
   const structuredFailure =
-    result.failure?.disposition === "retryable" || result.failure?.disposition === "terminal"
+    result.failure?.disposition === "retryable" ||
+    result.failure?.disposition === "fallback" ||
+    result.failure?.disposition === "terminal"
       ? result.failure
       : undefined;
 

@@ -3692,7 +3692,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: false,
       compacted: false,
       reason: "no codex app-server thread binding",
-      failure: { reason: "missing_thread_binding" },
+      failure: { disposition: "fallback", reason: "missing_thread_binding" },
     });
 
     const result = await compactEmbeddedAgentSession(
@@ -3724,7 +3724,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ok: false,
       compacted: false,
       reason: "no codex app-server thread binding",
-      failure: { reason: "missing_thread_binding" },
+      failure: { disposition: "fallback", reason: "missing_thread_binding" },
     });
   });
 
@@ -3739,7 +3739,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         ok: false,
         compacted: false,
         reason,
-        failure: { reason: failureReason },
+        failure: { disposition: "fallback", reason: failureReason },
       });
 
       const result = await compactEmbeddedAgentSession(
@@ -3755,7 +3755,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(result).toMatchObject({
         ok: false,
         compacted: false,
-        failure: { reason: failureReason },
+        failure: { disposition: "fallback", reason: failureReason },
       });
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
       expect(contextEngineCompactMock).not.toHaveBeenCalled();

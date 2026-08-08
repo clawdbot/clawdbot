@@ -903,8 +903,8 @@ function failedCodexThreadBindingCompactionResult(
     compacted: false,
     reason: recovery.reason,
     failure: {
+      disposition: "fallback",
       reason: recovery.recovery,
-      rawError: recovery.reason,
     },
   };
 }

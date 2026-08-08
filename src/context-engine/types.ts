@@ -117,6 +117,9 @@ export type RetryableCompactionFailureReason =
   | "server_error"
   | "timeout";
 
+/** Failures that require a synchronous alternative compaction owner. */
+export type FallbackCompactionFailureReason = "missing_thread_binding" | "stale_thread_binding";
+
 /** Failures that must not degrade into an un-compacted reply attempt. */
 export type TerminalCompactionFailureReason =
   | "aborted"
@@ -130,13 +133,11 @@ export type TerminalCompactionFailureReason =
   | "deferred_compaction_not_scheduled"
   | "format"
   | "invalid_request"
-  | "missing_thread_binding"
   | "model_not_found"
   | "model_selection_locked"
   | "no_error_details"
   | "runtime_unavailable"
   | "session_expired"
-  | "stale_thread_binding"
   | "summary_rejected"
   | "tls_certificate"
   | "transcript_persistence_failed"
@@ -149,6 +150,11 @@ export type CompactionFailure =
   | {
       disposition: "retryable";
       reason: RetryableCompactionFailureReason;
+      status?: number;
+    }
+  | {
+      disposition: "fallback";
+      reason: FallbackCompactionFailureReason;
       status?: number;
     }
   | {

@@ -1,6 +1,7 @@
 /** Closed compaction-failure construction and policy helpers. */
 import type {
   CompactionFailure,
+  FallbackCompactionFailureReason,
   RetryableCompactionFailureReason,
   TerminalCompactionFailureReason,
 } from "../../context-engine/types.js";
@@ -12,6 +13,11 @@ const RETRYABLE_REASONS = new Set<RetryableCompactionFailureReason>([
   "rate_limit",
   "server_error",
   "timeout",
+]);
+
+const FALLBACK_REASONS = new Set<FallbackCompactionFailureReason>([
+  "missing_thread_binding",
+  "stale_thread_binding",
 ]);
 
 const TERMINAL_FAILOVER_REASONS = new Set<TerminalCompactionFailureReason>([
@@ -36,10 +42,8 @@ const TERMINAL_COMPACTION_REASONS = new Set<TerminalCompactionFailureReason>([
   "background_compaction_pending",
   "deferred_compaction_not_scheduled",
   "invalid_request",
-  "missing_thread_binding",
   "model_selection_locked",
   "runtime_unavailable",
-  "stale_thread_binding",
   "summary_rejected",
   "transcript_persistence_failed",
   "unsupported_harness_compaction",
@@ -57,27 +61,49 @@ export function isStructuredCompactionFailure(value: unknown): value is Compacti
   if (!value || typeof value !== "object") {
     return false;
   }
-  const failure = value as {
-    disposition?: unknown;
-    reason?: unknown;
-    status?: unknown;
-  };
-  if (Object.keys(failure).some((key) => !COMPACTION_FAILURE_KEYS.has(key))) {
+  let ownKeys: (string | symbol)[];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    ownKeys = Reflect.ownKeys(value);
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
     return false;
   }
-  if ("status" in failure && normalizeStatus(failure.status) === undefined) {
+  if (
+    ownKeys.some(
+      (key) =>
+        typeof key !== "string" ||
+        !COMPACTION_FAILURE_KEYS.has(key) ||
+        descriptors[key]?.enumerable !== true ||
+        !("value" in descriptors[key]),
+    )
+  ) {
     return false;
   }
-  if (failure.disposition === "retryable") {
+  const disposition = descriptors.disposition?.value;
+  const reason = descriptors.reason?.value;
+  const status = descriptors.status?.value;
+  if (!descriptors.disposition || !descriptors.reason) {
+    return false;
+  }
+  if (descriptors.status && normalizeStatus(status) === undefined) {
+    return false;
+  }
+  if (disposition === "retryable") {
     return (
-      typeof failure.reason === "string" &&
-      RETRYABLE_REASONS.has(failure.reason as RetryableCompactionFailureReason)
+      typeof reason === "string" &&
+      RETRYABLE_REASONS.has(reason as RetryableCompactionFailureReason)
+    );
+  }
+  if (disposition === "fallback") {
+    return (
+      typeof reason === "string" && FALLBACK_REASONS.has(reason as FallbackCompactionFailureReason)
     );
   }
   return (
-    failure.disposition === "terminal" &&
-    typeof failure.reason === "string" &&
-    TERMINAL_COMPACTION_REASONS.has(failure.reason as TerminalCompactionFailureReason)
+    disposition === "terminal" &&
+    typeof reason === "string" &&
+    TERMINAL_COMPACTION_REASONS.has(reason as TerminalCompactionFailureReason)
   );
 }
 
@@ -88,6 +114,18 @@ function retryableCompactionFailure(
   const normalizedStatus = normalizeStatus(status);
   return {
     disposition: "retryable",
+    reason,
+    ...(normalizedStatus === undefined ? {} : { status: normalizedStatus }),
+  };
+}
+
+export function fallbackCompactionFailure(
+  reason: FallbackCompactionFailureReason,
+  status?: unknown,
+): CompactionFailure {
+  const normalizedStatus = normalizeStatus(status);
+  return {
+    disposition: "fallback",
     reason,
     ...(normalizedStatus === undefined ? {} : { status: normalizedStatus }),
   };

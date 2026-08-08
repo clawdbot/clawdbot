@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compactionFailureFromFailoverReason,
+  fallbackCompactionFailure,
   failoverReasonFromCompactionFailure,
   isStructuredCompactionFailure,
   terminalCompactionFailure,
@@ -47,6 +48,17 @@ describe("compaction failure policy", () => {
     expect(isStructuredCompactionFailure({ reason: "rate_limit" })).toBe(false);
   });
 
+  it.each(["missing_thread_binding", "stale_thread_binding"] as const)(
+    "classifies %s as synchronous owner fallback",
+    (reason) => {
+      const failure = fallbackCompactionFailure(reason);
+
+      expect(failure).toEqual({ disposition: "fallback", reason });
+      expect(isStructuredCompactionFailure(failure)).toBe(true);
+      expect(failoverReasonFromCompactionFailure(failure)).toBe("unknown");
+    },
+  );
+
   it.each([
     { disposition: "retryable", reason: "rate_limit", status: "429" },
     { disposition: "retryable", reason: "rate_limit", status: 99 },
@@ -54,6 +66,26 @@ describe("compaction failure policy", () => {
     { disposition: "retryable", reason: "rate_limit", code: "rate_limit_exceeded" },
   ])("fails closed for malformed or legacy retryable envelopes: %j", (failure) => {
     expect(isStructuredCompactionFailure(failure)).toBe(false);
+  });
+
+  it("rejects inherited, accessor, symbol, and non-enumerable failure fields", () => {
+    const inherited = Object.create({ disposition: "retryable", reason: "rate_limit" });
+    const accessor = { reason: "rate_limit" };
+    Object.defineProperty(accessor, "disposition", {
+      enumerable: true,
+      get: () => "retryable",
+    });
+    const symbolField = { disposition: "retryable", reason: "rate_limit", [Symbol()]: true };
+    const hiddenLegacyField = { disposition: "retryable", reason: "rate_limit" };
+    Object.defineProperty(hiddenLegacyField, "rawError", {
+      enumerable: false,
+      value: "provider detail",
+    });
+
+    expect(isStructuredCompactionFailure(inherited)).toBe(false);
+    expect(isStructuredCompactionFailure(accessor)).toBe(false);
+    expect(isStructuredCompactionFailure(symbolField)).toBe(false);
+    expect(isStructuredCompactionFailure(hiddenLegacyField)).toBe(false);
   });
 
   it("normalizes status values without retaining raw provider errors", () => {

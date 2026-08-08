@@ -24,9 +24,19 @@ function isRecoverableNativeHarnessBindingReason(reason: unknown): boolean {
 export function isRecoverableNativeHarnessBindingFailure(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
+  if (result?.ok !== false) {
+    return false;
+  }
+  if (result.failure?.disposition === "fallback") {
+    return isRecoverableNativeHarnessBindingReason(result.failure.reason);
+  }
+  if (result.failure?.disposition !== undefined) {
+    return false;
+  }
+  // Released harness plugins predate the typed fallback disposition. Keep the
+  // legacy reason reader only at this native-binding migration boundary.
   return (
-    result?.ok === false &&
-    (isRecoverableNativeHarnessBindingReason(result.failure?.reason) ||
-      isRecoverableNativeHarnessBindingReason(result.reason))
+    isRecoverableNativeHarnessBindingReason(result.failure?.reason) ||
+    isRecoverableNativeHarnessBindingReason(result.reason)
   );
 }
