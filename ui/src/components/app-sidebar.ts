@@ -475,7 +475,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ${renderAppSidebarAttention(this)}
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}
+              .updateSchedule=${this.updateSchedule}
               .updateRunning=${this.updateRunning}
+              .canUpdate=${this.canUpdate}
               .onUpdate=${this.onUpdate}
               .refreshRequired=${this.refreshRequired}
               .onRefresh=${this.onRefresh}

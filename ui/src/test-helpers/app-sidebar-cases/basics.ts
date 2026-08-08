@@ -40,6 +40,7 @@ describe("AppSidebar update card wiring", () => {
       latestVersion: "2.0.0",
       channel: "stable",
     };
+    sidebar.canUpdate = true;
     sidebar.onUpdate = onUpdate;
     sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;

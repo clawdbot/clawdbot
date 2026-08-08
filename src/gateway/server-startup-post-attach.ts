@@ -7,6 +7,7 @@ import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -965,10 +966,13 @@ function createDeferredGatewayUpdateCheck(params: {
   isNixMode: boolean;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   waitForPostReadyWork?: () => Promise<void>;
+  activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => void } {
   let started = false;
   let stopped = false;
   let stopUpdateCheck: (() => void) | null = null;
+  let latestUpdateAvailable: GatewayUpdateAvailableEventPayload["updateAvailable"] = null;
+  let latestSchedule: GatewayUpdateAvailableEventPayload["schedule"];
 
   const stop = () => {
     stopped = true;
@@ -999,8 +1003,23 @@ function createDeferredGatewayUpdateCheck(params: {
                 cfg: params.cfg,
                 log: params.log,
                 isNixMode: params.isNixMode,
+                ...(params.activeWorkInspectors
+                  ? { activeWorkInspectors: params.activeWorkInspectors }
+                  : {}),
                 onUpdateAvailableChange: (updateAvailable) => {
-                  const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+                  latestUpdateAvailable = updateAvailable;
+                  const payload: GatewayUpdateAvailableEventPayload = {
+                    updateAvailable,
+                    ...(latestSchedule ? { schedule: latestSchedule } : {}),
+                  };
+                  params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+                },
+                onUpdateScheduleChange: (schedule) => {
+                  latestSchedule = schedule;
+                  const payload: GatewayUpdateAvailableEventPayload = {
+                    updateAvailable: latestUpdateAvailable,
+                    schedule,
+                  };
                   params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
                 },
               }),
@@ -1102,6 +1121,7 @@ export async function startGatewayPostAttachRuntime(
       getConfig?: () => OpenClawConfig;
     };
     waitForPostReadyWork?: () => Promise<void>;
+    activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -1201,6 +1221,7 @@ export async function startGatewayPostAttachRuntime(
         isNixMode: params.isNixMode,
         broadcast: params.broadcast,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        activeWorkInspectors: params.activeWorkInspectors,
       });
 
   const tailscaleCleanupPromise = params.minimalTestGateway

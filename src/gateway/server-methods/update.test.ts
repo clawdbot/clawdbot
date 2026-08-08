@@ -41,6 +41,10 @@ const getUpdateAvailableMock = vi.fn(
       channel: string;
     } | null,
 );
+const getUpdateScheduleMock = vi.fn<
+  () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
+>(() => null);
+const adoptUpdateCampaignMock = vi.fn(() => true);
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 type ManagedServiceUpdateHandoffResult = Awaited<
   ReturnType<
@@ -151,6 +155,11 @@ vi.mock("../../infra/update-channels.js", () => ({
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
+  getUpdateSchedule: getUpdateScheduleMock,
+}));
+
+vi.mock("../../infra/update-campaign.js", () => ({
+  gatewayUpdateCampaign: { adopt: adoptUpdateCampaignMock },
 }));
 
 vi.mock("../../infra/update-runner.js", () => ({
@@ -172,6 +181,7 @@ vi.mock("../../infra/update-post-core-finalize.js", async () => {
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
   validateUpdateStatusParams: () => true,
+  validateUpdateStatusResult: () => true,
   validateUpdateRunParams: () => true,
 }));
 
@@ -224,6 +234,9 @@ beforeEach(() => {
   normalizeUpdateChannelMock.mockReturnValue(null);
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
+  getUpdateScheduleMock.mockReset();
+  getUpdateScheduleMock.mockReturnValue(null);
+  adoptUpdateCampaignMock.mockClear();
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
@@ -364,6 +377,7 @@ describe("update.run sentinel deliveryContext", () => {
     });
 
     expect(responded).toBe(true);
+    expect(adoptUpdateCampaignMock).toHaveBeenCalledOnce();
     const payload = readCapturedPayload();
     expect(payload.deliveryContext).toEqual({
       channel: "webchat",
@@ -1041,6 +1055,10 @@ describe("update.status", () => {
         after: { version: "2.0.0" },
       },
     });
+    getUpdateScheduleMock.mockReturnValueOnce({
+      channel: "beta",
+      autoEnabled: true,
+    });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
@@ -1059,6 +1077,7 @@ describe("update.status", () => {
         | {
             sentinel?: { kind?: string; status?: string };
             updateAvailable?: { latestVersion?: string } | null;
+            schedule?: { channel?: string };
           }
         | undefined
       ),
@@ -1068,6 +1087,7 @@ describe("update.status", () => {
     expect(response?.sentinel?.kind).toBe("update");
     expect(response?.sentinel?.status).toBe("ok");
     expect(response?.updateAvailable?.latestVersion).toBe("2.0.0");
+    expect(response?.schedule?.channel).toBe("beta");
   });
 
   it("falls back to the cached update sentinel when refresh fails", async () => {

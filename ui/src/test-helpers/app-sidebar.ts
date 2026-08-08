@@ -72,6 +72,7 @@ export type SidebarLifecycleState = HTMLElement & {
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
+  canUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => void;

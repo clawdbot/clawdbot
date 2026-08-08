@@ -1202,8 +1202,16 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.66;
+}
+
+.sidebar-update-card__action--busy:disabled {
+  cursor: wait;
+}
+
+.sidebar-update-card__action--undismissable {
+  padding-right: 8px;
 }
 
 .sidebar-update-card__icon,

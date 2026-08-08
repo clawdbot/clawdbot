@@ -16,7 +16,9 @@ export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
   onboarding: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
+  updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
   updateRunning: boolean;
+  canUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => void;
@@ -29,7 +31,9 @@ export function renderFloatingUpdateCard(params: {
   return html`<openclaw-sidebar-update-card
     class="sidebar-update-card--floating"
     .updateAvailable=${params.updateAvailable}
+    .updateSchedule=${params.updateSchedule ?? null}
     .updateRunning=${params.updateRunning}
+    .canUpdate=${params.canUpdate ?? false}
     .onUpdate=${params.onUpdate}
     .refreshRequired=${params.refreshRequired}
     .onRefresh=${params.onRefresh}

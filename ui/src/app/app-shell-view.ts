@@ -10,7 +10,7 @@ import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -92,6 +92,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const gatewaySnapshot = context.gateway.snapshot;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
+  const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
   const storedOutboxes = outboxStoreRuntime
@@ -211,7 +212,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: context.config.current.devGitBranch,
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+      updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
       updateRunning: overlaySnapshot.updateRunning,
+      canUpdate,
       onUpdate: () => void context.overlays.runUpdate(),
       refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
       onRefresh: () => host.refreshControlUi(),
@@ -241,7 +244,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         gatewayVersion:
           context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+        updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
         updateRunning: overlaySnapshot.updateRunning,
+        canUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
         refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
         onRefresh: () => host.refreshControlUi(),
@@ -430,7 +435,9 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           onboarding,
           updateAvailable: overlaySnapshot.updateAvailable,
+          updateSchedule: overlaySnapshot.updateSchedule,
           updateRunning: overlaySnapshot.updateRunning,
+          canUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
           refreshRequired: overlaySnapshot.controlUiRefreshRequired,
           onRefresh: () => host.refreshControlUi(),

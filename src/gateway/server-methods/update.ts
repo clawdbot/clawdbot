@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateUpdateRunParams,
   validateUpdateStatusParams,
+  validateUpdateStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -24,6 +25,7 @@ import {
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
+import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import {
@@ -41,7 +43,7 @@ import {
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
-import { getUpdateAvailable } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
@@ -140,15 +142,26 @@ export const updateHandlers: GatewayRequestHandlers = {
       );
       sentinel = getLatestUpdateRestartSentinel();
     }
-    respond(true, {
+    const schedule = getUpdateSchedule();
+    const result = {
       sentinel,
       updateAvailable: getUpdateAvailable(),
-    });
+      ...(schedule ? { schedule } : {}),
+    };
+    if (!validateUpdateStatusResult(result)) {
+      respond(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "update status is temporarily unavailable",
+      });
+      return;
+    }
+    respond(true, result);
   },
   "update.run": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
+    gatewayUpdateCampaign.adopt();
     const actor = resolveControlPlaneActor(client);
     const {
       sessionKey,

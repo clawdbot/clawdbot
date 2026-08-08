@@ -397,6 +397,7 @@ export const validateChatSendParams = compile(S.ChatSendParamsSchema);
 export const validateChatAbortParams = compile(S.ChatAbortParamsSchema);
 export const validateChatInjectParams = compile(S.ChatInjectParamsSchema);
 export const validateUpdateStatusParams = compile(S.UpdateStatusParamsSchema);
+export const validateUpdateStatusResult = compile(S.UpdateStatusResultSchema);
 export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);

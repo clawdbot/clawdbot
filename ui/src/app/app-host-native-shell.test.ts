@@ -382,8 +382,9 @@ describe("OpenClaw native shell", () => {
 });
 
 describe("OpenClaw shell update affordance", () => {
-  it("renders a floating card only while desktop navigation is collapsed", () => {
+  it("renders a capable floating card only while desktop navigation is collapsed", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
     const shared = {
       onboarding: false,
       updateAvailable: {
@@ -392,6 +393,7 @@ describe("OpenClaw shell update affordance", () => {
         channel: "stable" as const,
       },
       updateRunning: false,
+      canUpdate: true,
       onUpdate: vi.fn(),
       refreshRequired: false,
       onRefresh: vi.fn(),
@@ -405,11 +407,17 @@ describe("OpenClaw shell update affordance", () => {
     render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
     const card = container.querySelector<
       HTMLElement & {
-        refreshRequired: boolean;
+        canUpdate: boolean;
         onRefresh: () => void;
+        refreshRequired: boolean;
+        updateComplete: Promise<boolean>;
       }
     >("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
+    await card?.updateComplete;
+    expect(card?.canUpdate).toBe(true);
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(shared.onUpdate).toHaveBeenCalledOnce();
 
     render(
       renderFloatingUpdateCard({
@@ -440,6 +448,7 @@ describe("OpenClaw shell update affordance", () => {
       container,
     );
     expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+    container.remove();
   });
 
   it("treats a closed mobile drawer as hidden navigation", () => {

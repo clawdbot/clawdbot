@@ -1,8 +1,12 @@
 // @vitest-environment node
 // Control UI tests cover localized update and recovery status copy.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayHelloOk } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import {
+  formatUpdateCountdown,
+  readUpdateAvailable,
+  readUpdateSchedule,
   resolvePendingUpdateHandoffTimeoutBanner,
   resolvePostRestartUpdateBanner,
   resolveUpdateStatusBanner,
@@ -34,6 +38,57 @@ function installTranslations() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("update schedule hydration", () => {
+  it("preserves additive git availability and the hello schedule DTO", () => {
+    const updateSchedule = {
+      channel: "dev",
+      autoEnabled: true,
+      install: { kind: "git" },
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "b".repeat(40),
+        commitsBehind: 3,
+      },
+      campaign: {
+        id: "campaign-1",
+        state: "waiting-for-idle",
+        announcedAtMs: 1_000,
+        forceAtMs: 901_000,
+        updatedAtMs: 2_000,
+      },
+    } as const;
+    const hello = {
+      snapshot: {
+        updateAvailable: {
+          currentVersion: "2026.8.1",
+          latestVersion: "2026.8.1",
+          channel: "dev",
+          currentSha: "a".repeat(40),
+          upstreamRef: "origin/main",
+          upstreamSha: "b".repeat(40),
+          commitsBehind: 3,
+        },
+        updateSchedule,
+      },
+    } as GatewayHelloOk;
+
+    expect(readUpdateAvailable(hello)).toMatchObject({
+      currentSha: "a".repeat(40),
+      upstreamRef: "origin/main",
+      upstreamSha: "b".repeat(40),
+      commitsBehind: 3,
+    });
+    expect(readUpdateSchedule(hello)).toEqual(updateSchedule);
+  });
+
+  it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
+    expect(formatUpdateCountdown(55_000, 1_000)).toBe("0:54");
+    expect(formatUpdateCountdown(762_000, 1_000)).toBe("12:41");
+    expect(formatUpdateCountdown(500, 1_000)).toBe("0:00");
+  });
 });
 
 describe("update status localization", () => {

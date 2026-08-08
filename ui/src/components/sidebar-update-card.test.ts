@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
   NATIVE_UPDATE_DECLINED_EVENT,
@@ -13,7 +13,9 @@ const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 
 type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
+  updateSchedule: UpdateScheduleState | null;
   updateRunning: boolean;
+  canUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => void;
@@ -23,11 +25,17 @@ type SidebarUpdateCardElement = HTMLElement & {
 let originalWebkit: PropertyDescriptor | undefined;
 let originalLocalStorage: PropertyDescriptor | undefined;
 
-async function mount(update: UpdateAvailable | null) {
+async function mount(
+  update: UpdateAvailable | null,
+  schedule: UpdateScheduleState | null = null,
+  canUpdate = true,
+) {
   const element = document.createElement(
     "openclaw-sidebar-update-card",
   ) as SidebarUpdateCardElement;
   element.updateAvailable = update;
+  element.updateSchedule = schedule;
+  element.canUpdate = canUpdate;
   document.body.append(element);
   await element.updateComplete;
   return element;
@@ -43,6 +51,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
   if (originalLocalStorage) {
     Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
@@ -326,6 +335,66 @@ describe("SidebarUpdateCard", () => {
     const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
     expect(action?.disabled).toBe(true);
     expect(action?.textContent).toContain("Updating…");
+  });
+
+  it("renders a quiet live countdown, hides dismissal, and stops ticking on disconnect", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const clearInterval = vi.spyOn(globalThis, "clearInterval");
+    const element = await mount(
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "stable",
+      },
+      {
+        channel: "stable",
+        autoEnabled: true,
+        target: { kind: "package", version: "2.0.0" },
+        campaign: {
+          id: "campaign-1",
+          state: "countdown",
+          announcedAtMs: 0,
+          applyAtMs: 55_000,
+          forceAtMs: 900_000,
+          updatedAtMs: 0,
+        },
+      },
+    );
+
+    const card = element.querySelector(".sidebar-update-card");
+    const timer = element.querySelector("[role='timer']");
+    expect(card?.hasAttribute("role")).toBe(false);
+    expect(timer?.getAttribute("aria-live")).toBe("off");
+    expect(timer?.textContent).toContain("Updating in 0:54 · v2.0.0");
+    expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await element.updateComplete;
+    expect(element.querySelector("[role='timer']")?.textContent).toContain("Updating in 0:53");
+
+    element.remove();
+    expect(clearInterval).toHaveBeenCalled();
+  });
+
+  it("disables the update action when the operator cannot administer updates", async () => {
+    const element = await mount(
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "stable",
+      },
+      null,
+      false,
+    );
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    expect(action?.disabled).toBe(true);
+    expect(action?.title).toContain("Administrator access is required");
+    action?.click();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("persists dismissal and hides the card", async () => {

@@ -6,7 +6,7 @@ import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
@@ -54,6 +54,7 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
   const updateAvailable = getUpdateAvailable() ?? undefined;
+  const updateSchedule = getUpdateSchedule() ?? undefined;
   // Health is async; the caller replaces this with the collected snapshot.
   const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
@@ -69,6 +70,7 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
       scope,
     },
     updateAvailable,
+    updateSchedule,
   };
   if (opts?.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
