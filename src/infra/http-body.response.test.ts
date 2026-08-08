@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cancelUnreadResponseBody,
   readResponseTextPrefix,
   readResponseTextSnippet,
   readResponseWithLimit,
@@ -102,6 +103,37 @@ async function expectReadResponseWithLimitFailureCase(params: {
     readResponseWithLimit(params.response, params.maxBytes, params.options),
   ).rejects.toThrow(params.expectedError);
 }
+
+describe("cancelUnreadResponseBody", () => {
+  it("cancels unread bodies and ignores cancellation failures", async () => {
+    const cancel = vi.fn(() => {
+      throw new Error("already closed");
+    });
+    const response = new Response(makeStallingStream([], cancel));
+
+    await expect(cancelUnreadResponseBody(response)).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("leaves consumed and absent bodies alone", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("done"));
+          controller.close();
+        },
+        cancel,
+      }),
+    );
+    await response.text();
+
+    await cancelUnreadResponseBody(response);
+    await cancelUnreadResponseBody(undefined);
+
+    expect(cancel).not.toHaveBeenCalled();
+  });
+});
 
 describe("readResponseWithLimit", () => {
   beforeEach(() => {

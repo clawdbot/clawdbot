@@ -812,6 +812,7 @@ jobs:
           fi
           cat > "$gateway_config" <<EOF
           {
+            "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
             "browser": { "enabled": false },
           ${catalog_refresh_config}
             "update": { "checkOnStart": false },
@@ -825,7 +826,10 @@ jobs:
             },
             "plugins": {
               "enabled": true,
-              "entries": { "browser": { "enabled": false } }
+              "entries": {
+                "browser": { "enabled": false },
+                "memory-core": { "config": { "dreaming": { "enabled": false } } }
+              }
             }
           }
           EOF

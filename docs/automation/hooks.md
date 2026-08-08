@@ -310,6 +310,14 @@ coarse command/lifecycle event system and show up in `openclaw hooks list` as
 `plugin:<id>`. Use those for side effects and compatibility with hook packs, not
 for ordered middleware or policy gates.
 
+The legacy Plugin SDK `api.registerHook` registers into the internal event
+system only (`command:new`, `gateway:startup`, `message:received`, ...). Typed
+lifecycle event names such as `before_tool_call`, `message_received`, or
+`session_start` are dispatched exclusively by the typed hook runner and are
+**not** invoked through `registerHook`. Registering a typed name with
+`registerHook` emits a registration warning pointing to the public `api.on(...)`
+API as the replacement; it never silently no-ops.
+
 For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
 ## Configuration

@@ -325,3 +325,10 @@ export function formatCompactTokenCount(
   }
   return String(tokens);
 }
+
+export function formatContextTokenCapacity(tokens: number): string {
+  if (tokens < 1_000_000) {
+    return formatCompactTokenCount(tokens);
+  }
+  return `${Math.floor(tokens / 100_000) / 10}M`;
+}

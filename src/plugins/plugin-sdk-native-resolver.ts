@@ -3,6 +3,7 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
@@ -152,13 +153,7 @@ function isNativeLoadableSdkTarget(targetPath: string): boolean {
   }
 }
 
-function normalizePathForBoundary(candidate: string): string {
-  try {
-    return fs.realpathSync(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
+const normalizePathForBoundary = resolveRealpathOrAbsolute;
 
 function findNearestPackageRoot(modulePath: string): string {
   let cursor = path.dirname(path.resolve(modulePath));

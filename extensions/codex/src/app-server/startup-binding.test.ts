@@ -53,6 +53,11 @@ describe("Codex app-server startup binding", () => {
       JSON.stringify({
         "agent:main:session-1": {
           sessionFile,
+          ...(typeof record.totalTokens === "number" &&
+          record.totalTokensFresh !== false &&
+          !Object.hasOwn(record, "totalTokensVersion")
+            ? { totalTokensFresh: true, totalTokensVersion: 1 }
+            : {}),
           ...record,
         },
       }),
@@ -741,15 +746,25 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
-  it("ignores stale session token totals for native rollout rotation", async () => {
+  it.each([
+    {
+      name: "stale",
+      record: { totalTokens: 300_000, totalTokensFresh: false },
+    },
+    {
+      name: "unversioned",
+      record: {
+        totalTokens: 300_000,
+        totalTokensFresh: true,
+        totalTokensVersion: undefined,
+      },
+    },
+  ])("ignores $name session token totals for native rollout rotation", async ({ record }) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    await writeSessionRecord(sessionFile, {
-      totalTokens: 300_000,
-      totalTokensFresh: false,
-    });
+    await writeSessionRecord(sessionFile, record);
     const rolloutDir = path.join(agentDir, "codex-home", "sessions");
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(

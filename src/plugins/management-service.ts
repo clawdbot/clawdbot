@@ -1,5 +1,6 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
 import path from "node:path";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
@@ -415,7 +416,7 @@ function normalizeCatalogMetadata(
 }
 
 function normalizeFeaturedAt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function resolveCatalogInstallAction(params: {
@@ -1085,10 +1086,8 @@ async function persistManagedSourceInstall(params: {
       snapshot: params.snapshot,
       pluginId: params.pluginId,
       install: params.install,
-      invalidateRuntimeCache: params.cleanupOnPersistenceFailure
-        ? false
-        : params.invalidateRuntimeCache,
-      runtime: params.cleanupOnPersistenceFailure ? createSilentRuntime() : params.runtime,
+      invalidateRuntimeCache: params.invalidateRuntimeCache,
+      runtime: params.runtime,
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
   if (!params.cleanupOnPersistenceFailure) {
@@ -1163,8 +1162,15 @@ export async function installManagedPluginSource(params: {
       };
     }
     const targetDir = completed.targetDir ?? installed.targetDir;
+    // Links point at operator-owned source directories. Every published managed
+    // payload defaults to compensation, but link persistence never deletes source.
+    const cleanupOnPersistenceFailure =
+      request.source === "local" && request.link
+        ? false
+        : (params.cleanupOnPersistenceFailure ?? true);
     const config = await persistManagedSourceInstall({
       ...params,
+      cleanupOnPersistenceFailure,
       env,
       snapshot: completed.snapshot ?? params.snapshot,
       pluginId: installed.pluginId,
@@ -1413,6 +1419,8 @@ export async function installManagedPlugin(params: {
       env,
       logger: createInstallLogger(warnings),
       cleanupOnPersistenceFailure: true,
+      invalidateRuntimeCache: false,
+      runtime: createSilentRuntime(),
     });
     if (!installed.ok) {
       return throwInstallFailure(installed);

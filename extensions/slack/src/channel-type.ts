@@ -74,6 +74,7 @@ export async function resolveSlackConversationInfo(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   channelId: string;
+  teamId?: string;
   operation?: "read" | "write";
   requireFreshName?: boolean;
 }): Promise<SlackConversationInfo> {
@@ -87,7 +88,8 @@ export async function resolveSlackConversationInfo(params: {
   const userToken = normalizeOptionalString(account.userToken);
   const credentialRole = token ? (token === userToken ? "user" : "bot") : "none";
   const credentialFingerprint = token ? fingerprintSlackCredential(token) : "none";
-  const cacheKey = `${account.accountId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
+  const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "no-team-id";
+  const cacheKey = `${account.accountId}:${teamId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
   if (!params.requireFreshName) {
     const cached = getCachedSlackConversationInfo(cacheKey);
     if (cached) {
@@ -101,7 +103,7 @@ export async function resolveSlackConversationInfo(params: {
       // Read-only classification stays on conversations.info. conversations.open is
       // write-scoped and must only run when the caller explicitly requests a write.
       if (isNativeImChannel && operation === "write") {
-        const client = createSlackWebClient(token);
+        const client = createSlackWebClient(token, { teamId: params.teamId });
         const opened = await client.conversations.open({
           channel: channelId,
           prevent_creation: true,
@@ -117,7 +119,7 @@ export async function resolveSlackConversationInfo(params: {
         }
         return result;
       }
-      const client = createSlackReadClient(token);
+      const client = createSlackReadClient(token, { teamId: params.teamId });
       const info = await client.conversations.info({ channel: channelId });
       const channel = info.channel as
         | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }
@@ -151,6 +153,7 @@ export async function resolveSlackChannelType(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   channelId: string;
+  teamId?: string;
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }

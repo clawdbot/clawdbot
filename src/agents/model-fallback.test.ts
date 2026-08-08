@@ -16,7 +16,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
-import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -113,6 +113,36 @@ const authRuntimeMock = vi.hoisted(() => {
     Object.entries(store.profiles)
       .filter(([, profile]) => profile.provider === provider)
       .map(([id]) => id);
+  const resolveAuthProfileEligibility = (params: {
+    store: AuthProfileStore;
+    provider: string;
+    profileId: string;
+  }) => {
+    const credential = params.store.profiles[params.profileId];
+    if (!credential) {
+      return { eligible: false, reasonCode: "profile_missing" as const };
+    }
+    if (credential.provider !== params.provider) {
+      return { eligible: false, reasonCode: "provider_mismatch" as const };
+    }
+    if (credential.type === "api_key") {
+      return credential.key || credential.keyRef
+        ? { eligible: true, reasonCode: "ok" as const }
+        : { eligible: false, reasonCode: "missing_credential" as const };
+    }
+    if (credential.type === "token") {
+      if (!credential.token && !credential.tokenRef) {
+        return { eligible: false, reasonCode: "missing_credential" as const };
+      }
+      if (credential.expires !== undefined && credential.expires <= now()) {
+        return { eligible: false, reasonCode: "expired" as const };
+      }
+      return { eligible: true, reasonCode: "ok" as const };
+    }
+    return credential.access || credential.refresh
+      ? { eligible: true, reasonCode: "ok" as const }
+      : { eligible: false, reasonCode: "missing_credential" as const };
+  };
   const isProfileInCooldown = (
     store: AuthProfileStore,
     profileId: string,
@@ -168,10 +198,11 @@ const authRuntimeMock = vi.hoisted(() => {
       stores.set(keyFor(agentDir), store);
     },
     runtime: {
-      ensureAuthProfileStore: vi.fn((agentDir?: string) => getStore(agentDir)),
+      ensureAuthProfileStore: vi.fn((agentDir?: string, _options?: unknown) => getStore(agentDir)),
       loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
       resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
-        getProfileIds(params.store, params.provider),
+        params.store.order?.[params.provider] ?? getProfileIds(params.store, params.provider),
+      resolveAuthProfileEligibility,
       maybeReprobeWhamBlockedProfiles: vi.fn(),
       isProfileInCooldown,
       resolveProfilesUnavailableReason: (params: {
@@ -353,6 +384,7 @@ async function runWithStoredAuth(params: {
   store: AuthProfileStore;
   provider: string;
   run: (provider: string, model: string) => Promise<string>;
+  userLockedAuthProfileId?: string;
 }) {
   const tempDir = await makeAuthTempDir();
   setAuthRuntimeStore(tempDir, params.store);
@@ -362,6 +394,7 @@ async function runWithStoredAuth(params: {
     model: "m1",
     agentDir: tempDir,
     run: params.run,
+    userLockedAuthProfileId: params.userLockedAuthProfileId,
   });
 }
 
@@ -870,6 +903,186 @@ describe("runWithModelFallback", () => {
       ]);
       expect(second.attempts.some((attempt) => attempt.provider === "anthropic")).toBe(true);
       expect(second.attempts.find((attempt) => attempt.provider === "anthropic")?.error).toContain(
+        "recent auth failure",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      } else {
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+      }
+    }
+  });
+
+  it.each([
+    ["provider-owned auth", false],
+    ["harness-owned auth", true],
+  ])(
+    "scopes auth skip markers to the explicit profile for %s",
+    async (_label, harnessOwnedAuth) => {
+      const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
+      try {
+        const provider = `scoped-auth-skip-${crypto.randomUUID()}`;
+        if (harnessOwnedAuth) {
+          registerFallbackHarness("codex");
+        }
+        const profileA = `${provider}:a`;
+        const profileB = `${provider}:b`;
+        const cfg = makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/m1",
+                fallbacks: [`${provider}/m1`, "fallback/ok-model"],
+              },
+            },
+          },
+        });
+        const store: AuthProfileStore = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileA]: { type: "api_key", provider, key: "key-a" },
+            [profileB]: { type: "api_key", provider, key: "key-b" },
+          },
+        };
+        const agentDir = await makeAuthTempDir();
+        setAuthRuntimeStore(agentDir, store);
+        const run = vi.fn(async (candidateProvider: string, model: string) => {
+          if (candidateProvider === "openai") {
+            throw new FailoverError("primary rate limited", {
+              provider: candidateProvider,
+              model,
+              reason: "rate_limit",
+            });
+          }
+          if (candidateProvider === provider) {
+            throw new FailoverError("explicit profile failed", {
+              provider: candidateProvider,
+              model,
+              reason: "auth",
+            });
+          }
+          return "ok";
+        });
+        const execute = (userLockedAuthProfileId: string) =>
+          runWithModelFallback({
+            cfg,
+            provider: "openai",
+            model: "m1",
+            sessionId: "session:scoped-auth-skip",
+            agentDir,
+            userLockedAuthProfileId,
+            resolveAgentHarnessRuntimeOverride: (candidateProvider) =>
+              harnessOwnedAuth && candidateProvider === provider ? "codex" : undefined,
+            run,
+          });
+
+        await execute(profileA);
+        await execute(profileB);
+        const third = await execute(profileB);
+
+        expect(third.result).toBe("ok");
+        expect(run.mock.calls.map(([candidateProvider]) => candidateProvider)).toEqual([
+          "openai",
+          provider,
+          "fallback",
+          "openai",
+          provider,
+          "fallback",
+          "openai",
+          "fallback",
+        ]);
+        expect(third.attempts.find((attempt) => attempt.provider === provider)?.error).toContain(
+          "recent auth failure",
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+        } else {
+          process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+        }
+      }
+    },
+  );
+
+  it("scopes automatic auth skips to the selected profile", async () => {
+    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+    process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
+    try {
+      const provider = `automatic-auth-skip-${crypto.randomUUID()}`;
+      const lockedProfile = "openai:locked";
+      const profileA = `${provider}:a`;
+      const profileB = `${provider}:b`;
+      let selectedProfile = profileA;
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/m1",
+              fallbacks: [`${provider}/m1`, "fallback/ok-model"],
+            },
+          },
+        },
+      });
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [lockedProfile]: { type: "api_key", provider: "openai", key: "key-locked" },
+          [profileA]: { type: "api_key", provider, key: "key-a" },
+          [profileB]: { type: "api_key", provider, key: "key-b" },
+        },
+        order: { [provider]: [profileA, profileB] },
+      };
+      const agentDir = await makeAuthTempDir();
+      setAuthRuntimeStore(agentDir, store);
+      const run = vi.fn(async (candidateProvider: string, model: string) => {
+        if (candidateProvider === "openai") {
+          throw new FailoverError("primary rate limited", {
+            provider: candidateProvider,
+            model,
+            reason: "rate_limit",
+          });
+        }
+        if (candidateProvider === provider) {
+          throw new FailoverError("automatic profile failed", {
+            provider: candidateProvider,
+            model,
+            reason: "auth",
+            profileId: selectedProfile,
+          });
+        }
+        return "ok";
+      });
+      const execute = () =>
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "m1",
+          sessionId: "session:pooled-auth-skip",
+          agentDir,
+          userLockedAuthProfileId: lockedProfile,
+          run,
+        });
+
+      await execute();
+      selectedProfile = profileB;
+      store.order = { [provider]: [profileB, profileA] };
+      await execute();
+      const third = await execute();
+
+      expect(third.result).toBe("ok");
+      expect(run.mock.calls.map(([candidateProvider]) => candidateProvider)).toEqual([
+        "openai",
+        provider,
+        "fallback",
+        "openai",
+        provider,
+        "fallback",
+        "openai",
+        "fallback",
+      ]);
+      expect(third.attempts.find((attempt) => attempt.provider === provider)?.error).toContain(
         "recent auth failure",
       );
     } finally {
@@ -3326,6 +3539,200 @@ describe("runWithModelFallback", () => {
       expectedReason: "unknown",
     });
   });
+
+  it("attempts an eligible same-provider user lock omitted from cooldown order", async () => {
+    const provider = `locked-cooldown-${crypto.randomUUID()}`;
+    const orderedProfileA = `${provider}:a`;
+    const orderedProfileB = `${provider}:b`;
+    const orderedProfileIds = [orderedProfileA, orderedProfileB];
+    const userLockedAuthProfileId = `${provider}:locked`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [orderedProfileA]: { type: "api_key", provider, key: "key-a" },
+        [orderedProfileB]: { type: "api_key", provider, key: "key-b" },
+        [userLockedAuthProfileId]: { type: "api_key", provider, key: "key-locked" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [...orderedProfileIds] },
+      usageStats: {
+        [orderedProfileA]: { cooldownUntil: Date.now() + 60_000 },
+        [orderedProfileB]: { cooldownUntil: Date.now() + 120_000 },
+      },
+    };
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+    expect(store.order?.[provider]).toEqual(orderedProfileIds);
+  });
+
+  it("discovers an exact external CLI user lock before cooldown admission", async () => {
+    const provider = "minimax-portal";
+    const orderedProfileId = "minimax-portal:api";
+    const persistedStore: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [orderedProfileId]: { type: "api_key", provider, key: "api-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [orderedProfileId] },
+      usageStats: {
+        [orderedProfileId]: {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "auth",
+        },
+      },
+    };
+    const runtimeStore: AuthProfileStore = {
+      ...persistedStore,
+      profiles: {
+        ...persistedStore.profiles,
+        [MINIMAX_CLI_PROFILE_ID]: {
+          type: "oauth",
+          provider,
+          access: "external-access",
+          refresh: "external-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    authRuntimeMock.runtime.ensureAuthProfileStore.mockReturnValueOnce(runtimeStore);
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store: persistedStore,
+      provider,
+      run,
+      userLockedAuthProfileId: MINIMAX_CLI_PROFILE_ID,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(persistedStore.profiles[MINIMAX_CLI_PROFILE_ID]).toBeUndefined();
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
+    const ensureCall = requireMockCall(
+      authRuntimeMock.runtime.ensureAuthProfileStore,
+      0,
+      "ensureAuthProfileStore",
+    );
+    expect(requireRecord(ensureCall[1], "auth store options")).toMatchObject({
+      externalCli: {
+        mode: "scoped",
+        allowKeychainPrompt: false,
+        profileIds: [MINIMAX_CLI_PROFILE_ID],
+      },
+    });
+  });
+
+  it("normalizes a blank user lock before cooldown admission", async () => {
+    const provider = `blank-lock-${crypto.randomUUID()}`;
+    const orderedProfileId = `${provider}:ordered`;
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [orderedProfileId]: { type: "api_key", provider, key: "ordered-key" },
+        "": { type: "api_key", provider, key: "blank-key" },
+        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+      },
+      order: { [provider]: [orderedProfileId] },
+      usageStats: {
+        [orderedProfileId]: {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "auth",
+        },
+      },
+    };
+    const run = createFallbackOnlyRun();
+
+    const result = await runWithStoredAuth({
+      cfg: makeProviderFallbackCfg(provider),
+      store,
+      provider,
+      run,
+      userLockedAuthProfileId: "   ",
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["fallback", "ok-model", { isFinalFallbackAttempt: true }]]);
+    const ensureCall = requireMockCall(
+      authRuntimeMock.runtime.ensureAuthProfileStore,
+      0,
+      "ensureAuthProfileStore",
+    );
+    expect(requireRecord(ensureCall[1], "auth store options")).toMatchObject({
+      externalCli: { mode: "scoped" },
+    });
+    expect(
+      requireRecord(
+        requireRecord(ensureCall[1], "auth store options").externalCli,
+        "external CLI options",
+      ),
+    ).not.toHaveProperty("profileIds");
+  });
+
+  it.each(["cross-provider", "missing", "ineligible"] as const)(
+    "does not bypass cooldown order for a %s user lock",
+    async (kind) => {
+      const provider = `locked-rejected-${kind}-${crypto.randomUUID()}`;
+      const orderedProfileA = `${provider}:a`;
+      const orderedProfileB = `${provider}:b`;
+      const orderedProfileIds = [orderedProfileA, orderedProfileB];
+      const userLockedAuthProfileId =
+        kind === "cross-provider" ? "other:locked" : `${provider}:locked`;
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [orderedProfileA]: { type: "api_key", provider, key: "key-a" },
+          [orderedProfileB]: { type: "api_key", provider, key: "key-b" },
+          "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+        },
+        order: { [provider]: [...orderedProfileIds] },
+        usageStats: {
+          [orderedProfileA]: { cooldownUntil: Date.now() + 60_000 },
+          [orderedProfileB]: { cooldownUntil: Date.now() + 120_000 },
+        },
+      };
+      if (kind === "cross-provider") {
+        store.profiles[userLockedAuthProfileId] = {
+          type: "api_key",
+          provider: "other",
+          key: "other-key",
+        };
+      } else if (kind === "ineligible") {
+        store.profiles[userLockedAuthProfileId] = {
+          type: "token",
+          provider,
+          token: "expired-token",
+          expires: Date.now() - 1,
+        };
+      }
+      const run = createFallbackOnlyRun();
+
+      const result = await runWithStoredAuth({
+        cfg: makeProviderFallbackCfg(provider),
+        store,
+        provider,
+        run,
+        userLockedAuthProfileId,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([
+        [provider, "m1", { allowTransientCooldownProbe: true, isFinalFallbackAttempt: false }],
+        ["fallback", "ok-model", { isFinalFallbackAttempt: true }],
+      ]);
+      expect(store.order?.[provider]).toEqual(orderedProfileIds);
+    },
+  );
 
   it("does not skip OpenRouter when legacy cooldown markers exist", async () => {
     const provider = "openrouter";

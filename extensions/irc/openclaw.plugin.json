@@ -1,5 +1,9 @@
 {
   "id": "irc",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true
+  },
   "activation": {
     "onStartup": false
   },

@@ -1,10 +1,15 @@
 // Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
+import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   type HelloOk,
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -29,6 +34,8 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
+import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
+import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -63,11 +70,11 @@ const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
 type ResolvedGatewayConnection = {
   url: string;
+  deviceAuthScope?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
-  allowInsecureLocalOperatorUi: boolean;
 };
 
 function throwGatewayAuthResolutionError(reason: string): never {
@@ -106,6 +113,43 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function hasStoredOriginDeviceAuth(deviceAuthScope: string): boolean {
+  try {
+    const identity = loadDeviceIdentityIfPresent();
+    return Boolean(
+      identity &&
+      loadOriginDeviceToken({
+        gatewayScope: deviceAuthScope,
+        deviceId: identity.deviceId,
+        role: "operator",
+      })?.token,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function ensureTuiOriginAuth(params: {
+  deviceAuthScope: string;
+  explicitAuth: { token?: string; password?: string };
+  urlOverrideSource: "cli" | "env";
+}): void {
+  if (
+    params.explicitAuth.token ||
+    params.explicitAuth.password ||
+    hasStoredOriginDeviceAuth(params.deviceAuthScope)
+  ) {
+    return;
+  }
+  ensureExplicitGatewayAuth({
+    urlOverride: params.deviceAuthScope,
+    urlOverrideSource: params.urlOverrideSource,
+    explicitAuth: params.explicitAuth,
+    errorHint:
+      "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
+  });
 }
 
 function isLegacyPreserveSideRunsError(err: unknown): boolean {
@@ -151,6 +195,7 @@ export class GatewayChatClient implements TuiBackend {
 
     this.client = new GatewayClient({
       url: connection.url,
+      ...(connection.deviceAuthScope ? { deviceAuthScope: connection.deviceAuthScope } : {}),
       token: connection.token,
       password: connection.password,
       tlsFingerprint: connection.tlsFingerprint,
@@ -161,7 +206,6 @@ export class GatewayChatClient implements TuiBackend {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
-      deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
       caps: [
         GATEWAY_CLIENT_CAPS.AGENT_KIND,
         GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
@@ -230,6 +274,17 @@ export class GatewayChatClient implements TuiBackend {
   private notifyConnectError(error: Error) {
     if (this.pendingConnectError) {
       return;
+    }
+    if (
+      this.connection.deviceAuthScope &&
+      readConnectErrorDetailCode((error as Error & { details?: unknown }).details) ===
+        ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+      !error.message.includes("Pairing request sent.")
+    ) {
+      error.message = [
+        error.message,
+        "Pairing request sent. Approve it in that gateway's Control UI (Settings -> Devices), or run `openclaw devices approve --latest` on the gateway host, then retry.",
+      ].join("\n");
     }
     this.pendingConnectError = error;
     this.onConnectError?.(error);
@@ -466,10 +521,10 @@ function resolveBoundGatewayConnection(
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   return {
     url,
+    deviceAuthScope: gatewayOriginScope(url),
     token: explicitAuth.token,
     password: explicitAuth.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    allowInsecureLocalOperatorUi: false,
   };
 }
 
@@ -484,18 +539,10 @@ async function resolveGatewayConnection(
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
+  const envUrlOverride = urlOverride ? undefined : nonEmptyString(env.OPENCLAW_GATEWAY_URL);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  ensureExplicitGatewayAuth({
-    urlOverride,
-    urlOverrideSource: "cli",
-    explicitAuth,
-    errorHint: "Fix: pass --token or --password when using --url.",
-  });
   const hasExplicitGatewayTarget = Boolean(
-    urlOverride ||
-    env.OPENCLAW_GATEWAY_URL?.trim() ||
-    env.OPENCLAW_GATEWAY_PORT?.trim() ||
-    isRemoteMode,
+    urlOverride || envUrlOverride || env.OPENCLAW_GATEWAY_PORT?.trim() || isRemoteMode,
   );
   const activeLocalGatewayPort = hasExplicitGatewayTarget
     ? undefined
@@ -505,19 +552,37 @@ async function resolveGatewayConnection(
     ...(urlOverride ? { url: urlOverride } : {}),
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
-  const allowInsecureLocalOperatorUi = false;
 
   if (urlOverride) {
+    const deviceAuthScope = gatewayOriginScope(url);
+    ensureTuiOriginAuth({ deviceAuthScope, explicitAuth, urlOverrideSource: "cli" });
     return {
       url,
+      deviceAuthScope,
       token: explicitAuth.token,
       password: explicitAuth.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      allowInsecureLocalOperatorUi,
+    };
+  }
+
+  if (envUrlOverride) {
+    const deviceAuthScope = gatewayOriginScope(url);
+    const envAuth = {
+      token: explicitAuth.token ?? nonEmptyString(env.OPENCLAW_GATEWAY_TOKEN),
+      password: explicitAuth.password ?? nonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD),
+    };
+    ensureTuiOriginAuth({ deviceAuthScope, explicitAuth: envAuth, urlOverrideSource: "env" });
+    return {
+      url,
+      deviceAuthScope,
+      token: envAuth.token,
+      password: envAuth.password,
+      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
     };
   }
 
   if (isRemoteMode) {
+    const deviceAuthScope = gatewayOriginScope(url);
     const resolved = await resolveGatewayInteractiveSurfaceAuth({
       config,
       env,
@@ -525,17 +590,21 @@ async function resolveGatewayConnection(
       suppressEnvAuthFallback: preferConfiguredAuth,
       surface: "remote",
     });
-    if (resolved.failureReason) {
+    if (
+      resolved.failureReason &&
+      (resolved.failureReason !== "Missing gateway auth credentials." ||
+        !hasStoredOriginDeviceAuth(deviceAuthScope))
+    ) {
       throwGatewayAuthResolutionError(resolved.failureReason);
     }
     return {
       url,
+      deviceAuthScope,
       token: resolved.token,
       password: resolved.password,
       ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
         ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
         : {}),
-      allowInsecureLocalOperatorUi: false,
     };
   }
 
@@ -551,7 +620,6 @@ async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      allowInsecureLocalOperatorUi,
     };
   }
 
@@ -576,6 +644,5 @@ async function resolveGatewayConnection(
     token: resolved.token,
     password: resolved.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    allowInsecureLocalOperatorUi,
   };
 }

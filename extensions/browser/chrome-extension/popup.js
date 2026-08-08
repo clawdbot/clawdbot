@@ -61,13 +61,15 @@ async function refresh() {
   unpairButton.classList.toggle("hidden", !status.paired);
   unpairNote.classList.toggle("hidden", !status.paired);
   if (!status.paired) {
-    statusLine.textContent = actionError ?? "Not paired with a gateway";
+    statusLine.textContent = actionError ?? status.hint ?? "Not paired with a gateway";
     return;
   }
   const label = STATE_LABEL[status.state] ?? STATE_LABEL.off;
   statusLine.textContent =
     actionError ??
     `${label} · ${status.sharedTabCount} tab${status.sharedTabCount === 1 ? "" : "s"} shared`;
+  statusHint.textContent =
+    status.hint || "Relay unreachable — is the OpenClaw gateway running and up to date?";
   statusHint.classList.toggle("hidden", status.state !== "error");
   const tab = await activeTab();
   if (tab?.id === undefined) {

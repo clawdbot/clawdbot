@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { property } from "lit/decorators.js";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -47,8 +47,15 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
+  @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
+  @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
   @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) canUpdate = false;
+  @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) refreshRequired = false;
+  @property({ attribute: false }) onRefresh: () => void = () => undefined;
+  @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (

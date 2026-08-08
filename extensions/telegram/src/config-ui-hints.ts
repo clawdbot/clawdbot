@@ -47,7 +47,7 @@ export const telegramChannelConfigUiHints = {
   }),
   richMessages: {
     label: "Telegram Rich Messages",
-    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+    help: "Opt into Bot API 10.2 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",

@@ -240,14 +240,21 @@ bot-authored `message` and `app_mention` events before dispatch, regardless of
 `allowBots`, because org installs do not provide a stable workspace-qualified
 bot identity for loop prevention.
 
-Enterprise support is intentionally limited to direct Socket Mode or HTTP
-`message` and `app_mention` events and their immediate replies. Relay mode,
-slash commands, interactions, App Home, reaction event listeners, pins, Slack
-action tools, Slack-native approvals, bindings, queued or scheduled delivery,
-and proactive sends are unavailable for an enterprise account. Outbound
-acknowledgment, typing, and status reactions are supported through the
-listener-owned Slack client and require `reactions:write`; inbound reaction
-notifications and reaction action tools remain unavailable.
+Enterprise support accepts direct Socket Mode or HTTP `message` and
+`app_mention` events plus workspace-qualified outbound messages. Relay mode,
+slash commands, interactions, App Home, reaction event listeners, pins,
+Slack-native approvals, and bindings remain unavailable for an enterprise
+account. Slack action tools remain unavailable except for file uploads and
+adding or removing emoji reactions. Outbound acknowledgment, typing, and
+status reactions are supported and require `reactions:write`; inbound reaction
+notifications remain unavailable.
+
+OpenClaw records Enterprise Grid destinations as
+`team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
+Current-conversation sends, uploads, and reactions inherit that destination.
+Detached or proactive calls must provide the workspace-qualified target;
+bare channel and user IDs fail closed because those IDs can be reused by
+different workspaces.
 
 Immediate replies reuse the standard Slack delivery behavior for chunks,
 media, metadata, identity fallback, unfurls, and receipts, but only while the

@@ -16,7 +16,10 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEventEntry,
+} from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -43,6 +46,7 @@ import {
   appendOutput,
   createSessionSlug,
   markExited,
+  recordNotifyOnExitRemoval,
   tail,
 } from "./bash-process-registry.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
@@ -145,6 +149,7 @@ export type ExecProcessOutcome =
       timedOut: boolean;
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
       reason: string;
     };
 
@@ -310,7 +315,12 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+  if (
+    !session.backgrounded ||
+    !session.notifyOnExit ||
+    session.exitNotified ||
+    session.terminalPollObserved
+  ) {
     return;
   }
   const sessionKey = session.sessionKey?.trim();
@@ -338,10 +348,17 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
   };
-  enqueueSystemEvent(eventText, {
-    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
+  const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
+  const event = enqueueSystemEventEntry(eventText, {
+    sessionKey: eventSessionKey,
     deliveryContext: session.notifyDeliveryContext,
   });
+  if (event) {
+    recordNotifyOnExitRemoval(
+      session,
+      () => consumeSelectedSystemEventEntries(eventSessionKey, [event]).length > 0,
+    );
+  }
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
   if (!isSubagentSessionKey(sessionKey)) {
@@ -519,6 +536,7 @@ function buildExecExitOutcome(params: {
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
+    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
 }
@@ -646,6 +664,7 @@ export async function runExecProcess(opts: {
     pendingStderr: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
+    pendingOutputDropped: false,
     aggregated: "",
     tail: "",
     exited: false,

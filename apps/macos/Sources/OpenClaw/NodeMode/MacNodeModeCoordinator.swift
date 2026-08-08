@@ -753,7 +753,7 @@ final class MacNodeModeCoordinator: NSObject {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
         let input = MacNodeHostWorkerRetryPolicy.Input(
-            command: command,
+            launch: MacNodeHostWorkerLaunch(command: command),
             configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
@@ -823,23 +823,27 @@ final class MacNodeModeCoordinator: NSObject {
         guard self.nodeHostWorkerRetryTask == nil else {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
-        let executable: String
-        if let projectExecutable = CommandResolver.projectOpenClawExecutable() {
-            executable = projectExecutable
-        } else {
-            switch await CLIInstaller.status() {
-            case let .ready(location, _): executable = location
-            case let status:
-                throw MacNodeHostWorker.WorkerError.unavailable(status.message)
+        let launch: MacNodeHostWorkerLaunch
+        do {
+            if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
+                launch = projectLaunch
+            } else {
+                switch await CLIInstaller.status() {
+                case let .ready(location, _):
+                    launch = MacNodeHostWorkerLaunch(command: [location, "node", "worker"])
+                case let status:
+                    throw MacNodeHostWorker.WorkerError.unavailable(status.message)
+                }
             }
+        } catch let error as RuntimeResolutionError {
+            throw MacNodeHostWorker.WorkerError.unavailable(RuntimeLocator.describeFailure(error))
         }
-        let command = [executable, "node", "worker"]
         let input = MacNodeHostWorkerRetryPolicy.Input(
-            command: command,
+            launch: launch,
             configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
-        return try await nodeHostWorker.start(command: command)
+        return try await nodeHostWorker.start(launch: launch)
     }
 
     private func handleNodeHostWorkerFailure() {
@@ -1084,6 +1088,8 @@ extension MacNodeModeCoordinator {
             commands.append(OpenClawCameraCommand.list.rawValue)
             commands.append(OpenClawCameraCommand.snap.rawValue)
             commands.append(OpenClawCameraCommand.clip.rawValue)
+            commands.append(OpenClawCameraCommand.ptzStatus.rawValue)
+            commands.append(OpenClawCameraCommand.ptzControl.rawValue)
         }
         if capsSet.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)

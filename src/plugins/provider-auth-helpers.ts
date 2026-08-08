@@ -15,6 +15,7 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
@@ -284,15 +285,6 @@ export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string):
   };
 }
 
-/** Resolve real path, returning null if the target doesn't exist. */
-function safeRealpathSync(dir: string): string | null {
-  try {
-    return fs.realpathSync(path.resolve(dir));
-  } catch {
-    return null;
-  }
-}
-
 function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const normalized = path.resolve(primaryAgentDir);
   const parentOfAgent = path.dirname(normalized);
@@ -318,7 +310,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(dir);
+    const real = safeRealpathSync(path.resolve(dir));
     if (real && !seen.has(real)) {
       seen.add(real);
       result.push(real);
@@ -358,9 +350,9 @@ export async function writeOAuthCredentials(
   });
 
   if (options?.syncSiblingAgents) {
-    const primaryReal = safeRealpathSync(resolvedAgentDir);
+    const primaryReal = safeRealpathSync(path.resolve(resolvedAgentDir));
     for (const targetAgentDir of targetAgentDirs) {
-      const targetReal = safeRealpathSync(targetAgentDir);
+      const targetReal = safeRealpathSync(path.resolve(targetAgentDir));
       if (targetReal && primaryReal && targetReal === primaryReal) {
         continue;
       }

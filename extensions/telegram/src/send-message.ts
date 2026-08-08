@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -35,7 +36,10 @@ import {
   withTelegramNativeQuoteFallback,
   type TelegramApiContext,
 } from "./send-context.js";
-import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
+import {
+  isTelegramPhotoLimitError,
+  isTelegramVoiceMessagesForbiddenError,
+} from "./send-error-predicates.js";
 import { createTelegramTextSender } from "./send-message-text.js";
 import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
 import { reportTelegramProviderDelivery } from "./send-outbound.js";
@@ -297,7 +301,11 @@ async function sendMessageTelegramWithContext(
         plainCaption: htmlCaption ? plainCaption : undefined,
         ...(label === "photo"
           ? { shouldLog: (error: unknown) => !isTelegramPhotoLimitError(error) }
-          : {}),
+          : label === "voice"
+            ? {
+                shouldLog: (error: unknown) => !isTelegramVoiceMessagesForbiddenError(error),
+              }
+            : {}),
         send: (requestParams, shouldLog) =>
           withTelegramNativeQuoteFallback({
             label,
@@ -325,6 +333,22 @@ async function sendMessageTelegramWithContext(
       deliveredCaption = delivery.result.deliveredCaption;
       deliveredMediaSender = delivery.sender;
     } catch (error) {
+      if (
+        mediaSender.label === "voice" &&
+        isTelegramVoiceMessagesForbiddenError(error) &&
+        text.trim()
+      ) {
+        logVerbose(
+          "telegram sendVoice forbidden by recipient privacy settings; falling back to text",
+        );
+        const textResult = await sendChunkedText(text, "voice fallback text send");
+        recordChannelActivity({
+          channel: "telegram",
+          accountId: account.accountId,
+          direction: "outbound",
+        });
+        return textResult;
+      }
       opts.promptContextProjectionPlan?.cursor.invalidate();
       throw error;
     }

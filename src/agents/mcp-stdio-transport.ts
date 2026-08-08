@@ -2,12 +2,14 @@
  * OpenClaw stdio transport wrapper for MCP server subprocesses.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import process from "node:process";
 import { PassThrough } from "node:stream";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
@@ -16,6 +18,7 @@ type OpenClawStdioServerParameters = {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  prepareDataDir?: string;
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
@@ -49,6 +52,18 @@ export class OpenClawStdioClientTransport implements Transport {
       throw new Error(
         "OpenClawStdioClientTransport already started; Client.connect() starts transports automatically.",
       );
+    }
+
+    const prepareDataDir = this.serverParams.prepareDataDir?.trim();
+    if (prepareDataDir) {
+      try {
+        await fs.mkdir(prepareDataDir, { recursive: true });
+      } catch (error) {
+        throw new Error(
+          `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
     }
 
     await new Promise<void>((resolve, reject) => {

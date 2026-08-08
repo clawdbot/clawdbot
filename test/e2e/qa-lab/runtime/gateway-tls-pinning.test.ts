@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import { runGatewayTlsPinningProducer } from "./gateway-tls-pinning.js";
 
 const tempDirs: string[] = [];
@@ -14,12 +15,14 @@ describe("Gateway TLS pinning evidence", () => {
   it("proves the live listener fingerprint and public client pin policy", async () => {
     const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-tls-pinning-evidence-"));
     tempDirs.push(artifactBase);
+    const gatewayStartupEnv = snapshotGatewayStartupEnv();
 
     const evidence = await runGatewayTlsPinningProducer({
       artifactBase,
       repoRoot: process.cwd(),
     });
 
+    expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
     expect(evidence.entries[0]?.result.status).toBe("pass");
     const proof = JSON.parse(
       await fs.readFile(path.join(artifactBase, "gateway-tls-pinning-summary.json"), "utf8"),

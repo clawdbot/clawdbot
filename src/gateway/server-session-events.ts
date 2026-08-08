@@ -16,6 +16,7 @@ import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -363,7 +364,7 @@ async function handleTranscriptUpdateBroadcast(
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
-  const message = projectChatDisplayMessage(rawMessage);
+  const message = projectChatDisplayMessage(rawMessage, { resolveCurrentUserProfileDisplay });
   if (message) {
     params.broadcastToConnIds(
       "session.message",

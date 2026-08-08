@@ -22,11 +22,29 @@ export type StreamGroupPart = Extract<
   { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
 >;
 
-export type StreamGroupOptions = {
+type StreamMessageOptions = Pick<
+  Parameters<typeof renderGroupedMessage>[2],
+  | "sessionKey"
+  | "boardProvider"
+  | "agentId"
+  | "runActive"
+  | "onRequestUpdate"
+  | "canvasPluginSurfaceUrl"
+  | "basePath"
+  | "localMediaPreviewRoots"
+  | "assistantAttachmentAuthToken"
+  | "resolveArtifactDownload"
+  | "onAssistantAttachmentLoaded"
+  | "onRequestOpenImage"
+  | "onOpenImage"
+  | "embedSandboxMode"
+  | "allowExternalEmbedUrls"
+  | "onOpenWorkspaceFile"
+>;
+
+export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
-  basePath?: string;
-  authToken?: string | null;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
   startupPhase?: ChatRunStartupPhase;
@@ -70,7 +88,26 @@ export function renderStreamGroupParts(
                 timestamp: part.startedAt,
               },
               part.key,
-              { isStreaming: part.isStreaming, showReasoning: false },
+              {
+                isStreaming: part.isStreaming,
+                showReasoning: false,
+                sessionKey: opts.sessionKey,
+                boardProvider: opts.boardProvider,
+                agentId: opts.agentId,
+                runActive: opts.runActive,
+                onRequestUpdate: opts.onRequestUpdate,
+                canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+                basePath: opts.basePath,
+                localMediaPreviewRoots: opts.localMediaPreviewRoots,
+                assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+                resolveArtifactDownload: opts.resolveArtifactDownload,
+                onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
+                onRequestOpenImage: opts.onRequestOpenImage,
+                onOpenImage: opts.onOpenImage,
+                embedSandboxMode: opts.embedSandboxMode,
+                allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+                onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
+              },
               opts.onOpenSidebar,
             ),
   );
@@ -80,7 +117,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, basePath, authToken } = opts;
+  const { assistant, basePath, assistantAttachmentAuthToken } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -92,7 +129,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const workingOnly = parts.every((part) => part.kind !== "stream");
   const avatar = workingOnly
     ? nothing
-    : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
+    : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`

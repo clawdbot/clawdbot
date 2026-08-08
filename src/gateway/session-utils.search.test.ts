@@ -668,6 +668,7 @@ describe("listSessionsFromStore search", () => {
         updatedAt: now,
         totalTokens: 1200,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       } as SessionEntry,
       "agent:main:stale": {
         sessionId: "sess-stale",
@@ -935,6 +936,7 @@ describe("listSessionsFromStore search", () => {
             contextTokens: 200_000,
             totalTokens: TRANSCRIPT_TOTAL_TOKENS,
             totalTokensFresh: true,
+            totalTokensVersion: 1,
           }),
         });
 

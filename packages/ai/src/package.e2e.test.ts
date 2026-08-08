@@ -271,11 +271,8 @@ describe("@openclaw/ai packed package", () => {
     }
     const tempDir = tempDirs.make("openclaw-ai-consumer-");
 
-    await runCommand(
-      process.execPath,
-      ["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"],
-      { cwd: repoRoot },
-    );
+    // The E2E global setup owns the exact-head build. Rebuilding this shared
+    // package here can delete modules beneath concurrently running Gateways.
     const pack = await runNpmCommand(
       ["pack", "--ignore-scripts", "--json", "--pack-destination", tempDir],
       packageRoot,

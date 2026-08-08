@@ -12,6 +12,7 @@ import {
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
@@ -46,6 +47,7 @@ import {
   formatInternalExecPersistenceDeniedText,
   formatInternalVerboseCurrentReplyOnlyText,
   formatInternalVerbosePersistenceDeniedText,
+  formatModelSelectionScopeAck,
   enqueueModeSwitchEvents,
   persistSessionDirectiveSnapshot,
   rejectSessionDirectiveTransaction,
@@ -455,6 +457,7 @@ export async function handleDirectiveOnly(
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;
+  let configuredDefaultUpdate: ReturnType<typeof persistStickyModelSelectionBestEffort> | undefined;
   const appliedSessionEntry = sessionEntry;
   const touchedSessionFields = resolveDirectiveTouchedSessionFields({
     directives,
@@ -529,7 +532,7 @@ export async function handleDirectiveOnly(
       !modelSelection.isDefault &&
       params.canPersistStickyModelSelection === true
     ) {
-      persistStickyModelSelectionBestEffort({
+      configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,
       });
@@ -553,9 +556,9 @@ export async function handleDirectiveOnly(
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
         nextRouteResolution: "resolved",
-        nextModelOverrideSource: "user",
+        nextModelOverrideSource: modelSelection.isDefault ? undefined : "user",
         nextAuthProfileId: appliedSessionEntry.authProfileOverride,
-        nextAuthProfileIdSource: appliedSessionEntry.authProfileOverrideSource,
+        nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(appliedSessionEntry),
         nextThinking: {
           level: appliedSessionEntry.thinkingLevel,
           catalog: thinkingCatalog,
@@ -657,9 +660,11 @@ export async function handleDirectiveOnly(
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
     parts.push(
-      modelSelection.isDefault
-        ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias} for this session.`,
+      formatModelSelectionScopeAck({
+        isDefault: modelSelection.isDefault,
+        label: labelWithAlias,
+        configuredDefaultUpdate,
+      }),
     );
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);

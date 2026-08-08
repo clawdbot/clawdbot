@@ -882,6 +882,10 @@ function Invoke-OpenClawCommand {
     }
 
     & $commandPath @Arguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "openclaw $($Arguments -join ' ') failed with exit code $exitCode."
+    }
 }
 
 function Invoke-InteractiveOpenClawCommand {
@@ -1608,10 +1612,10 @@ function Run-Doctor {
     Write-Host "[*] Running doctor to migrate settings..." -ForegroundColor Yellow
     try {
         Invoke-OpenClawCommand doctor --non-interactive
+        Write-Host "[OK] Migration complete" -ForegroundColor Green
     } catch {
-        # Ignore errors from doctor
+        Write-Host "[!] Migration failed; continuing. Run: openclaw doctor --non-interactive" -ForegroundColor Yellow
     }
-    Write-Host "[OK] Migration complete" -ForegroundColor Green
 }
 
 function Test-GatewayServiceLoaded {

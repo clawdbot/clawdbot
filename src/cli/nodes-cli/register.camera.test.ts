@@ -80,6 +80,7 @@ describe("nodes camera snap CLI option forwarding", () => {
       throw new Error("expected camera snap command");
     }
 
+    expect(snap.options.find((option) => option.long === "--facing")?.defaultValue).toBeUndefined();
     expect(snap.options.find((option) => option.long === "--quality")?.description).toBe(
       "JPEG quality (optional; platform-specific default)",
     );
@@ -88,20 +89,21 @@ describe("nodes camera snap CLI option forwarding", () => {
     );
   });
 
-  it("omits quality and delayMs from RPC params when flags are not provided", async () => {
+  it("makes one facing-less request and forwards deviceId when --facing is omitted", async () => {
     const nodes = buildRootCommand();
-    await nodes.parseAsync(cameraSnapArgs(["--node", "test-node"]));
+    await nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--device-id", "camera-device"]));
 
-    // Default facing="both" may invoke camera.snap for more than one target.
-    expect(rpc.callGatewayCli).toHaveBeenCalled();
-    for (const invokeParams of capturedInvokeParams) {
-      expect(invokeParams).toMatchObject({
-        command: "camera.snap",
-        nodeId: "node-abc123",
-      });
-      expect((invokeParams.params as Record<string, unknown>).quality).toBeUndefined();
-      expect((invokeParams.params as Record<string, unknown>).delayMs).toBeUndefined();
-    }
+    expect(rpc.callGatewayCli).toHaveBeenCalledTimes(1);
+    expect(capturedInvokeParams).toHaveLength(1);
+    expect(capturedInvokeParams[0]).toMatchObject({
+      command: "camera.snap",
+      nodeId: "node-abc123",
+    });
+    const forwardedParams = capturedInvokeParams[0]?.params as Record<string, unknown>;
+    expect(forwardedParams).not.toHaveProperty("facing");
+    expect(forwardedParams.deviceId).toBe("camera-device");
+    expect(forwardedParams.quality).toBeUndefined();
+    expect(forwardedParams.delayMs).toBeUndefined();
   });
 
   it("forwards explicit --quality and --delay-ms values in RPC params", async () => {

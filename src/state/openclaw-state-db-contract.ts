@@ -14,11 +14,13 @@ export const FIRST_USE_STATE_INDEXES = ["execution_identity_contexts_run_created
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "model_catalog_remote",
+  "gateway_origin_device_tokens",
   "sidebar_sections",
   "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",
+  "worker_environment_ssh_fallback_ports",
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [...FIRST_USE_STATE_INDEXES] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */

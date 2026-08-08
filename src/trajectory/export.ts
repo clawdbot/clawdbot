@@ -919,10 +919,7 @@ function redactEventForExport(
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
-  const latestContext = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((event) => event.type === "context.compiled");
+  const latestContext = runtimeEvents.findLast((event) => event.type === "context.compiled");
   const runtimeData = latestContext?.data;
   const toolsValue = Array.isArray(runtimeData?.tools)
     ? (runtimeData.tools as TrajectoryToolDefinition[])
@@ -938,10 +935,7 @@ function resolveLatestRuntimeEventData(
   runtimeEvents: TrajectoryEvent[],
   type: string,
 ): JsonRecord | undefined {
-  const event = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((candidate) => candidate.type === type);
+  const event = runtimeEvents.findLast((candidate) => candidate.type === type);
   return event?.data;
 }
 
@@ -1041,10 +1035,9 @@ function buildMetadataCapture(params: {
     return undefined;
   }
   const modelFallback = (() => {
-    const latest = params.runtimeEvents
-      .slice()
-      .toReversed()
-      .find((event) => event.provider || event.modelId || event.modelApi);
+    const latest = params.runtimeEvents.findLast(
+      (event) => event.provider || event.modelId || event.modelApi,
+    );
     if (!latest?.provider && !latest?.modelId && !latest?.modelApi) {
       return undefined;
     }
@@ -1079,9 +1072,43 @@ function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
 }): JsonRecord | undefined {
-  const runtimeArtifacts = resolveLatestRuntimeEventData(params.runtimeEvents, "trace.artifacts");
-  const runtimeCompletion = resolveLatestRuntimeEventData(params.runtimeEvents, "model.completed");
-  const runtimeEnd = resolveLatestRuntimeEventData(params.runtimeEvents, "session.ended");
+  const cohortStart = params.runtimeEvents.findLastIndex(
+    (event) => event.type === "session.started",
+  );
+  const latestTimedEnd =
+    cohortStart < 0
+      ? params.runtimeEvents
+          .filter(
+            (event) => event.type === "session.ended" && isFiniteNumber(event.data?.startedAt),
+          )
+          .toSorted((left, right) => Number(left.data?.startedAt) - Number(right.data?.startedAt))
+          .at(-1)
+      : undefined;
+  const selectedEnd =
+    latestTimedEnd ??
+    (cohortStart < 0
+      ? params.runtimeEvents.findLast((event) => event.type === "session.ended")
+      : undefined);
+  const cohortRunId =
+    params.runtimeEvents[cohortStart]?.runId ??
+    selectedEnd?.runId ??
+    params.runtimeEvents.at(-1)?.runId;
+  const cohortEnd = selectedEnd
+    ? params.runtimeEvents.lastIndexOf(selectedEnd) + 1
+    : params.runtimeEvents.length;
+  const partialStart = selectedEnd
+    ? params.runtimeEvents.findLastIndex(
+        (event, index) =>
+          index < cohortEnd - 1 && event.type === "session.ended" && event.runId === cohortRunId,
+      ) + 1
+    : cohortStart;
+  // The newest start, or latest authoritative terminal in a partial tail, owns the cohort.
+  const cohort = params.runtimeEvents
+    .slice(Math.max(0, partialStart), cohortEnd)
+    .filter((event) => cohortRunId === undefined || event.runId === cohortRunId);
+  const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
+  const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
+  const runtimeEnd = resolveLatestRuntimeEventData(cohort, "session.ended");
   if (!runtimeArtifacts && !runtimeCompletion && !runtimeEnd) {
     return undefined;
   }
@@ -1113,6 +1140,8 @@ function buildArtifactsCapture(params: {
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,
     assistantTexts: runtimeArtifacts?.assistantTexts ?? runtimeCompletion?.assistantTexts,
+    stopReason:
+      runtimeArtifacts?.stopReason ?? runtimeCompletion?.stopReason ?? runtimeEnd?.stopReason,
     finalPromptText: runtimeArtifacts?.finalPromptText ?? runtimeCompletion?.finalPromptText,
     finalPromptTextOriginalLength:
       runtimeArtifacts?.finalPromptTextOriginalLength ??

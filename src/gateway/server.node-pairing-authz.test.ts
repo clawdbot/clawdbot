@@ -3,9 +3,13 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { resolveNodeIdFromNodeList } from "../shared/node-resolve.js";
 import {
   GATEWAY_CLIENT_MODES,
