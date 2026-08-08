@@ -30,25 +30,24 @@ export function finalizeEmbeddedAttempt(
     return result;
   }
   const terminalState = projectAgentRunAttemptTerminal(result.terminal);
-  // Yield ends before message_end, so lastAssistant owns completion; the
-  // completed attempt snapshot may belong to an earlier model cycle.
-  const completionAssistant =
+  // Yield ends before message_end, so its lastAssistant—not an earlier cycle—owns visible text.
+  const assistant =
     result.yieldDetected === true
       ? result.lastAssistant
       : (result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant);
   const completionOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
     attempt: result,
-    assistant: completionAssistant,
+    assistant: result.yieldDetected === true ? undefined : assistant,
   });
-  const terminalAssistantTexts = resolveTerminalAssistantTexts({
-    assistantTexts: result.assistantTexts,
-    lastAssistantStopReason: completionOutcome.stopReason,
-    lastAssistantVisibleText: resolveFinalAssistantVisibleText(completionAssistant),
-  });
+  const stopReason = result.yieldDetected === true ? "end_turn" : completionOutcome.stopReason;
   const terminal = resolveAttemptTrajectoryTerminal({
     failed: completionOutcome.status === "error",
     interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
-    assistantTexts: terminalAssistantTexts,
+    assistantTexts: resolveTerminalAssistantTexts({
+      assistantTexts: result.assistantTexts,
+      lastAssistantStopReason: stopReason,
+      lastAssistantVisibleText: resolveFinalAssistantVisibleText(assistant),
+    }),
     toolMetas: result.toolMetas,
     didSendViaMessagingTool: result.didSendViaMessagingTool,
     didSendDeterministicApprovalPrompt: result.didSendDeterministicApprovalPrompt === true,
@@ -64,7 +63,7 @@ export function finalizeEmbeddedAttempt(
     lastToolError: result.lastToolError,
     silentExpected: params.silentExpected,
     emptyAssistantReplyIsSilent: params.emptyAssistantReplyIsSilent,
-    lastAssistantStopReason: completionOutcome.stopReason,
+    lastAssistantStopReason: stopReason,
     hasTerminalOutput: params.hasTerminalOutput,
   });
   const promptError = terminalState.promptError
@@ -86,7 +85,7 @@ export function finalizeEmbeddedAttempt(
     promptCache: result.promptCache,
     compactionCount: result.compactionCount,
     assistantTexts: result.assistantTexts,
-    stopReason: completionOutcome.stopReason,
+    stopReason,
     finalPromptText: result.finalPromptText,
     messagesSnapshot: result.messagesSnapshot,
   });
@@ -108,7 +107,7 @@ export function finalizeEmbeddedAttempt(
       promptCache: result.promptCache,
       compactionCount: result.compactionCount ?? 0,
       assistantTexts: result.assistantTexts,
-      stopReason: completionOutcome.stopReason,
+      stopReason,
       finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,

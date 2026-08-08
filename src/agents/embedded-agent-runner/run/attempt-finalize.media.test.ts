@@ -84,10 +84,10 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     ],
     [
       "yield over completed assistant",
-      { kind: "ok" },
+      { kind: "aborted", source: "yield_cleanup" },
       "length",
-      "aborted",
-      "interrupted",
+      "end_turn",
+      "success",
       { last: "aborted", completed: "stop", yielded: true },
     ],
   ])(
