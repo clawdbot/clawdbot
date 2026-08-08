@@ -102,7 +102,7 @@ describe("buildNodesInventory", () => {
         }),
       ],
       nodes: [],
-      presence: [{ instanceId: "BROWSER-1", reason: "disconnect" }],
+      presence: [{ instanceId: "BROWSER-1", reason: "disconnect", ts: 1_000 }],
     });
 
     expect(firstGroup(groups).primary.connected).toBe(true);
@@ -304,8 +304,10 @@ describe("listStaleInventoryEntries", () => {
 
 describe("findGatewayPresence", () => {
   it("returns the Gateway self beacon", () => {
-    const gateway = { instanceId: "gateway-1", mode: " GATEWAY " };
-    expect(findGatewayPresence([{ instanceId: "node-1", mode: "node" }, gateway])).toBe(gateway);
+    const gateway = { instanceId: "gateway-1", mode: " GATEWAY ", ts: 2_000 };
+    expect(findGatewayPresence([{ instanceId: "node-1", mode: "node", ts: 1_000 }, gateway])).toBe(
+      gateway,
+    );
   });
 });
 
@@ -315,11 +317,16 @@ describe("listUnpairedPresence", () => {
       paired: [device({ deviceId: "node-1", displayName: "megaclaw" })],
       nodes: [],
     });
-    const joined = { deviceId: "NODE-1", mode: "node" };
-    const gateway = { instanceId: "gateway-1", mode: "gateway" };
-    const disconnected = { instanceId: "left-1", mode: "webchat", reason: "disconnect" };
+    const joined = { deviceId: "NODE-1", mode: "node", ts: 1_000 };
+    const gateway = { instanceId: "gateway-1", mode: "gateway", ts: 2_000 };
+    const disconnected = {
+      instanceId: "left-1",
+      mode: "webchat",
+      reason: "disconnect",
+      ts: 3_000,
+    };
     const textOnly = { text: "note from test", ts: 1_000 };
-    const live = { instanceId: "webchat-1", mode: "webchat", host: "browser" };
+    const live = { instanceId: "webchat-1", mode: "webchat", host: "browser", ts: 4_000 };
 
     expect(listUnpairedPresence([joined, gateway, disconnected, textOnly, live], groups)).toEqual([
       live,

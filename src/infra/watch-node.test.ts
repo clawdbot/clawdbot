@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
 import { runWatchMain } from "../../scripts/watch-node.mjs";
@@ -95,12 +95,7 @@ const startWatchRun = ({
   return { watcher, createWatcher, fakeProcess, runPromise };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireMockCall(mock: ReturnType<typeof vi.fn>, callIndex: number): unknown[] {
   const call = mock.mock.calls[callIndex] as unknown[] | undefined;

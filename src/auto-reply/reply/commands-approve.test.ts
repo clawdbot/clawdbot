@@ -1,4 +1,5 @@
 // Tests approval command behavior for pending tool and execution requests.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelApprovalCapability,
@@ -24,12 +25,7 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function approvalResolverRequest(callIndex = 0) {
   const call = resolveApprovalOverGatewayMock.mock.calls[callIndex] as unknown[] | undefined;

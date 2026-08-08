@@ -36,6 +36,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
   resolveStorePath,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
@@ -360,6 +361,17 @@ type SessionTranscriptUsageSnapshot = {
   trailingBytesTokens?: number;
 };
 
+function isUnavailableContextBarrier(
+  usage: NonNullable<ReturnType<typeof normalizeUsage>>,
+): boolean {
+  if (usage.contextUsage?.state !== "unavailable") {
+    return false;
+  }
+  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].every(
+    (value) => !(typeof value === "number" && value > 0),
+  );
+}
+
 // Keep a generous near-threshold window so large assistant outputs still trigger
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
@@ -414,9 +426,18 @@ function readLatestNonzeroUsageSnapshotFromTranscriptEvents(
     }
     const message =
       record.message && typeof record.message === "object" && !Array.isArray(record.message)
-        ? (record.message as { usage?: UsageLike })
+        ? (record.message as { api?: unknown; usage?: UsageLike })
         : undefined;
-    const usage = normalizeUsage(message?.usage ?? record.usage);
+    const rawUsage = message?.usage ?? record.usage;
+    if (message?.api === "cli" && rawUsage && rawUsage.contextUsage === undefined) {
+      return undefined;
+    }
+    const usage = normalizeUsage(rawUsage);
+    if (usage && isUnavailableContextBarrier(usage)) {
+      // This turn supersedes older context facts without supplying a replacement.
+      // Stop the reverse scan so pre-fix cumulative records cannot become fresh again.
+      return undefined;
+    }
     if (usage && hasNonzeroUsage(usage)) {
       return { usage, trailingBytes };
     }
@@ -544,6 +565,7 @@ function readSessionLogSnapshot(params: {
 type TranscriptTokenEstimate = {
   promptTokens: number;
   outputTokens?: number;
+  promptIncludesOutput?: boolean;
   transcriptByteSize?: number;
   transcriptBytesTokens?: number;
 };
@@ -630,6 +652,13 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     }
     return {
       promptTokens: Math.ceil(estimatedTokens),
+      // Full-message estimation already includes assistant content. Preserve
+      // output only for projection against a separate persisted prompt fact.
+      promptIncludesOutput: true,
+      outputTokens:
+        typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+          ? Math.ceil(outputTokens)
+          : undefined,
       transcriptByteSize: snapshot.byteSize,
       transcriptBytesTokens,
     };
@@ -717,11 +746,6 @@ export async function runPreflightCompactionIfNeeded(params: {
   const reserveTokensFloor = memoryFlushPlan?.reserveTokensFloor ?? 20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
-  const persistedTotalTokens = entry.totalTokens;
-  const hasPersistedTotalTokens =
-    typeof persistedTotalTokens === "number" &&
-    Number.isFinite(persistedTotalTokens) &&
-    persistedTotalTokens > 0;
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
@@ -778,17 +802,16 @@ export async function runPreflightCompactionIfNeeded(params: {
     );
     return entry ?? params.sessionEntry;
   }
-  const stalePersistedPromptTokens =
-    hasPersistedTotalTokens && entry.totalTokensFresh !== false
-      ? Math.floor(persistedTotalTokens)
-      : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
+  const transcriptEstimateOutputTokens = transcriptUsageTokens?.promptIncludesOutput
+    ? undefined
+    : transcriptOutputTokens;
   const usageProjectedTokenCount =
     typeof transcriptPromptTokens === "number"
       ? resolveEffectivePromptTokens(
           transcriptPromptTokens,
-          transcriptOutputTokens,
+          transcriptEstimateOutputTokens,
           promptTokenEstimate,
         )
       : undefined;
@@ -803,7 +826,6 @@ export async function runPreflightCompactionIfNeeded(params: {
   const projectedTokenCount = Math.max(
     usageProjectedTokenCount ?? 0,
     freshProjectedTokenCount ?? 0,
-    stalePersistedPromptTokens ?? 0,
   );
   const tokenCountForCompaction =
     Number.isFinite(projectedTokenCount) && projectedTokenCount > 0
@@ -1069,8 +1091,7 @@ export async function runMemoryFlushIfNeeded(params: {
     persistedPromptTokensRaw > 0
       ? persistedPromptTokensRaw
       : undefined;
-  const hasFreshPersistedPromptTokens =
-    typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
+  const hasFreshPersistedPromptTokens = resolveFreshSessionTotalTokens(entry) !== undefined;
 
   const flushThreshold =
     contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
@@ -1138,6 +1159,7 @@ export async function runMemoryFlushIfNeeded(params: {
       ...entry,
       totalTokens: transcriptPromptTokens,
       totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     };
     entry = nextEntry;
     if (params.sessionKey && params.sessionStore) {
@@ -1150,7 +1172,11 @@ export async function runMemoryFlushIfNeeded(params: {
             storePath: params.storePath,
             sessionKey: params.sessionKey,
           },
-          () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
+          () => ({
+            totalTokens: transcriptPromptTokens,
+            totalTokensFresh: true,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          }),
           {
             skipMaintenance: true,
             takeCacheOwnership: true,
@@ -1294,6 +1320,10 @@ export async function runMemoryFlushIfNeeded(params: {
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        userLockedAuthProfileId:
+          params.followupRun.run.authProfileIdSource === "user"
+            ? params.followupRun.run.authProfileId
+            : undefined,
       },
       identity: {
         runId: flushRunId,
@@ -1369,6 +1399,8 @@ export async function runMemoryFlushIfNeeded(params: {
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
+          contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           onAgentEvent: (evt) => {
             if (evt.stream === "tool" && evt.data.name === "write") {
               if (evt.data.phase === "result" && evt.data.isError !== true) {

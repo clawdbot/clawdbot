@@ -19,5 +19,6 @@ export function buildForkedGatewaySessionEntry(
       : {}),
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
   };
 }

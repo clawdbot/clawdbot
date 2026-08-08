@@ -1,5 +1,6 @@
-// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
 import { expectDefined } from "@openclaw/normalization-core";
+// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
@@ -325,12 +326,7 @@ async function runGatewayStatus(
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireRecordArray(value: unknown, label: string): Array<Record<string, unknown>> {
   if (

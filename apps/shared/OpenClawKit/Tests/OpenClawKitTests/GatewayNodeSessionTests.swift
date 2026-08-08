@@ -184,6 +184,8 @@ private final class FirstCancelGate: @unchecked Sendable {
 }
 
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
+
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
@@ -198,8 +200,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var sentRequestMethods: [String] = []
     private var sentRequestPayloads: [[String: Any]] = []
     private var receivePhase = 0
-    private var pendingReceiveHandler:
-        (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+    private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
+    private var pendingInboundFrames: [ReceiveResult] = []
 
     init(
         helloAuth: [String: Any]? = nil,
@@ -332,19 +334,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     func receive(
         completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
     {
-        self.lock.withLock { self.pendingReceiveHandler = completionHandler }
+        let queued = self.lock.withLock { () -> ReceiveResult? in
+            guard !self.pendingInboundFrames.isEmpty else {
+                self.pendingReceiveHandler = completionHandler
+                return nil
+            }
+            return self.pendingInboundFrames.removeFirst()
+        }
+        if let queued {
+            completionHandler(queued)
+        }
     }
 
     func emitReceiveFailure() {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            self._state = .canceling
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.networkConnectionLost)))
+        self.lock.withLock { self._state = .canceling }
+        self.emitInbound(.failure(URLError(.networkConnectionLost)))
     }
 
     func emitInvokeRequest(id: String, command: String, idempotencyKey: String? = nil) {
@@ -361,14 +365,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         paramsJSON: String?,
         idempotencyKey: String? = nil)
     {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(.success(.data(Self.invokeRequestData(
+        self.emitInbound(.success(.data(Self.invokeRequestData(
             id: id,
             command: command,
             paramsJSON: paramsJSON,
@@ -376,13 +373,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func emitResponse(id: String, payload: [String: Any]) {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
         let frame: [String: Any] = [
             "type": "res",
             "id": id,
@@ -390,7 +380,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             "payload": payload,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
-        handler?(.success(.data(data)))
+        self.emitInbound(.success(.data(data)))
+    }
+
+    private func emitInbound(_ result: ReceiveResult) {
+        let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
+            guard let handler = self.pendingReceiveHandler else {
+                // URLSession preserves socket frame order even while the actor is
+                // processing one callback and has not registered the next receive.
+                self.pendingInboundFrames.append(result)
+                return nil
+            }
+            self.pendingReceiveHandler = nil
+            return handler
+        }
+        handler?(result)
     }
 
     private static func connectChallengeData(nonce: String) -> Data {

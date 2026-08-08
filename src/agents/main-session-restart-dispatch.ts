@@ -137,7 +137,7 @@ export function resolveRestartRecoveryDeliveryContext(params: {
   entry: SessionEntry;
   includeSessionDeliveryFallback?: boolean;
   sessionKey: string;
-}): DeliveryContext | undefined {
+}): (DeliveryContext & { channel: string; to: string }) | undefined {
   const activeRunDeliveryContext = normalizeDeliveryContext(
     params.entry.restartRecoveryDeliveryContext,
   );

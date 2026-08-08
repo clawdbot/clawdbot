@@ -63,6 +63,25 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
+  it("round-trips only the immutable steer run identity", () => {
+    const state = createState();
+    const steer: ChatQueueItem = {
+      id: "steer-reload",
+      text: "keep the target",
+      createdAt: 1,
+      kind: "steered",
+      sendRunId: "steer-request",
+      sendState: "unconfirmed",
+      steerTargetRunId: "active-run",
+    };
+
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, steer)).toBe(true);
+
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
+  });
+
   it("notifies durable outbox subscribers on writes until they unsubscribe", () => {
     const state = createState();
     const original = reconnectItem("notify", 1);

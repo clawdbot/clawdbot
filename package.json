@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
       "state": 6,
@@ -1827,7 +1827,8 @@
     "test:env-mutations:report": "node --import tsx scripts/test-env-mutation-report.ts",
     "test:skip-inventory:report": "node --import tsx scripts/test-skip-inventory.ts",
     "test:type-suppression-inventory:report": "node --import tsx scripts/type-suppression-inventory.ts",
-    "test:e2e": "pnpm test:e2e:gateway && pnpm test:ui:e2e",
+    "test:e2e": "pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e",
+    "test:e2e:agent-plugin-gateway": "node --import tsx scripts/agent-plugin-gateway-e2e.ts",
     "test:e2e:browser-copilot": "node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node scripts/ensure-playwright-chromium.mjs --require-playwright-chromium && node scripts/run-with-env.mjs PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_COPILOT_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/browser/chrome-extension/page-share.e2e.test.ts extensions/browser/chrome-extension/sidepanel.e2e.test.ts",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "node scripts/run-with-env.mjs OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
@@ -2022,6 +2023,7 @@
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
     "@mdx-js/mdx": "3.1.1",
+    "@opentelemetry/sdk-node": "0.221.0",
     "@shikijs/core": "4.3.1",
     "@shikijs/engine-javascript": "4.3.1",
     "@shikijs/engine-oniguruma": "4.3.1",

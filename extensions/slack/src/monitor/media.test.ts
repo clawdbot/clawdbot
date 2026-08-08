@@ -7,6 +7,7 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSlackAttachmentContent,
@@ -27,6 +28,16 @@ type SaveMediaBufferMock = (
   originalFilename?: string,
 ) => Promise<SavedMedia>;
 type SlackMediaResult = NonNullable<Awaited<ReturnType<typeof resolveSlackMedia>>>;
+type ResolveSlackThreadStarterParams = Parameters<typeof resolveSlackThreadStarter>[0];
+
+function resolveTestSlackThreadStarter(
+  params: Omit<ResolveSlackThreadStarterParams, "workspaceScope">,
+) {
+  return resolveSlackThreadStarter({
+    ...params,
+    workspaceScope: { accountId: "test", teamId: "T1" },
+  });
+}
 
 function expectSlackMediaResult(
   result: Awaited<ReturnType<typeof resolveSlackMedia>>,
@@ -186,12 +197,7 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
   return call;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectFetchCalledWithUrl(mock: unknown, expectedUrl: string): void {
   expect(requireMockCall(mock, 0, "fetch")[0]).toBe(expectedUrl);
@@ -1637,7 +1643,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,
@@ -1659,7 +1665,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,
@@ -1690,7 +1696,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,
@@ -1731,7 +1737,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,
@@ -1755,7 +1761,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,
@@ -1777,7 +1783,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C42",
       threadTs: "9.999",
       client,
@@ -1796,7 +1802,7 @@ describe("resolveSlackThreadStarter", () => {
       conversations: { replies },
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
-    const result = await resolveSlackThreadStarter({
+    const result = await resolveTestSlackThreadStarter({
       channelId: "C1",
       threadTs: "1.000",
       client,

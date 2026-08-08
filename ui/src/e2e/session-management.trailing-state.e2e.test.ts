@@ -13,7 +13,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("swaps an active turn spinner for hover and focus management actions", async () => {
+  it("keeps action-only text widest at rest and swaps active state for actions", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -24,6 +24,11 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", Date.now()),
+          sessionRow(
+            "agent:main:hover-actions",
+            "A deliberately long action-only sidebar title",
+            Date.now() - 1,
+          ),
           sessionRow("agent:main:hover-active", "Hover active", Date.now() - 1, {
             hasActiveRun: true,
             status: "running",
@@ -35,6 +40,36 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      const actionOnlyRow = page.locator('[data-session-key="agent:main:hover-actions"]');
+      await actionOnlyRow.waitFor({ state: "visible", timeout: 10_000 });
+      const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
+      const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
+      const actionOnlyPin = actionOnlyRow.getByRole("button", { name: "Pin thread" });
+      await expect
+        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("4px");
+      const restingTextBounds = await actionOnlyText.boundingBox();
+
+      await actionOnlyRow.hover();
+      await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
+      await expect
+        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("52px");
+      const hoveredTextBounds = await actionOnlyText.boundingBox();
+
+      await page.mouse.move(0, 0);
+      await actionOnlyPin.focus();
+      await expect.poll(() => actionOpacity(actionOnlyPin)).toBe("1");
+      await expect
+        .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
+        .toBe("52px");
+      const focusedTextBounds = await actionOnlyText.boundingBox();
+      if (!restingTextBounds || !hoveredTextBounds || !focusedTextBounds) {
+        throw new Error("Expected visible action-only text geometry");
+      }
+      expect(restingTextBounds.width).toBeGreaterThanOrEqual(hoveredTextBounds.width);
+      expect(restingTextBounds.width).toBeGreaterThanOrEqual(focusedTextBounds.width);
+
       const row = page.locator('[data-session-key="agent:main:hover-active"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const state = row.locator(".session-row-state");
@@ -177,7 +212,7 @@ suite.define(() => {
     }
   });
 
-  it("reserves only the visible desktop trailing surface for a long active row", async () => {
+  it("does not widen desktop session text when hover actions replace trailing state", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -268,43 +303,42 @@ suite.define(() => {
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("68px");
 
-      const [restingNameBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
+      const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([
-          row.locator(".sidebar-recent-session__name").boundingBox(),
+          row.locator(".sidebar-recent-session__text").boundingBox(),
           state.boundingBox(),
           pin.boundingBox(),
           menu.boundingBox(),
         ]);
-      if (!restingNameBounds || !restingStateBounds || !restingPinBounds || !restingMenuBounds) {
+      if (!restingTextBounds || !restingStateBounds || !restingPinBounds || !restingMenuBounds) {
         throw new Error("Expected visible resting session state geometry");
       }
       const actionSurfaceWidth = restingMenuBounds.x + restingMenuBounds.width - restingPinBounds.x;
-      expect(restingNameBounds.x + restingNameBounds.width).toBeLessThanOrEqual(
+      expect(restingTextBounds.x + restingTextBounds.width).toBeLessThanOrEqual(
         restingStateBounds.x,
       );
-      expect(restingNameBounds.x + restingNameBounds.width).toBeGreaterThan(
+      expect(restingTextBounds.x + restingTextBounds.width).toBeGreaterThan(
         restingStateBounds.x - actionSurfaceWidth,
       );
-
       await row.hover();
       await expect.poll(() => actionOpacity(state)).toBe("0");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("52px");
+        .toBe("68px");
 
-      const [nameBounds, pinBounds, menuBounds] = await Promise.all([
-        row.locator(".sidebar-recent-session__name").boundingBox(),
+      const [textBounds, pinBounds, menuBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__text").boundingBox(),
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!nameBounds || !pinBounds || !menuBounds) {
+      if (!textBounds || !pinBounds || !menuBounds) {
         throw new Error("Expected visible combined session action geometry");
       }
-      expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x);
+      expect(restingTextBounds.width).toBeGreaterThanOrEqual(textBounds.width);
+      expect(textBounds.x + textBounds.width).toBeLessThanOrEqual(pinBounds.x);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
-
       await page.mouse.move(0, 0);
       await pin.focus();
       await expect.poll(() => actionOpacity(state)).toBe("0");
@@ -312,17 +346,18 @@ suite.define(() => {
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("52px");
+        .toBe("68px");
 
-      const [focusedNameBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
-        row.locator(".sidebar-recent-session__name").boundingBox(),
+      const [focusedTextBounds, focusedPinBounds, focusedMenuBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__text").boundingBox(),
         pin.boundingBox(),
         menu.boundingBox(),
       ]);
-      if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
+      if (!focusedTextBounds || !focusedPinBounds || !focusedMenuBounds) {
         throw new Error("Expected visible focused session action geometry");
       }
-      expect(focusedNameBounds.x + focusedNameBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
+      expect(restingTextBounds.width).toBeGreaterThanOrEqual(focusedTextBounds.width);
+      expect(focusedTextBounds.x + focusedTextBounds.width).toBeLessThanOrEqual(focusedPinBounds.x);
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
       await context.close();

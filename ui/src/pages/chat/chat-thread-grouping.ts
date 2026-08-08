@@ -532,6 +532,12 @@ type WorkGroupRenderItem = {
   hasError: boolean;
 };
 
+type ActivityRunRenderItem = {
+  kind: "activity-run";
+  key: string;
+  groups: MessageGroup[];
+};
+
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
 function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
@@ -709,5 +715,39 @@ export function collapseCompletedTurnWork(
     });
     result.push(...turn.slice(segmentEnd + 1));
   }
+  return result;
+}
+
+type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
+
+/** Presentation-only rollup for tool groups separated by projected turn boundaries. */
+export function coalesceActivityRuns(
+  items: CompletedTurnRenderItem[],
+  opts: { searchActive?: boolean } = {},
+): Array<CompletedTurnRenderItem | ActivityRunRenderItem> {
+  if (opts.searchActive) {
+    return items;
+  }
+  const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
+  let groups: MessageGroup[] = [];
+  const flush = () => {
+    const [first] = groups;
+    if (!first) {
+      return;
+    }
+    result.push(
+      groups.length === 1 ? first : { kind: "activity-run", key: `activity:${first.key}`, groups },
+    );
+    groups = [];
+  };
+  for (const item of items) {
+    if (item.kind === "group" && item.role.toLowerCase() === "tool") {
+      groups.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
   return result;
 }

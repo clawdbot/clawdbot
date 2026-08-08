@@ -54,7 +54,7 @@ function makeScenario(
           config,
         };
   return {
-    id: "tui-pty-producer-test",
+    id: "tui-pty-evidence-producer-contract",
     title: "TUI PTY producer test",
     surface: "tui",
     objective: "Prove the TUI PTY evidence producer contract.",

@@ -252,6 +252,38 @@ describe("processDiscordMessage draft streaming progress", () => {
     expectFinalWithProgressReceipt("done", "💬 2 notes", "🛠️ 1 tool call");
   });
 
+  it("retries an unacknowledged preamble and reports visibility after Discord accepts it", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    draftStream.messageId.mockReturnValue(undefined);
+    const results: Array<boolean | void> = [];
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      const preamble = {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking source data.",
+      };
+      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
+      draftStream.messageId.mockReturnValue("preview-1");
+      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(results).toEqual([false, true]);
+    expect(draftStream.update.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it.each([
     ["active", true],
     ["inactive", false],

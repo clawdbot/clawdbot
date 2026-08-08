@@ -16,6 +16,7 @@ import {
   formatMs,
   formatTokens,
 } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
@@ -349,14 +350,7 @@ function renderRun(
                   class="session-link"
                   href=${chatUrl}
                   @click=${(e: MouseEvent) => {
-                    if (
-                      e.defaultPrevented ||
-                      e.button !== 0 ||
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey
-                    ) {
+                    if (!shouldHandleNavigationClick(e)) {
                       return;
                     }
                     if (onNavigateToChat && entry.sessionKey) {

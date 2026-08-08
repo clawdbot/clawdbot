@@ -406,12 +406,15 @@ describe("Gateway task and automation RPCs", () => {
                 ts: number;
                 status: string;
                 reason?: string;
+                message?: string;
                 preview?: string;
               }>("last-heartbeat", {});
               return (
                 lastHeartbeat.ts >= wakeRequestedAt &&
                 lastHeartbeat.status === "skipped" &&
                 lastHeartbeat.reason === "target-none" &&
+                lastHeartbeat.message ===
+                  "Heartbeat delivery is disabled by configuration (target: none)." &&
                 lastHeartbeat.preview === `Heartbeat handled: ${wakeText}`
               );
             },
