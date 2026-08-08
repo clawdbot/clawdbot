@@ -226,6 +226,24 @@ describe("channel-streaming", () => {
     ).toBe("Working\n\n🛠️ pgrep -fl Discord || true (agent)\n• Discord is installed.");
   });
 
+  it("renders automatic and configured progress labels through the public formatter", () => {
+    expect(formatChannelProgressDraftText({ lines: [], random: () => 0 })).toBe("Working");
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: " AUTO " } } },
+        lines: [],
+        random: () => 0,
+      }),
+    ).toBe("Working");
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { labels: ["Pearling"] } } },
+        lines: [],
+        random: () => 0.5,
+      }),
+    ).toBe("Pearling");
+  });
+
   it("formats bounded progress draft text", () => {
     const entry = {
       streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80, render: "rich" } },
