@@ -27,6 +27,8 @@ type MockModelServer = {
   close: () => Promise<void>;
 };
 
+type MockSseEvent = { type: string } & Record<string, unknown>;
+
 const instances: OpenClawTestInstance[] = [];
 const modelServers: MockModelServer[] = [];
 
@@ -251,7 +253,7 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
     sequence === 1
       ? [{ type: "compaction", id: COMPACTION_ID, encrypted_content: COMPACTION_DATA }, message]
       : [message];
-  const events = output.flatMap((item, outputIndex) => [
+  const events: MockSseEvent[] = output.flatMap((item, outputIndex) => [
     {
       type: "response.output_item.added",
       output_index: outputIndex,
