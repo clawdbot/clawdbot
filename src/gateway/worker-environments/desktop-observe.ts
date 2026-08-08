@@ -52,7 +52,7 @@ export function mintWorkerDesktopObserverToken(params: {
   return { token, expiresAtMs };
 }
 
-export function consumeWorkerDesktopObserverToken(
+function consumeWorkerDesktopObserverToken(
   token: string,
   nowMs = Date.now(),
 ): WorkerDesktopObserverTokenEntry | undefined {

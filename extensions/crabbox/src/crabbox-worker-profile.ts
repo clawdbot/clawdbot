@@ -121,6 +121,30 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   return { binary, class: machineClass, desktop, idleTimeout, provider, setup, ttl };
 }
 
+export function buildCrabboxWarmupArgs(profile: CrabboxProfile, slug: string): string[] {
+  const args = [
+    "warmup",
+    "--provider",
+    profile.provider,
+    "--network",
+    "public",
+    "--tailscale=false",
+    "--class",
+    profile.class,
+    "--ttl",
+    profile.ttl,
+    "--idle-timeout",
+    profile.idleTimeout,
+    "--slug",
+    slug,
+    "--keep=true",
+  ];
+  if (profile.desktop) {
+    args.push("--desktop");
+  }
+  return args;
+}
+
 function defaultIsExecutable(candidate: string, platform: NodeJS.Platform): boolean {
   try {
     if (!fs.statSync(candidate).isFile()) {

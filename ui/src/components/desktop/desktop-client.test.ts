@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { DesktopClient, type RfbClient, type RfbConstructor } from "./desktop-client.ts";
+import { DesktopClient } from "./desktop-client.ts";
+
+type RfbConstructor = NonNullable<ConstructorParameters<typeof DesktopClient>[0]>;
+type RfbClient = InstanceType<RfbConstructor>;
 
 class FakeSocket extends EventTarget {
   readonly url: string;

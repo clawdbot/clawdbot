@@ -1802,7 +1802,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let idlems: Int?
     public let attachedsessionids: [String]
     public let tunnelstatus: WorkerTunnelStatus
-    public let error: String?
+    public let desktop: Bool?
 
     public init(
         providerid: String,
@@ -1812,7 +1812,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         idlems: Int? = nil,
         attachedsessionids: [String],
         tunnelstatus: WorkerTunnelStatus,
-        error: String? = nil)
+        desktop: Bool? = nil)
     {
         self.providerid = providerid
         self.leaseid = leaseid
@@ -1821,7 +1821,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.idlems = idlems
         self.attachedsessionids = attachedsessionids
         self.tunnelstatus = tunnelstatus
-        self.error = error
+        self.desktop = desktop
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1832,7 +1832,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case idlems = "idleMs"
         case attachedsessionids = "attachedSessionIds"
         case tunnelstatus = "tunnelStatus"
-        case error
+        case desktop
     }
 }
 
@@ -18138,25 +18138,21 @@ public struct UpdateStatusParams: Codable, Sendable {}
 public struct UpdateStatusResult: Codable, Sendable {
     public let sentinel: AnyCodable
     public let updateavailable: AnyCodable
-    public let effectivechannel: AnyCodable?
     public let schedule: UpdateScheduleState?
 
     public init(
         sentinel: AnyCodable,
         updateavailable: AnyCodable,
-        effectivechannel: AnyCodable? = nil,
         schedule: UpdateScheduleState? = nil)
     {
         self.sentinel = sentinel
         self.updateavailable = updateavailable
-        self.effectivechannel = effectivechannel
         self.schedule = schedule
     }
 
     private enum CodingKeys: String, CodingKey {
         case sentinel
         case updateavailable = "updateAvailable"
-        case effectivechannel = "effectiveChannel"
         case schedule
     }
 }

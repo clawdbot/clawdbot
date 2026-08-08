@@ -101,6 +101,7 @@ describe("listGatewayMethods", () => {
       "sessions.patchMany",
       "update.hold",
       "sessions.catalog.startTerminal",
+      "worker.desktop.observe",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -215,6 +216,7 @@ describe("listGatewayMethods", () => {
       "sessions.patchMany",
       "update.hold",
       "sessions.catalog.startTerminal",
+      "worker.desktop.observe",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -223,6 +225,9 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
     expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(
       methods.indexOf("update.hold") + 1,
+    );
+    expect(methods.indexOf("worker.desktop.observe")).toBe(
+      methods.indexOf("sessions.catalog.startTerminal") + 1,
     );
   });
 

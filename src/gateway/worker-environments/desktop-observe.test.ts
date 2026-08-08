@@ -6,7 +6,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
-  consumeWorkerDesktopObserverToken,
   handleWorkerDesktopUpgrade,
   mintWorkerDesktopObserverToken,
   WORKER_DESKTOP_OBSERVE_PATH,
@@ -20,7 +19,7 @@ afterEach(async () => {
 });
 
 describe("worker desktop observer tokens", () => {
-  it("are single-use, expire after 60 seconds, and reject unknown values", () => {
+  it("mints opaque tokens that expire after 60 seconds", () => {
     const minted = mintWorkerDesktopObserverToken({
       environmentId: "worker:one",
       ownerEpoch: 3,
@@ -30,22 +29,6 @@ describe("worker desktop observer tokens", () => {
     });
     expect(minted.token).toMatch(/^[a-f0-9]{48}$/u);
     expect(minted.expiresAtMs).toBe(61_000);
-    expect(consumeWorkerDesktopObserverToken(minted.token, 2_000)).toMatchObject({
-      environmentId: "worker:one",
-      ownerEpoch: 3,
-      control: true,
-    });
-    expect(consumeWorkerDesktopObserverToken(minted.token, 2_000)).toBeUndefined();
-
-    const expired = mintWorkerDesktopObserverToken({
-      environmentId: "worker:two",
-      ownerEpoch: 1,
-      control: false,
-      localSocketPath: "/tmp/expired.sock",
-      nowMs: 5_000,
-    });
-    expect(consumeWorkerDesktopObserverToken(expired.token, 65_000)).toBeUndefined();
-    expect(consumeWorkerDesktopObserverToken("0".repeat(48), 5_000)).toBeUndefined();
   });
 });
 
@@ -110,10 +93,42 @@ async function createProxyHarness(params: { getBufferedAmount?: () => number } =
     ws.once("open", resolve);
     ws.once("error", reject);
   });
-  return { closeObserver, desktopPeer: await peerConnected, release, ws };
+  return { closeObserver, desktopPeer: await peerConnected, observerUrl: ws.url, release, ws };
+}
+
+async function expectUnauthorizedObserver(url: string): Promise<void> {
+  const ws = new WebSocket(url);
+  cleanup.push(async () => ws.terminate());
+  await new Promise<void>((resolve, reject) => {
+    ws.once("open", () => reject(new Error("observer token was unexpectedly accepted")));
+    ws.once("unexpected-response", (_request, response) => {
+      expect(response.statusCode).toBe(401);
+      response.resume();
+      resolve();
+    });
+    ws.once("error", () => undefined);
+  });
 }
 
 describe("worker desktop observer proxy", () => {
+  it("rejects consumed, expired, and unknown tokens", async () => {
+    const harness = await createProxyHarness();
+    await expectUnauthorizedObserver(harness.observerUrl);
+
+    const expired = mintWorkerDesktopObserverToken({
+      environmentId: "worker:expired",
+      ownerEpoch: 1,
+      control: false,
+      localSocketPath: "/tmp/expired.sock",
+      nowMs: 0,
+    });
+    const observerUrl = new URL(harness.observerUrl);
+    observerUrl.searchParams.set("token", expired.token);
+    await expectUnauthorizedObserver(observerUrl.toString());
+    observerUrl.searchParams.set("token", "0".repeat(48));
+    await expectUnauthorizedObserver(observerUrl.toString());
+  });
+
   it("pumps binary RFB bytes both directions and propagates desktop close", async () => {
     const harness = await createProxyHarness();
     const fromDesktop = new Promise<Buffer>((resolve) => {

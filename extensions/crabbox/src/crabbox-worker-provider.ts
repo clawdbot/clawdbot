@@ -11,6 +11,7 @@ import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/pro
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
+  buildCrabboxWarmupArgs,
   identityRefId,
   nonEmptyString,
   operationSlug,
@@ -604,6 +605,7 @@ export function createCrabboxWorkerProvider(
               binary,
               deadline,
               inspect: existing.inspect,
+              profile: parsed,
               provider: parsed.provider,
               runCommand,
             });
@@ -642,29 +644,9 @@ export function createCrabboxWorkerProvider(
         }
       }
 
-      const warmupArgs = [
-        "warmup",
-        "--provider",
-        parsed.provider,
-        "--network",
-        "public",
-        "--tailscale=false",
-        "--class",
-        parsed.class,
-        "--ttl",
-        parsed.ttl,
-        "--idle-timeout",
-        parsed.idleTimeout,
-        "--slug",
-        slug,
-        "--keep=true",
-      ];
-      if (parsed.desktop) {
-        warmupArgs.push("--desktop");
-      }
       const warmup = await runCrabboxCommand({
         action: "warmup",
-        args: warmupArgs,
+        args: buildCrabboxWarmupArgs(parsed, slug),
         binary,
         runCommand,
         timeoutMs: remainingProvisionTimeout(deadline, WARMUP_TIMEOUT_MS),

@@ -1,9 +1,9 @@
-export type DesktopDisconnectDetail = {
+type DesktopDisconnectDetail = {
   code?: number;
   reason?: string;
 };
 
-export type DesktopSecurityFailureDetail = {
+type DesktopSecurityFailureDetail = {
   reason?: string;
   status?: number;
 };
@@ -23,13 +23,13 @@ export type DesktopConnectionHandle = {
   disconnect(): void;
 };
 
-export type RfbClient = EventTarget & {
+type RfbClient = EventTarget & {
   disconnect(): void;
   scaleViewport: boolean;
   viewOnly: boolean;
 };
 
-export type RfbConstructor = new (
+type RfbConstructor = new (
   target: HTMLElement,
   channel: string | WebSocket,
   options?: { credentials?: { password: string } },
@@ -45,10 +45,7 @@ const loadDefaultRfb: RfbLoader = async () => {
   return module.default;
 };
 
-export function resolveDesktopWebSocketUrl(
-  wsUrl: string,
-  gatewayUrl = globalThis.location?.href,
-): string {
+function resolveDesktopWebSocketUrl(wsUrl: string, gatewayUrl = globalThis.location?.href): string {
   const base = new URL(gatewayUrl ?? globalThis.location.href, globalThis.location?.href);
   if (base.protocol === "http:") {
     base.protocol = "ws:";
@@ -83,9 +80,11 @@ export class DesktopClient {
     socket.addEventListener("close", (event) => {
       closeDetail = { code: event.code, reason: event.reason };
     });
-    const rfb = new Rfb(options.target, socket, {
-      ...(options.password ? { credentials: { password: options.password } } : {}),
-    });
+    const rfb = new Rfb(
+      options.target,
+      socket,
+      options.password ? { credentials: { password: options.password } } : undefined,
+    );
     rfb.viewOnly = options.viewOnly;
     rfb.scaleViewport = true;
     rfb.addEventListener("connect", () => options.onConnect?.());

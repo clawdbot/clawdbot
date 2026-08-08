@@ -26,7 +26,7 @@ trap 'exit 0' HUP INT TERM
 while :; do sleep 3600; done
 `;
 
-export type WorkerDesktopObserver = {
+type WorkerDesktopObserver = {
   control: boolean;
   close(code: number, reason: string): void;
 };
@@ -59,7 +59,7 @@ type DesktopEntry = {
   stopped: boolean;
 };
 
-export class WorkerDesktopUnsupportedError extends Error {
+class WorkerDesktopUnsupportedError extends Error {
   readonly code = "unsupported_platform";
 
   constructor() {

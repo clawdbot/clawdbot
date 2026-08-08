@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import { createWorkerDesktopTunnels, WorkerDesktopUnsupportedError } from "./desktop-tunnel.js";
+import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
 
 const SSH: WorkerSshEndpoint = {
@@ -201,7 +201,7 @@ describe("worker desktop tunnels", () => {
   it("rejects Windows gateway hosts before spawning SSH", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner, platform: "win32" });
-    await expect(acquire(manager)).rejects.toBeInstanceOf(WorkerDesktopUnsupportedError);
+    await expect(acquire(manager)).rejects.toMatchObject({ code: "unsupported_platform" });
     await expect(acquire(manager)).rejects.toThrow(
       "desktop observe is not supported on Windows gateway hosts",
     );
