@@ -55,13 +55,6 @@ export class AgentSessionSteering {
     };
   }
 
-  add(text: string, message: AgentMessage, queueReceipt: QueueReceipt): void {
-    const item = { message, queueReceipt, text };
-    this.pending.push(item);
-    this.byMessage.set(message, item);
-    this.onChange();
-  }
-
   start(message: AgentMessage): boolean {
     const item = this.byMessage.get(message);
     if (!item) {

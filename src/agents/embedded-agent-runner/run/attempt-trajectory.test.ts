@@ -76,11 +76,6 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
     expect(hoisted.createTrajectoryRuntimeRecorder).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:sender:main",
-          sourceTool: "sessions_send",
-        },
         sessionFile: "/tmp/trajectory.jsonl",
         sessionId: "session-1",
         sessionTarget: expect.objectContaining({

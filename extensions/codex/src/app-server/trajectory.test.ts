@@ -189,12 +189,13 @@ describe("Codex trajectory recorder", () => {
   });
 
   it.each(["dynamic", "mcp"])(
-    "redacts secrets in %s tool arguments and keeps strings UTF-16 safe",
+    "forwards %s tool arguments unchanged to the host recorder",
     async (toolKind) => {
       const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+      const text = `${"x".repeat(19_999)}😀`;
       recorder.recordEvent("tool.call", {
         toolKind,
-        text: `${"x".repeat(19_999)}😀`,
+        text,
         apiKey: "secret",
         authorization: "Bearer sk-test-secret-token",
         arguments: {
@@ -204,12 +205,18 @@ describe("Codex trajectory recorder", () => {
       });
       await recorder.flush();
 
-      expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
-      expect(events[0]?.data?.apiKey).toBe("<redacted>");
-      expect(events[0]?.data?.authorization).toBe("<redacted>");
-      expect(events[0]?.data?.arguments).toEqual({
-        sessionKey: "<redacted>",
-        sourceSessionKey: "<redacted>",
+      expect(events[0]).toEqual({
+        type: "tool.call",
+        data: {
+          toolKind,
+          text,
+          apiKey: "secret",
+          authorization: "Bearer sk-test-secret-token",
+          arguments: {
+            sessionKey: "agent:receiver:main",
+            sourceSessionKey: "agent:sender:main",
+          },
+        },
       });
     },
   );
@@ -263,7 +270,7 @@ describe("Codex trajectory recorder", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("preserves usage when truncating oversized model completion events", async () => {
+  it("delegates oversized model completion events to the host recorder", async () => {
     const attempt = {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -302,15 +309,14 @@ describe("Codex trajectory recorder", () => {
     await recorder.flush();
 
     expect(events[0]?.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
       usage,
+      assistantTexts: ["done"],
     });
-    expect(events[0]?.data?.messagesSnapshot).toBeUndefined();
-    expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
+    expect(events[0]?.data?.messagesSnapshot).toHaveLength(20);
+    expect(events[0]?.data?.truncated).toBeUndefined();
   });
 
-  it("preserves tool identity and outcome through oversized results", () => {
+  it("delegates oversized tool results to the host tool-result path", () => {
     const recorded: Array<Record<string, unknown>> = [];
     const recorder = expectTrajectoryRecorder(
       createCodexTrajectoryRecorder({
@@ -332,7 +338,7 @@ describe("Codex trajectory recorder", () => {
       }),
     );
 
-    recorder.recordToolResult({
+    const data = {
       name: "sessions_send",
       toolCallId: "call-oversized",
       isError: true,
@@ -341,23 +347,15 @@ describe("Codex trajectory recorder", () => {
         type: "inputText",
         text: "x".repeat(8_000),
       })),
-    });
+    };
+    recorder.recordToolResult(data);
 
-    expect(recorded).toHaveLength(1);
-    expect(recorded[0]).toMatchObject({
-      truncated: true,
-      name: "sessions_send",
-      toolCallId: "call-oversized",
-      isError: true,
-      success: false,
-    });
-    expect(recorded[0]?.contentItems).toBeUndefined();
+    expect(recorded).toEqual([data]);
   });
 
-  it("projects trusted prompt origin for the host when truncating an oversized prompt event", async () => {
+  it("projects trusted prompt origin without applying host bounds", async () => {
     const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
     const oversized = "界".repeat(30_000);
-    const truncated = `${"界".repeat(20_000)}…`;
     const origin = {
       kind: "inter_session" as const,
       sourceSessionKey: "agent:sender:main",
@@ -377,19 +375,19 @@ describe("Codex trajectory recorder", () => {
     );
     await recorder.flush();
 
-    expect(events[0]?.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
+    expect(events[0]?.data).toEqual({
+      threadId: oversized,
+      turnId: oversized,
+      prompt: oversized,
+      imagesCount: 0,
       origin: {
         kind: "inter_session",
         sourceSessionKey: "agent:sender:main",
-        originSessionId: truncated,
-        sourceChannel: truncated,
-        sourceTool: truncated,
+        originSessionId: oversized,
+        sourceChannel: oversized,
+        sourceTool: oversized,
       },
     });
-    expect(events[0]?.data?.prompt).toBeUndefined();
-    expect(events[0]?.data?.droppedFields).toContain("prompt");
   });
 
   it("validates prompt provenance and projects only canonical fields", async () => {

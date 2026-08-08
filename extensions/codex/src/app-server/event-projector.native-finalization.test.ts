@@ -388,7 +388,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       name: "bash",
       arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
     });
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+    expect(trajectoryRecorder.recordToolResult).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       turnId: TURN_ID,
       itemId: "cmd-snapshot",
@@ -396,6 +396,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       name: "bash",
       status: "completed",
       isError: false,
+      success: true,
       result: { status: "completed", exitCode: 0, durationMs: 42 },
       output: "ok",
     });
@@ -438,9 +439,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     );
 
     const output = (
-      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
-        | { output?: string }
-        | undefined
+      trajectoryRecorder.recordToolResult.mock.calls[0]?.[0] as { output?: string } | undefined
     )?.output;
     expect(output).toHaveLength(10_000);
     expect(output).toContain("OpenClaw truncated Codex native tool output");
@@ -458,6 +457,56 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
     expect(toolResultContentItem.content).toHaveLength(10_000);
     expect(toolResultContentItem.content).toContain("OpenClaw truncated Codex native tool output");
+  });
+
+  it("routes oversized native MCP results through the host tool-result recorder", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      recordToolResult: vi.fn(),
+      recordPromptSubmitted: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(await createParams(), { trajectoryRecorder });
+    const result = {
+      content: Array.from({ length: 33 }, (_value, index) => ({
+        type: "text",
+        text: `${index}:${"x".repeat(8_000)}`,
+      })),
+    };
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "mcpToolCall",
+          id: "mcp-oversized",
+          server: "github",
+          tool: "search_code",
+          status: "completed",
+          arguments: { query: "repo:openclaw/openclaw trajectory" },
+          result,
+          error: null,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    expect(trajectoryRecorder.recordToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "mcp-oversized",
+        toolCallId: "mcp-oversized",
+        name: "github.search_code",
+        isError: false,
+        success: true,
+        result: expect.objectContaining({
+          status: "completed",
+          result: expect.any(Object),
+        }),
+      }),
+    );
+    expect(trajectoryRecorder.recordEvent.mock.calls.some(([type]) => type === "tool.result")).toBe(
+      false,
+    );
   });
 
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
@@ -535,7 +584,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
         cwd: "/workspace",
       },
     });
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+    expect(trajectoryRecorder.recordToolResult).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       turnId: TURN_ID,
       itemId: "cmd-denied",
@@ -543,6 +592,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
       name: "bash",
       status: "failed",
       isError: true,
+      success: false,
       result: { status: "failed", reason: "missing_tool_result" },
       output: expect.stringContaining("without a matching tool.result"),
     });

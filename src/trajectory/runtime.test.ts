@@ -576,6 +576,50 @@ describe("trajectory runtime", () => {
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
+  it("preserves tool identity and outcome in compact oversized results", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    expectTrajectoryRuntimeRecorder(recorder).recordToolResult({
+      name: "github.search_code",
+      toolCallId: "mcp-oversized",
+      isError: false,
+      success: true,
+      result: {
+        content: Array.from({ length: 33 }, (_value, index) => ({
+          type: "text",
+          text: `${index}:${"x".repeat(8_000)}`,
+        })),
+      },
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(parsed.type).toBe("tool.result");
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+      name: "github.search_code",
+      toolCallId: "mcp-oversized",
+      isError: false,
+      success: true,
+    });
+    expect(parsed.data.result).toBeUndefined();
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
+  });
+
   it("drops oversized preserved fields when needed to keep runtime events bounded", () => {
     const writes: string[] = [];
     const oversizedUsage = Object.fromEntries(

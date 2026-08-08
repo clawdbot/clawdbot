@@ -383,6 +383,15 @@ async function startAgentRun(params: {
         messageText,
         queueOptions,
       );
+      if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+        const bestEffortQueueOptions = { ...queueOptions };
+        delete bestEffortQueueOptions.waitForTranscriptCommit;
+        queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+          activeRunSessionId,
+          messageText,
+          bestEffortQueueOptions,
+        );
+      }
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }

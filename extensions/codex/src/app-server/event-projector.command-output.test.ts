@@ -73,8 +73,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
     expect(toolResultContentItem.content).toBe("status passed\njson /tmp/scenario.json");
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
-      "tool.result",
+    expect(trajectoryRecorder.recordToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
         itemId: "cmd-1",
         output: "status passed\njson /tmp/scenario.json",
@@ -329,8 +328,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
     expect(toolResultContentItem.content).toBe(`${userOutputWithNotice}second line must survive`);
-    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
-      "tool.result",
+    expect(trajectoryRecorder.recordToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
         itemId: "cmd-notice-prefix",
         output: `${userOutputWithNotice}second line must survive`,
@@ -383,9 +381,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
 
     const output = (
-      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
-        | { output?: string }
-        | undefined
+      trajectoryRecorder.recordToolResult.mock.calls[0]?.[0] as { output?: string } | undefined
     )?.output;
     expect(output).toHaveLength(10_000);
     expect(output).toContain("OpenClaw truncated Codex native tool output");
@@ -437,9 +433,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
 
     const output = (
-      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
-        | { output?: string }
-        | undefined
+      trajectoryRecorder.recordToolResult.mock.calls[0]?.[0] as { output?: string } | undefined
     )?.output;
     expect(output).toHaveLength(10_000);
     expect(output).toContain("OpenClaw truncated Codex native tool output");
@@ -547,9 +541,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     expect(
       trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.call"),
     ).toHaveLength(1);
-    expect(
-      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.result"),
-    ).toHaveLength(1);
+    expect(trajectoryRecorder.recordToolResult).toHaveBeenCalledOnce();
   });
 
   it("does not synthesize completed progress for running turn completion snapshots", async () => {

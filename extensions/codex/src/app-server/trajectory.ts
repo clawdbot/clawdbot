@@ -1,11 +1,8 @@
 /**
- * Records optional Codex runtime trajectory events with bounded, redacted
- * context and completion payloads.
+ * Adapts Codex runtime events to the host-owned trajectory recorder.
  */
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
 type CodexPromptSubmittedData = {
@@ -37,117 +34,13 @@ type CodexTrajectoryInit = {
   warn?: (message: string, fields: Record<string, unknown>) => void;
 };
 
-const SENSITIVE_FIELD_RE = /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
-const PRIVATE_PAYLOAD_FIELD_RE = /(?:image|screenshot|attachment|fileData|dataUri)/iu;
-const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
-const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
-const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
 const INPUT_PROVENANCE_KINDS = new Set(["external_user", "inter_session", "internal_system"]);
-const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
-const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
-const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
-  "name",
-  "toolCallId",
-  "isError",
-  "success",
-  ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
-] as const;
-
-type CodexTrajectorySink = {
-  flush: () => Promise<void>;
-  recordToolResult: (data: Record<string, unknown>) => void;
-  write: (event: CodexTrajectoryEvent) => void;
-};
 
 export type CodexHostTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   recordToolResult: (data: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
-
-type CodexTrajectoryEvent = Record<string, unknown> & {
-  data?: Record<string, unknown>;
-  type: string;
-};
-
-function boundedTrajectoryEvent(
-  event: Record<string, unknown>,
-  preservableDataKeys: readonly string[] = TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
-): CodexTrajectoryEvent | undefined {
-  const line = JSON.stringify(event);
-  const bytes = Buffer.byteLength(line, "utf8");
-  if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-    return event as CodexTrajectoryEvent;
-  }
-
-  const originalData =
-    event.data && typeof event.data === "object" && !Array.isArray(event.data)
-      ? (event.data as Record<string, unknown>)
-      : {};
-  const originalDataKeys = Object.keys(originalData);
-  const preservedDataKeys = new Set<string>();
-  const baseData = {
-    truncated: true,
-    originalBytes: bytes,
-    limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-    reason: "trajectory-event-size-limit",
-  };
-  const buildTruncatedEvent = (includeDroppedFields: boolean): CodexTrajectoryEvent | undefined => {
-    const data: Record<string, unknown> = { ...baseData };
-    for (const key of preservableDataKeys) {
-      if (preservedDataKeys.has(key)) {
-        data[key] = originalData[key];
-      }
-    }
-    if (includeDroppedFields) {
-      const droppedFields = originalDataKeys.filter((key) => !preservedDataKeys.has(key));
-      if (droppedFields.length > 0) {
-        data.droppedFields = droppedFields;
-      }
-    }
-    const truncatedEvent = { ...event, data };
-    const truncated = JSON.stringify(truncatedEvent);
-    if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-      return truncatedEvent as CodexTrajectoryEvent;
-    }
-    return undefined;
-  };
-
-  let best = buildTruncatedEvent(true) ?? buildTruncatedEvent(false);
-  if (!best) {
-    return undefined;
-  }
-
-  for (const key of preservableDataKeys) {
-    if (!Object.hasOwn(originalData, key)) {
-      continue;
-    }
-    preservedDataKeys.add(key);
-    const next = buildTruncatedEvent(true) ?? buildTruncatedEvent(false);
-    if (next) {
-      best = next;
-      continue;
-    }
-    preservedDataKeys.delete(key);
-  }
-  return best;
-}
-
-function createCodexHostTrajectorySink(params: {
-  recorder: CodexHostTrajectoryRecorder;
-}): CodexTrajectorySink {
-  return {
-    write: (event) => {
-      params.recorder.recordEvent(event.type, event.data);
-    },
-    flush: async () => {
-      await params.recorder.flush();
-    },
-    recordToolResult: (data) => {
-      params.recorder.recordToolResult(data);
-    },
-  };
-}
 
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
@@ -170,69 +63,25 @@ export function createCodexTrajectoryRecorder(
     });
     return null;
   }
-  const sink = createCodexHostTrajectorySink({ recorder: params.trajectoryRecorder });
-  let seq = 0;
-  const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
-
-  const buildSanitizedEvent = (
-    type: string,
-    data: Record<string, unknown> | undefined,
-    preservedDataKeys?: readonly string[],
-  ) =>
-    boundedTrajectoryEvent(
-      {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        traceId: params.attempt.sessionId,
-        source: "runtime",
-        type,
-        ts: new Date().toISOString(),
-        seq: (seq += 1),
-        sourceSeq: seq,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.attempt.sessionKey,
-        runId: params.attempt.runId,
-        workspaceDir: params.cwd,
-        provider: attribution.provider,
-        modelId: params.attempt.modelId,
-        modelApi: attribution.api,
-        data,
-      },
-      preservedDataKeys,
-    );
+  const recorder = params.trajectoryRecorder;
 
   return {
     recordEvent: (type, data) => {
-      const event = buildSanitizedEvent(
-        type,
-        data ? (sanitizeValue(data) as Record<string, unknown>) : undefined,
-      );
-      if (event) {
-        sink.write(event);
-      }
+      recorder.recordEvent(type, data);
     },
     recordToolResult: (data) => {
-      const event = buildSanitizedEvent(
-        "tool.result",
-        sanitizeValue(data) as Record<string, unknown>,
-        TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
-      );
-      if (event?.data) {
-        sink.recordToolResult(event.data);
-      }
+      recorder.recordToolResult(data);
     },
     recordPromptSubmitted: (data, origin) => {
-      const sanitizedData = sanitizeValue(data) as Record<string, unknown>;
       const projectedOrigin = projectInputProvenance(origin);
-      if (projectedOrigin) {
-        sanitizedData.origin = projectedOrigin;
-      }
-      const event = buildSanitizedEvent("prompt.submitted", sanitizedData, ["origin"]);
-      if (event) {
-        sink.write(event);
-      }
+      recorder.recordEvent("prompt.submitted", {
+        ...data,
+        ...(projectedOrigin ? { origin: projectedOrigin } : {}),
+      });
     },
-    flush: sink.flush,
+    flush: async () => {
+      await recorder.flush();
+    },
   };
 }
 
@@ -308,46 +157,11 @@ function toTrajectoryToolDefinitions(
         {
           name,
           description: tool.description,
-          parameters: sanitizeValue(tool.inputSchema),
+          parameters: tool.inputSchema,
         },
       ];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
-  // Trajectory exports may leave the live process, so redact credentials and
-  // private payloads before passing events to the SQLite host recorder.
-  if (value == null || typeof value === "boolean" || typeof value === "number") {
-    return value;
-  }
-  if (typeof value === "string") {
-    if (SENSITIVE_FIELD_RE.test(key)) {
-      return "<redacted>";
-    }
-    if (value.startsWith("data:") && value.length > 256) {
-      return `<redacted data-uri ${value.slice(0, value.indexOf(",")).length} chars>`;
-    }
-    if (PRIVATE_PAYLOAD_FIELD_RE.test(key) && value.length > 256) {
-      return "<redacted payload>";
-    }
-    const redacted = redactSensitiveString(value);
-    return redacted.length > 20_000 ? `${truncateUtf16Safe(redacted, 20_000)}…` : redacted;
-  }
-  if (depth >= 6) {
-    return "<truncated>";
-  }
-  if (Array.isArray(value)) {
-    return value.slice(0, 100).map((entry) => sanitizeValue(entry, depth + 1, key));
-  }
-  if (typeof value === "object") {
-    const next: Record<string, unknown> = {};
-    for (const [keyLocal, child] of Object.entries(value).slice(0, 100)) {
-      next[keyLocal] = sanitizeValue(child, depth + 1, keyLocal);
-    }
-    return next;
-  }
-  return JSON.stringify(value);
 }
 
 function projectInputProvenance(provenance: unknown): Record<string, string> | undefined {
@@ -369,19 +183,10 @@ function projectInputProvenance(provenance: unknown): Record<string, string> | u
   ] as const) {
     const value = record[key];
     if (typeof value === "string") {
-      const redacted = redactSensitiveString(value);
-      sanitized[key] =
-        redacted.length > 20_000 ? `${truncateUtf16Safe(redacted, 20_000)}…` : redacted;
+      sanitized[key] = value;
     }
   }
   return sanitized;
-}
-
-function redactSensitiveString(value: string): string {
-  return value
-    .replace(AUTHORIZATION_VALUE_RE, "$1 <redacted>")
-    .replace(JWT_VALUE_RE, "<redacted-jwt>")
-    .replace(COOKIE_PAIR_RE, "$1=<redacted>");
 }
 
 /** Converts arbitrary prompt errors into trajectory-safe text. */

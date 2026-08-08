@@ -12,6 +12,7 @@ import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 
 const thinkingMocks = vi.hoisted(() => ({
@@ -393,6 +394,55 @@ describe("AgentSession tree navigation", () => {
 });
 
 describe("AgentSession queued user turns", () => {
+  it("does not admit an ordinary steer cleared during async preparation", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    let finishPreparation: ((value: undefined) => void) | undefined;
+    const preparation = new Promise<undefined>((resolve) => {
+      finishPreparation = resolve;
+    });
+    const recorder = {
+      resolveMessage: vi.fn(() => preparation),
+    } as unknown as UserTurnTranscriptRecorder;
+    const agentSteer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => true });
+
+    const steerPromise = session.steer("late clear", undefined, recorder);
+    await vi.waitFor(() => expect(recorder.resolveMessage).toHaveBeenCalledOnce());
+    const rejected = expect(steerPromise).rejects.toThrow("queued steering message was cleared");
+
+    expect(session.clearQueue()).toEqual({ steering: ["late clear"], followUp: [] });
+    await rejected;
+    finishPreparation?.(undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(agentSteer).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it("does not admit an ordinary steer after disposal during async preparation", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    let finishPreparation: ((value: undefined) => void) | undefined;
+    const preparation = new Promise<undefined>((resolve) => {
+      finishPreparation = resolve;
+    });
+    const recorder = {
+      resolveMessage: vi.fn(() => preparation),
+    } as unknown as UserTurnTranscriptRecorder;
+    const agentSteer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => true });
+
+    const steerPromise = session.steer("late dispose", undefined, recorder);
+    await vi.waitFor(() => expect(recorder.resolveMessage).toHaveBeenCalledOnce());
+    const rejected = expect(steerPromise).rejects.toThrow("agent session was disposed");
+
+    session.dispose();
+    await rejected;
+    finishPreparation?.(undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(agentSteer).not.toHaveBeenCalled();
+  });
+
   it("carries typed provenance on the queued user message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const origin = {

@@ -174,7 +174,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
           await this.queueFollowUp(expandedText, currentImages);
         } else {
           const message = this.createUserMessage(expandedText, currentImages);
-          this.enqueuePreparedSteer({ text: expandedText, message });
+          await this.reservePreparedSteer({ text: expandedText, message }).accepted;
         }
         preflightResult?.(true);
         return;
@@ -344,15 +344,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
   ): Promise<void> {
-    const prepared = await this.prepareSteer(
+    await this.steerWithReceipt(
       text,
       images,
       userTurnTranscriptRecorder,
       media,
       imageOrder,
       inputProvenance,
-    );
-    this.enqueuePreparedSteer(prepared);
+    ).accepted;
   }
 
   /** Queue steering with exact cancellation and durable transcript acknowledgment. */
@@ -385,8 +384,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return reservation.receipt;
   }
 
-  private enqueuePreparedSteer(prepared: { text: string; message: AgentMessage }): void {
-    this.steering.add(prepared.text, prepared.message, this.agent.steer(prepared.message));
+  private reservePreparedSteer(prepared: {
+    text: string;
+    message: AgentMessage;
+  }): AgentSessionSteerReceipt {
+    const reservation = this.steering.reserve(prepared.text);
+    reservation.admit(prepared.text, prepared.message, () => this.agent.steer(prepared.message));
+    return reservation.receipt;
   }
 
   /**

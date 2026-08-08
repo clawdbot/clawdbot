@@ -402,14 +402,16 @@ export class CodexToolTranscriptProjection {
     this.trajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
     const output = itemOutputText(params.item, this.progress.outputTextByItem);
-    this.options.trajectoryRecorder?.recordEvent("tool.result", {
+    const isError = isNonSuccessItemStatus(params.status);
+    this.options.trajectoryRecorder?.recordToolResult({
       threadId: this.threadId,
       turnId: this.turnId,
       itemId: params.item.id,
       toolCallId: params.item.id,
       name: params.name,
       status: params.status,
-      isError: isNonSuccessItemStatus(params.status),
+      isError,
+      success: !isError,
       ...(toolResult ? { result: toolResult } : {}),
       ...(output ? { output } : {}),
     });
@@ -477,7 +479,7 @@ export class CodexToolTranscriptProjection {
       }
       this.trajectoryResultIds.add(id);
       const text = formatMissingToolResultError({ id, name });
-      this.options.trajectoryRecorder?.recordEvent("tool.result", {
+      this.options.trajectoryRecorder?.recordToolResult({
         threadId: this.threadId,
         turnId: this.turnId,
         itemId: id,
@@ -485,6 +487,7 @@ export class CodexToolTranscriptProjection {
         name,
         status: "failed",
         isError: true,
+        success: false,
         result: { status: "failed", reason: "missing_tool_result" },
         output: text,
       });
