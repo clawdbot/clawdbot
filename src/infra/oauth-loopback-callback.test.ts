@@ -175,7 +175,6 @@ describe("OAuth loopback callback server", () => {
     const pendingLookup = new Promise<Awaited<ReturnType<typeof dnsPromises.lookup>>>((resolve) => {
       releaseLookup = () => resolve([{ address: "127.0.0.1", family: 4 }]);
     });
-    vi.doMock("node:dns/promises", () => ({ lookup: () => pendingLookup }));
     const controller = new AbortController();
     const port = await getFreePort();
     const startPromise = startOAuthLoopbackCallbackServer({
@@ -183,11 +182,23 @@ describe("OAuth loopback callback server", () => {
       expectedState: "state-1234567890",
       timeoutMs: 5_000,
       signal: controller.signal,
+      lookup: (() => pendingLookup) as typeof dnsPromises.lookup,
     });
     controller.abort();
-    releaseLookup();
     await expect(startPromise).rejects.toThrow("cancelled");
-    vi.doUnmock("node:dns/promises");
+    releaseLookup();
+  });
+
+  it("validates localhost resolution even with an explicit IPv4 bind host", async () => {
+    await expect(
+      startOAuthLoopbackCallbackServer({
+        redirectUrl: "http://localhost:8989/oauth/callback",
+        bindHostname: "127.0.0.1",
+        expectedState: "state-1234567890",
+        timeoutMs: 5_000,
+        lookup: (async () => [{ address: "203.0.113.1", family: 4 }]) as typeof dnsPromises.lookup,
+      }),
+    ).rejects.toThrow("exclusively to loopback");
   });
 
   it("binds every loopback address resolved for localhost", async () => {
@@ -201,6 +212,7 @@ describe("OAuth loopback callback server", () => {
     ];
     const callback = await startOAuthLoopbackCallbackServer({
       redirectUrl: `http://localhost:${port}/oauth/callback`,
+      bindHostname: "127.0.0.1",
       expectedState: "state-1234567890",
       timeoutMs: 5_000,
     });

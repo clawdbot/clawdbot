@@ -26,18 +26,20 @@ function isLoopbackAddress(address: string): boolean {
   );
 }
 
-function resolveBindAddresses(
-  redirectUrl: URL,
-  bindHostname?: string,
+function resolveLoopbackHostname(
+  hostname: string,
+  lookupOverride?: typeof import("node:dns/promises").lookup,
 ): string[] | Promise<string[]> {
-  const hostname = unbracket(bindHostname ?? redirectUrl.hostname);
   if (hostname === "127.0.0.1" || hostname === "::1") {
     return [hostname];
   }
   if (hostname !== "localhost") {
     throw new Error("OAuth callback redirect must use localhost, 127.0.0.1, or ::1");
   }
-  return import("node:dns/promises").then(async ({ lookup }) => {
+  const loadLookup = lookupOverride
+    ? Promise.resolve(lookupOverride)
+    : import("node:dns/promises").then(({ lookup }) => lookup);
+  return loadLookup.then(async (lookup) => {
     const addresses = [
       ...new Set(
         (await lookup("localhost", { all: true, verbatim: true })).map(({ address }) => address),
@@ -47,6 +49,40 @@ function resolveBindAddresses(
       throw new Error("localhost did not resolve exclusively to loopback addresses");
     }
     return addresses;
+  });
+}
+
+function resolveBindAddresses(
+  redirectUrl: URL,
+  bindHostname?: string,
+  lookup?: typeof import("node:dns/promises").lookup,
+): string[] | Promise<string[]> {
+  const redirectHostname = unbracket(redirectUrl.hostname);
+  const redirectAddresses = resolveLoopbackHostname(redirectHostname, lookup);
+  const requestedHostname = bindHostname ? unbracket(bindHostname) : redirectHostname;
+  if (requestedHostname === redirectHostname) {
+    return redirectAddresses;
+  }
+  const requestedAddresses = resolveLoopbackHostname(requestedHostname, lookup);
+  if (redirectHostname !== "localhost") {
+    throw new Error("OAuth callback bind hostname must match the redirect hostname");
+  }
+  return Promise.all([redirectAddresses, requestedAddresses]).then(([redirect, requested]) => [
+    ...new Set([...requested, ...redirect]),
+  ]);
+}
+
+async function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  return await new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new Error("OAuth callback cancelled"));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) {
+      abort();
+    }
   });
 }
 
@@ -110,6 +146,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   bindHostname?: string;
+  lookup?: typeof import("node:dns/promises").lookup;
   createServer?: typeof import("node:http").createServer;
   resolveCorsOrigin?: CorsOriginResolver;
   renderSuccess?: () => RenderedResponse;
@@ -130,8 +167,10 @@ export async function startOAuthLoopbackCallbackServer(params: {
     throw new Error("OAuth callback cancelled");
   }
 
-  const resolvedAddresses = resolveBindAddresses(redirectUrl, params.bindHostname);
-  const addresses = Array.isArray(resolvedAddresses) ? resolvedAddresses : await resolvedAddresses;
+  const resolvedAddresses = resolveBindAddresses(redirectUrl, params.bindHostname, params.lookup);
+  const addresses = Array.isArray(resolvedAddresses)
+    ? resolvedAddresses
+    : await waitForAbortable(resolvedAddresses, params.signal);
   const port = resolveOAuthLoopbackPort(redirectUrl);
   const callbackPath = redirectUrl.pathname || "/";
   const createServer = params.createServer ?? (await import("node:http")).createServer;
