@@ -104,7 +104,7 @@ describe("doctor-contract-registry module loader", () => {
   it.each([
     {
       name: "declared false skips loading",
-      doctorContract: { legacyConfigRules: false },
+      doctorContract: { configRepair: false },
       expectedRuleCount: 0,
       expectedLoadCount: 0,
     },
@@ -116,11 +116,11 @@ describe("doctor-contract-registry module loader", () => {
     },
     {
       name: "declared true loads the authoritative module",
-      doctorContract: { legacyConfigRules: true },
+      doctorContract: { configRepair: true },
       expectedRuleCount: 1,
       expectedLoadCount: 1,
     },
-  ])("gates doctor contract artifacts by surface: $name", (testCase) => {
+  ])("gates config-repair artifacts: $name", (testCase) => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
@@ -143,6 +143,33 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(testCase.expectedLoadCount);
   });
 
+  it("loads a normalizer-only config-repair contract", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, repaired: true },
+        changes: ["repaired config"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "normalizer-only",
+          rootDir: pluginRoot,
+          doctorContract: { configRepair: true },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(applyPluginDoctorCompatibilityMigrations({}, { env: {} })).toEqual({
+      config: { repaired: true },
+      changes: ["repaired config"],
+    });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("records doctor contract load failures with plugin and artifact context", () => {
     const pluginRoot = makeTempDir();
     const contractSource = path.join(pluginRoot, "doctor-contract-api.ts");
@@ -155,7 +182,7 @@ describe("doctor-contract-registry module loader", () => {
         {
           id: "broken-doctor-plugin",
           rootDir: pluginRoot,
-          doctorContract: { legacyConfigRules: true },
+          doctorContract: { configRepair: true },
         },
       ],
       diagnostics: [],

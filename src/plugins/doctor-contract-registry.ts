@@ -280,7 +280,7 @@ export function listPluginDoctorLegacyConfigRules(params?: {
 }): LegacyConfigRule[] {
   return resolvePluginDoctorContracts({
     ...params,
-    surface: "legacyConfigRules",
+    surface: "configRepair",
   }).flatMap((entry) => entry.rules);
 }
 
@@ -362,7 +362,7 @@ export function applyPluginDoctorCompatibilityMigrations(
   const changes: string[] = [];
   for (const entry of resolvePluginDoctorContracts({
     ...params,
-    surface: "normalizeCompatibilityConfig",
+    surface: "configRepair",
   })) {
     const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {

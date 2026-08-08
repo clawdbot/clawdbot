@@ -146,8 +146,7 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
   const summary: Record<keyof PluginManifestDoctorContract, boolean> = {
-    legacyConfigRules: rules.length > 0,
-    normalizeCompatibilityConfig: Boolean(normalizeCompatibilityConfig),
+    configRepair: rules.length > 0 || Boolean(normalizeCompatibilityConfig),
     resolveSessionStoreAgentIds: Boolean(resolveSessionStoreAgentIds),
     sessionRouteStateOwners: sessionRouteStateOwners.length > 0,
     stateMigrations: stateMigrations.length > 0,

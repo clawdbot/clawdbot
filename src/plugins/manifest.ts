@@ -214,8 +214,7 @@ export function loadPluginManifest(
   const doctorContract = rawDoctorContract
     ? (Object.fromEntries(
         [
-          "legacyConfigRules",
-          "normalizeCompatibilityConfig",
+          "configRepair",
           "resolveSessionStoreAgentIds",
           "sessionRouteStateOwners",
           "stateMigrations",

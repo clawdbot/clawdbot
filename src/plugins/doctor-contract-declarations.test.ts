@@ -9,8 +9,7 @@ import {
 } from "./plugin-module-loader-cache.js";
 
 const DOCTOR_CONTRACT_SURFACES = [
-  "legacyConfigRules",
-  "normalizeCompatibilityConfig",
+  "configRepair",
   "resolveSessionStoreAgentIds",
   "sessionRouteStateOwners",
   "stateMigrations",

@@ -227,8 +227,7 @@ export type PluginManifestSetup = {
 };
 
 export type PluginManifestDoctorContract = {
-  legacyConfigRules?: boolean;
-  normalizeCompatibilityConfig?: boolean;
+  configRepair?: boolean;
   resolveSessionStoreAgentIds?: boolean;
   /**
    * @deprecated Declare static ownership in top-level sessionRouteStateOwners instead.

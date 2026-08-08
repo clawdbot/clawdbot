@@ -1,7 +1,7 @@
 {
   "id": "copilot",
   "doctorContract": {
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "sessionRouteStateOwners": [
     {

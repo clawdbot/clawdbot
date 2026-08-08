@@ -191,6 +191,10 @@ OpenClaw uses it without loading the doctor-contract module. Removal plan:
 remove the module fallback in OpenClaw 2027.1 after the external-plugin
 migration window.
 
+Set `doctorContract.configRepair: true` when the doctor-contract module exports
+non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
+both. One declaration covers the complete config-repair artifact.
+
 ## MCP server reference
 
 `mcpServers` lets a native plugin ship an MCP server, including an MCP App, without requiring operators to duplicate its static process definition in `openclaw.json`:
