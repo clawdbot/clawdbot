@@ -29,6 +29,7 @@ export async function runManagerCloseSession(params: {
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<AcpCloseSessionResult> {
   const { input, sessionKey } = params;
   const resolution = params.resolveSession({
@@ -62,6 +63,12 @@ export async function runManagerCloseSession(params: {
       sessionKey,
       logPrefix: "acp close fast-reset",
     });
+    if (!params.isCurrentActor()) {
+      return {
+        runtimeClosed: false,
+        metaCleared: false,
+      };
+    }
     params.runtimeHandles.clear(sessionKey);
   } else {
     try {
@@ -69,7 +76,13 @@ export async function runManagerCloseSession(params: {
         cfg: input.cfg,
         sessionKey,
         meta,
+        isCurrentActor: params.isCurrentActor,
       });
+      if (input.discardPersistentState) {
+        // A discard close may itself hang. Evict before awaiting it so reset
+        // callers can never reuse the handle after their cleanup timeout.
+        params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
+      }
       await withAcpRuntimeErrorBoundary({
         run: async () =>
           await ensuredRuntime.close({
@@ -81,13 +94,24 @@ export async function runManagerCloseSession(params: {
         fallbackMessage: "ACP close failed before completion.",
       });
       runtimeClosed = true;
-      params.runtimeHandles.clear(sessionKey);
+      if (!params.isCurrentActor()) {
+        return {
+          runtimeClosed,
+          metaCleared: false,
+        };
+      }
+      if (!input.discardPersistentState) {
+        params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
+      }
     } catch (error) {
       const acpError = toAcpRuntimeError({
         error,
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP close failed before completion.",
       });
+      if (!params.isCurrentActor()) {
+        throw acpError;
+      }
       if (
         input.allowBackendUnavailable &&
         (acpError.code === "ACP_BACKEND_MISSING" ||
@@ -105,6 +129,9 @@ export async function runManagerCloseSession(params: {
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           });
+          if (!params.isCurrentActor()) {
+            throw acpError;
+          }
         }
         // Treat unavailable backends as terminal for this cached handle so it
         // cannot continue counting against maxConcurrentSessions.
@@ -116,12 +143,21 @@ export async function runManagerCloseSession(params: {
     }
   }
 
+  if (!params.isCurrentActor()) {
+    return {
+      runtimeClosed,
+      ...(runtimeNotice ? { runtimeNotice } : {}),
+      metaCleared: false,
+    };
+  }
+
   let metaCleared = false;
   if (input.discardPersistentState && !input.clearMeta) {
     await discardPersistedManagerRuntimeState({
       cfg: input.cfg,
       sessionKey,
       writeSessionMeta: params.writeSessionMeta,
+      isCurrentActor: params.isCurrentActor,
     });
   }
 
@@ -129,7 +165,11 @@ export async function runManagerCloseSession(params: {
     await params.writeSessionMeta({
       cfg: input.cfg,
       sessionKey,
+      isCurrentActor: params.isCurrentActor,
       mutate: (_current, entry) => {
+        if (!params.isCurrentActor()) {
+          return undefined;
+        }
         if (!entry) {
           return null;
         }
@@ -137,6 +177,13 @@ export async function runManagerCloseSession(params: {
       },
       failOnError: true,
     });
+    if (!params.isCurrentActor()) {
+      return {
+        runtimeClosed,
+        ...(runtimeNotice ? { runtimeNotice } : {}),
+        metaCleared: false,
+      };
+    }
     metaCleared = true;
   }
 

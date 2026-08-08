@@ -13,6 +13,7 @@ import {
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type { SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
@@ -171,7 +172,12 @@ export async function applyManagerRuntimeControls(params: {
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
   getCachedRuntimeState: (sessionKey: string) => CachedRuntimeState | null;
+  isCurrentActor?: () => boolean;
 }): Promise<void> {
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   const options = resolveRuntimeOptionsFromMeta(params.meta);
   const signature = buildRuntimeControlSignature(options);
   const cached = params.getCachedRuntimeState(params.sessionKey);
@@ -185,6 +191,9 @@ export async function applyManagerRuntimeControls(params: {
     handle: params.handle,
     includeStatusConfigOptionKeys: needsConfigOptionKeys,
   });
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   const backend = params.handle.backend || params.meta.backend;
   const runtimeMode = normalizeText(options.runtimeMode);
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
@@ -196,6 +205,9 @@ export async function applyManagerRuntimeControls(params: {
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
+      if (!isCurrentActor()) {
+        throw createSupersededActorError(params.sessionKey);
+      }
       if (runtimeMode) {
         if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
           throw createUnsupportedControlError({
@@ -220,6 +232,9 @@ export async function applyManagerRuntimeControls(params: {
           });
         }
         for (const [key, value] of configOptions) {
+          if (!isCurrentActor()) {
+            throw createSupersededActorError(params.sessionKey);
+          }
           if (
             advertisedKeys.size > 0 &&
             !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
@@ -251,6 +266,9 @@ export async function applyManagerRuntimeControls(params: {
     fallbackMessage: "Could not apply ACP runtime options before turn execution.",
   });
 
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   if (cached) {
     cached.appliedControlSignature = signature;
   }

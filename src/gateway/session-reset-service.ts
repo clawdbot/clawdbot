@@ -614,10 +614,24 @@ async function closeAcpRuntimeForSession(params: {
   }
   params.assertCurrent?.();
   if (cancelOutcome.status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
-    );
+    const discardOutcome = await runAcpCleanupStep({
+      op: async () => {
+        await acpManager.forceDiscardSessionRuntime({
+          cfg: params.cfg,
+          sessionKey: acpSessionKey,
+          reason: params.reason,
+        });
+      },
+    });
+    if (discardOutcome.status === "timeout") {
+      logVerbose(
+        `sessions.${params.reason}: ACP force discard timed out for ${params.sessionKey}; stale handle was evicted`,
+      );
+    } else if (discardOutcome.status === "error") {
+      logVerbose(
+        `sessions.${params.reason}: ACP force discard failed for ${params.sessionKey}: ${String(discardOutcome.error)}`,
+      );
+    }
   }
   if (cancelOutcome.status === "error") {
     logVerbose(
@@ -629,27 +643,44 @@ async function closeAcpRuntimeForSession(params: {
     return undefined;
   }
   params.assertCurrent?.();
-  const closeOutcome = await runAcpCleanupStep({
-    op: async () => {
-      await acpManager.closeSession({
-        cfg: params.cfg,
-        sessionKey: acpSessionKey,
-        reason: params.reason,
-        discardPersistentState: true,
-        requireAcpSession: false,
-        allowBackendUnavailable: true,
-      });
-    },
-  });
+  const closeOutcome =
+    cancelOutcome.status === "timeout"
+      ? ({ status: "ok" } as const)
+      : await runAcpCleanupStep({
+          op: async () => {
+            await acpManager.closeSession({
+              cfg: params.cfg,
+              sessionKey: acpSessionKey,
+              reason: params.reason,
+              discardPersistentState: true,
+              requireAcpSession: false,
+              allowBackendUnavailable: true,
+            });
+          },
+        });
   if (params.shouldCleanup && !params.shouldCleanup()) {
     return undefined;
   }
   params.assertCurrent?.();
   if (closeOutcome.status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
-    );
+    const discardOutcome = await runAcpCleanupStep({
+      op: async () => {
+        await acpManager.forceDiscardSessionRuntime({
+          cfg: params.cfg,
+          sessionKey: acpSessionKey,
+          reason: params.reason,
+        });
+      },
+    });
+    if (discardOutcome.status === "timeout") {
+      logVerbose(
+        `sessions.${params.reason}: ACP force discard timed out after close timeout for ${params.sessionKey}; stale handle was evicted`,
+      );
+    } else if (discardOutcome.status === "error") {
+      logVerbose(
+        `sessions.${params.reason}: ACP force discard failed after close timeout for ${params.sessionKey}: ${String(discardOutcome.error)}`,
+      );
+    }
   }
   if (closeOutcome.status === "error") {
     logVerbose(

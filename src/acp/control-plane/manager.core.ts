@@ -19,7 +19,10 @@ import {
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
+import {
+  createSupersededActorError,
+  ensureManagerRuntimeHandle,
+} from "./manager.runtime-handle-ensure.js";
 import {
   runResetManagerSessionRuntimeOptions,
   runSetManagerSessionConfigOption,
@@ -146,6 +149,11 @@ export class AcpSessionManager {
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
       reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
+      getSessionActorGuard: (sessionKey) => {
+        const actorKey = normalizeActorKey(sessionKey);
+        const actorEpoch = this.actorQueue.getEpoch(actorKey);
+        return () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch);
+      },
     });
   }
 
@@ -162,6 +170,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await this.withSessionActor(sessionKey, async () => {
       return await runManagerInitializeSession({
         input,
@@ -170,6 +180,7 @@ export class AcpSessionManager {
         runtimeHandles: this.runtimeHandles,
         enforceConcurrentSessionLimit: this.enforceConcurrentSessionLimit.bind(this),
         writeSessionMeta: this.writeSessionMeta.bind(this),
+        isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
       });
     });
   }
@@ -185,6 +196,8 @@ export class AcpSessionManager {
     }
     this.throwIfAborted(params.signal);
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await this.withSessionActor(
       sessionKey,
       async () =>
@@ -197,6 +210,7 @@ export class AcpSessionManager {
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           resolveRuntimeCapabilities: this.resolveRuntimeCapabilities.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
+          isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
         }),
       params.signal,
     );
@@ -214,12 +228,15 @@ export class AcpSessionManager {
     const runtimeMode = validateRuntimeModeInput(params.runtimeMode);
 
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
+    const isCurrentActor = () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch);
     return await this.withSessionActor(sessionKey, async () => {
       return await runSetManagerSessionRuntimeMode({
         cfg: params.cfg,
         sessionKey,
         runtimeMode,
-        ...this.runtimeOptionCommandServices(),
+        ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
   }
@@ -239,13 +256,16 @@ export class AcpSessionManager {
     const value = normalizedOption.value;
 
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
+    const isCurrentActor = () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch);
     return await this.withSessionActor(sessionKey, async () => {
       return await runSetManagerSessionConfigOption({
         cfg: params.cfg,
         sessionKey,
         key,
         value,
-        ...this.runtimeOptionCommandServices(),
+        ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
   }
@@ -262,12 +282,15 @@ export class AcpSessionManager {
     }
 
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
+    const isCurrentActor = () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch);
     return await this.withSessionActor(sessionKey, async () => {
       return await runUpdateManagerSessionRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
         patch: validatedPatch,
-        ...this.runtimeOptionCommandServices(),
+        ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
   }
@@ -281,11 +304,14 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
+    const isCurrentActor = () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch);
     return await this.withSessionActor(sessionKey, async () => {
       return await runResetManagerSessionRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
-        ...this.runtimeOptionCommandServices(),
+        ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });
   }
@@ -299,6 +325,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     await this.withSessionActor(
       sessionKey,
       async () =>
@@ -315,6 +343,7 @@ export class AcpSessionManager {
           recordTurnCompletion: this.recordTurnCompletion.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
+          isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
         }),
       input.signal,
     );
@@ -330,6 +359,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     await runManagerCancelSession({
       cfg: params.cfg,
       sessionKey,
@@ -338,7 +369,56 @@ export class AcpSessionManager {
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+      isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
       setSessionState: this.setSessionState.bind(this),
+    });
+  }
+
+  /** Evicts runtime ownership immediately; old handles close best-effort in the background. */
+  async forceDiscardSessionRuntime(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    reason: string;
+  }): Promise<void> {
+    const sessionKey = canonicalizeAcpSessionKey(params);
+    if (!sessionKey) {
+      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
+    }
+    const actorKey = normalizeActorKey(sessionKey);
+    this.actorQueue.rotate(actorKey);
+
+    const activeTurn = this.activeTurnBySession.get(actorKey);
+    if (activeTurn) {
+      activeTurn.abortController.abort();
+      if (this.activeTurnBySession.get(actorKey) === activeTurn) {
+        this.activeTurnBySession.delete(actorKey);
+      }
+    }
+    const cached = this.runtimeHandles.take(sessionKey);
+    const closeTargets = [
+      ...(activeTurn ? [{ runtime: activeTurn.runtime, handle: activeTurn.handle }] : []),
+      ...(cached &&
+      (!activeTurn || !this.runtimeHandles.handlesMatch(cached.handle, activeTurn.handle))
+        ? [{ runtime: cached.runtime, handle: cached.handle }]
+        : []),
+    ];
+    void Promise.allSettled(
+      closeTargets.map(async ({ runtime, handle }) => {
+        await runtime.close({
+          handle,
+          reason: params.reason,
+          discardPersistentState: true,
+        });
+      }),
+    ).then((outcomes) => {
+      const failed = outcomes.find(
+        (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+      );
+      if (failed) {
+        logVerbose(
+          `acp-manager: force-discard runtime close failed for ${sessionKey}: ${String(failed.reason)}`,
+        );
+      }
     });
   }
 
@@ -351,6 +431,8 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles();
+    const actorKey = normalizeActorKey(sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await this.withSessionActor(
       sessionKey,
       async () =>
@@ -362,6 +444,7 @@ export class AcpSessionManager {
           resolveSession: this.resolveSession.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
+          isCurrentActor: () => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch),
         }),
     );
   }
@@ -370,7 +453,10 @@ export class AcpSessionManager {
     cfg: OpenClawConfig;
     sessionKey: string;
     meta: SessionAcpMeta;
+    isCurrentActor?: () => boolean;
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
+    const actorKey = normalizeActorKey(params.sessionKey);
+    const actorEpoch = this.actorQueue.getEpoch(actorKey);
     return await ensureManagerRuntimeHandle({
       ...params,
       deps: this.deps,
@@ -378,16 +464,21 @@ export class AcpSessionManager {
       enforceConcurrentSessionLimit: (limitParams) =>
         this.enforceConcurrentSessionLimit(limitParams),
       writeSessionMeta: async (writeParams) => await this.writeSessionMeta(writeParams),
+      isCurrentActor:
+        params.isCurrentActor ?? (() => this.actorQueue.isCurrentEpoch(actorKey, actorEpoch)),
     });
   }
 
-  private runtimeOptionCommandServices(): RuntimeOptionCommandServices {
+  private runtimeOptionCommandServices(
+    isCurrentActor: () => boolean,
+  ): RuntimeOptionCommandServices {
     return {
       runtimeHandles: this.runtimeHandles,
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
       resolveRuntimeCapabilities: this.resolveRuntimeCapabilities.bind(this),
       writeSessionMeta: this.writeSessionMeta.bind(this),
+      isCurrentActor,
     };
   }
 
@@ -442,6 +533,7 @@ export class AcpSessionManager {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;
+    isCurrentActor?: () => boolean;
   }): Promise<void> {
     await applyManagerRuntimeControls({
       ...params,
@@ -455,13 +547,18 @@ export class AcpSessionManager {
     state: SessionAcpMeta["state"];
     lastError?: string;
     clearLastError?: boolean;
+    isCurrentActor?: () => boolean;
   }): Promise<void> {
     await this.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       skipMaintenance: true,
       takeCacheOwnership: true,
+      isCurrentActor: params.isCurrentActor,
       mutate: (current, entry) => {
+        if (params.isCurrentActor && !params.isCurrentActor()) {
+          return undefined;
+        }
         if (!entry) {
           return null;
         }
@@ -500,6 +597,7 @@ export class AcpSessionManager {
     meta: SessionAcpMeta;
     runtimeStatus?: AcpRuntimeStatus;
     failOnStatusError: boolean;
+    isCurrentActor?: () => boolean;
   }): Promise<{
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;
@@ -524,6 +622,7 @@ export class AcpSessionManager {
       current: SessionAcpMeta | undefined,
       entry: SessionEntry | undefined,
     ) => SessionAcpMeta | null | undefined;
+    isCurrentActor?: () => boolean;
     failOnError?: boolean;
     skipMaintenance?: boolean;
     takeCacheOwnership?: boolean;
@@ -533,6 +632,15 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         mutate: params.mutate,
+        ...(params.isCurrentActor
+          ? {
+              assertCommitAllowed: () => {
+                if (!params.isCurrentActor?.()) {
+                  throw createSupersededActorError(params.sessionKey);
+                }
+              },
+            }
+          : {}),
         ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
         ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
       });

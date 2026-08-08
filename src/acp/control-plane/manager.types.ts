@@ -164,6 +164,7 @@ export type WriteManagerSessionMeta = (params: {
     current: SessionAcpMeta | undefined,
     entry: SessionEntry | undefined,
   ) => SessionAcpMeta | null | undefined;
+  isCurrentActor?: () => boolean;
   failOnError?: boolean;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
@@ -178,6 +179,7 @@ export type EnsureManagerRuntimeHandle = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   meta: SessionAcpMeta;
+  isCurrentActor?: () => boolean;
 }) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
 
 export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
@@ -188,6 +190,7 @@ export type ReconcileManagerRuntimeSessionIdentifiers = (params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  isCurrentActor?: () => boolean;
 }) => Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
@@ -200,6 +203,7 @@ export type SetManagerSessionState = (params: {
   state: SessionAcpMeta["state"];
   lastError?: string;
   clearLastError?: boolean;
+  isCurrentActor?: () => boolean;
 }) => Promise<void>;
 
 export type WithManagerSessionActor = <T>(sessionKey: string, op: () => Promise<T>) => Promise<T>;

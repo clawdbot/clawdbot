@@ -71,7 +71,22 @@ const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
 
 type ResetAwareSessionStore = AcpSessionStore & {
-  markFresh: (sessionKey: string) => void;
+  currentGeneration: (sessionKey: string) => number;
+  generationForRecord: (record: AcpLoadedSessionRecord, sessionKey: string) => number;
+  generationForHandle: (handle: AcpRuntimeHandle) => number | undefined;
+  getCloseSnapshot: (sessionKey: string) => AcpxCloseRecordSnapshot;
+  discardPersistedRecord: (sessionKey: string) => Promise<void>;
+  markFresh: (sessionKey: string, expectedGeneration?: number) => Promise<boolean>;
+  releaseGeneration: (
+    sessionKey: string,
+    generation: number,
+    record?: AcpLoadedSessionRecord,
+  ) => void;
+};
+
+type AcpxCloseRecordSnapshot = {
+  record: AcpLoadedSessionRecord;
+  generation: number;
 };
 
 type OpenClawLeaseSessionMetadata = {
@@ -108,6 +123,19 @@ type AcpxLaunchLeaseContext = {
   resolvedCommand: string;
   leasedCommand: string;
 };
+
+type AcpxCloseRecordContext = {
+  recordId: string;
+  sessionKey: string;
+  generation: number;
+  record: Promise<AcpLoadedSessionRecord>;
+};
+
+const acpxCloseRecordScope = new AsyncLocalStorage<AcpxCloseRecordContext>();
+const acpxSessionGenerationScope = new AsyncLocalStorage<{
+  sessionKey: string;
+  generation: number;
+}>();
 
 const CODEX_WRAPPER_STDERR_LOG_PREFIX = "codex-acp-wrapper.stderr";
 const CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS = 6_000;
@@ -190,6 +218,56 @@ function readRecordResetOnNextEnsure(record: unknown): boolean {
   return (acpx as { reset_on_next_ensure?: unknown }).reset_on_next_ensure === true;
 }
 
+function readRecordAcpSessionId(record: unknown): string {
+  if (typeof record !== "object" || record === null) {
+    return "";
+  }
+  const { acpSessionId } = record as { acpSessionId?: unknown };
+  return typeof acpSessionId === "string" ? acpSessionId.trim() : "";
+}
+
+function readRecordAcpRecordId(record: unknown): string {
+  if (typeof record !== "object" || record === null) {
+    return "";
+  }
+  const { acpxRecordId } = record as { acpxRecordId?: unknown };
+  return typeof acpxRecordId === "string" ? acpxRecordId.trim() : "";
+}
+
+function readHandleIdentity(handle: AcpRuntimeHandle): {
+  acpxRecordId?: string;
+  backendSessionId?: string;
+  agentSessionId?: string;
+} {
+  const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+  return {
+    acpxRecordId: handle.acpxRecordId?.trim() || decoded?.acpxRecordId?.trim() || undefined,
+    backendSessionId:
+      handle.backendSessionId?.trim() || decoded?.backendSessionId?.trim() || undefined,
+    agentSessionId: handle.agentSessionId?.trim() || decoded?.agentSessionId?.trim() || undefined,
+  };
+}
+
+function recordMatchesHandle(handle: AcpRuntimeHandle, record: AcpLoadedSessionRecord): boolean {
+  if (!record) {
+    return false;
+  }
+  const identity = readHandleIdentity(handle);
+  const acpxRecordId = readRecordAcpRecordId(record);
+  const acpSessionId = readRecordAcpSessionId(record);
+  const agentSessionId =
+    typeof record === "object" &&
+    record !== null &&
+    typeof (record as { agentSessionId?: unknown }).agentSessionId === "string"
+      ? (record as { agentSessionId: string }).agentSessionId.trim()
+      : "";
+  return (
+    (!identity.acpxRecordId || identity.acpxRecordId === acpxRecordId) &&
+    (!identity.backendSessionId || identity.backendSessionId === acpSessionId) &&
+    (!identity.agentSessionId || identity.agentSessionId === agentSessionId)
+  );
+}
+
 function readRecordAgentPid(record: unknown): number | undefined {
   if (typeof record !== "object" || record === null) {
     return undefined;
@@ -263,110 +341,415 @@ function createResetAwareSessionStore(
   },
 ): ResetAwareSessionStore {
   const freshSessionKeys = new Set<string>();
+  const generationBySessionKey = new Map<string, number>();
+  const generationByRecord = new WeakMap<object, number>();
+  const sessionKeyByRecord = new WeakMap<object, string>();
+  const sessionKeyByRecordIdentity = new Map<string, string>();
+  const generationByRecordIdentity = new Map<string, number>();
+  const generationBySessionIdentity = new Map<string, number>();
+  const closeRecordBySessionKey = new Map<string, AcpxCloseRecordSnapshot>();
+  const sessionStateTails = new Map<string, Promise<void>>();
+
+  const currentGeneration = (sessionKey: string): number =>
+    generationBySessionKey.get(sessionKey) ?? 0;
+
+  const runSerializedSessionState = async <T>(
+    sessionKey: string,
+    run: () => Promise<T> | T,
+  ): Promise<T> => {
+    const key = sessionKey.trim() || sessionKey;
+    const previous = sessionStateTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => current);
+    sessionStateTails.set(key, tail);
+    await previous;
+    try {
+      return await run();
+    } finally {
+      release();
+      if (sessionStateTails.get(key) === tail) {
+        sessionStateTails.delete(key);
+      }
+    }
+  };
+
+  const recordIdentityWithoutSessionKey = (record: unknown): string =>
+    `${readRecordAcpRecordId(record)}\u0000${readRecordAcpSessionId(record)}`;
+
+  const recordIdentityKey = (sessionKey: string, record: unknown): string =>
+    `${sessionKey}\u0000${readRecordAcpRecordId(record)}\u0000${readRecordAcpSessionId(record)}`;
+
+  const recordSessionKey = (record: unknown, fallbackSessionKey?: string): string => {
+    if (typeof record === "object" && record !== null) {
+      const remembered = sessionKeyByRecord.get(record);
+      if (remembered) {
+        return remembered;
+      }
+    }
+    const rememberedByIdentity = sessionKeyByRecordIdentity.get(
+      recordIdentityWithoutSessionKey(record),
+    );
+    if (rememberedByIdentity) {
+      return rememberedByIdentity;
+    }
+    return (
+      readSessionRecordName(record) || fallbackSessionKey?.trim() || readRecordAcpRecordId(record)
+    );
+  };
+
+  const cloneRecord = (record: AcpLoadedSessionRecord): AcpLoadedSessionRecord =>
+    record === undefined ? undefined : structuredClone(record);
+
+  const rememberRecordGeneration = (
+    record: unknown,
+    sessionKey: string,
+    generation = currentGeneration(sessionKey),
+  ): void => {
+    const normalized = sessionKey.trim();
+    if (!normalized) {
+      return;
+    }
+    if (typeof record === "object" && record !== null) {
+      generationByRecord.set(record, generation);
+      sessionKeyByRecord.set(record, normalized);
+      const recordIdentity = recordIdentityWithoutSessionKey(record);
+      if (recordIdentity !== "\u0000") {
+        sessionKeyByRecordIdentity.set(recordIdentity, normalized);
+      }
+      generationByRecordIdentity.set(recordIdentityKey(normalized, record), generation);
+      closeRecordBySessionKey.set(normalized, {
+        record: cloneRecord(record as AcpLoadedSessionRecord),
+        generation,
+      });
+    }
+    const acpSessionId = readRecordAcpSessionId(record);
+    if (acpSessionId) {
+      generationBySessionIdentity.set(`${normalized}\u0000${acpSessionId}`, generation);
+    }
+  };
+
+  const resolveRecordGeneration = (record: unknown, sessionKey: string): number | undefined => {
+    const normalized = sessionKey.trim();
+    if (typeof record === "object" && record !== null) {
+      const byReference = generationByRecord.get(record);
+      if (byReference !== undefined) {
+        return byReference;
+      }
+      const byIdentity = generationByRecordIdentity.get(recordIdentityKey(normalized, record));
+      if (byIdentity !== undefined) {
+        return byIdentity;
+      }
+    }
+    const acpSessionId = readRecordAcpSessionId(record);
+    return acpSessionId
+      ? generationBySessionIdentity.get(`${normalized}\u0000${acpSessionId}`)
+      : undefined;
+  };
+
+  const markFreshUnlocked = (sessionKey: string, expectedGeneration?: number): boolean => {
+    const normalized = sessionKey.trim();
+    if (!normalized) {
+      return false;
+    }
+    const generation = currentGeneration(normalized);
+    if (expectedGeneration !== undefined && generation !== expectedGeneration) {
+      return false;
+    }
+    generationBySessionKey.set(normalized, generation + 1);
+    freshSessionKeys.add(normalized);
+    closeRecordBySessionKey.delete(normalized);
+    return true;
+  };
+
+  const releaseGeneration = (
+    sessionKey: string,
+    generation: number,
+    record?: AcpLoadedSessionRecord,
+  ): void => {
+    const normalized = sessionKey.trim();
+    if (!normalized) {
+      return;
+    }
+    const prefix = `${normalized}\u0000`;
+    const acpSessionId = readRecordAcpSessionId(record);
+    if (acpSessionId) {
+      const key = `${normalized}\u0000${acpSessionId}`;
+      if (generationBySessionIdentity.get(key) === generation) {
+        generationBySessionIdentity.delete(key);
+      }
+    } else {
+      for (const [key, value] of generationBySessionIdentity) {
+        if (key.startsWith(prefix) && value === generation) {
+          generationBySessionIdentity.delete(key);
+        }
+      }
+    }
+    const recordPrefix = `${normalized}\u0000`;
+    if (record) {
+      const key = recordIdentityKey(normalized, record);
+      const trackedGeneration = generationByRecordIdentity.get(key);
+      if (trackedGeneration === generation) {
+        generationByRecordIdentity.delete(key);
+      }
+      const recordIdentity = recordIdentityWithoutSessionKey(record);
+      if (
+        trackedGeneration === generation &&
+        sessionKeyByRecordIdentity.get(recordIdentity) === normalized
+      ) {
+        sessionKeyByRecordIdentity.delete(recordIdentity);
+      }
+    } else {
+      for (const [key, value] of generationByRecordIdentity) {
+        if (key.startsWith(recordPrefix) && value === generation) {
+          generationByRecordIdentity.delete(key);
+          const recordIdentity = key.slice(recordPrefix.length);
+          if (sessionKeyByRecordIdentity.get(recordIdentity) === normalized) {
+            sessionKeyByRecordIdentity.delete(recordIdentity);
+          }
+        }
+      }
+    }
+    const snapshot = closeRecordBySessionKey.get(normalized);
+    const sameSnapshot =
+      !record ||
+      (snapshot &&
+        readRecordAcpRecordId(snapshot.record) === readRecordAcpRecordId(record) &&
+        readRecordAcpSessionId(snapshot.record) === readRecordAcpSessionId(record));
+    if (snapshot?.generation === generation && sameSnapshot) {
+      closeRecordBySessionKey.delete(normalized);
+    }
+  };
+
+  const generationForHandle = (handle: AcpRuntimeHandle): number | undefined => {
+    const sessionKey = handle.sessionKey.trim();
+    const identity = readHandleIdentity(handle);
+    if (identity.backendSessionId) {
+      const generation = generationBySessionIdentity.get(
+        `${sessionKey}\u0000${identity.backendSessionId}`,
+      );
+      if (generation !== undefined) {
+        return generation;
+      }
+    }
+    if (currentGeneration(sessionKey) === 0) {
+      return 0;
+    }
+    return undefined;
+  };
 
   return {
     async load(sessionId: string): Promise<AcpLoadedSessionRecord> {
       const normalized = sessionId.trim();
-      if (normalized && freshSessionKeys.has(normalized)) {
-        return undefined;
+      const closeContext = acpxCloseRecordScope.getStore();
+      if (
+        closeContext &&
+        normalized &&
+        (normalized === closeContext.recordId || normalized === closeContext.sessionKey)
+      ) {
+        return await closeContext.record;
       }
-      const record = await baseStore.load(sessionId);
-      if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
-        return record;
-      }
-      const sessionName = readSessionRecordName(record) || normalized;
-      const lease = selectCurrentSessionLease({
-        leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
-        sessionKeys: [sessionName, normalized],
-        rootPid: readRecordAgentPid(record),
-      });
-      if (!lease) {
-        return record;
-      }
-      return withOpenClawLeaseSessionMetadata(record, {
-        openclawLeaseId: lease.leaseId,
-        openclawGatewayInstanceId: lease.gatewayInstanceId,
+      return await runSerializedSessionState(normalized, async () => {
+        if (normalized && freshSessionKeys.has(normalized)) {
+          return undefined;
+        }
+        const record = await baseStore.load(sessionId);
+        if (!record) {
+          return record;
+        }
+        const sessionName = readSessionRecordName(record) || normalized;
+        if (freshSessionKeys.has(sessionName)) {
+          return undefined;
+        }
+        const generation = currentGeneration(sessionName);
+        rememberRecordGeneration(record, sessionName, generation);
+        if (sessionName !== normalized) {
+          rememberRecordGeneration(record, normalized, generation);
+        }
+        if (!params?.leaseStore || !params.gatewayInstanceId) {
+          return record;
+        }
+        const rootPid = readRecordAgentPid(record);
+        const sessionKeys = [sessionName, normalized];
+        const openLeases = await params.leaseStore.listOpen(params.gatewayInstanceId);
+        const savedLeaseId = readOpenClawLeaseIdFromRecord(record);
+        const savedLease = savedLeaseId ? await params.leaseStore.load(savedLeaseId) : undefined;
+        const exactLease =
+          savedLease &&
+          savedLease.gatewayInstanceId === params.gatewayInstanceId &&
+          sessionKeys.includes(savedLease.sessionKey) &&
+          (!rootPid || savedLease.rootPid === rootPid)
+            ? savedLease
+            : undefined;
+        const pidLease = rootPid
+          ? selectCurrentSessionLease({
+              leases: openLeases,
+              sessionKeys,
+              rootPid,
+            })
+          : undefined;
+        const lease = exactLease ?? pidLease;
+        if (!lease) {
+          return record;
+        }
+        const leasedRecord = withOpenClawLeaseSessionMetadata(record, {
+          openclawLeaseId: lease.leaseId,
+          openclawGatewayInstanceId: lease.gatewayInstanceId,
+        });
+        rememberRecordGeneration(leasedRecord, sessionName, generation);
+        if (sessionName !== normalized) {
+          rememberRecordGeneration(leasedRecord, normalized, generation);
+        }
+        return leasedRecord;
       });
     },
     async save(record: AcpSessionRecord): Promise<void> {
-      let recordToSave = record;
       const launch = params?.launchScope?.getStore();
-      const sessionName = readSessionRecordName(record);
-      const agentCommand = readRecordAgentCommand(record);
-      const leasedCommand = launch?.leasedCommand ?? agentCommand;
-      const leaseIdentity = launch ?? readAcpxProcessLeaseIdentity(leasedCommand);
-      if (
-        params?.leaseStore &&
-        params.gatewayInstanceId &&
-        params.wrapperRoot &&
-        (!launch || sessionName === launch.sessionKey) &&
-        leasedCommand &&
-        leaseIdentity?.gatewayInstanceId === params.gatewayInstanceId &&
-        isOpenClawLeaseAwareAcpxProcessCommand({
-          command: leasedCommand,
-          wrapperRoot: params.wrapperRoot,
-        })
-      ) {
-        const existing = await params.leaseStore.load(leaseIdentity.leaseId);
-        const ownsExisting =
-          !existing ||
-          (existing.gatewayInstanceId === leaseIdentity.gatewayInstanceId &&
-            existing.sessionKey === sessionName &&
-            existing.wrapperRoot === params.wrapperRoot);
-        if (ownsExisting) {
-          const adoptingLease = Boolean(launch && launch.resolvedCommand !== launch.leasedCommand);
-          const lifecycleRecord = adoptingLease
-            ? {
-                ...record,
-                // A reused legacy record can carry the previous wrapper PID. Clear
-                // it before persisting the new lease so reconnect cannot claim it.
-                pid: undefined,
-                processId: undefined,
-                agentStartedAt: undefined,
-              }
-            : record;
-          const rootPid = readRecordAgentPid(lifecycleRecord);
-          if (rootPid) {
-            await params.leaseStore.save({
-              leaseId: leaseIdentity.leaseId,
-              gatewayInstanceId: leaseIdentity.gatewayInstanceId,
-              sessionKey: sessionName,
-              wrapperRoot: params.wrapperRoot,
-              wrapperPath: extractGeneratedWrapperPath(leasedCommand),
-              rootPid,
-              ...(existing?.rootPid === rootPid && existing.processGroupId
-                ? { processGroupId: existing.processGroupId }
-                : {}),
-              commandHash: hashAcpxProcessCommand(leasedCommand),
-              startedAt: existing?.rootPid === rootPid ? existing.startedAt : Date.now(),
-              state: "open",
-            });
-          }
-          recordToSave = withOpenClawLeaseSessionMetadata(
-            {
-              ...lifecycleRecord,
-              // ACPX reconnects from the persisted command, so lease identity must
-              // remain in that reuse key until the session lifecycle is terminal.
-              agentCommand: leasedCommand,
-            },
-            {
-              openclawLeaseId: leaseIdentity.leaseId,
-              openclawGatewayInstanceId: leaseIdentity.gatewayInstanceId,
-            },
-          );
+      const closeContext = acpxCloseRecordScope.getStore();
+      const generationContext = closeContext ?? acpxSessionGenerationScope.getStore();
+      const sessionName =
+        recordSessionKey(record, generationContext?.sessionKey) || launch?.sessionKey || "";
+      if (!sessionName) {
+        await baseStore.save(record);
+        return;
+      }
+      await runSerializedSessionState(sessionName, async () => {
+        const trackedGeneration = resolveRecordGeneration(record, sessionName);
+        const expectedGeneration = trackedGeneration ?? generationContext?.generation;
+        if (
+          expectedGeneration !== undefined &&
+          expectedGeneration !== currentGeneration(sessionName)
+        ) {
+          return;
         }
-      }
-      await baseStore.save(recordToSave);
-      if (sessionName) {
+        const generation = expectedGeneration ?? currentGeneration(sessionName);
+        let recordToSave = record;
+        const agentCommand = readRecordAgentCommand(record);
+        const leasedCommand = launch?.leasedCommand ?? agentCommand;
+        const leaseIdentity = launch ?? readAcpxProcessLeaseIdentity(leasedCommand);
+        if (
+          params?.leaseStore &&
+          params.gatewayInstanceId &&
+          params.wrapperRoot &&
+          (!launch || sessionName === launch.sessionKey) &&
+          leasedCommand &&
+          leaseIdentity?.gatewayInstanceId === params.gatewayInstanceId &&
+          isOpenClawLeaseAwareAcpxProcessCommand({
+            command: leasedCommand,
+            wrapperRoot: params.wrapperRoot,
+          })
+        ) {
+          const existing = await params.leaseStore.load(leaseIdentity.leaseId);
+          const ownsExisting =
+            !existing ||
+            (existing.gatewayInstanceId === leaseIdentity.gatewayInstanceId &&
+              existing.sessionKey === sessionName &&
+              existing.wrapperRoot === params.wrapperRoot);
+          if (ownsExisting) {
+            const adoptingLease = Boolean(
+              launch && launch.resolvedCommand !== launch.leasedCommand,
+            );
+            const lifecycleRecord = adoptingLease
+              ? {
+                  ...record,
+                  // A reused legacy record can carry the previous wrapper PID. Clear
+                  // it before persisting the new lease so reconnect cannot claim it.
+                  pid: undefined,
+                  processId: undefined,
+                  agentStartedAt: undefined,
+                }
+              : record;
+            const rootPid = readRecordAgentPid(lifecycleRecord);
+            if (rootPid) {
+              await params.leaseStore.save({
+                leaseId: leaseIdentity.leaseId,
+                gatewayInstanceId: leaseIdentity.gatewayInstanceId,
+                sessionKey: sessionName,
+                wrapperRoot: params.wrapperRoot,
+                wrapperPath: extractGeneratedWrapperPath(leasedCommand),
+                rootPid,
+                ...(existing?.rootPid === rootPid && existing.processGroupId
+                  ? { processGroupId: existing.processGroupId }
+                  : {}),
+                commandHash: hashAcpxProcessCommand(leasedCommand),
+                startedAt: existing?.rootPid === rootPid ? existing.startedAt : Date.now(),
+                state: "open",
+              });
+            }
+            recordToSave = withOpenClawLeaseSessionMetadata(
+              {
+                ...lifecycleRecord,
+                // ACPX reconnects from the persisted command, so lease identity must
+                // remain in that reuse key until the session lifecycle is terminal.
+                agentCommand: leasedCommand,
+              },
+              {
+                openclawLeaseId: leaseIdentity.leaseId,
+                openclawGatewayInstanceId: leaseIdentity.gatewayInstanceId,
+              },
+            );
+          }
+        }
+        if (generation !== currentGeneration(sessionName)) {
+          return;
+        }
+        await baseStore.save(recordToSave);
+        rememberRecordGeneration(record, sessionName, generation);
+        if (recordToSave !== record) {
+          rememberRecordGeneration(recordToSave, sessionName, generation);
+        }
         freshSessionKeys.delete(sessionName);
-      }
+      });
     },
-    markFresh(sessionKey: string): void {
+    currentGeneration(sessionKey: string): number {
+      return currentGeneration(sessionKey.trim());
+    },
+    generationForRecord(record: AcpLoadedSessionRecord, sessionKey: string): number {
+      const normalized = recordSessionKey(record, sessionKey);
+      return resolveRecordGeneration(record, normalized) ?? currentGeneration(normalized);
+    },
+    generationForHandle,
+    getCloseSnapshot(sessionKey: string): AcpxCloseRecordSnapshot {
       const normalized = sessionKey.trim();
-      if (normalized) {
-        freshSessionKeys.add(normalized);
-      }
+      const snapshot = closeRecordBySessionKey.get(normalized);
+      return snapshot
+        ? { record: cloneRecord(snapshot.record), generation: snapshot.generation }
+        : {
+            record: undefined,
+            generation: currentGeneration(normalized),
+          };
     },
+    async discardPersistedRecord(sessionKey: string): Promise<void> {
+      const normalized = sessionKey.trim();
+      if (!normalized) {
+        return;
+      }
+      await runSerializedSessionState(normalized, async () => {
+        const record = await baseStore.load(normalized);
+        markFreshUnlocked(normalized);
+        if (!record || readRecordResetOnNextEnsure(record)) {
+          return;
+        }
+        await baseStore.save({
+          ...record,
+          closed: true,
+          closedAt: new Date().toISOString(),
+          acpx: { ...record.acpx, reset_on_next_ensure: true },
+        });
+      });
+    },
+    async markFresh(sessionKey: string, expectedGeneration?: number): Promise<boolean> {
+      const normalized = sessionKey.trim();
+      if (!normalized) {
+        return false;
+      }
+      return await runSerializedSessionState(normalized, () =>
+        markFreshUnlocked(normalized, expectedGeneration),
+      );
+    },
+    releaseGeneration,
   };
 }
 
@@ -801,6 +1184,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly openclawToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsSessionDelegates = new Map<string, BaseAcpxRuntime>();
+  private readonly generationDelegates = new Map<string, BaseAcpxRuntime>();
   private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
@@ -863,20 +1247,63 @@ export class AcpxRuntime implements AcpRuntime {
   private resolveDelegateForSession(params: {
     command: string | undefined;
     sessionKey: string;
+    generation?: number;
   }): BaseAcpxRuntime {
-    if (shouldUseBridgeSafeDelegateForCommand(params.command)) {
-      return this.bridgeSafeDelegate;
+    const sessionKey = params.sessionKey.trim();
+    const generation = params.generation ?? this.sessionStore.currentGeneration(sessionKey);
+    const bridgeSafe = shouldUseBridgeSafeDelegateForCommand(params.command);
+    if (generation === 0) {
+      if (bridgeSafe) {
+        return this.bridgeSafeDelegate;
+      }
+      return this.resolveManagedToolsDelegateForSession(sessionKey, generation);
     }
-    return this.resolveManagedToolsDelegateForSession(params.sessionKey);
+
+    const delegateKind = bridgeSafe
+      ? "bridge"
+      : this.managedToolsMcpBridgeEnabled
+        ? "managed"
+        : "default";
+    const key = `${sessionKey}\u0000${generation}\u0000${delegateKind}`;
+    const cached = this.generationDelegates.get(key);
+    if (cached) {
+      return cached;
+    }
+    const options = bridgeSafe
+      ? { ...this.delegateOptions, mcpServers: [] }
+      : this.managedToolsMcpBridgeEnabled
+        ? {
+            ...this.delegateOptions,
+            mcpServers: withManagedToolsMcpSessionEnv({
+              pluginToolsEnabled: this.pluginToolsMcpBridgeEnabled,
+              openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
+              mcpServers: this.delegateOptions.mcpServers,
+              sessionKey,
+            }),
+          }
+        : this.delegateOptions;
+    const delegate = new BaseAcpxRuntime(options, this.delegateTestOptions);
+    this.generationDelegates.set(key, delegate);
+    return delegate;
   }
 
-  private resolveManagedToolsDelegateForSession(sessionKey: string): BaseAcpxRuntime {
+  private resolveManagedToolsDelegateForSession(
+    sessionKey: string,
+    generation = this.sessionStore.currentGeneration(sessionKey),
+  ): BaseAcpxRuntime {
     if (!this.managedToolsMcpBridgeEnabled) {
       return this.delegate;
     }
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) {
       return this.delegate;
+    }
+    if (generation !== 0) {
+      return this.resolveDelegateForSession({
+        command: undefined,
+        sessionKey: normalizedSessionKey,
+        generation,
+      });
     }
     const cached = this.managedToolsSessionDelegates.get(normalizedSessionKey);
     if (cached) {
@@ -901,31 +1328,48 @@ export class AcpxRuntime implements AcpRuntime {
     return delegate;
   }
 
-  private releaseManagedToolsDelegateForSession(sessionKey: string): void {
-    if (!this.managedToolsMcpBridgeEnabled) {
-      return;
-    }
+  private releaseDelegateForGeneration(sessionKey: string, generation: number): void {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) {
       return;
     }
-    this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+    if (generation === 0) {
+      this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+      return;
+    }
+    const prefix = `${normalizedSessionKey}\u0000${generation}\u0000`;
+    for (const key of this.generationDelegates.keys()) {
+      if (key.startsWith(prefix)) {
+        this.generationDelegates.delete(key);
+      }
+    }
   }
 
   private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
     const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
-    return this.resolveDelegateForLoadedRecord(handle, record);
+    const generation = record
+      ? this.sessionStore.generationForRecord(record, handle.sessionKey)
+      : this.sessionStore.generationForHandle(handle);
+    if (generation === undefined) {
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        `ACP session handle is stale after reset: ${handle.sessionKey}`,
+      );
+    }
+    return this.resolveDelegateForLoadedRecord(handle, record, generation);
   }
 
   private resolveDelegateForLoadedRecord(
     handle: AcpRuntimeHandle,
     record: AcpLoadedSessionRecord,
+    generation?: number,
   ): BaseAcpxRuntime {
     const recordCommand = readAgentCommandFromRecord(record);
     if (recordCommand) {
       return this.resolveDelegateForSession({
         command: recordCommand,
         sessionKey: handle.sessionKey,
+        generation,
       });
     }
     const agentName = readAgentFromHandle(handle);
@@ -933,7 +1377,7 @@ export class AcpxRuntime implements AcpRuntime {
       agentName,
       agentRegistry: this.agentRegistry,
     });
-    return this.resolveDelegateForSession({ command, sessionKey: handle.sessionKey });
+    return this.resolveDelegateForSession({ command, sessionKey: handle.sessionKey, generation });
   }
 
   private async resolveCommandForHandle(handle: AcpRuntimeHandle): Promise<string | undefined> {
@@ -1358,20 +1802,22 @@ export class AcpxRuntime implements AcpRuntime {
       this.gatewayInstanceId && this.processLeaseStore
         ? await this.processLeaseStore.listOpen(this.gatewayInstanceId)
         : [];
-    const selectedLease = selectCurrentSessionLease({
-      leases: openLeases,
-      sessionKeys,
-      rootPid,
-    });
     const loadedLease = leaseId ? await this.processLeaseStore?.load(leaseId) : undefined;
-    const lease =
-      selectedLease ??
-      (loadedLease &&
+    const exactLease =
+      loadedLease &&
       loadedLease.gatewayInstanceId === this.gatewayInstanceId &&
-      (!rootPid || loadedLease.rootPid === rootPid) &&
-      sessionKeys.includes(loadedLease.sessionKey)
+      sessionKeys.includes(loadedLease.sessionKey) &&
+      (!rootPid || loadedLease.rootPid === rootPid)
         ? loadedLease
-        : undefined);
+        : undefined;
+    const selectedLease = rootPid
+      ? selectCurrentSessionLease({
+          leases: openLeases,
+          sessionKeys,
+          rootPid,
+        })
+      : undefined;
+    const lease = exactLease ?? selectedLease;
     if (lease && lease.gatewayInstanceId === this.gatewayInstanceId && lease.rootPid > 0) {
       await this.processLeaseStore?.markState(lease.leaseId, "closing");
       const result = await cleanupOpenClawOwnedAcpxProcessTree({
@@ -1428,9 +1874,13 @@ export class AcpxRuntime implements AcpRuntime {
   async ensureSession(
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<OpenClawRuntimeHandle> {
-    return await this.runSerializedSessionEnsure(input.sessionKey, () =>
-      this.ensureSessionUnlocked(input),
-    );
+    return await this.runSerializedSessionEnsure(input.sessionKey, () => {
+      const sessionKey = input.sessionKey.trim();
+      const generation = this.sessionStore.currentGeneration(sessionKey);
+      return acpxSessionGenerationScope.run({ sessionKey, generation }, () =>
+        this.ensureSessionUnlocked(input),
+      );
+    });
   }
 
   private async ensureSessionUnlocked(
@@ -1754,53 +2204,120 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
+    const handleGeneration = this.sessionStore.generationForHandle(input.handle);
+    const currentGeneration = this.sessionStore.currentGeneration(input.handle.sessionKey);
+    if (
+      currentGeneration > 0 &&
+      (handleGeneration === undefined || handleGeneration !== currentGeneration)
+    ) {
+      return;
+    }
     const record = await this.sessionStore.load(
       input.handle.acpxRecordId ?? input.handle.sessionKey,
     );
-    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
+    const generation = record
+      ? this.sessionStore.generationForRecord(record, input.handle.sessionKey)
+      : handleGeneration;
+    if (
+      generation === undefined ||
+      (handleGeneration !== undefined && generation !== handleGeneration)
+    ) {
+      return;
+    }
+    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record, generation);
     await delegate.cancel(input);
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
-    // Fresh reset has no ACP handle to close the delegate's upstream client.
-    // Keep the scoped delegate reachable so the next ensure can replace it;
-    // close() owns cache release when the session lifecycle ends.
-    this.sessionStore.markFresh(input.sessionKey);
+    await this.runSerializedSessionEnsure(input.sessionKey, async () => {
+      // Fresh reset has no ACP handle to close the delegate's upstream client.
+      // Persist the upstream reset marker before the next ensure can reuse the
+      // old record, while generation fencing protects any late old completion.
+      await this.sessionStore.discardPersistedRecord(input.sessionKey);
+    });
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    const closeLease = await this.prepareProcessLeaseForOperation(input.handle);
-    let cleanupSucceeded = false;
-    try {
-      const record = await this.sessionStore.load(
-        input.handle.acpxRecordId ?? input.handle.sessionKey,
-      );
-      let closeSucceeded;
-      const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
-      try {
-        await delegate.close({
-          handle: input.handle,
-          reason: input.reason,
-          discardPersistentState: input.discardPersistentState,
-        });
-        closeSucceeded = true;
-      } finally {
-        await this.cleanupProcessTreeForRecord(input.handle, record);
-        cleanupSucceeded = true;
-      }
-      if (closeSucceeded) {
-        this.releaseManagedToolsDelegateForSession(input.handle.sessionKey);
-      }
-      if (closeSucceeded && input.discardPersistentState) {
-        this.sessionStore.markFresh(input.handle.sessionKey);
-      }
-    } finally {
-      if (cleanupSucceeded) {
-        await this.finalizeProcessLeaseForOperation(input.handle, closeLease);
-      } else {
-        await this.retirePendingProcessLease(closeLease);
-      }
+    const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
+    const closeSnapshot = this.sessionStore.getCloseSnapshot(input.handle.sessionKey);
+    const handleIdentity = readHandleIdentity(input.handle);
+    if (
+      !handleIdentity.acpxRecordId &&
+      !handleIdentity.backendSessionId &&
+      !handleIdentity.agentSessionId &&
+      this.sessionStore.currentGeneration(input.handle.sessionKey) > 0
+    ) {
+      return;
     }
+    if (closeSnapshot.record && !recordMatchesHandle(input.handle, closeSnapshot.record)) {
+      return;
+    }
+    const handleGeneration = this.sessionStore.generationForHandle(input.handle);
+    const currentGeneration = this.sessionStore.currentGeneration(input.handle.sessionKey);
+    if (
+      (closeSnapshot.record === undefined && handleGeneration === undefined) ||
+      (currentGeneration > 0 &&
+        (handleGeneration === undefined || handleGeneration !== currentGeneration))
+    ) {
+      return;
+    }
+    // Capture the old record before a concurrent reset can hide it as fresh. The
+    // scoped snapshot also lets upstream acpx re-load it during close; generation
+    // checks below still prevent stale completion from being persisted.
+    const recordPromise = closeSnapshot.record
+      ? Promise.resolve(closeSnapshot.record)
+      : this.sessionStore.load(recordId);
+    return await acpxCloseRecordScope.run(
+      {
+        recordId,
+        sessionKey: input.handle.sessionKey,
+        generation: closeSnapshot.record
+          ? closeSnapshot.generation
+          : (handleGeneration ?? this.sessionStore.currentGeneration(input.handle.sessionKey)),
+        record: recordPromise,
+      },
+      async () => {
+        const record = await recordPromise;
+        if (!record || !recordMatchesHandle(input.handle, record)) {
+          return;
+        }
+        const closeGeneration = closeSnapshot.record
+          ? closeSnapshot.generation
+          : this.sessionStore.generationForRecord(record, input.handle.sessionKey);
+        if (handleGeneration !== undefined && handleGeneration !== closeGeneration) {
+          return;
+        }
+        const closeLease = await this.prepareProcessLeaseForOperation(input.handle);
+        const delegate = this.resolveDelegateForLoadedRecord(input.handle, record, closeGeneration);
+        let cleanupSucceeded = false;
+        try {
+          try {
+            await delegate.close({
+              handle: input.handle,
+              reason: input.reason,
+              discardPersistentState: input.discardPersistentState,
+            });
+          } finally {
+            await this.cleanupProcessTreeForRecord(input.handle, record);
+            cleanupSucceeded = true;
+          }
+          if (input.discardPersistentState) {
+            await this.sessionStore.markFresh(input.handle.sessionKey, closeGeneration);
+            this.releaseDelegateForGeneration(input.handle.sessionKey, closeGeneration);
+            this.sessionStore.releaseGeneration(input.handle.sessionKey, closeGeneration, record);
+            return;
+          }
+          this.releaseDelegateForGeneration(input.handle.sessionKey, closeGeneration);
+          this.sessionStore.releaseGeneration(input.handle.sessionKey, closeGeneration, record);
+        } finally {
+          if (cleanupSucceeded) {
+            await this.finalizeProcessLeaseForOperation(input.handle, closeLease);
+          } else {
+            await this.retirePendingProcessLease(closeLease);
+          }
+        }
+      },
+    );
   }
 }
 

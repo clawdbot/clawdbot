@@ -10,6 +10,10 @@ import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  closeSupersededRuntimeHandle,
+  createSupersededActorError,
+} from "./manager.runtime-handle-ensure.js";
 import type {
   AcpInitializeSessionInput,
   AcpSessionManagerDeps,
@@ -31,12 +35,14 @@ export async function runManagerInitializeSession(params: {
   runtimeHandles: ManagerRuntimeHandleCache;
   enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor?: () => boolean;
 }): Promise<{
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
 }> {
   const { input, sessionKey } = params;
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
   const backend = params.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
   const runtime = backend.runtime;
   const agent = normalizeAgentId(input.agent);
@@ -66,6 +72,14 @@ export async function runManagerInitializeSession(params: {
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
   });
+  if (!isCurrentActor()) {
+    await closeSupersededRuntimeHandle({
+      runtime,
+      handle,
+      sessionKey,
+    });
+    throw createSupersededActorError(sessionKey);
+  }
   const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
   const effectiveModel = resolveEffectiveSessionModel({
     requestedModel,
@@ -113,12 +127,21 @@ export async function runManagerInitializeSession(params: {
     runtime,
     handle,
     writeSessionMeta: params.writeSessionMeta,
+    isCurrentActor,
   });
   if (!persisted?.acp) {
     throw new AcpRuntimeError(
       "ACP_SESSION_INIT_FAILED",
       `Could not persist ACP metadata for ${sessionKey}.`,
     );
+  }
+  if (!isCurrentActor()) {
+    await closeSupersededRuntimeHandle({
+      runtime,
+      handle,
+      sessionKey,
+    });
+    throw createSupersededActorError(sessionKey);
   }
   params.runtimeHandles.set(sessionKey, {
     runtime,
@@ -154,12 +177,16 @@ async function persistInitializedSessionMeta(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<SessionEntry | null> {
   try {
     const persisted = await params.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
-      mutate: () => params.meta,
+      isCurrentActor: params.isCurrentActor,
+      // A reset can rotate the actor while the storage operation is pending. Do not let the
+      // superseded initializer republish metadata after the reset has moved to a new lane.
+      mutate: () => (params.isCurrentActor() ? params.meta : undefined),
       failOnError: true,
     });
     if (persisted?.acp) {

@@ -243,6 +243,31 @@ function resolveSessionConversationBindingContext(
   };
 }
 
+function resolveBoundAcpSessionForCommandReset(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  bindingContext?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
+}): string | undefined {
+  const bindingContext =
+    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
+  return resolveEffectiveResetTargetSessionKey({
+    cfg: params.cfg,
+    channel: bindingContext?.channel,
+    accountId: bindingContext?.accountId,
+    conversationId: bindingContext?.conversationId,
+    parentConversationId: bindingContext?.parentConversationId,
+    activeSessionKey: normalizeOptionalString(params.ctx.SessionKey),
+    allowNonAcpBindingSessionKey: false,
+    skipConfiguredFallbackWhenActiveSessionNonAcp: true,
+    fallbackToActiveAcpWhenUnbound: false,
+  });
+}
+
 function resolveBoundConversationSessionKey(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
@@ -542,7 +567,22 @@ async function initSessionStateAttemptLocked(
     isGroup,
     resetAuthorized,
   });
-  const { matchedResetTriggerLower, softResetMatched, triggerBodyNormalized } = resetCommand;
+  const boundAcpSessionForCommandReset = resolveBoundAcpSessionForCommandReset({
+    cfg,
+    ctx: sessionCtxForState,
+    bindingContext: conversationBindingContext,
+  });
+  const shouldDeferResetToBoundAcpCommand =
+    Boolean(boundAcpSessionForCommandReset) &&
+    resetCommand.matchedResetTriggerLower !== undefined &&
+    DEFAULT_RESET_TRIGGERS.some(
+      (defaultTrigger) =>
+        normalizeOptionalLowercaseString(defaultTrigger) === resetCommand.matchedResetTriggerLower,
+    );
+  const matchedResetTriggerLower = shouldDeferResetToBoundAcpCommand
+    ? undefined
+    : resetCommand.matchedResetTriggerLower;
+  const { softResetMatched, triggerBodyNormalized } = resetCommand;
   if (matchedResetTriggerLower !== undefined) {
     isNewSession = true;
     bodyStripped = resetCommand.payload ?? "";

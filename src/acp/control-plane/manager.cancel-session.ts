@@ -24,6 +24,7 @@ export async function runManagerCancelSession(params: {
   withSessionActor: WithManagerSessionActor;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
+  isCurrentActor: () => boolean;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
   const actorKey = normalizeActorKey(params.sessionKey);
@@ -46,6 +47,7 @@ export async function runManagerCancelSession(params: {
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       meta: resolvedMeta,
+      isCurrentActor: params.isCurrentActor,
     });
     try {
       await cancelRuntimeHandle({
@@ -53,19 +55,27 @@ export async function runManagerCancelSession(params: {
         handle,
         reason: params.reason,
       });
+      if (!params.isCurrentActor()) {
+        return;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         state: "idle",
         clearLastError: true,
+        isCurrentActor: params.isCurrentActor,
       });
     } catch (error) {
       const acpError = normalizeCancelError(error);
+      if (!params.isCurrentActor()) {
+        throw acpError;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         state: "error",
         lastError: acpError.message,
+        isCurrentActor: params.isCurrentActor,
       });
       throw acpError;
     }

@@ -35,7 +35,9 @@ function makeRuntime(
   testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
 ): {
   runtime: AcpxRuntime;
-  wrappedStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+  wrappedStore: TestSessionStore & {
+    markFresh: (sessionKey: string, expectedGeneration?: number) => Promise<boolean>;
+  };
   delegate: {
     cancel: AcpRuntime["cancel"];
     close: AcpRuntime["close"];
@@ -76,7 +78,9 @@ function makeRuntime(
     runtime,
     wrappedStore: (
       runtime as unknown as {
-        sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+        sessionStore: TestSessionStore & {
+          markFresh: (sessionKey: string, expectedGeneration?: number) => Promise<boolean>;
+        };
       }
     ).sessionStore,
     delegate: (
@@ -248,7 +252,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
+  it("isolates managed OpenClaw tools MCP delegates across fresh generations", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -275,7 +279,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).toBe(
+    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).not.toBe(
       firstDelegate,
     );
   });
@@ -1600,9 +1604,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
+    let persisted: Record<string, unknown> = { acpxRecordId: "stale" };
     const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
-      save: vi.fn(async () => {}),
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = record;
+      }),
     };
 
     const { runtime, wrappedStore } = makeRuntime(baseStore);
@@ -1617,19 +1624,153 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
-    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
-    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
 
     await wrappedStore.save({
-      acpxRecordId: "fresh-record",
+      acpxRecordId: "agent:codex:acp:binding:test",
       name: "agent:codex:acp:binding:test",
+      acpSessionId: "fresh-session",
     } as never);
 
-    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
-      acpxRecordId: "stale",
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toMatchObject({
+      acpxRecordId: "agent:codex:acp:binding:test",
+      acpSessionId: "fresh-session",
     });
-    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
+    expect(baseStore["load"]).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects saves from records loaded before a fresh reset generation", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, wrappedStore } = makeRuntime(baseStore);
+    const staleRecord = await wrappedStore.load(sessionKey);
+
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "fresh-session",
+    });
+    expect(staleRecord).toBeDefined();
+    await wrappedStore.save({
+      ...(staleRecord as Record<string, unknown>),
+      closed: true,
+    });
+
+    expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
+  });
+
+  it("keeps a fresh generation owned when an older discard close finishes late", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    const oldRecord: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    let persisted = oldRecord;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = record;
+      }),
+    };
+    const { runtime, wrappedStore } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const exposedRuntime = runtime as unknown as {
+      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): {
+        close: AcpRuntime["close"];
+      };
+    };
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(sessionKey);
+    let releaseClose: (() => void) | undefined;
+    vi.spyOn(scopedDelegate, "close").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      oldRecord.closed = true;
+      await wrappedStore.save(oldRecord);
+    });
+
+    const closePromise = runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+    await vi.waitFor(() => expect(releaseClose).toEqual(expect.any(Function)));
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "fresh-session",
+    });
+
+    releaseClose?.();
+    await closePromise;
+
+    expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
+    expect(await wrappedStore.load(sessionKey)).toMatchObject({ acpSessionId: "fresh-session" });
+    expect(exposedRuntime.managedToolsSessionDelegates.has(sessionKey)).toBe(false);
+  });
+
+  it("keeps a background discard close attached to the pre-reset record", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    const oldRecord: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const load = vi.fn(async () => oldRecord);
+    const baseStore: TestSessionStore = {
+      load,
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore);
+    await expect(wrappedStore.load(sessionKey)).resolves.toBe(oldRecord);
+    const baseLoadCount = load.mock.calls.length;
+    const close = vi.spyOn(delegate, "close").mockImplementation(async () => {
+      expect(await wrappedStore.load(sessionKey)).toMatchObject(oldRecord);
+    });
+
+    const closePromise = runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+    await runtime.prepareFreshSession({ sessionKey });
+    await closePromise;
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledTimes(baseLoadCount);
   });
 
   it("marks the session fresh after discardPersistentState close", async () => {
@@ -1662,6 +1803,300 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore["load"]).toHaveBeenCalledOnce();
+  });
+
+  it("persists the reset marker for a Gateway restart", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+      closed: false,
+      acpx: {},
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => structuredClone(persisted)),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime } = makeRuntime(baseStore);
+
+    await runtime.prepareFreshSession({ sessionKey });
+
+    expect(persisted).toMatchObject({
+      acpxRecordId: sessionKey,
+      closed: true,
+      acpx: { reset_on_next_ensure: true },
+    });
+  });
+
+  it("fences legacy records without a name by record identity", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: "legacy-record-1",
+      acpSessionId: "old-session",
+      closed: false,
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, wrappedStore } = makeRuntime(baseStore);
+    const staleRecord = await wrappedStore.load(sessionKey);
+
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      ...(staleRecord as Record<string, unknown>),
+      closedAt: "late-stale-close",
+    });
+
+    expect(persisted).toMatchObject({
+      acpSessionId: "old-session",
+      acpx: { reset_on_next_ensure: true },
+    });
+    expect(persisted.closedAt).not.toBe("late-stale-close");
+  });
+
+  it("does not cancel a fresh generation through an older record-only handle", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore);
+    await wrappedStore.load(sessionKey);
+    await runtime.prepareFreshSession({ sessionKey });
+    const cancel = vi.spyOn(delegate, "cancel").mockResolvedValue(undefined);
+
+    await runtime.cancel({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+        acpxRecordId: sessionKey,
+      },
+      reason: "late-old-cancel",
+    });
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(persisted).toMatchObject({ acpSessionId: "old-session" });
+  });
+
+  it("serializes reset before a late stale save can commit", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    let loadCount = 0;
+    let releaseResetLoad!: () => void;
+    let resetLoadStarted!: () => void;
+    const resetLoad = new Promise<void>((resolve) => {
+      releaseResetLoad = resolve;
+    });
+    const resetStarted = new Promise<void>((resolve) => {
+      resetLoadStarted = resolve;
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => {
+        loadCount += 1;
+        if (loadCount === 2) {
+          resetLoadStarted();
+          await resetLoad;
+        }
+        return structuredClone(persisted);
+      }),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, wrappedStore } = makeRuntime(baseStore);
+    const staleRecord = await wrappedStore.load(sessionKey);
+    const reset = runtime.prepareFreshSession({ sessionKey });
+    await resetStarted;
+
+    const staleSave = wrappedStore.save({
+      ...(staleRecord as Record<string, unknown>),
+      closedAt: "late-stale-close",
+    });
+    releaseResetLoad();
+    await Promise.all([reset, staleSave]);
+
+    expect(baseStore["save"]).toHaveBeenCalledOnce();
+    expect(persisted).toMatchObject({ acpx: { reset_on_next_ensure: true } });
+    expect(persisted.closedAt).not.toBe("late-stale-close");
+  });
+
+  it("does not close a fresh record through an older handle identity", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore);
+    await wrappedStore.load(sessionKey);
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "fresh-session",
+    });
+    const close = vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+        acpxRecordId: sessionKey,
+        backendSessionId: "old-session",
+      },
+      reason: "late-old-close",
+      discardPersistentState: true,
+    });
+
+    expect(close).not.toHaveBeenCalled();
+    expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
+  });
+
+  it("does not close a fresh record through an older record-only handle", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    let persisted: Record<string, unknown> = {
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "old-session",
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => persisted),
+      save: vi.fn(async (record) => {
+        persisted = structuredClone(record);
+      }),
+    };
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore);
+    await wrappedStore.load(sessionKey);
+    await runtime.prepareFreshSession({ sessionKey });
+    await wrappedStore.save({
+      acpxRecordId: sessionKey,
+      name: sessionKey,
+      acpSessionId: "fresh-session",
+    });
+    const close = vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+        acpxRecordId: sessionKey,
+      },
+      reason: "late-old-close",
+      discardPersistentState: true,
+    });
+
+    expect(close).not.toHaveBeenCalled();
+    expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
+  });
+
+  it("serializes prepareFreshSession behind an in-flight ensure", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    let releaseEnsure!: () => void;
+    let ensureStarted!: () => void;
+    const ensureBlocked = new Promise<void>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const ensureEntered = new Promise<void>((resolve) => {
+      ensureStarted = resolve;
+    });
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      ensureStarted();
+      await ensureBlocked;
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+    const ensure = runtime.ensureSession({
+      sessionKey,
+      agent: "codex",
+      mode: "persistent",
+    });
+    await ensureEntered;
+    let resetDone = false;
+    const reset = runtime.prepareFreshSession({ sessionKey }).then(() => {
+      resetDone = true;
+    });
+    await Promise.resolve();
+    expect(resetDone).toBe(false);
+
+    releaseEnsure();
+    await ensure;
+    await reset;
+    expect(resetDone).toBe(true);
+  });
+
+  it("does not select a newer pending lease for a stale record without identity", async () => {
+    const sessionKey = "agent:codex:acp:binding:test";
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("fresh-pending", {
+      leaseId: "fresh-pending",
+      gatewayInstanceId: "gateway-test",
+      sessionKey,
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 0,
+      commandHash: "hash",
+      startedAt: 2,
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: sessionKey,
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+    });
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+      },
+      reason: "late-old-close",
+    });
+
+    expect(leaseStore.store.markState).not.toHaveBeenCalledWith("fresh-pending", "closing");
+    expect(leaseStore.leases.get("fresh-pending")).toMatchObject({ state: "open" });
   });
 
   it("releases managed OpenClaw tools MCP delegates after close", async () => {

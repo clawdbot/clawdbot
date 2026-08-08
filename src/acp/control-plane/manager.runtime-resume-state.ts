@@ -52,11 +52,18 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
   meta?: SessionAcpMeta;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<boolean> {
+  if (!params.isCurrentActor()) {
+    return false;
+  }
   if (params.attempt > 0 || params.sawTurnOutput) {
     return false;
   }
   if (isRecoverableManagerAcpxExitError(params.error.message)) {
+    if (!params.isCurrentActor()) {
+      return false;
+    }
     params.runtimeHandles.clear(params.sessionKey);
     logVerbose(
       `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
@@ -75,21 +82,31 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     writeSessionMeta: params.writeSessionMeta,
+    isCurrentActor: params.isCurrentActor,
   });
-  if (!cleared) {
+  if (!cleared || !params.isCurrentActor()) {
     return false;
   }
   if (params.runtime.prepareFreshSession) {
+    if (!params.isCurrentActor()) {
+      return false;
+    }
     try {
       await params.runtime.prepareFreshSession({
         sessionKey: params.sessionKey,
       });
+      if (!params.isCurrentActor()) {
+        return false;
+      }
     } catch (error) {
       logVerbose(
         `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
       );
       return false;
     }
+  }
+  if (!params.isCurrentActor()) {
+    return false;
   }
   params.runtimeHandles.clear(params.sessionKey);
   logVerbose(
@@ -102,12 +119,17 @@ async function clearPersistedRuntimeResumeState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<boolean> {
   const now = Date.now();
   const updated = await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
+      if (!params.isCurrentActor()) {
+        return undefined;
+      }
       if (!entry) {
         return null;
       }
@@ -153,12 +175,17 @@ export async function discardPersistedManagerRuntimeState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<void> {
   const now = Date.now();
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
+      if (!params.isCurrentActor()) {
+        return undefined;
+      }
       if (!entry) {
         return null;
       }

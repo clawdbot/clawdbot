@@ -1,4 +1,5 @@
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -541,6 +542,7 @@ function sessionStoreUpdateOptions(params: {
 async function clearLegacyEmbeddedAcpMetadata(params: {
   storePath: string;
   sessionKeys: Iterable<string | null | undefined>;
+  assertCommitAllowed?: () => void;
 }): Promise<void> {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => sessionKey?.trim()).filter(
@@ -567,6 +569,7 @@ async function clearLegacyEmbeddedAcpMetadata(params: {
       {
         replaceEntry: true,
         skipMaintenance: true,
+        assertCommitAllowed: params.assertCommitAllowed,
       },
     );
   }
@@ -580,6 +583,7 @@ export async function upsertAcpSessionMeta(params: {
   now?: () => number;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
+  assertCommitAllowed?: () => void;
   mutate: (
     current: SessionAcpMeta | undefined,
     entry: SessionEntry | undefined,
@@ -603,12 +607,16 @@ export async function upsertAcpSessionMeta(params: {
   const updatedAt = params.now?.() ?? Date.now();
   runOpenClawStateWriteTransaction(
     (database) => {
+      params.assertCommitAllowed?.();
       const currentRow = selectAcpSessionRow(database.db, storageSessionKey);
       current =
         currentRow && acpSessionRowMatchesEntry(currentRow, entry)
           ? rowToAcpSessionMeta(currentRow)
           : undefined;
-      preparedEntry = mergeSessionEntry(entry, { updatedAt });
+      preparedEntry = mergeSessionEntry(entry, {
+        updatedAt,
+        ...(entry ? {} : { lifecycleRevision: randomUUID() }),
+      });
       nextMeta = params.mutate(
         current,
         current ? mergeAcpForReturn(preparedEntry, current) : entry,
@@ -636,11 +644,13 @@ export async function upsertAcpSessionMeta(params: {
           {
             ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
             replaceEntry: true,
+            assertCommitAllowed: params.assertCommitAllowed,
           },
         )
       : null;
     runOpenClawStateWriteTransaction(
       (database) => {
+        params.assertCommitAllowed?.();
         const sessionKeysToDelete = new Set([storageSessionKey]);
         if (patched?.sessionKey) {
           sessionKeysToDelete.add(patched.sessionKey);
@@ -659,6 +669,7 @@ export async function upsertAcpSessionMeta(params: {
     await clearLegacyEmbeddedAcpMetadata({
       storePath: storeEntry.storePath,
       sessionKeys: [storageSessionKey, patched?.sessionKey],
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     return patched?.entry ?? null;
   }
@@ -679,6 +690,7 @@ export async function upsertAcpSessionMeta(params: {
       ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
       fallbackEntry: preparedEntry,
       replaceEntry: true,
+      assertCommitAllowed: params.assertCommitAllowed,
     },
   );
   if (!persisted) {
@@ -687,9 +699,11 @@ export async function upsertAcpSessionMeta(params: {
   await clearLegacyEmbeddedAcpMetadata({
     storePath: storeEntry.storePath,
     sessionKeys: [storageSessionKey, persisted.sessionKey],
+    assertCommitAllowed: params.assertCommitAllowed,
   });
   runOpenClawStateWriteTransaction(
     (database) => {
+      params.assertCommitAllowed?.();
       upsertAcpSessionMetaRow(
         database.db,
         bindAcpSessionMeta({

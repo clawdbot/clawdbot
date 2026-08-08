@@ -12,7 +12,11 @@ import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/ty
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import {
+  AcpRuntimeError,
+  toAcpRuntimeError,
+  withAcpRuntimeErrorBoundary,
+} from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
   AcpSessionManagerDeps,
@@ -36,7 +40,9 @@ export async function ensureManagerRuntimeHandle(params: {
   runtimeHandles: ManagerRuntimeHandleCache;
   enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor?: () => boolean;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
   const agent =
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
@@ -57,7 +63,7 @@ export async function ensureManagerRuntimeHandle(params: {
       handle: cached.handle,
       meta: params.meta,
     });
-    if (
+    const reusable =
       backendMatches &&
       agentMatches &&
       modeMatches &&
@@ -68,8 +74,15 @@ export async function ensureManagerRuntimeHandle(params: {
         sessionKey: params.sessionKey,
         runtime: cached.runtime,
         handle: cached.handle,
-      }))
-    ) {
+        isCurrentActor,
+      }));
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+    if (reusable) {
+      if (!isCurrentActor()) {
+        throw createSupersededActorError(params.sessionKey);
+      }
       return {
         runtime: cached.runtime,
         handle: cached.handle,
@@ -98,8 +111,8 @@ export async function ensureManagerRuntimeHandle(params: {
     mode === "persistent" &&
     previousIdentity != null &&
     !identityHasStableSessionId(previousIdentity);
-  const ensureSession = async (resumeSessionId?: string) =>
-    await withAcpRuntimeErrorBoundary({
+  const ensureSession = async (resumeSessionId?: string) => {
+    const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>
         await runtime.ensureSession({
           sessionKey: params.sessionKey,
@@ -113,11 +126,27 @@ export async function ensureManagerRuntimeHandle(params: {
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",
     });
+    if (!isCurrentActor()) {
+      await closeSupersededRuntimeHandle({
+        runtime,
+        handle: ensured,
+        sessionKey: params.sessionKey,
+      });
+      throw createSupersededActorError(params.sessionKey);
+    }
+    return ensured;
+  };
   let ensured: AcpRuntimeHandle;
   if (shouldPrepareFreshPersistentSession) {
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
     await runtime.prepareFreshSession?.({
       sessionKey: params.sessionKey,
     });
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
   }
   if (persistedResumeSessionId) {
     try {
@@ -128,6 +157,9 @@ export async function ensureManagerRuntimeHandle(params: {
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
       });
+      if (!isCurrentActor()) {
+        throw acpError;
+      }
       if (acpError.code !== "ACP_SESSION_INIT_FAILED") {
         throw acpError;
       }
@@ -202,13 +234,25 @@ export async function ensureManagerRuntimeHandle(params: {
     await params.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      isCurrentActor,
       mutate: (_current, entry) => {
+        if (!isCurrentActor()) {
+          return undefined;
+        }
         if (!entry) {
           return null;
         }
         return nextMeta;
       },
     });
+  }
+  if (!isCurrentActor()) {
+    await closeSupersededRuntimeHandle({
+      runtime,
+      handle: nextHandle,
+      sessionKey: params.sessionKey,
+    });
+    throw createSupersededActorError(params.sessionKey);
   }
   params.runtimeHandles.set(params.sessionKey, {
     runtime,
@@ -225,4 +269,32 @@ export async function ensureManagerRuntimeHandle(params: {
     handle: nextHandle,
     meta: nextMeta,
   };
+}
+
+const SESSION_ACTOR_SUPERSEDED_DETAIL_CODE = "SESSION_ACTOR_SUPERSEDED";
+
+export function createSupersededActorError(sessionKey: string): AcpRuntimeError {
+  return new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `ACP session actor was superseded during runtime initialization for ${sessionKey}.`,
+    { detailCode: SESSION_ACTOR_SUPERSEDED_DETAIL_CODE },
+  );
+}
+
+export async function closeSupersededRuntimeHandle(params: {
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  sessionKey: string;
+}): Promise<void> {
+  await params.runtime
+    .close({
+      handle: params.handle,
+      reason: "session-actor-superseded",
+      discardPersistentState: true,
+    })
+    .catch((error: unknown) => {
+      logVerbose(
+        `acp-manager: failed discarding superseded runtime for ${params.sessionKey}: ${String(error)}`,
+      );
+    });
 }

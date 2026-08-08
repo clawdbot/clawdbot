@@ -176,8 +176,12 @@ describe("ACP session metadata SQLite store", () => {
       expect(result?.acp?.runtimeSessionName).toBe("codex-new");
       const storedEntry = readStoredAcpSessionEntry({ storePath, sessionKey });
       expect(storedEntry?.sessionId).toEqual(expect.any(String));
+      expect(storedEntry?.lifecycleRevision).toEqual(expect.any(String));
       expect(storedEntry?.updatedAt).toEqual(expect.any(Number));
       expect(storedEntry?.acp).toBeUndefined();
+      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
+        "codex-new",
+      );
     });
   });
 

@@ -24,6 +24,7 @@ import {
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
@@ -51,6 +52,7 @@ type ApplyRuntimeControls = (params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
+  isCurrentActor: () => boolean;
 }) => Promise<void>;
 
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
@@ -70,6 +72,7 @@ export async function runManagerTurn(params: {
   }) => void;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<void> {
   const { input, sessionKey } = params;
   const turnStartedAt = Date.now();
@@ -148,12 +151,15 @@ export async function runManagerTurn(params: {
         });
       }
     }
-    await params.setSessionState({
-      cfg: input.cfg,
-      sessionKey,
-      state: "error",
-      lastError: formatAcpErrorChain(errorToRecord),
-    });
+    if (params.isCurrentActor()) {
+      await params.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        state: "error",
+        lastError: formatAcpErrorChain(errorToRecord),
+        isCurrentActor: params.isCurrentActor,
+      });
+    }
     throw errorToRecord;
   };
 
@@ -210,23 +216,35 @@ export async function runManagerTurn(params: {
             cfg: input.cfg,
             sessionKey,
             meta: metaWithBackend,
+            isCurrentActor: params.isCurrentActor,
           });
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
           await params.applyRuntimeControls({
             sessionKey,
             runtime,
             handle,
             meta,
+            isCurrentActor: params.isCurrentActor,
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
 
           await params.setSessionState({
             cfg: input.cfg,
             sessionKey,
             state: "running",
             clearLastError: true,
+            isCurrentActor: params.isCurrentActor,
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
 
           internalAbortController = new AbortController();
           onCallerAbort = () => {
@@ -342,12 +360,15 @@ export async function runManagerTurn(params: {
               });
             }
           }
-          await params.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "idle",
-            clearLastError: true,
-          });
+          if (params.isCurrentActor()) {
+            await params.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "idle",
+              clearLastError: true,
+              isCurrentActor: params.isCurrentActor,
+            });
+          }
           return;
         } catch (error) {
           const acpError = toAcpRuntimeError({
@@ -357,6 +378,9 @@ export async function runManagerTurn(params: {
               ? "ACP turn failed before completion."
               : "Could not initialize ACP session runtime.",
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
           retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
             attempt,
             cfg: input.cfg,
@@ -367,7 +391,11 @@ export async function runManagerTurn(params: {
             meta,
             runtimeHandles: params.runtimeHandles,
             writeSessionMeta: params.writeSessionMeta,
+            isCurrentActor: params.isCurrentActor,
           });
+          if (!params.isCurrentActor()) {
+            throw createSupersededActorError(sessionKey);
+          }
           if (retryFreshHandle) {
             continue;
           }
@@ -396,7 +424,14 @@ export async function runManagerTurn(params: {
           if (activeTurn && params.activeTurnBySession.get(actorKey) === activeTurn) {
             params.activeTurnBySession.delete(actorKey);
           }
-          if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
+          if (
+            !retryFreshHandle &&
+            !skipPostTurnCleanup &&
+            runtime &&
+            handle &&
+            meta &&
+            params.isCurrentActor()
+          ) {
             ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
               cfg: input.cfg,
               sessionKey,
@@ -404,6 +439,7 @@ export async function runManagerTurn(params: {
               handle,
               meta,
               failOnStatusError: false,
+              isCurrentActor: params.isCurrentActor,
             }));
           }
           if (
@@ -412,6 +448,7 @@ export async function runManagerTurn(params: {
             runtime &&
             handle &&
             meta &&
+            params.isCurrentActor() &&
             meta.mode === "oneshot"
           ) {
             try {
@@ -424,7 +461,7 @@ export async function runManagerTurn(params: {
                 `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
               );
             } finally {
-              params.runtimeHandles.clear(sessionKey);
+              params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
             }
           }
         }
