@@ -312,8 +312,7 @@ main model can read the screenshot directly.
   for a remote endpoint: the schema rejects an `openclaw` or `clawd` profile
   that sets neither with `Profile must set cdpPort or cdpUrl`.
   `existing-session` profiles take the endpoint from `cdpUrl` and ignore
-  `cdpPort`; `extension` profiles own their relay port and reject `cdpUrl`. The
-  top-level `browser.cdpUrl` defaults to the managed local CDP port when unset.
+  `cdpPort`; `extension` profiles own their relay port and reject `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
