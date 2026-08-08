@@ -59,7 +59,6 @@ import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
-const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
@@ -113,7 +112,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
       if (this.composerPrefillAttentionTarget === input) {
         this.clearComposerPrefillAttention();
       }
-    }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
+    }, 1_200);
   }
 
   protected confirmConversationReset(): Promise<boolean> {

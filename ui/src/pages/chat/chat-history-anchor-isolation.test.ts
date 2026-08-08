@@ -99,6 +99,15 @@ describe("historical transcript anchor isolation", () => {
         deltaText: "streaming",
       },
     });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "main",
+        agentId: "main",
+        phase: "message",
+      },
+    });
     await Promise.resolve();
 
     expect(historyRequest).toBe(1);
