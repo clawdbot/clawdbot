@@ -6,7 +6,7 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
@@ -25,7 +25,8 @@ const activeTestRegistries = new Set<NodeRegistry>();
 type TestNodeSocket = {
   readyState: number;
   bufferedAmount: number;
-  send: ReturnType<typeof vi.fn>;
+  // Declared with its call signature so tests can wrap the recorded send.
+  send: Mock<(frame: unknown) => void>;
   close: ReturnType<typeof vi.fn>;
 };
 
