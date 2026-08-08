@@ -85,8 +85,8 @@ function isOpenAIResponsesCompactionSuppressionState(
   );
 }
 
-function compactionReplayStateMatches(
-  state: OpenAIResponsesCompactionReplayState,
+function replayContextMatches(
+  state: OpenAIResponsesReplayContext,
   context: OpenAIResponsesReplayContext,
 ): boolean {
   // Replay state is scoped to the exact request identity that captured it.
@@ -200,14 +200,9 @@ export function isSafeResponsesReplayItemId(id: unknown): id is string {
 
 function prepareOpenAIResponsesCompactionForReplay(
   value: unknown,
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
+  context: OpenAIResponsesReplayContext,
 ): { item: ResponseCompactionItemParam; replayIndex: number } | undefined {
-  const context = buildOpenAIResponsesReplayContext(model, options);
-  if (
-    !isOpenAIResponsesCompactionReplayState(value) ||
-    !compactionReplayStateMatches(value, context)
-  ) {
+  if (!isOpenAIResponsesCompactionReplayState(value) || !replayContextMatches(value, context)) {
     return undefined;
   }
   return {
@@ -225,6 +220,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
 ): { owner: AssistantMessage; item: ResponseCompactionItemParam; replayIndex: number } | undefined {
+  const context = buildOpenAIResponsesReplayContext(model, options);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant") {
@@ -233,16 +229,15 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
     if (isOpenAIResponsesCompactionSuppressionState(message.providerReplay)) {
       // A successful encrypted-content fallback records this provider-owned
       // tombstone so later turns never retry an already rejected compaction.
-      return undefined;
+      if (replayContextMatches(message.providerReplay, context)) {
+        return undefined;
+      }
+      continue;
     }
     if (message.providerReplay?.type !== OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE) {
       continue;
     }
-    const replay = prepareOpenAIResponsesCompactionForReplay(
-      message.providerReplay,
-      model,
-      options,
-    );
+    const replay = prepareOpenAIResponsesCompactionForReplay(message.providerReplay, context);
     return replay ? { owner: message, ...replay } : undefined;
   }
   return undefined;

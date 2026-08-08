@@ -7,6 +7,7 @@ import type {
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
+import { suppressOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
 import {
@@ -747,6 +748,47 @@ describe("OpenAI Responses compaction replay", () => {
 
     expect(input.some((item) => item.type === "compaction")).toBe(false);
   });
+
+  it.each(responseConverters)(
+    "$name ignores a newer foreign-route suppression tombstone",
+    ({ convert }) => {
+      const compatible = createAssistant(
+        [
+          { type: "text", text: "pruned before compaction" },
+          { type: "text", text: "retained after compaction" },
+        ],
+        compactionState(model, { replayIndex: 1 }),
+      );
+      const foreignSuppression = createAssistant([
+        { type: "text", text: "foreign route recovered" },
+      ]);
+      suppressOpenAIResponsesCompaction(
+        foreignSuppression,
+        { ...model, baseUrl: "https://route-b.example/v1" },
+        replayIdentity,
+      );
+
+      const input = convert({
+        messages: [
+          { role: "user", content: "pruned prefix", timestamp: 1 },
+          compatible,
+          { role: "user", content: "route B retry", timestamp: 2 },
+          foreignSuppression,
+          { role: "user", content: "current route A turn", timestamp: 3 },
+        ],
+      });
+
+      expect(input.filter((item) => item.type === "compaction")).toEqual([
+        expect.objectContaining({ id: "cmp_replay" }),
+      ]);
+      const encoded = JSON.stringify(input);
+      expect(encoded).not.toContain("pruned prefix");
+      expect(encoded).not.toContain("pruned before compaction");
+      expect(encoded).toContain("retained after compaction");
+      expect(encoded).toContain("foreign route recovered");
+      expect(encoded).toContain("current route A turn");
+    },
+  );
 
   it("redacts encrypted compaction bytes from payload and event previews", () => {
     const secret = "opaque-preview-compaction";
