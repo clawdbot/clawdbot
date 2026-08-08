@@ -80,7 +80,7 @@ import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {

@@ -3,14 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "../chat-history.ts";
+import { renderBackgroundTasksRail } from "./chat-background-tasks-render.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import {
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,
-  renderBackgroundTasksRail,
   type BackgroundTasksHost,
-  type BackgroundTasksProps,
 } from "./chat-background-tasks.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 function flushAsync() {
   return new Promise((resolve) => {

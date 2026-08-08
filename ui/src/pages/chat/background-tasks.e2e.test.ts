@@ -2,7 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat background-tasks rail mocked Gateway E2E",
@@ -14,6 +14,19 @@ const suite = createControlUiE2eSuite({
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
 const baseTime = Date.now();
 const chatSessionKey = "agent:main:main";
+
+function requestSessionKey(request: MockGatewayRequest): string | undefined {
+  const { params } = request;
+  if (
+    typeof params !== "object" ||
+    params === null ||
+    !("sessionKey" in params) ||
+    typeof params.sessionKey !== "string"
+  ) {
+    return undefined;
+  }
+  return params.sessionKey;
+}
 
 const runningSubagent = {
   id: "task-subagent",
@@ -250,9 +263,7 @@ suite.define(() => {
         expect(page.url()).toBe(chatUrl);
         expect(
           (await gateway.getRequests("chat.history")).some(
-            (request) =>
-              (request.params as { sessionKey?: string }).sessionKey ===
-              runningSubagent.childSessionKey,
+            (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
           ),
         ).toBe(false);
         await page.screenshot({
@@ -261,7 +272,7 @@ suite.define(() => {
         });
 
         const mainTranscript = page.locator(".chat-main .chat-thread");
-        const mainTranscriptBefore = await mainTranscript.innerText();
+        const mainTranscriptBefore = await mainTranscript.textContent();
         await rail
           .locator('[data-task-id="task-cli"]')
           .getByRole("button", { name: "Show details for Generate media index" })
@@ -276,23 +287,23 @@ suite.define(() => {
         await expect
           .poll(async () =>
             (await gateway.getRequests("chat.history")).some(
-              (request) => request.params.sessionKey === finishedCli.sessionKey,
+              (request) => requestSessionKey(request) === finishedCli.sessionKey,
             ),
           )
           .toBe(true);
         const transcriptRequest = (await gateway.getRequests("chat.history")).find(
-          (request) => request.params.sessionKey === finishedCli.sessionKey,
+          (request) => requestSessionKey(request) === finishedCli.sessionKey,
         );
         expect(transcriptRequest?.params).toEqual({
           sessionKey: finishedCli.sessionKey,
           limit: 100,
         });
         await rail.getByText("CLI transcript stayed in the task rail.").waitFor();
-        expect(await rail.locator(".chat-thread").innerText()).toContain(
+        expect(await rail.locator(".chat-thread").textContent()).toContain(
           "CLI transcript stayed in the task rail.",
         );
         expect(page.url()).toBe(chatUrl);
-        expect(await mainTranscript.innerText()).toBe(mainTranscriptBefore);
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
         expect(await rail.getByRole("button", { name: "Back to task details" }).count()).toBe(1);
         await page.screenshot({
           path: path.join(artifactDir, "06-cli-task-transcript.png"),
@@ -303,7 +314,7 @@ suite.define(() => {
         await rail.locator('[data-task-detail="task-cli"]').waitFor({ state: "visible" });
         await rail.getByText("Generate a searchable media index.").waitFor();
         expect(page.url()).toBe(chatUrl);
-        expect(await mainTranscript.innerText()).toBe(mainTranscriptBefore);
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
         await page.screenshot({
           path: path.join(artifactDir, "07-cli-task-detail-restored.png"),
           fullPage: true,
