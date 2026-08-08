@@ -2033,6 +2033,66 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
+  it("releases a completed native child when its full idle pool cannot evict its oldest owner", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    client.request.mockImplementation(async (method) => {
+      if (method === "thread/unsubscribe") {
+        return {} as never;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    ensureCodexAppServerClientRuntime(client as never, { agentDir: "/tmp/agent" });
+    const oldestRelease = vi
+      .fn<(threadId: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("oldest native subscription could not be released"))
+      .mockResolvedValueOnce(undefined);
+    await retainCodexAppServerLiveThread(client as never, "thread-oldest", oldestRelease);
+    for (let index = 1; index < 64; index += 1) {
+      await retainCodexAppServerLiveThread(client as never, `thread-sibling-${index}`);
+    }
+    const releaseParentThread = vi.fn();
+    const parent = registerCodexNativeSubagentMonitor({
+      client: client as never,
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      runtime,
+      retainParentThread: () => releaseParentThread,
+    });
+
+    await notifyChildStarted(client);
+    await vi.waitFor(() =>
+      expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true),
+    );
+    await client.notify(nativeCompletionNotification());
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledExactlyOnceWith(
+        "thread/unsubscribe",
+        { threadId: "child-thread" },
+        { timeoutMs: 5_000 },
+      ),
+    );
+    expect(oldestRelease).toHaveBeenCalledExactlyOnceWith("thread-oldest");
+    expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false);
+    await expect(
+      consumeCodexAppServerLiveThread(client as never, "child-thread"),
+    ).resolves.toBeUndefined();
+    const oldest = await consumeCodexAppServerLiveThread(client as never, "thread-oldest");
+    expect(oldest).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    await expect(
+      retainCodexAppServerLiveThread(client as never, "thread-oldest", oldest?.release),
+    ).resolves.toBe(true);
+    await expect(
+      consumeCodexAppServerLiveThread(client as never, "thread-sibling-1"),
+    ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+
+    parent.unregister();
+    client.close();
+  });
+
   it("releases the exact retained completed child when its original parent closes it", async () => {
     const client = createClient();
     const runtime = createRuntime();

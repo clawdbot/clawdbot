@@ -189,15 +189,24 @@ function registerMonitor(params: {
       retainChildThread: (threadId) =>
         childThreadTransitions.enqueue(threadId, async () => {
           const ownership = childThreadOwnership.get(threadId);
-          const retained = await retainCodexAppServerLiveThread(
-            params.client,
-            threadId,
-            ownership?.release,
-          );
-          if (retained && childThreadOwnership.get(threadId) === ownership) {
-            childThreadOwnership.delete(threadId);
+          let retained = false;
+          try {
+            retained = await retainCodexAppServerLiveThread(
+              params.client,
+              threadId,
+              ownership?.release,
+            );
+            return retained;
+          } finally {
+            // A full idle pool can reject terminal child ownership. Release
+            // its exact branded claim before the monitor forgets that child.
+            if (!retained && ownership) {
+              await ownership.release(threadId);
+            }
+            if (childThreadOwnership.get(threadId) === ownership) {
+              childThreadOwnership.delete(threadId);
+            }
           }
-          return retained;
         }),
       releaseChildThread: (threadId) =>
         childThreadTransitions.enqueue(threadId, async () => {
