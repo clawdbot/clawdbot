@@ -511,47 +511,67 @@ describe("Crabbox worker provider", () => {
     expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
   });
 
-  it("stops a forbidden replay lease before polling for SSH readiness", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      if (argv[1] === "inspect") {
-        return commandResult({
-          stdout: inspectJson({
-            providerMetadata: { instanceProfileAttached: true },
-            ready: false,
-          }),
+  it.each([
+    {
+      state: "pending-metadata then ready-safe",
+      inspections: [
+        { providerMetadata: undefined, ready: false },
+        {
+          providerMetadata: { instanceProfileAttached: false },
+          ready: true,
+          sshHostKey: HOST_KEY,
+        },
+      ],
+      expectedError: null,
+      expectedCommands: ["inspect", "inspect"],
+    },
+    {
+      state: "pending-forbidden",
+      inspections: [
+        {
+          providerMetadata: { instanceProfileAttached: true },
+          ready: false,
+        },
+      ],
+      expectedError: "Crabbox AWS inspect must attest that no instance profile is attached",
+      expectedCommands: ["inspect", "stop"],
+    },
+    {
+      state: "ready-metadata-missing",
+      inspections: [{ providerMetadata: undefined, ready: true, sshHostKey: HOST_KEY }],
+      expectedError: "Crabbox AWS inspect must attest that no instance profile is attached",
+      expectedCommands: ["inspect", "stop"],
+    },
+  ])(
+    "enforces AWS instance-profile attestation across the $state sequence",
+    async ({ inspections, expectedError, expectedCommands }) => {
+      const calls: string[][] = [];
+      let inspectionIndex = 0;
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        if (argv[1] === "inspect") {
+          const inspection = inspections[inspectionIndex];
+          if (!inspection) {
+            throw new Error("unexpected extra inspection");
+          }
+          inspectionIndex += 1;
+          return commandResult({ stdout: inspectJson(inspection) });
+        }
+        return commandResult();
+      });
+
+      const provision = provider.provision(PROFILE, "provision:metadata-sequence");
+      if (expectedError) {
+        await expect(provision).rejects.toMatchObject({
+          code: "invalid_profile",
+          message: expectedError,
         });
+      } else {
+        await expect(provision).resolves.toMatchObject({ leaseId: LEASE_ID });
       }
-      return commandResult();
-    });
-
-    await expect(provider.provision(PROFILE, "provision:forbidden-replay")).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: "Crabbox AWS inspect must attest that no instance profile is attached",
-    });
-    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
-  });
-
-  it("stops an AWS lease when provider metadata cannot attest the instance profile state", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      if (argv[1] === "inspect") {
-        return commandResult({
-          stdout: inspectJson({ providerMetadata: undefined, sshHostKey: HOST_KEY }),
-        });
-      }
-      return commandResult();
-    });
-
-    await expect(
-      provider.provision(PROFILE, "provision:instance-profile-unknown"),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
-    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
-  });
+      expect(calls.map((argv) => argv[1])).toEqual(expectedCommands);
+    },
+  );
 
   it.each([
     {
@@ -940,23 +960,6 @@ describe("Crabbox worker provider", () => {
       "--id",
       TESTBOX_LEASE_ID,
     ]);
-  });
-
-  it("waits for a replayed operation lease to become SSH-ready", async () => {
-    let inspections = 0;
-    const provider = providerWithRunner(async () => {
-      inspections += 1;
-      return commandResult({
-        stdout: inspectJson({ ready: inspections > 1, sshHostKey: HOST_KEY }),
-      });
-    });
-
-    await expect(provider.provision(PROFILE, "provision:operation-pending")).resolves.toMatchObject(
-      {
-        leaseId: LEASE_ID,
-      },
-    );
-    expect(inspections).toBe(2);
   });
 
   it("keeps readiness polling out of the setup timeout budget", async () => {

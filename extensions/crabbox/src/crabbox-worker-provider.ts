@@ -384,7 +384,9 @@ function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provide
   if (params.inspect.tailscaleEnabled) {
     throw new WorkerProviderError("Crabbox cloud worker lease must not have Tailscale enabled");
   }
-  if (params.provider === "aws" && params.inspect.awsInstanceProfileAttached !== false) {
+  const attached = params.inspect.awsInstanceProfileAttached;
+  const pending = !params.inspect.ready && !isUnusableProvisionState(params.inspect.state);
+  if (params.provider === "aws" && attached !== false && (attached || !pending)) {
     throw new WorkerProviderError(
       "Crabbox AWS inspect must attest that no instance profile is attached",
     );
@@ -412,11 +414,8 @@ async function waitForProvisionReady(
     return replay.inspect;
   };
   try {
-    if (params.refresh) {
-      inspect = await inspectAgain();
-    }
-    // Credential and private-network attestation is authoritative before SSH readiness.
-    // Reject immediately so a forbidden lease cannot remain live during polling.
+    inspect = params.refresh ? await inspectAgain() : params.inspect;
+    // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
       const remaining = remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS);
