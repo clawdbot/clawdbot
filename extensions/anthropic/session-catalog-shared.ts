@@ -9,10 +9,6 @@ export const CLAUDE_CLI_NODE_RUN_COMMANDS = [
 ] as const;
 export const CLAUDE_TERMINAL_RESUME_COMMAND = "anthropic.claude.terminal.resume.v1";
 
-export function hasClaudeCliNodeRunCommand(commands: readonly string[] | undefined): boolean {
-  return CLAUDE_CLI_NODE_RUN_COMMANDS.some((command) => commands?.includes(command));
-}
-
 export class ClaudeCatalogParamsError extends Error {}
 
 // Desktop sessions share the resumable projects store with CLI sessions.

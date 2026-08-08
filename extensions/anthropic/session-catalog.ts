@@ -29,10 +29,10 @@ import {
   resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
 import {
+  CLAUDE_CLI_NODE_RUN_COMMANDS,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   ClaudeCatalogParamsError,
-  hasClaudeCliNodeRunCommand,
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
@@ -73,6 +73,10 @@ const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 const TRANSCRIPT_READ_CHUNK_BYTES = 128 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
+
+function hasClaudeCliNodeRunCommand(commands: readonly string[] | undefined): boolean {
+  return CLAUDE_CLI_NODE_RUN_COMMANDS.some((command) => commands?.includes(command));
+}
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
 

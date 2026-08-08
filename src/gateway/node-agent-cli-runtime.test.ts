@@ -30,7 +30,7 @@ function buildAiAgentEnv(overrides: Partial<AiAgentEnvPlan> = {}): AiAgentEnvPla
     overrideEnv: {},
     clearEnv: [],
     preserveEnv: [],
-    forceClear: false,
+    forceClearBeforeOverrides: false,
     ...overrides,
   };
 }

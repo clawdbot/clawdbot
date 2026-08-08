@@ -84,7 +84,7 @@ describe("resolveAiAgentEnvPlan", () => {
     overrideEnv: {},
     clearEnv: [],
     preserveEnv: [],
-    forceClear: false,
+    forceClearBeforeOverrides: false,
     ...overrides,
   });
 

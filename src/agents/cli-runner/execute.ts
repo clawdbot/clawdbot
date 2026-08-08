@@ -477,7 +477,7 @@ export async function executePreparedCliRun(
             },
             clearEnv: [...(backend.clearEnv ?? [])],
             preserveEnv: preservedEnvKeys,
-            forceClear: hasSelectedClaudeAuth,
+            forceClearBeforeOverrides: hasSelectedClaudeAuth,
           }
         : undefined;
 

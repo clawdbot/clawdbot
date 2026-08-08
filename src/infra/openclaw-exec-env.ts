@@ -13,7 +13,7 @@ export type AiAgentEnvPlan = {
   overrideEnv: Record<string, string>;
   clearEnv: string[];
   preserveEnv: string[];
-  forceClear: boolean;
+  forceClearBeforeOverrides: boolean;
 };
 
 function normalizeAiAgentEnvValue(value: string | undefined): string {
@@ -87,9 +87,9 @@ export function resolveAiAgentEnvPlan(
 ): { value?: string; clear: boolean } {
   const clearRequested = hasAiAgentEnvKey(input.clearEnv, platform);
   const clearPreserved = hasAiAgentEnvKey(input.preserveEnv, platform);
-  const clear = clearRequested && (!clearPreserved || input.forceClear);
+  const clear = clearRequested && (!clearPreserved || input.forceClearBeforeOverrides);
   const configured =
-    clearRequested && input.forceClear
+    clearRequested && input.forceClearBeforeOverrides
       ? undefined
       : resolveAiAgentEnvValue(input.configuredEnv, platform);
   const override = resolveAiAgentEnvValue(input.overrideEnv, platform) ?? configured;
