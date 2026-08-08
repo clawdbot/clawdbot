@@ -26,7 +26,7 @@ describe("bundled plugin doctor contract declarations", () => {
       if (!artifactPath) {
         continue;
       }
-      const declaration = record.manifest?.doctorContract;
+      const declaration = record.doctorContract;
       if (!declaration) {
         mismatches.push(`${record.id}: missing doctorContract declaration`);
         continue;

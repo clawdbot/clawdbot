@@ -442,7 +442,7 @@ function resolvePluginDoctorContracts(params: {
     ) {
       continue;
     }
-    const declaration = record.manifest?.doctorContract;
+    const declaration = record.doctorContract;
     // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
     if (declaration && declaration[params.surface] !== true) {
       continue;

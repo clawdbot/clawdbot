@@ -29,6 +29,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestDoctorContract,
 } from "./manifest-types.js";
 import {
   isCoreReservedPluginId,
@@ -247,7 +248,7 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
-  manifest?: PluginManifest;
+  doctorContract?: PluginManifestDoctorContract;
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -556,7 +557,7 @@ function buildRecord(params: {
   );
   return {
     id: pluginId,
-    manifest: params.manifest,
+    doctorContract: params.manifest.doctorContract,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,

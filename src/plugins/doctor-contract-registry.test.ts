@@ -118,11 +118,7 @@ describe("doctor-contract-registry module loader", () => {
         {
           id: "test-plugin",
           rootDir: pluginRoot,
-          manifest: {
-            id: "test-plugin",
-            configSchema: { type: "object" },
-            ...(testCase.doctorContract ? { doctorContract: testCase.doctorContract } : {}),
-          },
+          ...(testCase.doctorContract ? { doctorContract: testCase.doctorContract } : {}),
         },
       ],
       diagnostics: [],
