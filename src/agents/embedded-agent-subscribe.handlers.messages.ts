@@ -446,23 +446,6 @@ function copyPartialBlockState(
   target.pendingTagFragment = source.pendingTagFragment;
 }
 
-/** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-function resolveSilentReplyFallbackText(params: {
-  text: unknown;
-  messagingToolSentTexts: string[];
-}): string {
-  const text = coerceChatContentText(params.text);
-  const trimmed = text.trim();
-  if (trimmed !== SILENT_REPLY_TOKEN) {
-    return text;
-  }
-  const fallback = coerceChatContentText(params.messagingToolSentTexts.at(-1)).trim();
-  if (!fallback) {
-    return text;
-  }
-  return fallback;
-}
-
 function clearPendingToolMedia(
   state: Pick<
     EmbeddedAgentSubscribeState,
@@ -1257,7 +1240,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     buildAssistantStreamData,
     recordPendingAssistantReplyDirectives,
     resolveCurrentSourceMessagingToolPartial,
-    resolveSilentReplyFallbackText,
   };
 }
 
@@ -1357,10 +1339,10 @@ export function handleMessageEnd(
     ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
     : visibleText;
 
-  const text = resolveSilentReplyFallbackText({
-    text: finalVisibleText,
-    messagingToolSentTexts: ctx.state.messagingToolSentTexts,
-  });
+  // Exact NO_REPLY stays silent. The legacy rewrite (silentReplyRewrite) was
+  // removed by contract; global messaging-tool send evidence is not a
+  // user-route reply and must never be mirrored into the final payload.
+  const text = finalVisibleText;
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)

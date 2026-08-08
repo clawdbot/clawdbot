@@ -15,6 +15,8 @@ type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -55,6 +57,57 @@ afterEach(() => {
 });
 
 describe("SidebarUpdateCard", () => {
+  it("renders the refresh state and invokes its action", async () => {
+    const element = await mount(null);
+    const onRefresh = vi.fn();
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    await element.updateComplete;
+
+    const card = element.querySelector(".sidebar-update-card");
+    expect(card?.getAttribute("role")).toBe("status");
+    expect(card?.getAttribute("aria-live")).toBe("polite");
+    expect(element.querySelector(".sidebar-update-card__title")?.textContent).toBe(
+      "Server updated",
+    );
+    expect(element.querySelector(".sidebar-update-card__subtitle")?.textContent).toBe(
+      "Refresh for full capabilities",
+    );
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("gives the refresh state precedence over an available update", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onRefresh = vi.fn();
+    const onUpdate = vi.fn();
+    element.refreshRequired = true;
+    element.onRefresh = onRefresh;
+    element.onUpdate = onUpdate;
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Server updated");
+    expect(element.textContent).not.toContain("Update Gateway");
+    expect(element.textContent).not.toContain("v2.0.0");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not render a dismiss button for the refresh state", async () => {
+    const element = await mount(null);
+    element.refreshRequired = true;
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
+  });
+
   it("labels a direct Gateway update and invokes its action", async () => {
     const element = await mount({
       currentVersion: "1.0.0",

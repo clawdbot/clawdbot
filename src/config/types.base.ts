@@ -263,7 +263,7 @@ export type SessionMaintenanceConfig = {
   /**
    * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
    * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
-   * (mode=enforce). Set `false` to disable the budget entirely.
+   * (mode=enforce). Set `false`, `0`, or `"0"` to disable the budget entirely.
    */
   maxDiskBytes?: number | string | false;
   /**
@@ -324,6 +324,11 @@ export type AuditConfig = {
    * records stay readable until they expire.
    */
   enabled?: boolean;
+  /**
+   * Retain bounded execution-identity attribution for exact-run inspection.
+   * Default: false. Requires the audit ledger and takes effect after Gateway restart.
+   */
+  executionIdentity?: boolean;
   /**
    * Record content-free message lifecycle metadata. `direct` records only
    * known direct conversations; `all` also records group, channel, and

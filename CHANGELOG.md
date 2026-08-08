@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
+- **Plugin uninstall cleanup:** remove exact recorded install paths from `plugins.load.paths` for marketplace, npm, and other managed installs while preserving parent, child, prefix, and unrelated paths.
 - Fixed Crabbox hydration on unprivileged cloud sandboxes by falling back to a user-writable pnpm store when the shared `/var/cache/crabbox` cache is unavailable, preserving the hardlink import mode after hydration, and making Docker an explicit routed capability instead of an implicit install requirement.
 
 - **Browser extension relay CDP compat:** answer `Target.getBrowserContexts` so Puppeteer-based clients (chrome-devtools-mcp) can drive the paired Chrome without the remote-debugging permission prompt, serve DevTools-style `/json/list` target descriptors, and add `openclaw browser extension cdp` to print the relay endpoint plus auth header for external CDP clients.
@@ -63,6 +65,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Browser extension relay security:** require canonical 64-character relay secrets and safe WebSocket pairing URLs, and recheck OpenClaw tab-group consent at the extension edge before every authority-bearing existing-tab command.
+- **Control UI debug diagnostics:** keep last-good status, health, model, and heartbeat snapshots visible when refreshes fail, show the failure inside Snapshots, isolate it from Manual RPC state, and prevent older manual calls from overwriting newer ones. Thanks @shakkernerd.
+- **Control UI read-only preferences:** keep personal preference edits browser-local without attempting unauthorized config writes or claiming server sync, preserve offline intent for a later authorized reconnect, and restore the current server value on local reset. Thanks @shakkernerd.
+- **Control UI owner handoff:** give browsers opened by host-issued dashboard and graphical onboarding links durable administrator access, including same-browser recovery from a limited credential, while keeping generic, Telegram, mobile, and ordinary scope-upgrade paths bounded. Thanks @shakkernerd.
+- **Control UI agent and skill permissions:** gate Agents, Skills, Skill Workshop, and delayed mutation dispatches by the current Gateway method catalog and operator scopes while preserving read-only browsing and legacy Gateway compatibility. Fixes #119176. Thanks @shakkernerd.
 - **Guided onboarding skip-UI routing:** keep `openclaw onboard --skip-ui` and `openclaw setup --skip-ui` on guided onboarding while skipping both browser and terminal handoffs, instead of silently switching to the classic wizard. Thanks @shakkernerd.
 - **Telegram durable ingress:** preserve pre-identity control-lane ownership during replay and attempt each drain snapshot row only once per pass, preventing targeted commands from spinning the spool and blocking polling shutdown.
 - **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.

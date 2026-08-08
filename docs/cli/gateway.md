@@ -470,6 +470,7 @@ Low-level RPC helper.
 
 ```bash
 openclaw gateway call status
+openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
@@ -478,6 +479,9 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
 </ParamField>
 <ParamField path="--token <token>" type="string">
   Gateway token.
@@ -496,7 +500,7 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 
 <Note>
-`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected).
+`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>
 
 ## Manage the Gateway service

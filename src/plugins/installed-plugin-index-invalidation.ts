@@ -56,7 +56,10 @@ export function diffInstalledPluginIndexInvalidationReasons(
     ) {
       reasons.add("migration");
     }
-    if (previousPlugin.manifestHash !== currentPlugin.manifestHash) {
+    if (
+      previousPlugin.manifestHash !== currentPlugin.manifestHash ||
+      previousPlugin.doctorContractHash !== currentPlugin.doctorContractHash
+    ) {
       reasons.add("stale-manifest");
     }
     if (

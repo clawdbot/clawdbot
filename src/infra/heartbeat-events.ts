@@ -4,6 +4,8 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
+const TARGET_NONE_MESSAGE = "Heartbeat delivery is disabled by configuration (target: none).";
+
 export type HeartbeatEventPayload = {
   ts: number;
   status: "sent" | "ok-empty" | "ok-token" | "skipped" | "failed";
@@ -13,6 +15,8 @@ export type HeartbeatEventPayload = {
   durationMs?: number;
   hasMedia?: boolean;
   reason?: string;
+  /** Operator-facing companion to the machine-stable reason code. */
+  message?: string;
   /** The channel this heartbeat was sent to. */
   channel?: string;
   /** Whether the message was silently suppressed (showOk: false). */
@@ -51,7 +55,13 @@ const state = resolveGlobalSingleton<HeartbeatEventState>(HEARTBEAT_EVENT_STATE_
 }));
 
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
-  const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
+  const enriched: HeartbeatEventPayload = {
+    ts: Date.now(),
+    ...evt,
+    ...(evt.reason === "target-none" && evt.message === undefined
+      ? { message: TARGET_NONE_MESSAGE }
+      : {}),
+  };
   state.lastHeartbeat = enriched;
   notifyListeners(state.listeners, enriched);
 }

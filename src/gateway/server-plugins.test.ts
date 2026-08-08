@@ -1,5 +1,6 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   getGlobalPluginRegistry,
@@ -30,6 +31,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() => vi.fn(() => undefined));
 const pluginRuntimeLoaderLogger = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
@@ -58,6 +60,10 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable,
+}));
+
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime,
 }));
 
 vi.mock("../channels/plugins/binding-registry.js", async () => {
@@ -201,12 +207,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function getLastMockFirstArg(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -401,6 +402,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
+  normalizeProviderModelIdWithRuntime.mockReset().mockReturnValue(undefined);
   pluginRuntimeLoaderLogger.info.mockClear();
   pluginRuntimeLoaderLogger.warn.mockClear();
   pluginRuntimeLoaderLogger.error.mockClear();
@@ -1612,6 +1614,7 @@ describe("loadGatewayPlugins", () => {
         },
       },
     });
+    expect(normalizeProviderModelIdWithRuntime).not.toHaveBeenCalled();
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-trusted-overrides"));
     await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
       runtime.run({
@@ -1627,6 +1630,7 @@ describe("loadGatewayPlugins", () => {
     expect(params.sessionKey).toBe("s-trusted-override");
     expect(params.provider).toBe("anthropic");
     expect(params.model).toBe("claude-haiku-4-5");
+    expect(normalizeProviderModelIdWithRuntime).toHaveBeenCalledOnce();
   });
 
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {

@@ -697,11 +697,12 @@ export async function dispatchOutbound(
             ? {
                 onPartialReply: async (payload: { text?: string }) => {
                   try {
-                    await streamingController.onPartialReply(payload);
+                    return await streamingController.onPartialReply(payload);
                   } catch (partialErr) {
                     log?.error(
                       `Streaming onPartialReply error: ${partialErr instanceof Error ? partialErr.message : String(partialErr)}`,
                     );
+                    return false;
                   }
                 },
               }

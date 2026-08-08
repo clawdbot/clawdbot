@@ -4,6 +4,7 @@ export function resolveSkillWorkshopAttemptParams(
   params: Pick<
     RunEmbeddedAgentParams,
     | "skillWorkshopAutonomousCapture"
+    | "skillWorkshopUpdateProposals"
     | "skillWorkshopOrigin"
     | "skillWorkshopProposalEnv"
     | "skillWorkshopProposalMutationBudget"
@@ -13,6 +14,7 @@ export function resolveSkillWorkshopAttemptParams(
 ) {
   return {
     skillWorkshopAutonomousCapture: params.skillWorkshopAutonomousCapture,
+    skillWorkshopUpdateProposals: params.skillWorkshopUpdateProposals,
     skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
     skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
     skillWorkshopOrigin: params.skillWorkshopOrigin,

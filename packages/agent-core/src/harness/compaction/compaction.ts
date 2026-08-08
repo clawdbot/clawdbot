@@ -1,7 +1,5 @@
 import {
   resolveClaudeFable5ModelIdentity,
-  type AssistantMessage,
-  type Context,
   type Model,
   type SimpleStreamOptions,
   type StreamFn,
@@ -18,19 +16,13 @@ import {
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
-import {
-  asAgentMessage,
-  convertToLlm,
-  createBranchSummaryMessage,
-  createCompactionSummaryMessage,
-  createCustomMessage,
-  type HarnessMessage,
-} from "../messages.js";
-import { buildSessionContext } from "../session/session.js";
+import { convertToLlm, type HarnessMessage } from "../messages.js";
+import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import {
   type CompactionEntry,
   CompactionError,
   err,
+  InvalidSummaryOutputError,
   ok,
   type Result,
   type SessionTreeEntry,
@@ -39,10 +31,13 @@ import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  extractSummaryText,
   type FileOperations,
   formatFileOperations,
   getCompactionContentBlockText,
+  mergeSummaryFileOperations,
   serializeConversation,
+  stringifyCompactionValue,
 } from "./utils.js";
 
 /** File-operation details stored on generated compaction entries. */
@@ -52,14 +47,6 @@ export interface CompactionDetails {
   /** Files modified in the compacted history. */
   modifiedFiles: string[];
 }
-function safeJsonStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? "undefined";
-  } catch {
-    return "[unserializable]";
-  }
-}
-
 function extractFileOperations(
   messages: AgentMessage[],
   entries: SessionTreeEntry[],
@@ -69,17 +56,7 @@ function extractFileOperations(
   if (prevBoundaryIndex >= 0 && entries[prevBoundaryIndex]?.type === "compaction") {
     const prevCompaction = entries[prevBoundaryIndex] as CompactionEntry;
     if (!prevCompaction.fromHook && prevCompaction.details) {
-      const details = prevCompaction.details as CompactionDetails;
-      if (Array.isArray(details.readFiles)) {
-        for (const f of details.readFiles) {
-          fileOps.read.add(f);
-        }
-      }
-      if (Array.isArray(details.modifiedFiles)) {
-        for (const f of details.modifiedFiles) {
-          fileOps.edited.add(f);
-        }
-      }
+      mergeSummaryFileOperations(fileOps, prevCompaction.details as CompactionDetails);
     }
   }
   for (const msg of messages) {
@@ -88,37 +65,11 @@ function extractFileOperations(
 
   return fileOps;
 }
-function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
-  if (entry.type === "message") {
-    return entry.message;
-  }
-  if (entry.type === "custom_message") {
-    return asAgentMessage(
-      createCustomMessage(
-        entry.customType,
-        entry.content,
-        entry.display,
-        entry.details,
-        entry.timestamp,
-      ),
-    );
-  }
-  if (entry.type === "branch_summary") {
-    return asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
-  }
-  if (entry.type === "compaction") {
-    return asAgentMessage(
-      createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
-    );
-  }
-  return undefined;
-}
-
 function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
   if (entry.type === "compaction") {
     return undefined;
   }
-  return getMessageFromEntry(entry);
+  return projectSessionEntryMessage(entry);
 }
 
 function isResetReplayableEntry(entry: SessionTreeEntry): boolean {
@@ -179,10 +130,26 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   return undefined;
 }
 
+function isUnavailableContextBarrier(message: AgentMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  if (message.api === "cli" && message.usage.contextUsage === undefined) {
+    return true;
+  }
+  if (message.usage.contextUsage?.state !== "unavailable") {
+    return false;
+  }
+  return calculateContextTokens(message.usage) === 0;
+}
+
 /** Return usage from the last valid assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
+      if (isUnavailableContextBarrier(entry.message)) {
+        return undefined;
+      }
       const usage = getAssistantUsage(entry.message);
       if (usage) {
         return usage;
@@ -211,6 +178,11 @@ function getLastAssistantUsageInfo(
     const message = messages.at(i);
     if (!message) {
       continue;
+    }
+    if (isUnavailableContextBarrier(message)) {
+      // Synthetic CLI markers invalidate older usage without contributing a
+      // replacement. Estimate the whole transcript instead of scanning past it.
+      return undefined;
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {
@@ -306,7 +278,7 @@ export function estimateTokens(message: AgentMessage): number {
         } else if (block.type === "toolCall") {
           chars +=
             estimateStringChars(block.name) +
-            estimateStringChars(safeJsonStringify(block.arguments));
+            estimateStringChars(stringifyCompactionValue(block.arguments));
         }
       }
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -584,19 +556,6 @@ function createSummarizationOptions(
   return options;
 }
 
-async function completeSummarization(
-  model: Model,
-  context: Context,
-  options: SimpleStreamOptions,
-  streamFn?: StreamFn,
-  runtime?: AgentCoreCompletionRuntimeDeps,
-): Promise<AssistantMessage> {
-  if (streamFn) {
-    return (await streamFn(model, context, options)).result();
-  }
-  return await resolveAgentCoreCompleteFn(runtime)(model, context, options);
-}
-
 /** Runs one summarization completion and maps abort/error stops to CompactionError. */
 async function runSummarizationCompletion(params: {
   promptText: string;
@@ -610,28 +569,27 @@ async function runSummarizationCompletion(params: {
   runtime?: AgentCoreCompletionRuntimeDeps;
   errorLabel: string;
 }): Promise<Result<string, CompactionError>> {
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: params.promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  const context = {
+    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: params.promptText }],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+  const options = createSummarizationOptions(
     params.model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(
-      params.model,
-      params.maxTokens,
-      params.apiKey,
-      params.headers,
-      params.signal,
-      params.thinkingLevel,
-    ),
-    params.streamFn,
-    params.runtime,
+    params.maxTokens,
+    params.apiKey,
+    params.headers,
+    params.signal,
+    params.thinkingLevel,
   );
+  const response = params.streamFn
+    ? await (await params.streamFn(params.model, context, options)).result()
+    : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   if (response.stopReason === "aborted") {
     return err(
       new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
@@ -646,12 +604,13 @@ async function runSummarizationCompletion(params: {
     );
   }
 
-  return ok(
-    response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n"),
-  );
+  const summary = extractSummaryText(response);
+  if (summary === undefined) {
+    return err(
+      new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
+    );
+  }
+  return ok(summary);
 }
 
 /** Generate or update a conversation summary for compaction. */
@@ -901,28 +860,29 @@ export async function compact(
     );
   }
 
-  let summary: string;
+  const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
+  const historyResult =
+    messagesToSummarize.length > 0 || !summarizeTurnPrefix
+      ? await generateSummary(
+          messagesToSummarize,
+          model,
+          settings.reserveTokens,
+          apiKey,
+          headers,
+          signal,
+          customInstructions,
+          previousSummary,
+          thinkingLevel,
+          streamFn,
+          runtime,
+        )
+      : ok<string, CompactionError>("No prior history.");
+  if (!historyResult.ok) {
+    return err(historyResult.error);
+  }
 
-  if (isSplitTurn && turnPrefixMessages.length > 0) {
-    const historyResult =
-      messagesToSummarize.length > 0
-        ? await generateSummary(
-            messagesToSummarize,
-            model,
-            settings.reserveTokens,
-            apiKey,
-            headers,
-            signal,
-            customInstructions,
-            previousSummary,
-            thinkingLevel,
-            streamFn,
-            runtime,
-          )
-        : ok<string, CompactionError>("No prior history.");
-    if (!historyResult.ok) {
-      return err(historyResult.error);
-    }
+  let summary = historyResult.value;
+  if (summarizeTurnPrefix) {
     const turnPrefixResult = await generateTurnPrefixSummary(
       turnPrefixMessages,
       model,
@@ -937,25 +897,7 @@ export async function compact(
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
-    summary = `${historyResult.value}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
-  } else {
-    const summaryResult = await generateSummary(
-      messagesToSummarize,
-      model,
-      settings.reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      previousSummary,
-      thinkingLevel,
-      streamFn,
-      runtime,
-    );
-    if (!summaryResult.ok) {
-      return err(summaryResult.error);
-    }
-    summary = summaryResult.value;
+    summary = `${summary}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
   }
 
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);

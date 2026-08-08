@@ -20,7 +20,7 @@ export {
 } from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
-  completeSimple: typeof import("../llm/stream.js").completeSimple;
+  completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
   prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
   requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
@@ -31,11 +31,11 @@ function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
   // Speech provider imports should not initialize the LLM stack. Load it only
   // when synthesis actually needs summarization, then reuse the module bindings.
   return (defaultSummarizeTextDepsPromise ??= Promise.all([
-    import("../llm/stream.js"),
     import("../agents/simple-completion-runtime.js"),
     import("../agents/model-auth.js"),
-  ]).then(([stream, completionRuntime, { requireApiKey }]) => ({
-    completeSimple: stream.completeSimple,
+  ]).then(([completionRuntime, { requireApiKey }]) => ({
+    completeWithPreparedSimpleCompletionModel:
+      completionRuntime.completeWithPreparedSimpleCompletionModel,
     prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
     requireApiKey,
   })));
@@ -120,9 +120,10 @@ export async function summarizeText(
     try {
       // Keep summarization on the simple-completion path so provider auth,
       // aliases, and timeout behavior match other lightweight model calls.
-      const res = await resolvedDeps.completeSimple(
-        completionModel,
-        {
+      const res = await resolvedDeps.completeWithPreparedSimpleCompletionModel({
+        model: completionModel,
+        auth: { ...prepared.auth, apiKey: providerKey },
+        context: {
           messages: [
             {
               role: "user",
@@ -135,13 +136,13 @@ export async function summarizeText(
             },
           ],
         },
-        {
-          apiKey: providerKey,
+        cfg,
+        options: {
           maxTokens: Math.ceil(targetLength / 2),
           temperature: 0.3,
           signal: controller.signal,
         },
-      );
+      });
       const summary = res.content
         .filter(isTextContentBlock)
         .map((block) => block.text.trim())

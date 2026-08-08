@@ -10,6 +10,7 @@ import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
@@ -73,19 +74,38 @@ function resolvePluginRegistryContent(
     plugins: content.plugins
       .filter((plugin) => !excludedPlugins?.has(plugin.pluginId))
       .map((plugin) => {
-        const { manifestFile: _manifestFile, packageJson, ...record } = plugin;
+        const {
+          doctorContractFile: _doctorContractFile,
+          manifestFile: _manifestFile,
+          packageBuild,
+          packageJson,
+          ...record
+        } = plugin;
+        // Compare the durable package-build contract. The store intentionally drops
+        // build-only metadata that runtime selection does not consume.
+        const stableRecord = Object.assign(
+          record,
+          packageBuild === undefined
+            ? {}
+            : {
+                packageBuild:
+                  packageBuild.bundledDist === undefined
+                    ? {}
+                    : { bundledDist: packageBuild.bundledDist },
+              },
+        );
         if (!packageJson) {
-          return record;
+          return stableRecord;
         }
         if (!comparePackageJsonPath) {
-          return record;
+          return stableRecord;
         }
         const {
           fileSignature: _fileSignature,
           path: packageJsonPath,
           ...stablePackageJson
         } = packageJson;
-        return Object.assign(record, {
+        return Object.assign(stableRecord, {
           packageJson: Object.assign(stablePackageJson, { path: packageJsonPath }),
         });
       }),
@@ -119,6 +139,7 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     index?: PluginRegistrySnapshot;
     preferPersisted?: boolean;
+    allowCurrent?: boolean;
   };
 
 type GetPluginRecordParams = LoadPluginRegistryParams & {
@@ -127,6 +148,7 @@ type GetPluginRecordParams = LoadPluginRegistryParams & {
 
 function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
   return (
+    params.allowCurrent !== false &&
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
     params.filePath === undefined &&
@@ -211,13 +233,28 @@ function isContainedPluginPath(
   return Boolean(root && target && isPathInside(root, target));
 }
 
+function hasStaleDoctorContractFile(
+  plugin: InstalledPluginIndexRecord,
+  rootExists: boolean,
+): boolean {
+  if (!rootExists && !plugin.enabled) {
+    return false;
+  }
+  const contractPath = resolvePluginDoctorContractArtifactPath(plugin.rootDir);
+  return contractPath
+    ? !plugin.doctorContractHash ||
+        !fileContentMatches(contractPath, plugin.doctorContractHash, plugin.doctorContractFile)
+    : plugin.doctorContractHash !== undefined || plugin.doctorContractFile !== undefined;
+}
+
 function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
   const realpathCache = new Map<string, string>();
   return index.plugins.some((plugin) => {
     if (!isContainedPluginPath(plugin.rootDir, plugin.rootDir, realpathCache)) {
       return true;
     }
-    if (!fs.existsSync(plugin.rootDir) && plugin.enabled) {
+    const rootExists = fs.existsSync(plugin.rootDir);
+    if (!rootExists && plugin.enabled) {
       return true;
     }
     for (const artifactPath of [plugin.source, plugin.setupSource, plugin.manifestPath]) {
@@ -242,6 +279,9 @@ function hasStalePersistedPluginFiles(index: InstalledPluginIndex): boolean {
       ) {
         return true;
       }
+    }
+    if (hasStaleDoctorContractFile(plugin, rootExists)) {
+      return true;
     }
     if (!plugin.packageJson) {
       return false;

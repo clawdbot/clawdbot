@@ -105,7 +105,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.memory?.search).toMatchObject({
-      provider: "openai",
+      provider: "openai-compatible",
       model: "text-embedding-3-small",
       remote: {
         baseUrl: "http://127.0.0.1:44080/v1",
@@ -285,6 +285,34 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({
       params: { transport: "sse", openaiWsWarmup: false, fastMode: true },
     });
+  });
+
+  it("keeps inferred live providers when scenarios require additional plugins", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "anthropic/claude-sonnet-4-6",
+      imageGenerationModel: null,
+      enabledPluginIds: ["active-memory"],
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(cfg.plugins?.allow).toEqual([
+      "acpx",
+      "memory-core",
+      "qa-lab",
+      "active-memory",
+      "openai",
+      "anthropic",
+      "qa-channel",
+    ]);
+    expect(cfg.plugins?.entries?.["active-memory"]).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.anthropic).toEqual({ enabled: true });
   });
 
   it("keeps forced Codex cells free of OpenClaw request params", () => {

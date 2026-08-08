@@ -7,7 +7,7 @@ function failFlagParse(message) {
  * @internal Shared repository-script contract.
  */
 export function readFlagValue(args, name) {
-  for (let index = 0; index < args.length; index += 1) {
+  for (let index = args.length - 1; index >= 0; index -= 1) {
     const arg = args[index];
     if (arg === name) {
       return args[index + 1];

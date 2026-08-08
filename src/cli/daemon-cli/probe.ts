@@ -1,4 +1,5 @@
 // Gateway status probe helper used by `gateway status` service diagnostics.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -135,13 +136,15 @@ export async function probeGatewayStatus(opts: {
       auth,
       ...serverSummary,
       ...(version != null ? { version } : {}),
-      error: resolveProbeFailureMessage(result),
+      // Probe failure text can echo the credential-bearing target URL (close
+      // reasons, transport errors); status renderers print it verbatim.
+      error: redactSensitiveUrlLikeString(resolveProbeFailureMessage(result)),
     } as const;
   } catch (err) {
     return {
       ok: false,
       kind,
-      error: formatErrorMessage(err),
+      error: redactSensitiveUrlLikeString(formatErrorMessage(err)),
     } as const;
   }
 }

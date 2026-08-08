@@ -17,6 +17,7 @@ type QaSuiteScenarioResult = {
     details?: string;
   }>;
   details?: string;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type QaFlowApi = Record<string, unknown> & {
@@ -36,6 +37,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./errors.js": () => import("./errors.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
@@ -368,5 +370,8 @@ export async function runScenarioFlow(params: {
       return formatFlowDetails(details);
     },
   }));
-  return await params.api.runScenario(params.scenarioTitle, steps);
+  const result = await params.api.runScenario(params.scenarioTitle, steps);
+  return isPlainObject(vars.modelSwitchEvidence)
+    ? { ...result, modelSwitchEvidence: vars.modelSwitchEvidence }
+    : result;
 }

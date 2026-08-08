@@ -1,5 +1,5 @@
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
@@ -61,6 +61,8 @@ export type ConfigProps = {
   /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
   connected: boolean;
+  mutationAllowed?: boolean;
+  openFileAllowed?: boolean;
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;

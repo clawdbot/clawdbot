@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 // persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -68,12 +69,7 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
   });
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function gatewayRequestRecords(): Record<string, unknown>[] {
   // Gateway calls are the seam proof for spawn orchestration; assertions inspect
@@ -1290,6 +1286,8 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedRunId,
         pluginOwnerId: "agentic-os",
         requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
         reservedSubagentClaimToken: "plugin-reserved-claim",
       },
     );
@@ -1325,6 +1323,8 @@ describe("spawnSubagentDirect seam flow", () => {
           openclawReservedSubagent: {
             runId: preallocatedRunId,
             requesterSessionId: "requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
             claimToken: "plugin-reserved-claim",
           },
         },
@@ -1356,6 +1356,8 @@ describe("spawnSubagentDirect seam flow", () => {
           openclawReservedSubagent: {
             runId,
             requesterSessionId: "requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
             claimToken,
           },
         },
@@ -1400,6 +1402,8 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedRunId: runId,
         pluginOwnerId: "agentic-os",
         requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
         reservedSubagentClaimToken: claimToken,
       },
     );
@@ -1490,6 +1494,8 @@ describe("spawnSubagentDirect seam flow", () => {
           openclawReservedSubagent: {
             runId,
             requesterSessionId: "requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
             claimToken: "reserved-crash-replay-original-fingerprint",
           },
         },
@@ -1527,6 +1533,8 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedRunId: runId,
         pluginOwnerId: "agentic-os",
         requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
         reservedSubagentClaimToken: "reserved-crash-replay-changed-fingerprint",
       },
     );
@@ -1557,6 +1565,8 @@ describe("spawnSubagentDirect seam flow", () => {
           openclawReservedSubagent: {
             runId,
             requesterSessionId: "original-requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
             claimToken,
           },
         },
@@ -1594,6 +1604,79 @@ describe("spawnSubagentDirect seam flow", () => {
         preallocatedRunId: runId,
         pluginOwnerId: "agentic-os",
         requesterSessionId: "replacement-requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
+        reservedSubagentClaimToken: claimToken,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin-reserved replay after requester lifecycle reset with a stable session id", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-reset-requester-child";
+    const runId = "reserved-reset-requester-run";
+    const claimToken = "reserved-reset-requester-fingerprint";
+    const existingEntry = {
+      sessionId: "reserved-reset-requester-child-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "stable-requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "before-reset",
+            claimToken,
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "stable requester session id must not replay after lifecycle reset",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "stable-requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "after-reset",
         reservedSubagentClaimToken: claimToken,
       },
     );

@@ -6,6 +6,21 @@ import {
   buildMockFunctionCall,
   buildToolCallEventsWithArgs,
 } from "./mock-openai-tooling.js";
+
+export function buildFailedResponseEvents(): StreamEvent[] {
+  const responseId = `resp_qa_failed_${Date.now()}`;
+  return [
+    { type: "response.created", response: { id: responseId } },
+    {
+      type: "response.failed",
+      response: {
+        id: responseId,
+        status: "failed",
+      },
+    },
+  ];
+}
+
 export function buildToolCallEvents(prompt: string): StreamEvent[] {
   const targetPath = readTargetFromPrompt(prompt);
   return buildToolCallEventsWithArgs("read", { path: targetPath });
@@ -108,20 +123,26 @@ export function extractPlannedToolName(events: StreamEvent[]) {
   return undefined;
 }
 
-export function extractPlannedToolCallId(events: StreamEvent[]) {
+export function extractPlannedToolIdentity(events: StreamEvent[]): {
+  callId?: string;
+  itemId?: string;
+} {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; call_id?: unknown };
+    const item = event.item as { type?: unknown; id?: unknown; call_id?: unknown };
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
       typeof item.call_id === "string"
     ) {
-      return item.call_id;
+      return {
+        callId: item.call_id,
+        itemId: typeof item.id === "string" ? item.id : undefined,
+      };
     }
   }
-  return undefined;
+  return {};
 }
 
 export function extractPlannedToolArgs(events: StreamEvent[]) {

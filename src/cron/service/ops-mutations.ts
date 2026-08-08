@@ -43,6 +43,7 @@ import {
   ensureLoaded,
   persist,
   persistOrRestore,
+  runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
   warnIfDisabled,
@@ -514,9 +515,7 @@ export async function removeAgentJobsTransactional<T>(
     } catch (error) {
       if (error instanceof AgentDeletionCommitUncertainError) {
         // Uncertain roster writes intentionally keep the cron deletion durable.
-        for (const notify of postPersistNotifications) {
-          notify();
-        }
+        runPostPersistCronNotifications(state, postPersistNotifications);
         armTimer(state);
         for (const job of removedJobs) {
           noteActiveCronJobRemoval(job.id);
@@ -540,9 +539,7 @@ export async function removeAgentJobsTransactional<T>(
       }
       throw error;
     }
-    for (const notify of postPersistNotifications) {
-      notify();
-    }
+    runPostPersistCronNotifications(state, postPersistNotifications);
     for (const job of removedJobs) {
       noteActiveCronJobRemoval(job.id);
       try {

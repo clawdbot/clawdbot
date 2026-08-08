@@ -17,6 +17,7 @@ const promptDefaultModel = vi.hoisted(() => vi.fn());
 const applyPrimaryModel = vi.hoisted(() => vi.fn((config: unknown) => config));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoice>(() => ({
     pluginId: "anthropic",
@@ -43,12 +44,16 @@ vi.mock("../commands/model-picker.js", () => ({
 }));
 
 vi.mock("../commands/auth-choice-prompt.js", () => ({
-  KEEP_CURRENT_AUTH_CHOICE: "__keep_current__",
+  isKeepCurrentAuthChoice: (value: unknown) => value === "__keep-current",
   promptAuthChoiceGrouped,
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore,
+}));
+
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
 }));
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
@@ -97,6 +102,7 @@ describe("runSetupModelAuthStep", () => {
     vi.clearAllMocks();
     promptDefaultModel.mockResolvedValue({});
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
   });
 
   it("targets the configured default agent for auth and model setup", async () => {
@@ -120,7 +126,10 @@ describe("runSetupModelAuthStep", () => {
       readOnly: true,
     });
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+      expect.objectContaining({
+        workspaceDir: "/tmp/ops-workspace",
+        detectedProviderIds: new Set(["ollama"]),
+      }),
     );
     expect(applyAuthChoice).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -32,6 +32,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
+  @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   @property({ attribute: false }) workboardBoards: readonly SidebarWorkboardBoard[] = [];
@@ -48,6 +49,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) refreshRequired = false;
+  @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (

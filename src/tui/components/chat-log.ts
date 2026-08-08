@@ -2,6 +2,7 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.js";
+import { sanitizeRenderableText } from "../tui-formatters.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
@@ -194,13 +195,15 @@ export class ChatLog extends Container {
     this.pendingUsers.clear();
   }
 
-  private formatRepeatedSystemText(text: string, count: number) {
-    return count > 1 ? `${text} x${count}` : text;
+  private formatSystemText(text: string, count = 1) {
+    const sanitized = sanitizeRenderableText(text);
+    const visible = sanitized.trim() || (text ? "(no output)" : "");
+    return theme.system(count > 1 ? `${visible} x${count}` : visible);
   }
 
   private createSystemMessage(text: string): RepeatableSystemMessage {
     const entry = new Container();
-    const textNode = new Text(theme.system(text), 1, 0);
+    const textNode = new Text(this.formatSystemText(text), 1, 0);
     entry.addChild(new Spacer(1));
     entry.addChild(textNode);
     return {
@@ -219,7 +222,7 @@ export class ChatLog extends Container {
     ) {
       this.repeatableSystemMessage.count += 1;
       this.repeatableSystemMessage.textNode.setText(
-        theme.system(this.formatRepeatedSystemText(text, this.repeatableSystemMessage.count)),
+        this.formatSystemText(text, this.repeatableSystemMessage.count),
       );
       return;
     }

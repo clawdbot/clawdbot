@@ -1,4 +1,5 @@
 // Integration regressions for cron execution timeouts and setup watchdogs.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   createDeferred,
@@ -30,12 +31,7 @@ function requireJob(state: { store?: { jobs?: CronJob[] } | null }, id: string):
   return job;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function firstMockArg(mock: unknown): unknown {
   const calls = (mock as { mock: { calls: readonly (readonly unknown[])[] } }).mock.calls;

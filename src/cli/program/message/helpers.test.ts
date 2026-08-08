@@ -1,4 +1,5 @@
 // Message program helper tests cover message command helper behavior and mocks.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
@@ -102,12 +103,7 @@ function expectNoAccountFieldInPassedOptions() {
   expect(passedOpts).not.toHaveProperty("account");
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectMessageCommandOptions(expected: Record<string, unknown>, callIndex = 0): void {
   const call = (messageCommandMock.mock.calls as unknown[][])[callIndex];

@@ -7,8 +7,47 @@ import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
+export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockCompactionSummaryFaultMode =
+  | "none"
+  | "empty-output-once"
+  | "reasoning-only-output-once";
+
+type MockOpenAiRequestOutcome = "success" | "error";
+
+export type QaMockProviderDispatchRequest = {
+  route: "responses" | "anthropic-messages";
+  body: Record<string, unknown>;
+  raw: string;
+};
+
+export type QaMockProviderFailure = {
+  status: number;
+  type: string;
+  code?: string;
+  message: string;
+  presentation?: "anthropic-thinking";
+};
+
+export type QaMockProviderDispatchResult = {
+  events: StreamEvent[];
+  model: string;
+  failure?: QaMockProviderFailure;
+  onResponseSent?: () => void;
+  previewPauseMs?: number;
+  responsePauseMs?: number;
+};
+
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
+  | {
+      type: "response.failed";
+      response: {
+        id: string;
+        status: "failed";
+        error?: { code: string; message: string };
+      };
+    }
   | {
       type: "response.output_item.added";
       output_index?: number;
@@ -122,7 +161,13 @@ export type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  requestKind: MockOpenAiRequestKind;
+  compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
+  outcome: MockOpenAiRequestOutcome;
+  errorCode?: string;
+  rawByteLength: number;
   plannedToolCallId?: string;
+  plannedToolItemId?: string;
   plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
@@ -184,6 +229,10 @@ export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
   /empty response after write recovery qa check/i;
+export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
+  /repeated request queued reply gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
@@ -302,6 +351,8 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  compactionOverflowInjected: boolean;
+  compactionRetryActive: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;

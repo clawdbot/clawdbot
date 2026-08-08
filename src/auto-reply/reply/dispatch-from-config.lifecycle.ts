@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/run-state.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -157,12 +158,27 @@ export function createDispatchReplyOperationCoordinator(params: {
       params.operationSessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
+    const activeReplyOperation = replyRunRegistry.get(params.dispatchOperationSessionKey);
+    const activeEmbeddedSessionId = resolveActiveEmbeddedRunSessionId(
+      params.dispatchOperationSessionKey,
+    );
+    const allowGatewayEmbeddedQueueResolution =
+      replyTurnKind === "visible" &&
+      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      activeReplyOperation === undefined &&
+      activeEmbeddedSessionId === operationSessionId;
+    if (allowGatewayEmbeddedQueueResolution) {
+      // An embedded owner can outlive its reply-operation registration. Do not
+      // create a competing operation for the same session before queue policy
+      // gets a chance to steer the active backend.
+      return { status: "ready" };
+    }
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
     const allowGatewayQueueResolution =
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
       params.replyOptions?.turnAdoptionLifecycle !== undefined &&
-      replyRunRegistry.get(params.dispatchOperationSessionKey) !== undefined;
+      activeReplyOperation !== undefined;
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy.
@@ -190,6 +206,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       kind: replyTurnKind,
       resetTriggered: false,
       routeThreadId: params.routeThreadId,
+      originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
@@ -237,6 +254,8 @@ export function createDispatchReplyOperationCoordinator(params: {
           kind: replyTurnKind,
           resetTriggered: false,
           routeThreadId: params.routeThreadId,
+          originatingLeafEntryId:
+            params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,

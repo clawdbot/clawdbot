@@ -239,6 +239,8 @@ function buildReservedSubagentClaimToken(params: {
   pluginId: string;
   requesterSessionKey: string;
   requesterSessionId?: string;
+  requesterLifecycleRevisionPresent: boolean;
+  requesterLifecycleRevision?: string;
   targetAgentId: string;
   childSessionKey: string;
   runId: string;
@@ -256,6 +258,10 @@ function buildReservedSubagentClaimToken(params: {
         pluginId: params.pluginId,
         requesterSessionKey: params.requesterSessionKey,
         requesterSessionId: params.requesterSessionId ?? null,
+        requesterLifecycleRevisionPresent: params.requesterLifecycleRevisionPresent,
+        requesterLifecycleRevision: params.requesterLifecycleRevisionPresent
+          ? (params.requesterLifecycleRevision ?? null)
+          : null,
         targetAgentId: params.targetAgentId,
         childSessionKey: params.childSessionKey,
         runId: params.runId,
@@ -274,6 +280,8 @@ function claimReservedSubagentIdentities(params: {
   pluginId: string;
   requesterSessionKey: string;
   requesterSessionId?: string;
+  requesterLifecycleRevisionPresent: boolean;
+  requesterLifecycleRevision?: string;
   targetAgentId: string;
   childSessionKey: string;
   runId: string;
@@ -340,6 +348,8 @@ function assertReservedSubagentRequesterOwned(params: {
 }): {
   requesterAgentId: string;
   requesterSessionId?: string;
+  requesterLifecycleRevisionPresent: boolean;
+  requesterLifecycleRevision?: string;
   requesterStorePath: string;
 } {
   const parsedRequester = parseAgentSessionKey(params.requesterSessionKey);
@@ -414,6 +424,10 @@ function assertReservedSubagentRequesterOwned(params: {
   return {
     requesterAgentId: parsedRequester.agentId,
     ...(entry.sessionId ? { requesterSessionId: entry.sessionId } : {}),
+    requesterLifecycleRevisionPresent: Object.hasOwn(entry, "lifecycleRevision"),
+    ...(Object.hasOwn(entry, "lifecycleRevision") && entry.lifecycleRevision !== undefined
+      ? { requesterLifecycleRevision: entry.lifecycleRevision }
+      : {}),
     requesterStorePath: loaded.storePath,
   };
 }
@@ -502,7 +516,13 @@ export const spawnReservedSubagent: PluginRuntime["subagent"]["spawnReserved"] =
         task,
         taskName,
         gatewayContext,
-        requesterSessionId: admittedRequester.requesterSessionId,
+        ...(admittedRequester.requesterSessionId
+          ? { requesterSessionId: admittedRequester.requesterSessionId }
+          : {}),
+        requesterLifecycleRevisionPresent: admittedRequester.requesterLifecycleRevisionPresent,
+        ...(admittedRequester.requesterLifecycleRevision !== undefined
+          ? { requesterLifecycleRevision: admittedRequester.requesterLifecycleRevision }
+          : {}),
         signal,
       });
     },
@@ -520,13 +540,19 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
   taskName?: string;
   gatewayContext: GatewayRequestContext;
   requesterSessionId?: string;
+  requesterLifecycleRevisionPresent: boolean;
+  requesterLifecycleRevision?: string;
   signal: AbortSignal;
 }): ReturnType<PluginRuntime["subagent"]["spawnReserved"]> {
   const reservationParams = params.params;
   const identityClaim = claimReservedSubagentIdentities({
     pluginId: params.pluginId,
     requesterSessionKey: params.requesterSessionKey,
-    requesterSessionId: params.requesterSessionId,
+    ...(params.requesterSessionId ? { requesterSessionId: params.requesterSessionId } : {}),
+    requesterLifecycleRevisionPresent: params.requesterLifecycleRevisionPresent,
+    ...(params.requesterLifecycleRevision !== undefined
+      ? { requesterLifecycleRevision: params.requesterLifecycleRevision }
+      : {}),
     targetAgentId: params.targetAgentId,
     runId: params.runId,
     childSessionKey: params.childSessionKey,
@@ -576,7 +602,11 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
         preallocatedChildSessionKey: params.childSessionKey,
         preallocatedRunId: params.runId,
         pluginOwnerId: params.pluginId,
-        requesterSessionId: params.requesterSessionId,
+        ...(params.requesterSessionId ? { requesterSessionId: params.requesterSessionId } : {}),
+        requesterLifecycleRevisionPresent: params.requesterLifecycleRevisionPresent,
+        ...(params.requesterLifecycleRevision !== undefined
+          ? { requesterLifecycleRevision: params.requesterLifecycleRevision }
+          : {}),
         reservedSubagentClaimToken: identityClaim.claimToken,
         signal: params.signal,
       },

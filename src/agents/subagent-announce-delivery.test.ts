@@ -128,7 +128,7 @@ type QueueEmbeddedAgentMessageWithOutcome = (
   sessionId: string,
   message: string,
   options?: EmbeddedAgentQueueMessageOptions,
-) => EmbeddedAgentQueueMessageOutcome;
+) => EmbeddedAgentQueueMessageOutcome | Promise<EmbeddedAgentQueueMessageOutcome>;
 
 function createQueueOutcomeMock(
   queued: boolean,
@@ -262,6 +262,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceTool?: string;
   requesterAbandoned?: boolean;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
 }) {
   // Slack thread delivery exercises all origins because direct, session, and
   // completion routing can differ after a child run outlives its requester.
@@ -296,6 +297,7 @@ async function deliverSlackThreadAnnouncement(params: {
     sourceRunId: "run-generated-media",
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+    isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
   });
 }
 
@@ -1125,6 +1127,82 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       deliveredAt: 4_200,
     });
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "defers completion delivery when sessions_yield owns the handoff (active: %s)",
+    async (isActive) => {
+      const callGateway = createGatewayMock();
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+        "runtime_rejected",
+      ]);
+
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        sessionId: "requester-session-1",
+        isActive,
+        directIdempotencyKey: `announce-yield-owned-completion-${isActive}`,
+        queueEmbeddedAgentMessageWithOutcome,
+        isCompletionOwnedByRequesterYield: () => true,
+      });
+
+      expect(result).toMatchObject({
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_pending",
+        terminal: true,
+        disposition: "intentional_non_delivery",
+      });
+      expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fences an active completion delivery when sessions_yield takes ownership mid-wait", async () => {
+    let requesterYielded = false;
+    let markWakeStarted: () => void = () => undefined;
+    const wakeStarted = new Promise<void>((resolve) => {
+      markWakeStarted = resolve;
+    });
+    let releaseWake: () => void = () => undefined;
+    const wakeGate = new Promise<void>((resolve) => {
+      releaseWake = resolve;
+    });
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => {
+      markWakeStarted();
+      await wakeGate;
+      return {
+        queued: true as const,
+        sessionId,
+        target: "embedded_run" as const,
+        gatewayHealth: "live" as const,
+        enqueuedAtMs: 4_100,
+        deliveredAtMs: 4_200,
+      };
+    });
+    const callGateway = createGatewayMock();
+
+    const delivery = deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-1",
+      isActive: true,
+      directIdempotencyKey: "announce-yield-owned-mid-wait",
+      queueEmbeddedAgentMessageWithOutcome,
+      isCompletionOwnedByRequesterYield: () => requesterYielded,
+    });
+    await wakeStarted;
+    requesterYielded = true;
+    releaseWake();
+
+    await expect(delivery).resolves.toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+      disposition: "intentional_non_delivery",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledOnce();
     expect(callGateway).not.toHaveBeenCalled();
   });
 

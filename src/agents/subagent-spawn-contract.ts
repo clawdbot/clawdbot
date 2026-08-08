@@ -66,6 +66,10 @@ export type SpawnSubagentContext = {
   pluginOwnerId?: string;
   /** Immutable requester session identity bound to the reserved replay token. */
   requesterSessionId?: string;
+  /** Whether the requester lifecycle revision key existed when the reservation was admitted. */
+  requesterLifecycleRevisionPresent?: boolean;
+  /** Requester lifecycle revision value bound to the reserved replay token when present. */
+  requesterLifecycleRevision?: string;
   /** Process-local token binding a reserved run to its Gateway dedupe reservation. */
   reservedSubagentClaimToken?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */

@@ -330,9 +330,56 @@ describe("createGatewaySubagentRuntime.spawnReserved validation", () => {
         runId: scopedReservation.runId,
       });
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(spawnSubagentDirect.mock.calls[0]?.[1]).toMatchObject({
+        requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: initial.lifecycleRevisionPresent,
+        ...(initial.lifecycleRevisionPresent && initial.value !== undefined
+          ? { requesterLifecycleRevision: initial.value }
+          : {}),
+      });
     } else {
       await result.rejects.toThrow("changed while starting reserved subagent work");
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
     }
+  });
+
+  it("binds reserved claim tokens to requester lifecycle revision value", async () => {
+    const loadWithRevision = (value: string) =>
+      requesterLoadResult({
+        lifecycleRevisionPresent: true,
+        value,
+      });
+    loadSessionEntryReadOnly
+      .mockReturnValueOnce(loadWithRevision("before-reset"))
+      .mockReturnValueOnce(loadWithRevision("before-reset"))
+      .mockReturnValueOnce(loadWithRevision("after-reset"))
+      .mockReturnValueOnce(loadWithRevision("after-reset"));
+
+    await expect(
+      withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(reservation)),
+    ).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
+    await expect(
+      withReservedPluginScope(() => createGatewaySubagentRuntime().spawnReserved(reservation)),
+    ).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
+
+    const firstToken = (
+      spawnSubagentDirect.mock.calls[0]?.[1] as {
+        reservedSubagentClaimToken?: string;
+      }
+    )?.reservedSubagentClaimToken;
+    const secondToken = (
+      spawnSubagentDirect.mock.calls[1]?.[1] as {
+        reservedSubagentClaimToken?: string;
+      }
+    )?.reservedSubagentClaimToken;
+    expect(firstToken).toBeTypeOf("string");
+    expect(secondToken).toBeTypeOf("string");
+    expect(firstToken).not.toBe(secondToken);
   });
 });

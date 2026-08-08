@@ -117,6 +117,7 @@ export const OpenClawSchemaShape = {
       audit: z
         .strictObject({
           enabled: z.boolean().optional(),
+          executionIdentity: z.boolean().optional(),
           messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
         })
         .optional(),
@@ -198,6 +199,11 @@ export const OpenClawSchemaShape = {
       tabCleanup: z
         .strictObject({
           enabled: z.boolean().optional(),
+        })
+        .optional(),
+      extensionRelay: z
+        .strictObject({
+          allowLegacyAuth: z.boolean().optional(),
         })
         .optional(),
     })

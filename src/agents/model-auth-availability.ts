@@ -1,6 +1,7 @@
 /** Read-only provider/model auth availability with provider-route selection. */
 import {
   findNormalizedProviderValue,
+  normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -30,7 +31,11 @@ import {
 } from "./auth-profiles/read-only-availability.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
+import {
+  isAuthCooldownBypassedForProvider,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./auth-profiles/usage-state.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -55,6 +60,7 @@ import {
   buildProviderModelAuthSourcePlan,
   fromProviderModelAuthReadiness,
   toProviderModelAuthReadiness,
+  type ProviderModelAuthAuthorization,
   type ProviderModelAuthEvidence,
   type ProviderModelAuthProfileSource,
 } from "./provider-model-auth-source-plan.js";
@@ -502,6 +508,21 @@ export function createModelAuthAvailabilityResolver(
     if (binding.kind === "profile-incompatible") {
       return { availability: false, evidence: "profile" };
     }
+    // Config-backed inline provider keys have no auth profile, so a recorded
+    // billing/auth cooldown must hide them from browse availability the same way
+    // it blocks their resolution — otherwise a cooled key still looks usable.
+    // Mirrors resolveInlineProviderApiKeyUnusableUntil, but reads the cooldown
+    // via usage-state primitives so this hot browse path stays independent of
+    // the auth-profiles usage module that many callers mock in tests.
+    const inlineUsageStats = isAuthCooldownBypassedForProvider(provider)
+      ? undefined
+      : store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+    const inlineKeyUnusableUntil = inlineUsageStats
+      ? resolveProfileUnusableUntil(inlineUsageStats)
+      : null;
+    if (inlineKeyUnusableUntil != null && inlineKeyUnusableUntil > now) {
+      return { availability: false, evidence: "provider-config" };
+    }
     if (binding.kind === "literal") {
       return {
         availability: modeAllowed(provider, target, configuredBearerMode),
@@ -611,11 +632,15 @@ export function createModelAuthAvailabilityResolver(
       selectedAuthMode: configured?.auth,
     };
   };
-  const directSource = (evaluation: AuthSourceEvaluation) =>
+  const directSource = (
+    evaluation: AuthSourceEvaluation,
+    authorization: ProviderModelAuthAuthorization = "declared",
+  ) =>
     buildProviderModelAuthDirectSource({
       mode: evaluation.selectedAuthMode,
       availability: evaluation.availability,
       evidence: evaluation.evidence ?? "none",
+      authorization,
     });
   const automaticProfileSource = (
     provider: string,
@@ -677,14 +702,28 @@ export function createModelAuthAvailabilityResolver(
       (hasDirectMaterial && shouldPreferExplicitConfigApiKeyAuth(params.cfg, provider));
     const environment = envAuth(provider);
     const environmentMode = environment ? (configured?.auth ?? environment.mode) : undefined;
+    // Mirrors the runtime classification in runtime-plan/prepare-auth.ts: a
+    // credential is ambient only when it came from the environment and the
+    // provider entry declares no apiKey material pointing at it. Availability
+    // and runtime must agree, or status advertises a credential the run will
+    // refuse (or the reverse).
+    const ambientEnvironmentCredential =
+      !required && environmentMode !== undefined && environmentMode !== "aws-sdk"
+        ? !hasDirectMaterial
+        : false;
     const direct =
       !required && environmentMode
         ? buildProviderModelAuthDirectSource({
             mode: environmentMode,
             availability: modeAllowed(provider, target, environmentMode),
             evidence: environmentMode === "aws-sdk" ? "aws-sdk" : "environment",
+            authorization: ambientEnvironmentCredential ? "ambient" : "declared",
           })
-        : directSource(unprofiledEvaluation(provider, target));
+        : ((evaluation) =>
+            directSource(
+              evaluation,
+              evaluation.evidence === "environment" && !hasDirectMaterial ? "ambient" : "declared",
+            ))(unprofiledEvaluation(provider, target));
     const hasDirectFallback = hasDirectMaterial || direct.evidence !== "none";
     return {
       binding,

@@ -217,6 +217,17 @@ describe("resolveLatestCallUsage", () => {
 });
 
 describe("buildUsageAgentMetaFields", () => {
+  it("selects unavailable over older prompt usage", () => {
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator: createUsageAccumulator(),
+      lastAssistantUsage: { contextUsage: { state: "unavailable" } },
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+    });
+
+    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
   it("keeps cumulative usage separate from the latest context snapshot", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {
@@ -325,6 +336,23 @@ describe("buildUsageAgentMetaFields", () => {
 });
 
 describe("buildErrorAgentMeta", () => {
+  it("does not promote historical CLI usage without context provenance", () => {
+    const fields = buildErrorAgentMeta({
+      sessionId: "session-error",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+      lastAssistant: {
+        api: "cli",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    });
+
+    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
   it("keeps cumulative usage separate from the latest call on error exits", () => {
     const usageAccumulator = createUsageAccumulator();
     mergeUsageIntoAccumulator(usageAccumulator, {

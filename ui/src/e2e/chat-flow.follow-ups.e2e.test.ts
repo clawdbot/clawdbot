@@ -355,7 +355,9 @@ suite.define(() => {
         sessionKey: "main",
       });
       const queue = page.locator(".chat-queue");
-      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
+        timeout: 10_000,
+      });
       await queue.getByText(followUp).waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({
@@ -544,7 +546,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat?session=main`);
+      await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/chat\/main$/);
 
       await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
       await page.getByRole("button", { name: "Send message" }).click();
@@ -560,6 +563,17 @@ suite.define(() => {
         "sessions.list",
         chatSessionListResponse([
           {
+            activeLeafEntryId: "leaf-active",
+            activeRunIds: ["active-run"],
+            hasActiveRun: true,
+            key: "global",
+            kind: "global",
+            label: "Global",
+            updatedAt: Date.now(),
+          },
+          {
+            activeLeafEntryId: "leaf-active",
+            activeRunIds: ["active-run"],
             hasActiveRun: true,
             key: "main",
             kind: "direct",
@@ -569,6 +583,7 @@ suite.define(() => {
         ]),
       );
       await page.reload();
+      await gateway.waitForRequest("sessions.list");
 
       const queue = page.locator(".chat-queue");
       await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
@@ -578,10 +593,15 @@ suite.define(() => {
       const steerParams = requireRecord(steerRequest.params);
       expect(steerParams).toMatchObject({
         deliver: false,
+        expectedLeafEntryId: "leaf-active",
+        expectedRunId: "active-run",
         message: queuedPrompt,
+        queueMode: "steer",
         sessionKey: "main",
       });
-      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
+        timeout: 10_000,
+      });
       await gateway.emitChatFinal({
         runId: requireString(steerParams.idempotencyKey, "restored steer idempotency key"),
         text: "Restored steer completed.",

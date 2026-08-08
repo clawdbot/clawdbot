@@ -194,6 +194,7 @@ async function runEmbeddedAgentViaCliBackend(
     const result = await runCliAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       agentId: params.agentId,
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,

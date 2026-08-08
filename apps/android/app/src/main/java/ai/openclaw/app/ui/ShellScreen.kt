@@ -1546,7 +1546,7 @@ internal fun overviewRecentSessionRows(
         ownerAgentId = session.ownerAgentId,
         title = title,
         source = sessionListSubtitle(session, sessionSourceLabel(session.key, channelsSummary)),
-        metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
+        metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: "",
       )
     }
 
@@ -2199,20 +2199,6 @@ internal fun settingsRowDisclosureDescription(
   localizedTitle: String,
   opensRoute: Boolean,
 ): String = if (opensRoute) nativeString("Open \${row.title}", localizedTitle) else localizedTitle
-
-private fun overviewRelativeSessionTime(
-  updatedAtMs: Long,
-  nowMs: Long = System.currentTimeMillis(),
-): String {
-  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
-  val minutes = deltaMs / 60_000L
-  if (minutes < 1) return nativeString("now")
-  if (minutes < 60) return nativeString("\${minutes}m", minutes)
-  val hours = minutes / 60
-  if (hours < 24) return nativeString("\${hours}h", hours)
-  val days = hours / 24
-  return nativeString("\${days}d", days)
-}
 
 private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
 

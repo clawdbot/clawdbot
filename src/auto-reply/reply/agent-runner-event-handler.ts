@@ -35,6 +35,7 @@ export function createAgentRunEventHandler(params: {
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
+  runId: string;
   effectiveSessionId?: string;
   notifyUserAboutCompaction: boolean;
   onCompactionCompleted: () => number;

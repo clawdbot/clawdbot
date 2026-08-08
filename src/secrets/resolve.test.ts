@@ -75,7 +75,6 @@ describe("secret ref resolver", () => {
     path: string;
     mode: "json" | "singleValue";
     timeoutMs?: number;
-    allowInsecurePath?: boolean;
   };
 
   function createExecProviderConfig(
@@ -816,33 +815,10 @@ describe("secret ref resolver", () => {
     });
   });
 
-  it("stays fail-closed when the retired Windows ACL opt-out is present", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-acl-opt-out");
-      const filePath = path.join(dir, "secrets.json");
-      await writeSecureFile(filePath, '{"token":"abc123"}');
-
-      await expect(
-        resolveSecretRefString(
-          { source: "file", provider: "filemain", id: "/token" },
-          {
-            config: {
-              secrets: {
-                providers: {
-                  filemain: createFileProviderConfig(filePath, { allowInsecurePath: true }),
-                },
-              },
-            },
-          },
-        ),
-      ).rejects.toThrow(/ACL verification unavailable on Windows/);
-    });
-  });
-
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
     await withMockedWindowsPlatform(async () => {
       await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
-        /ACL verification unavailable on Windows/,
+        /Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass/,
       );
     });
   });

@@ -207,7 +207,6 @@ function respondControlUiAssetsUnavailable(
   options?: {
     configuredRootPath?: string;
     failed?: boolean;
-    head?: boolean;
     preparing?: boolean;
   },
 ) {
@@ -221,12 +220,6 @@ function respondControlUiAssetsUnavailable(
   if (options?.preparing) {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Retry-After", "1");
-  }
-  if (options?.head) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end();
-    return;
   }
   respondPlainText(res, 503, message);
 }
@@ -905,6 +898,9 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    // Symlinked assets that resolve inside the root are served; fs-safe still
+    // rejects hops whose canonical target escapes the control-ui root.
+    rejectSymlinks: false,
     rejectHardlinks,
   });
   if (!opened.ok) {
@@ -1100,13 +1096,11 @@ export async function handleControlUiHttpRequest(
   if (rootState?.kind === "invalid") {
     respondControlUiAssetsUnavailable(res, {
       configuredRootPath: rootState.path,
-      head: req.method === "HEAD",
     });
     return true;
   }
   if (rootState?.kind === "preparing") {
     respondControlUiAssetsUnavailable(res, {
-      head: req.method === "HEAD",
       preparing: true,
     });
     return true;
@@ -1114,12 +1108,11 @@ export async function handleControlUiHttpRequest(
   if (rootState?.kind === "failed") {
     respondControlUiAssetsUnavailable(res, {
       failed: true,
-      head: req.method === "HEAD",
     });
     return true;
   }
   if (!rootState || rootState.kind === "missing") {
-    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -1138,7 +1131,7 @@ export async function handleControlUiHttpRequest(
     }
   })();
   if (!rootReal) {
-    respondControlUiAssetsUnavailable(res, { head: req.method === "HEAD" });
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 

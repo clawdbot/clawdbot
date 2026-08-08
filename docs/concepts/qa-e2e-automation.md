@@ -1237,6 +1237,9 @@ The minimum adoption bar for a new channel:
    changing the command's existing scenario catalog. Same-channel partitions
    are serial unless the factory declares that every instance owns isolated
    credentials or disposable servers, Gateway state, and artifact paths.
+   Module-backed flow scenarios additionally require
+   `adapterFactory.supportsModuleFlows: true`; those factories must return
+   adapters that implement `prepareFlow`.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.

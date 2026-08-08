@@ -87,13 +87,14 @@ function compactionCheckpointEntry(
     tokensBefore?: number;
     tokensAfter?: number;
   },
-) {
+): SessionCompactionCheckpoint {
   return {
     checkpointId: options.checkpointId,
     sessionKey: options.sessionKey,
     sessionId: fixture.sessionId,
     createdAt: options.createdAt,
     reason: options.reason,
+    tokensVersion: 1,
     summary: options.summary,
     ...(options.tokensBefore === undefined ? {} : { tokensBefore: options.tokensBefore }),
     ...(options.tokensAfter === undefined ? {} : { tokensAfter: options.tokensAfter }),
@@ -1530,6 +1531,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     contextKey: "test",
     count: 1,
     sources: [elidedRun],
+    summaryLines: ["elided summary"],
     sourceRefs: new WeakMap(),
   });
 

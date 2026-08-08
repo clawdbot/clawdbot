@@ -38,8 +38,8 @@ flow:
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }
-            textIncludes: exec
-            timeoutMs: 60000
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
         - call: sleep
           args: [1000]
         - set: joinedReply

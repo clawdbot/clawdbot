@@ -331,6 +331,8 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         preallocatedRunId: reservation.runId,
         pluginOwnerId: "agentic-os",
         requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "1",
         reservedSubagentClaimToken: expect.any(String),
         signal: expect.any(AbortSignal),
       },

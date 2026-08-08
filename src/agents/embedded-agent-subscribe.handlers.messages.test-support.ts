@@ -39,10 +39,6 @@ type EmbeddedSubscribeMessagesTestApi = {
       visibleDelta: string;
     },
   ): { hold: boolean; text: string };
-  resolveSilentReplyFallbackText(params: {
-    text: unknown;
-    messagingToolSentTexts: string[];
-  }): string;
 };
 
 function getTestApi(): EmbeddedSubscribeMessagesTestApi {
@@ -78,11 +74,4 @@ export function resolveCurrentSourceMessagingToolPartial(
   },
 ): { hold: boolean; text: string } {
   return getTestApi().resolveCurrentSourceMessagingToolPartial(state, params);
-}
-
-export function resolveSilentReplyFallbackText(params: {
-  text: unknown;
-  messagingToolSentTexts: string[];
-}): string {
-  return getTestApi().resolveSilentReplyFallbackText(params);
 }

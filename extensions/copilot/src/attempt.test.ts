@@ -42,6 +42,13 @@ function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["ter
 
 const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
+  claimPendingAgentQuestionAnswer: undefined as
+    | ((
+        ...args: Parameters<
+          typeof import("openclaw/plugin-sdk/agent-harness-runtime").claimPendingAgentQuestionAnswer
+        >
+      ) => Promise<boolean>)
+    | undefined,
   cancelError: undefined as Error | undefined,
   warn: vi.fn(),
   setActiveEmbeddedRun: vi.fn(),
@@ -62,6 +69,12 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       }
       return await actual.cancelPendingAgentQuestionForSession(...args);
     },
+    claimPendingAgentQuestionAnswer: async (
+      ...args: Parameters<typeof actual.claimPendingAgentQuestionAnswer>
+    ) =>
+      gatewayQuestionMock.claimPendingAgentQuestionAnswer
+        ? await gatewayQuestionMock.claimPendingAgentQuestionAnswer(...args)
+        : await actual.claimPendingAgentQuestionAnswer(...args),
     callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
       const [method, , rawParams] = args;
       const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
@@ -174,6 +187,7 @@ type SessionEventShape = {
   timestamp: string;
   type: string;
 };
+type SendFn = (options?: unknown) => Promise<string>;
 type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
 
 type FakeSession = {
@@ -189,6 +203,7 @@ type FakeSession = {
       cancelBackgroundCompaction: ReturnType<typeof vi.fn<() => Promise<{ cancelled: boolean }>>>;
     };
   };
+  send: ReturnType<typeof vi.fn<SendFn>>;
   sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
   sessionId: string;
 };
@@ -310,6 +325,7 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
         })),
       },
     },
+    send: vi.fn<SendFn>(async () => "user-message-id"),
     sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
     sessionId: id,
   };
@@ -385,6 +401,7 @@ function makeUserTurnRecorder(
     hasPersisted: () => persisted,
     isBlocked: () => blocked,
     hasRuntimePersistencePending: () => false,
+    getAdmissionReceipt: () => undefined,
     waitForRuntimePersistence: vi.fn(async () => undefined),
     persistApproved: vi.fn(async () => undefined),
     persistBlocked: vi.fn(async () => undefined),
@@ -1484,7 +1501,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write" }]);
+    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write", isError: false }]);
     expect(result.replayMetadata).toEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -1929,6 +1946,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session, cfg) => {
         session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
           const handler = cfg.onUserInputRequest;
           if (typeof handler !== "function") {
             throw new Error("expected onUserInputRequest handler");
@@ -1962,6 +1980,287 @@ describe("runCopilotAttempt", () => {
     );
     expect(result.assistantTexts).toEqual(["selected Deep"]);
     expect(queueAgentHarnessMessage("session-1", "late")).toBe(false);
+  });
+
+  it("injects active-run steering and waits for its canonical transcript receipt", async () => {
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+          return initialTurn.promise;
+        });
+        session.send.mockImplementationOnce(async (options) => {
+          const prompt = (options as { prompt?: string }).prompt;
+          session.emit("user.message", {
+            __eventId: "steered-user",
+            content: prompt,
+            delivery: "steering",
+          });
+          return "steered-user";
+        });
+      },
+    });
+    const attempt = runCopilotAttempt(makeParams({ taskSuggestionDeliveryMode: "gateway" }), {
+      pool: makeFakePool(sdk),
+    });
+
+    await vi.waitFor(() => {
+      expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1);
+    });
+    const handle = gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+      | {
+          queueMessage: (
+            text: string,
+            options?: {
+              deliveryTimeoutMs?: number;
+              waitForTranscriptCommit?: boolean;
+            },
+          ) => Promise<void>;
+          supportsTranscriptCommitWait?: boolean;
+          taskSuggestionDeliveryMode?: "gateway";
+        }
+      | undefined;
+    expect(handle?.supportsTranscriptCommitWait).toBe(true);
+    expect(handle?.taskSuggestionDeliveryMode).toBe("gateway");
+
+    expect(
+      queueAgentHarnessMessage("session-1", "change course", {
+        deliveryTimeoutMs: 1_000,
+        taskSuggestionDeliveryMode: "gateway",
+        waitForTranscriptCommit: true,
+      }),
+    ).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(requireSession(sdk).send).toHaveBeenCalledWith({ prompt: "change course" });
+      expect(transcriptRuntimeMock.appendStrict).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: "steered-user",
+          message: expect.objectContaining({ role: "user", content: "change course" }),
+        }),
+      );
+    });
+
+    initialTurn.resolve(makeAssistantMessageEvent("done"));
+    await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+  });
+
+  it("holds a steering receipt until pending tool results and the user turn persist", async () => {
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+          session.emit("assistant.message", {
+            __eventId: "assistant-tools",
+            content: "checking",
+            messageId: "assistant-tools",
+            toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
+          });
+          return initialTurn.promise;
+        });
+        session.send.mockImplementationOnce(async (options) => {
+          session.emit("user.message", {
+            __eventId: "steered-user",
+            content: (options as { prompt?: string }).prompt,
+            delivery: "steering",
+          });
+          return "steered-user";
+        });
+      },
+    });
+    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1));
+    const handle = expectDefined(
+      gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+        | {
+            queueMessage: (
+              text: string,
+              options?: { waitForTranscriptCommit?: boolean },
+            ) => Promise<void>;
+          }
+        | undefined,
+      "active Copilot steering handle",
+    );
+    let receiptSettled = false;
+    const receipt = handle
+      .queueMessage("change course", { waitForTranscriptCommit: true })
+      .then(() => {
+        receiptSettled = true;
+      });
+    await Promise.resolve();
+    expect(receiptSettled).toBe(false);
+
+    requireSession(sdk).emit("tool.execution_complete", {
+      __eventId: "tool-result",
+      result: { content: "done" },
+      success: true,
+      toolCallId: "call-1",
+    });
+    await receipt;
+
+    initialTurn.resolve(makeAssistantMessageEvent("done"));
+    await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+  });
+
+  it("rejects a waited steering receipt without leaking an unhandled rejection", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (input: unknown) => {
+            const message = (input as { message: AgentMessage }).message;
+            return message.role === "user" &&
+              typeof message.content === "string" &&
+              message.content.includes("suppressed steer")
+              ? { block: true }
+              : undefined;
+          },
+        },
+      ]),
+    );
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+          return initialTurn.promise;
+        });
+        session.send.mockImplementation(async (options) => {
+          const prompt = (options as { prompt?: string }).prompt ?? "";
+          const eventId = prompt.includes("fire and forget")
+            ? "suppressed-steer-unobserved"
+            : "suppressed-steer-waited";
+          session.emit("user.message", {
+            __eventId: eventId,
+            content: prompt,
+            delivery: "steering",
+          });
+          return eventId;
+        });
+      },
+    });
+    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1));
+    const handle = expectDefined(
+      gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+        | {
+            queueMessage: (
+              text: string,
+              options?: { waitForTranscriptCommit?: boolean },
+            ) => Promise<void>;
+          }
+        | undefined,
+      "active Copilot steering handle",
+    );
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      await expect(
+        handle.queueMessage("fire and forget suppressed steer"),
+      ).resolves.toBeUndefined();
+      await waitForEventLoopTurn();
+      expect(unhandledRejections).toEqual([]);
+
+      await expect(
+        handle.queueMessage("waited suppressed steer", { waitForTranscriptCommit: true }),
+      ).resolves.toEqual({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "Copilot steering user write was suppressed",
+      });
+
+      initialTurn.resolve(makeAssistantMessageEvent("done"));
+      await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+      await waitForEventLoopTurn();
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("rejects active steering before the initial SDK user event is validated", async () => {
+    gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(() => initialTurn.promise);
+      },
+    });
+    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+    await vi.waitFor(() => {
+      expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1);
+    });
+    const handle = expectDefined(
+      gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+        | {
+            queueMessage: (text: string) => Promise<void>;
+          }
+        | undefined,
+      "registered Copilot run handle",
+    );
+    await expect(handle.queueMessage("too early")).rejects.toThrow(
+      "unavailable before initial user validation",
+    );
+    expect(requireSession(sdk).send).not.toHaveBeenCalled();
+
+    requireSession(sdk).emit("user.message", {
+      __eventId: "initial-user",
+      content: "hello",
+    });
+    await expect(handle.queueMessage("now steer")).resolves.toBeUndefined();
+    expect(requireSession(sdk).send).toHaveBeenCalledWith({ prompt: "now steer" });
+
+    initialTurn.resolve(makeAssistantMessageEvent("done"));
+    await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+  });
+
+  it("rejects steering when the run settles during pending-question lookup", async () => {
+    const initialTurn = createDeferred<SessionEventShape | undefined>();
+    const questionClaim = createDeferred<boolean>();
+    const claimPendingAgentQuestionAnswer = vi.fn(() => questionClaim.promise);
+    gatewayQuestionMock.claimPendingAgentQuestionAnswer = claimPendingAgentQuestionAnswer;
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: "hello" });
+          return initialTurn.promise;
+        });
+      },
+    });
+    try {
+      const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+
+      await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1));
+      const handle = expectDefined(
+        gatewayQuestionMock.setActiveEmbeddedRun.mock.calls.at(-1)?.[1] as
+          | {
+              queueMessage: (
+                text: string,
+                options?: { isInboundUserMessage?: boolean },
+              ) => Promise<void>;
+            }
+          | undefined,
+        "active Copilot steering handle",
+      );
+      const steering = handle.queueMessage("late steer", { isInboundUserMessage: true });
+      await vi.waitFor(() => expect(claimPendingAgentQuestionAnswer).toHaveBeenCalledTimes(1));
+
+      initialTurn.resolve(makeAssistantMessageEvent("done"));
+      await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
+      questionClaim.resolve(false);
+
+      await expect(steering).rejects.toThrow("active run ended");
+      expect(requireSession(sdk).send).not.toHaveBeenCalled();
+    } finally {
+      gatewayQuestionMock.claimPendingAgentQuestionAnswer = undefined;
+    }
   });
 
   it("enableSessionTelemetry is omitted from createSession when undefined (SDK default)", async () => {

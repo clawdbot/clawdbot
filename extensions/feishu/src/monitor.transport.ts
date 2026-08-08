@@ -28,6 +28,7 @@ import {
   wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
@@ -370,7 +371,13 @@ export async function monitorWebhook({
   }
 
   const port = account.config.webhookPort ?? 3000;
-  const path = account.config.webhookPath ?? "/feishu/events";
+  const path = account.config.webhookPath ?? DEFAULT_FEISHU_WEBHOOK_PATH;
+  if (normalizeFeishuWebhookPath(path) !== path) {
+    throw new Error(
+      `Feishu account "${accountId}" webhookPath must be a canonical HTTP request path; ` +
+        'run "openclaw doctor --fix" to repair it',
+    );
+  }
   const host = account.config.webhookHost ?? "127.0.0.1";
 
   log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
@@ -378,6 +385,16 @@ export async function monitorWebhook({
   const server = http.createServer();
 
   server.on("request", (req, res) => {
+    const requestUrl = req.url ?? "/";
+    const requestPath = requestUrl.split("?", 1)[0];
+    // Explicit query routes retain Lark's exact raw-target contract; path-only
+    // routes accept queries without normalizing attacker-controlled targets.
+    const requestRoute = path.includes("?") ? requestUrl : requestPath;
+    if (!requestPath?.startsWith("/") || requestUrl.includes("#") || requestRoute !== path) {
+      respondText(res, 404, "Not Found");
+      return;
+    }
+
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
       // Refresh lastEventAt / lastTransportActivityAt on every successful 2xx
@@ -402,6 +419,7 @@ export async function monitorWebhook({
       !applyBasicWebhookRequestGuards({
         req,
         res,
+        allowMethods: ["POST"],
         rateLimiter: feishuWebhookRateLimiter,
         rateLimitKey,
         nowMs: Date.now(),

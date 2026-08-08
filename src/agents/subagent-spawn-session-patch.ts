@@ -28,6 +28,8 @@ const RESERVED_DIRECT_SPAWN_IN_FLIGHT_KEY: unique symbol = Symbol.for(
 type ReservedSubagentReplayMarker = {
   runId: string;
   requesterSessionId: string;
+  requesterLifecycleRevisionPresent: boolean;
+  requesterLifecycleRevision: string | null;
   claimToken: string;
 };
 
@@ -38,6 +40,11 @@ function isReservedSubagentReplayMarker(value: unknown): value is ReservedSubage
     !Array.isArray(value) &&
     typeof (value as Partial<ReservedSubagentReplayMarker>).runId === "string" &&
     typeof (value as Partial<ReservedSubagentReplayMarker>).requesterSessionId === "string" &&
+    typeof (value as Partial<ReservedSubagentReplayMarker>).requesterLifecycleRevisionPresent ===
+      "boolean" &&
+    ((value as Partial<ReservedSubagentReplayMarker>).requesterLifecycleRevision === null ||
+      typeof (value as Partial<ReservedSubagentReplayMarker>).requesterLifecycleRevision ===
+        "string") &&
     typeof (value as Partial<ReservedSubagentReplayMarker>).claimToken === "string"
   );
 }
@@ -128,10 +135,19 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   const reservedSubagentRequesterSessionId = normalizeOptionalString(
     patch.reservedSubagentRequesterSessionId,
   );
+  const reservedSubagentRequesterLifecycleRevisionPresent =
+    patch.reservedSubagentRequesterLifecycleRevisionPresent;
+  const reservedSubagentRequesterLifecycleRevision = normalizeOptionalString(
+    patch.reservedSubagentRequesterLifecycleRevision,
+  );
   const reservedSubagentClaimToken = normalizeOptionalString(patch.reservedSubagentClaimToken);
   const pluginOwnerId = normalizeOptionalString(patch.pluginOwnerId);
   if (
-    (reservedSubagentRunId || reservedSubagentRequesterSessionId || reservedSubagentClaimToken) &&
+    (reservedSubagentRunId ||
+      reservedSubagentRequesterSessionId ||
+      typeof reservedSubagentRequesterLifecycleRevisionPresent === "boolean" ||
+      reservedSubagentRequesterLifecycleRevision ||
+      reservedSubagentClaimToken) &&
     pluginOwnerId
   ) {
     entry.pluginExtensions = {
@@ -142,6 +158,15 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
           ...(reservedSubagentRunId ? { runId: reservedSubagentRunId } : {}),
           ...(reservedSubagentRequesterSessionId
             ? { requesterSessionId: reservedSubagentRequesterSessionId }
+            : {}),
+          ...(typeof reservedSubagentRequesterLifecycleRevisionPresent === "boolean"
+            ? {
+                requesterLifecycleRevisionPresent:
+                  reservedSubagentRequesterLifecycleRevisionPresent,
+                requesterLifecycleRevision: reservedSubagentRequesterLifecycleRevisionPresent
+                  ? (reservedSubagentRequesterLifecycleRevision ?? null)
+                  : null,
+              }
             : {}),
           ...(reservedSubagentClaimToken ? { claimToken: reservedSubagentClaimToken } : {}),
         },
@@ -262,6 +287,8 @@ export async function createInitialSubagentSession(params: {
   modelPatch: Record<string, unknown>;
   reservedSubagentRunId?: string;
   reservedSubagentRequesterSessionId?: string;
+  reservedSubagentRequesterLifecycleRevisionPresent?: boolean;
+  reservedSubagentRequesterLifecycleRevision?: string;
   reservedSubagentClaimToken?: string;
   swarmGroupId?: string;
   collect: boolean;
@@ -286,6 +313,18 @@ export async function createInitialSubagentSession(params: {
       : {}),
     ...(params.reservedSubagentRequesterSessionId
       ? { reservedSubagentRequesterSessionId: params.reservedSubagentRequesterSessionId }
+      : {}),
+    ...(params.reservedSubagentRequesterLifecycleRevisionPresent !== undefined
+      ? {
+          reservedSubagentRequesterLifecycleRevisionPresent:
+            params.reservedSubagentRequesterLifecycleRevisionPresent,
+        }
+      : {}),
+    ...(params.reservedSubagentRequesterLifecycleRevision !== undefined
+      ? {
+          reservedSubagentRequesterLifecycleRevision:
+            params.reservedSubagentRequesterLifecycleRevision,
+        }
       : {}),
     ...(params.reservedSubagentClaimToken
       ? { reservedSubagentClaimToken: params.reservedSubagentClaimToken }
@@ -344,13 +383,21 @@ export async function createInitialSubagentSession(params: {
               const reserved = params.pluginOwnerId
                 ? existing.pluginExtensions?.[params.pluginOwnerId]?.openclawReservedSubagent
                 : undefined;
+              const requesterLifecycleRevisionPresent =
+                params.reservedSubagentRequesterLifecycleRevisionPresent;
+              const requesterLifecycleRevision = requesterLifecycleRevisionPresent
+                ? (params.reservedSubagentRequesterLifecycleRevision ?? null)
+                : null;
               const exactReplay =
                 params.reservedSubagentRunId &&
                 params.reservedSubagentRequesterSessionId &&
+                requesterLifecycleRevisionPresent !== undefined &&
                 params.reservedSubagentClaimToken &&
                 isReservedSubagentReplayMarker(reserved) &&
                 reserved?.runId === params.reservedSubagentRunId &&
                 reserved?.requesterSessionId === params.reservedSubagentRequesterSessionId &&
+                reserved?.requesterLifecycleRevisionPresent === requesterLifecycleRevisionPresent &&
+                reserved?.requesterLifecycleRevision === requesterLifecycleRevision &&
                 reserved?.claimToken === params.reservedSubagentClaimToken &&
                 existing.pluginOwnerId === params.pluginOwnerId &&
                 existing.spawnedBy === params.requesterInternalKey &&

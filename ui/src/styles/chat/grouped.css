@@ -501,6 +501,11 @@ img.chat-avatar {
   object-position: center;
 }
 
+img.chat-avatar.chat-avatar--logo {
+  object-fit: contain;
+  padding: 2px;
+}
+
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;

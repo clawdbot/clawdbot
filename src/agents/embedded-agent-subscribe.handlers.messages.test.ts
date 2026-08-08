@@ -16,7 +16,6 @@ import {
   buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
   resolveCurrentSourceMessagingToolPartial,
-  resolveSilentReplyFallbackText,
 } from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
@@ -236,50 +235,6 @@ function createMessageToolEnvelope(message: string, args: Record<string, unknown
     },
   });
 }
-
-describe("resolveSilentReplyFallbackText", () => {
-  it("replaces NO_REPLY with latest messaging tool text when available", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: ["first", "final delivered text"],
-      }),
-    ).toBe("final delivered text");
-  });
-
-  it("keeps original text when response is not NO_REPLY", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "normal assistant reply",
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("normal assistant reply");
-  });
-
-  it("keeps NO_REPLY when there is no messaging tool text to mirror", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [],
-      }),
-    ).toBe("NO_REPLY");
-  });
-
-  it("tolerates malformed text payloads without throwing", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: undefined,
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("");
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [42 as unknown as string],
-      }),
-    ).toBe("42");
-  });
-});
 
 describe("hasAssistantVisibleReply", () => {
   it("treats audio-only payloads as visible", () => {
@@ -1704,6 +1659,71 @@ describe("handleMessageEnd", () => {
       expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text }));
     },
   );
+
+  it("keeps exact NO_REPLY silent after a user-facing message send followed by sessions_send (#119383)", () => {
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      finalizeAssistantTexts,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+        messagingToolSentTexts: ["<user-facing reply>", "<internal escalation note>"],
+        messagingToolSentTextsNormalized: ["<user-facing reply>", "<internal escalation note>"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "whatsapp",
+            to: "user:123",
+            text: "<user-facing reply>",
+          },
+        ],
+      },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    });
+
+    // The exact silent token must never be rewritten to the sessions_send body:
+    // the final assistant text keeps NO_REPLY and no block reply carries the note.
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    for (const call of emitBlockReply.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("<internal escalation note>");
+    }
+  });
+
+  it("keeps exact NO_REPLY silent when only sessions_send delivered (#119383)", () => {
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      finalizeAssistantTexts,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+        messagingToolSentTexts: ["<internal escalation note>"],
+        messagingToolSentTextsNormalized: ["<internal escalation note>"],
+        messagingToolSentTargets: [],
+      },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    });
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    for (const call of emitBlockReply.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("<internal escalation note>");
+    }
+  });
 
   it.each([
     {

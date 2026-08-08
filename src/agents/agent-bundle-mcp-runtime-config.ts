@@ -265,6 +265,11 @@ export function loadSessionMcpConfig(params: {
     includeServerNames: params.includeServerNames,
     excludeServerNames: params.excludeServerNames,
   });
+  const prepareDataDirsByServer = Object.fromEntries(
+    Object.entries(discovery.loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
+      Object.hasOwn(mcpServers, serverName),
+    ),
+  );
   const fingerprintServers = params.redactConnectionServerNames?.size
     ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
     : mcpServers;
@@ -272,6 +277,9 @@ export function loadSessionMcpConfig(params: {
     loaded: {
       ...discovery.loaded,
       mcpServers,
+      // Launch ownership is not serialized or fingerprinted; the injected env path already
+      // participates in the server fingerprint and this sidecar only authorizes mkdir.
+      prepareDataDirsByServer,
     },
     fingerprint: createCatalogFingerprint({
       servers: fingerprintServers,

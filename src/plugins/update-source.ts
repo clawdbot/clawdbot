@@ -32,7 +32,7 @@ import {
 } from "./install-channel-specs.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialNpmSpec } from "./official-external-install-records.js";
+import * as officialInstallRecords from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
@@ -126,10 +126,11 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     resolveNpmSpecPackageName(params.specOverride ?? params.record.spec) ??
     params.record.resolvedName ??
     resolveNpmSpecPackageName(params.record.resolvedSpec);
-  return Boolean(
-    packageName &&
-    packageName !== params.pluginId &&
-    unscopedPackageName(packageName) === params.pluginId,
+  return (
+    (packageName !== undefined &&
+      packageName !== params.pluginId &&
+      unscopedPackageName(packageName) === params.pluginId) ||
+    officialInstallRecords.hasOfficialNpmIdReplacement(params)
   );
 }
 
@@ -620,7 +621,7 @@ export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

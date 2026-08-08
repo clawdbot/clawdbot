@@ -37,7 +37,10 @@ import {
 } from "./subagent-spawn-failure-quarantine.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
-import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
+import {
+  createSubagentSpawnLifecycleEmitter,
+  emitSubagentSpawnFailedEndedHook,
+} from "./subagent-spawn-lifecycle.js";
 import { sanitizeMountPathHint } from "./subagent-spawn-mount-path.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import {
@@ -207,6 +210,15 @@ export async function spawnSubagentDirect(
       modelPatch: plan.initialSessionPatch,
       reservedSubagentRunId: ctx.preallocatedRunId,
       reservedSubagentRequesterSessionId: ctx.requesterSessionId,
+      ...(ctx.requesterLifecycleRevisionPresent !== undefined
+        ? {
+            reservedSubagentRequesterLifecycleRevisionPresent:
+              ctx.requesterLifecycleRevisionPresent,
+          }
+        : {}),
+      ...(ctx.requesterLifecycleRevision !== undefined
+        ? { reservedSubagentRequesterLifecycleRevision: ctx.requesterLifecycleRevision }
+        : {}),
       reservedSubagentClaimToken: ctx.reservedSubagentClaimToken,
       swarmGroupId,
       collect: params.collect === true,
@@ -511,32 +523,13 @@ export async function spawnSubagentDirect(
         }
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
-          let endedHookEmitted = false;
-          if (hookRunner?.hasHooks("subagent_ended")) {
-            try {
-              await hookRunner.runSubagentEnded(
-                {
-                  targetSessionKey: childSessionKey,
-                  targetKind: "subagent",
-                  reason: "spawn-failed",
-                  sendFarewell: true,
-                  accountId: childSessionOrigin?.accountId,
-                  runId: acceptedDispatchRunId ?? childIdem,
-                  outcome: "error",
-                  error: "Session failed to start",
-                },
-                {
-                  runId: acceptedDispatchRunId ?? childIdem,
-                  childSessionKey,
-                  requesterSessionKey: requesterInternalKey,
-                },
-              );
-              endedHookEmitted = true;
-            } catch {
-              // Spawn cleanup continues even when presentation hooks fail.
-            }
-          }
-          emitLifecycleHooks = !endedHookEmitted;
+          emitLifecycleHooks = !(await emitSubagentSpawnFailedEndedHook({
+            hookRunner,
+            childSessionKey,
+            childSessionOrigin,
+            runId: acceptedDispatchRunId ?? childIdem,
+            requesterInternalKey,
+          }));
         }
         const cleanupResult = await cleanupFailedSpawnBeforeAgentStart({
           childSessionKey,

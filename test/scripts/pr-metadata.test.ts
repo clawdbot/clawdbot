@@ -78,7 +78,10 @@ function readPrMetadata(
 ) {
   return spawnSync(
     "bash",
-    ["-c", "set -euo pipefail; source scripts/pr-lib/worktree.sh; pr_meta_json 42"],
+    [
+      "-c",
+      "set -euo pipefail; source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; pr_meta_json 42",
+    ],
     {
       cwd: process.cwd(),
       env: {
@@ -89,6 +92,7 @@ function readPrMetadata(
         FAKE_GRAPHQL_FILE_COUNT: options.graphqlFileCount ?? "100",
         FAKE_HEAD_AFTER: options.headAfter ?? "head-a",
         FAKE_REST_FILE_COUNT: options.restFileCount ?? "101",
+        OPENCLAW_GH_BIN: join(fakeGhDir, "gh"),
         PATH: `${fakeGhDir}:${process.env.PATH}`,
       },
       encoding: "utf8",
