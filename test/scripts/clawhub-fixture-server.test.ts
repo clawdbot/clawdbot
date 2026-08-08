@@ -94,6 +94,14 @@ function runPrepublishAssertion(
   );
 }
 
+function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd()) {
+  return spawnSync(process.execPath, [SCRIPT_PATH, "assert-no-requests", baseUrl ?? ""], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env },
+  });
+}
+
 describe("ClawHub fixture server", () => {
   it("serves package metadata and npm-pack artifacts for kitchen-sink fixtures", async () => {
     const { baseUrl } = await startFixtureServer("kitchen-sink-plugin");
@@ -144,6 +152,67 @@ describe("ClawHub fixture server", () => {
     expect(assertion.stderr).toContain(
       "assert-prepublish-requests requires <base-url> <package-name> <version>",
     );
+    const emptyAssertion = runNoRequestsAssertion();
+    expect(emptyAssertion.status).toBe(1);
+    expect(emptyAssertion.stderr).toContain("assert-no-requests requires <base-url>");
+  });
+
+  it("parks WhatsApp startup config and restores the authored bytes exactly", () => {
+    const root = tempDirs.make("openclaw-clawhub-auth-config-");
+    const configPath = path.join(root, "openclaw.json");
+    const snapshotPath = path.join(root, "openclaw.authored.json");
+    const authoredConfig = `{
+  "gateway": { "mode": "local", "reload": { "mode": "hybrid" } },
+  "plugins": {
+    "allow": ["discord", "whatsapp"],
+    "entries": { "discord": { "enabled": true }, "whatsapp": { "enabled": true } }
+  },
+  "channels": { "discord": { "enabled": true }, "whatsapp": { "enabled": true } }
+}
+`;
+    writeFileSync(configPath, authoredConfig);
+
+    const park = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, "park-prepublish-auth-config", configPath, snapshotPath],
+      { encoding: "utf8", env: { ...process.env } },
+    );
+    expect(park.status, park.stderr).toBe(0);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(authoredConfig);
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+      gateway: { mode: "local", reload: { mode: "off" } },
+      plugins: {
+        allow: ["discord"],
+        entries: { discord: { enabled: true } },
+      },
+      channels: { discord: { enabled: true } },
+    });
+
+    const restore = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, "restore-prepublish-auth-config", configPath, snapshotPath],
+      { encoding: "utf8", env: { ...process.env } },
+    );
+    expect(restore.status, restore.stderr).toBe(0);
+    expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
+  });
+
+  it("rejects malformed probe config without changing authored bytes", () => {
+    const root = tempDirs.make("openclaw-clawhub-invalid-auth-config-");
+    const configPath = path.join(root, "openclaw.json");
+    const snapshotPath = path.join(root, "openclaw.authored.json");
+    const authoredConfig = '{"plugins":{"allow":"whatsapp"}}\n';
+    writeFileSync(configPath, authoredConfig);
+
+    const park = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, "park-prepublish-auth-config", configPath, snapshotPath],
+      { encoding: "utf8", env: { ...process.env } },
+    );
+    expect(park.status).toBe(1);
+    expect(park.stderr).toContain("plugins.allow must be an array");
+    expect(readFileSync(configPath, "utf8")).toBe(authoredConfig);
+    expect(existsSync(snapshotPath)).toBe(false);
   });
 
   it("serves exact prepublish tarballs through the ClawHub artifact contract", async () => {
@@ -180,6 +249,7 @@ describe("ClawHub fixture server", () => {
       [manifestPath],
       isolatedCwd,
     );
+    expect(runNoRequestsAssertion(baseUrl, isolatedCwd).status).toBe(0);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
@@ -255,6 +325,9 @@ describe("ClawHub fixture server", () => {
     expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, isolatedCwd).status).toBe(
       0,
     );
+    const unexpectedStartupRequest = runNoRequestsAssertion(baseUrl, isolatedCwd);
+    expect(unexpectedStartupRequest.status).toBe(1);
+    expect(unexpectedStartupRequest.stderr).toContain("unexpected ClawHub fixture requests");
     expect((await fetch(`${baseUrl}${whatsappPath}/versions/0.0.0/artifact`)).status).toBe(404);
     const mismatch = runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version);
     expect(mismatch.status).toBe(1);
