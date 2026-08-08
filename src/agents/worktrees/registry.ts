@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
@@ -12,6 +13,7 @@ import {
 import type {
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanup,
   ProvisionedFileState,
 } from "./types.js";
 
@@ -40,7 +42,41 @@ function kyselyLeaseFor(db: DatabaseSync) {
   return getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
 }
 
+function parseRunEndCleanup(
+  raw: string | null | undefined,
+): ManagedWorktreeRunEndCleanup | undefined {
+  if (raw == null) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || !Number.isInteger(parsed.at) || (parsed.at as number) < 0) {
+      return undefined;
+    }
+    const at = parsed.at as number;
+    switch (parsed.outcome) {
+      case "failed":
+        return typeof parsed.reason === "string" &&
+          parsed.reason.length > 0 &&
+          parsed.reason.length <= 500
+          ? { outcome: parsed.outcome, at, reason: parsed.reason }
+          : undefined;
+      case "removed-lossless":
+      case "retained-busy":
+      case "retained-dirty":
+      case "retained-unpushed":
+      case "retained-provisioned-drift":
+        return parsed.reason === undefined ? { outcome: parsed.outcome, at } : undefined;
+      default:
+        return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToRecord(row: WorktreeRow): ManagedWorktreeRecord {
+  const runEndCleanup = parseRunEndCleanup(row.run_end_cleanup_json);
   return {
     id: row.id,
     name: row.path.split(/[\\/]/).at(-1) ?? row.id,
@@ -55,6 +91,7 @@ function rowToRecord(row: WorktreeRow): ManagedWorktreeRecord {
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
     ...(row.removed_at == null ? {} : { removedAt: row.removed_at }),
+    ...(runEndCleanup ? { runEndCleanup } : {}),
   };
 }
 
@@ -77,6 +114,8 @@ function recordToRow(
     removed_at: record.removedAt ?? null,
     provisioned_paths_json:
       provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
+    run_end_cleanup_json:
+      record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
   };
 }
 
@@ -356,7 +395,9 @@ export function insertRegistryWorktree(
 export function updateRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
-  patch: Partial<Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "snapshotRef">> & {
+  patch: Partial<
+    Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
+  > & {
     provisionedPaths?: readonly string[];
     provisionedState?: readonly ProvisionedFileState[];
   },
@@ -371,6 +412,10 @@ export function updateRegistryWorktree(
   }
   if ("snapshotRef" in patch) {
     values.snapshot_ref = patch.snapshotRef ?? null;
+  }
+  if ("runEndCleanup" in patch) {
+    values.run_end_cleanup_json =
+      patch.runEndCleanup === undefined ? null : JSON.stringify(patch.runEndCleanup);
   }
   if (patch.provisionedState !== undefined) {
     values.provisioned_paths_json = JSON.stringify(patch.provisionedState);

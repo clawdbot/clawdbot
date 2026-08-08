@@ -3,8 +3,10 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -56,6 +58,7 @@ import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
 } from "./types.js";
 
@@ -1043,11 +1046,25 @@ export class ManagedWorktreeService {
   async removeIfLossless(id: string): Promise<boolean> {
     const record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
+    const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
+      updateRegistryWorktree(this.env, id, {
+        runEndCleanup: {
+          outcome,
+          at: this.now(),
+          ...(outcome === "failed"
+            ? { reason: truncateUtf16Safe(formatErrorMessage(error), 500) }
+            : {}),
+        },
+      });
+    };
+    // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
+    // QA and operators observe this product-boundary fact through worktrees.list.
     try {
       claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
     } catch {
       // A live run lease or a competing remover holds the worktree; a lossless
       // auto-cleanup must not race it.
+      recordOutcome("retained-busy");
       return false;
     }
     try {
@@ -1063,16 +1080,32 @@ export class ManagedWorktreeService {
         record.path,
         getRegistryWorktreeProvisionedPaths(this.env, record.id),
       );
-      if (status || unpushed || ignoredDrift) {
+      const retainedOutcome = status
+        ? "retained-dirty"
+        : unpushed
+          ? "retained-unpushed"
+          : ignoredDrift
+            ? "retained-provisioned-drift"
+            : undefined;
+      if (retainedOutcome) {
         abortWorktreeRemoval(this.env, id, claimToken);
+        recordOutcome(retainedOutcome);
         return false;
       }
     } catch (error) {
       abortWorktreeRemoval(this.env, id, claimToken);
+      recordOutcome("failed", error);
       throw error;
     }
-    await this.release(id);
-    await this.remove({ id, reason: "run-end", claimToken });
+    try {
+      await this.release(id);
+      await this.remove({ id, reason: "run-end", claimToken });
+    } catch (error) {
+      abortWorktreeRemoval(this.env, id, claimToken);
+      recordOutcome("failed", error);
+      throw error;
+    }
+    recordOutcome("removed-lossless");
     return true;
   }
 

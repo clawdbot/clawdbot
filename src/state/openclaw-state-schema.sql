@@ -1791,6 +1791,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
   owner_id TEXT,
   snapshot_ref TEXT,
   provisioned_paths_json TEXT,
+  run_end_cleanup_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER
