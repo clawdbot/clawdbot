@@ -461,8 +461,10 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
   exit "$update_status"
 fi
-[ -z "${OPENCLAW_CLAWHUB_URL:-}" ] || CLAWHUB_EXPECTED_VERSION="$package_version" \
-  node -e 'const n="@openclaw/whatsapp",v=encodeURIComponent(process.env.CLAWHUB_EXPECTED_VERSION),p=`/api/v1/packages/${encodeURIComponent(n)}`,expected=[`GET ${p}`,`GET ${p}/versions/${v}/artifact`,`GET ${p}/versions/${v}/security`,`GET ${p}/versions/${v}/artifact/download`];fetch(`${process.env.OPENCLAW_CLAWHUB_URL}/__fixture__/requests`).then((response)=>response.json()).then(({requests})=>{if(JSON.stringify(requests)!==JSON.stringify(expected))throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`)})'
+if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+  node "$OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER" \
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"
+fi
 
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."

@@ -80,6 +80,14 @@ async function fetchJson(baseUrl: string, requestPath: string) {
   return response.json();
 }
 
+function runPrepublishAssertion(baseUrl?: string, packageName?: string, version?: string) {
+  return spawnSync(
+    process.execPath,
+    [SCRIPT_PATH, "assert-prepublish-requests", baseUrl ?? "", packageName ?? "", version ?? ""],
+    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env } },
+  );
+}
+
 describe("ClawHub fixture server", () => {
   it("serves package metadata and npm-pack artifacts for kitchen-sink fixtures", async () => {
     const { baseUrl } = await startFixtureServer("kitchen-sink-plugin");
@@ -124,6 +132,11 @@ describe("ClawHub fixture server", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "usage: clawhub-fixture-server.cjs <catalog-search|kitchen-sink-plugin|plugins|prepublish-artifacts> <port-file> [manifest-file]",
+    );
+    const assertion = runPrepublishAssertion();
+    expect(assertion.status).toBe(1);
+    expect(assertion.stderr).toContain(
+      "assert-prepublish-requests requires <base-url> <package-name> <version>",
     );
   });
 
@@ -177,7 +190,11 @@ describe("ClawHub fixture server", () => {
       `GET ${whatsappPath}/versions/${version}/security`,
       `GET ${whatsappPath}/versions/${version}/artifact/download`,
     ]);
+    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version).status).toBe(0);
     expect((await fetch(`${baseUrl}${whatsappPath}/versions/0.0.0/artifact`)).status).toBe(404);
+    const mismatch = runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version);
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stderr).toContain("unexpected ClawHub fixture requests");
   });
 
   it("serves separate plugin-family and skill search fixtures", async () => {

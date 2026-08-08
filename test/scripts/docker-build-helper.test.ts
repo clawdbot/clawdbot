@@ -115,6 +115,16 @@ const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/test-install-sh-e2e-docker.sh",
   "scripts/test-live-build-docker.sh",
 ] as const;
+
+function extractUpgradeSurvivorPayload(script: string) {
+  const marker = " bash -lc ";
+  const start = script.indexOf(marker);
+  const quoted = script.slice(start + marker.length).trimEnd();
+  if (start < 0 || !quoted.startsWith("'") || !quoted.endsWith("'")) {
+    throw new Error("upgrade survivor bash -lc payload not found");
+  }
+  return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
+}
 const BOUNDED_CLIENT_LOG_DOCKER_E2E_SCRIPTS = [
   "scripts/e2e/cron-mcp-cleanup-docker.sh",
   "scripts/e2e/mcp-channels-docker.sh",
@@ -2305,11 +2315,21 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase configure-clawhub-fixture configure_clawhub_fixture"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
-      publishedRunner.indexOf('CLAWHUB_EXPECTED_VERSION="$candidate_version"'),
+      publishedRunner.indexOf("phase assert-prepublish-requests node"),
     );
-    expect(runner.indexOf("openclaw_e2e_maybe_timeout")).toBeLessThan(
-      runner.indexOf('CLAWHUB_EXPECTED_VERSION="$package_version"'),
+    expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
+      publishedRunner.indexOf("phase doctor run_doctor"),
     );
+    expect(runner.indexOf('openclaw "${update_args[@]}"')).toBeLessThan(
+      runner.indexOf(
+        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+      ),
+    );
+    expect(
+      runner.indexOf(
+        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+      ),
+    ).toBeLessThan(runner.indexOf("openclaw doctor --fix --non-interactive"));
     expect(runner).toContain(
       'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
     );
@@ -2329,9 +2349,10 @@ docker_e2e_docker_run_cmd run demo
         "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
         'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
         'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
-        "/__fixture__/requests",
-        "@openclaw/whatsapp",
+        "assert-prepublish-requests",
       ]);
+      expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
+      expect(script).not.toContain("/__fixture__/requests");
       expect(script).not.toContain("https://clawhub.ai");
       const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
       const fixtureDirectoryIndex = script.indexOf(
@@ -2364,6 +2385,19 @@ docker_e2e_docker_run_cmd run demo
         /-e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=\/tmp\/openclaw-clawhub-fixture-server\.cjs/gu,
       ),
     ).toHaveLength(2);
+  });
+
+  it("keeps upgrade survivor wrappers and the embedded payload valid bash", () => {
+    for (const path of [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, UPGRADE_SURVIVOR_RUN_SCRIPT]) {
+      const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const wrapper = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const inner = spawnSync("bash", ["-n"], {
+      input: extractUpgradeSurvivorPayload(wrapper),
+      encoding: "utf8",
+    });
+    expect(inner.status, inner.stderr).toBe(0);
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {

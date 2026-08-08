@@ -16,6 +16,31 @@ const tar = requireFromApp("tar");
 const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
+async function assertPrepublishRequests(baseUrl, requestedPackage, version) {
+  if (!baseUrl || !requestedPackage || !version) {
+    throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
+  }
+  const response = await fetch(new URL("/__fixture__/requests", baseUrl));
+  if (!response.ok) {
+    throw new Error(`ClawHub fixture request ledger returned HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!Array.isArray(payload?.requests)) {
+    throw new Error("ClawHub fixture request ledger must contain a requests array");
+  }
+  const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
+  const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
+  const expected = [
+    `GET ${packagePath}`,
+    `GET ${versionPath}/artifact`,
+    `GET ${versionPath}/security`,
+    `GET ${versionPath}/artifact/download`,
+  ];
+  if (JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+    throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
+  }
+}
+
 function startPrepublishArtifactServer() {
   const manifest = JSON.parse(fs.readFileSync(artifactManifestFile, "utf8"));
   if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
@@ -576,6 +601,16 @@ profiles["catalog-search"] = {
     ],
   },
 };
+
+if (profile === "assert-prepublish-requests") {
+  assertPrepublishRequests(portFile, artifactManifestFile, process.argv[5]).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
+  return;
+}
 
 const fixture = profiles[profile];
 if (!fixture || !portFile) {

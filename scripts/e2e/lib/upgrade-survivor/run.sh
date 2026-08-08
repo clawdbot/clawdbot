@@ -1479,8 +1479,11 @@ phase prepare-update-restart-probe prepare_update_restart_probe
 phase configure-clawhub-fixture configure_clawhub_fixture
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
-[ -z "${OPENCLAW_CLAWHUB_URL:-}" ] || CLAWHUB_EXPECTED_VERSION="$candidate_version" \
-  node -e 'const n="@openclaw/whatsapp",v=encodeURIComponent(process.env.CLAWHUB_EXPECTED_VERSION),p=`/api/v1/packages/${encodeURIComponent(n)}`,expected=[`GET ${p}`,`GET ${p}/versions/${v}/artifact`,`GET ${p}/versions/${v}/security`,`GET ${p}/versions/${v}/artifact/download`];fetch(`${process.env.OPENCLAW_CLAWHUB_URL}/__fixture__/requests`).then((response)=>response.json()).then(({requests})=>{if(JSON.stringify(requests)!==JSON.stringify(expected))throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`)})'
+if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+  phase assert-prepublish-requests node \
+    "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$candidate_version"
+fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase doctor run_doctor
