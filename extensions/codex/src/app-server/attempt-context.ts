@@ -237,7 +237,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const turnScopedDeveloperInstructionFiles = shouldInjectCodexOpenClawPromptContext(
       params.params,
     )
-      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
+          contextFiles,
+          params.sandboxed === true,
+        )
       : [];
     return {
       bootstrapFiles,
@@ -717,11 +720,22 @@ function selectCodexWorkspacePromptContextFiles(
 
 function selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(
   contextFiles: EmbeddedContextFile[],
+  injectNativeProjectDoc = false,
 ): EmbeddedContextFile[] {
-  return selectCodexWorkspaceDeveloperInstructionFiles(
-    contextFiles,
-    CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
-  );
+  // Codex resolves AGENTS.md itself, walking up from the thread cwd, which is
+  // why it is normally excluded here. A sandboxed run is started with the
+  // container workdir while the app-server resolves that path on the host, so
+  // the native loader looks in a directory that does not exist there and the
+  // project doc silently never reaches the model. Inject it as a turn-scoped
+  // developer instruction in that case only; unsandboxed runs keep the native
+  // path, so the file is still delivered exactly once.
+  const basenames = injectNativeProjectDoc
+    ? new Set([
+        ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
+        ...CODEX_NATIVE_PROJECT_DOC_BASENAMES,
+      ])
+    : CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES;
+  return selectCodexWorkspaceDeveloperInstructionFiles(contextFiles, basenames);
 }
 
 function selectCodexWorkspaceDeveloperInstructionFiles(

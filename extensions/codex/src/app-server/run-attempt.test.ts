@@ -412,6 +412,7 @@ async function buildDynamicToolsForTest(
 async function buildCodexTurnContextForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
+  options: { sandboxed?: boolean } = {},
 ) {
   const sessionAgentId = "main";
   const agentTools = await buildDynamicToolsForTest(params, workspaceDir);
@@ -428,6 +429,7 @@ async function buildCodexTurnContextForTest(
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionAgentId,
     memoryToolNames,
+    ...(options.sandboxed === undefined ? {} : { sandboxed: options.sandboxed }),
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
@@ -3156,6 +3158,38 @@ describe("runCodexAppServerAttempt", () => {
       truncated: false,
     });
   });
+  it("injects AGENTS.md when the run is sandboxed and Codex cannot resolve it", async () => {
+    // A sandboxed run is started with the container workdir while the
+    // app-server resolves that path on the host, so Codex's native project-doc
+    // loader finds nothing and AGENTS.md silently never reaches the model.
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const agentsGuidance = "Follow AGENTS guidance.";
+    const soulGuidance = "Soul voice goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    const params = createParams(sessionFile, workspaceDir);
+    setAgentWorkspaceForTest(params, workspaceDir);
+
+    const sandboxed = await buildCodexTurnContextForTest(params, workspaceDir, {
+      sandboxed: true,
+    });
+    const unsandboxed = await buildCodexTurnContextForTest(params, workspaceDir, {
+      sandboxed: false,
+    });
+
+    // Delivered exactly once, through the same channel as the other base files.
+    expect(sandboxed.collaborationInstructions).toContain(agentsGuidance);
+    expect(sandboxed.collaborationInstructions?.split(agentsGuidance).length).toBe(2);
+    expect(sandboxed.collaborationInstructions).toContain(soulGuidance);
+    // Never duplicated into the workspace prompt context.
+    expect(sandboxed.inputText).not.toContain(agentsGuidance);
+
+    // Unsandboxed runs keep Codex's native project-doc path untouched.
+    expect(unsandboxed.collaborationInstructions).not.toContain(agentsGuidance);
+    expect(unsandboxed.collaborationInstructions).toContain(soulGuidance);
+  });
+
   it("adds memory recall guidance when dated memory notes exist without root MEMORY.md", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const datedMemory = "User avoids Chase cards while over 5/24.";
