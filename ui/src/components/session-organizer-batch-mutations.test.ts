@@ -33,11 +33,12 @@ function createHarness(
   const request = vi.fn(async (_method: string, rawParams?: unknown) => {
     const archiveParams = rawParams as SessionsArchiveManyParams;
     const result = {
-      outcomes: archiveParams.targets.map((target) => ({
-        ok: true,
-        key: target.key,
-        ...(target.agentId ? { agentId: target.agentId } : {}),
-      })),
+      outcomes: archiveParams.targets.map((target) => {
+        if (target.agentId) {
+          return { ok: true as const, key: target.key, agentId: target.agentId };
+        }
+        return { ok: true as const, key: target.key };
+      }),
     } satisfies SessionsArchiveManyResult;
     requestCount += 1;
     if (requestCount === params.staleAfterRequest) {

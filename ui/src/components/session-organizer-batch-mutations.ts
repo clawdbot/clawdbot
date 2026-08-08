@@ -3,6 +3,7 @@ import {
   type SessionsArchiveManyParams,
   type SessionsArchiveManyResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions-archive-many.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type {
@@ -129,8 +130,9 @@ export async function archiveSessionRows(
     }),
   );
   if (errors.length > 0) {
-    if (terminalError !== null) {
-      errors.push(String(terminalError));
+    const terminalErrorMessage = terminalError === null ? "" : formatUiError(terminalError);
+    if (terminalErrorMessage) {
+      errors.push(terminalErrorMessage);
     }
     host.sessionData.publishSessionMutationError(scope, errors.join("; "));
   }
