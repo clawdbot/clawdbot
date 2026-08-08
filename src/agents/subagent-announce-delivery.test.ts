@@ -184,6 +184,10 @@ const longChildCompletionOutput = [
   "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
 ].join("\n");
 
+const committedSessionSpawnEvidence = {
+  acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+} as const;
+
 function registerDirectTargetTestChannel(channelId: string): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -1805,7 +1809,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "accepted session spawn",
       result: {
         payloads: [],
-        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+        ...committedSessionSpawnEvidence,
       },
     },
     {
@@ -2879,6 +2883,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "rejects missing visible delivery",
+      gatewayResult: { payloads: [{ text: "NO_REPLY" }] },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
+    },
+    {
+      name: "preserves committed outbound side effects",
+      gatewayResult: {
+        payloads: [],
+        ...committedSessionSpawnEvidence,
+      },
+      expected: { delivered: true, path: "direct" },
+    },
+  ])(
+    "$name for automatic no-output channel subagent completions",
+    async ({ gatewayResult, expected }) => {
+      const callGateway = createGatewayMock({ result: gatewayResult });
+      const childSessionKey = "agent:worker:subagent:automatic-no-output";
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: "announce-channel-subagent-automatic-no-output",
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "child-session-id",
+          taskLabel: "channel no-output completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "(no output)",
+        }),
+      });
+
+      expect(result).toMatchObject(expected);
+      expectGatewayAgentParams(callGateway, {
+        deliver: true,
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        sourceReplyDeliveryMode: undefined,
+      });
+    },
+  );
 
   it("keeps configured channel subagent completions on parent message-tool handoff", async () => {
     const callGateway = createGatewayMock({
