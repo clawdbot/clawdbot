@@ -181,6 +181,7 @@
     "!dist/plugin-sdk/request-url.d.ts",
     "!dist/plugin-sdk/response-limit-runtime.d.ts",
     "!dist/plugin-sdk/retry-runtime.d.ts",
+    "!dist/plugin-sdk/runtime-doctor-migrations.d.ts",
     "!dist/plugin-sdk/runtime-doctor.d.ts",
     "!dist/plugin-sdk/runtime-fetch.d.ts",
     "!dist/plugin-sdk/sandbox.d.ts",
@@ -402,6 +403,9 @@
     },
     "./plugin-sdk/runtime-doctor": {
       "default": "./dist/plugin-sdk/runtime-doctor.js"
+    },
+    "./plugin-sdk/runtime-doctor-migrations": {
+      "default": "./dist/plugin-sdk/runtime-doctor-migrations.js"
     },
     "./plugin-sdk/runtime-env": {
       "types": "./dist/plugin-sdk/runtime-env.d.ts",

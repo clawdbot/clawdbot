@@ -6,6 +6,7 @@
   "runtime",
   "health",
   "runtime-doctor",
+  "runtime-doctor-migrations",
   "runtime-env",
   "proxy-capture",
   "setup",
