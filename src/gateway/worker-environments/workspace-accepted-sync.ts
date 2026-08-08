@@ -19,6 +19,18 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
+export function isIndeterminateWorkspaceApplyResult(result: SpawnResult): boolean {
+  return result.termination !== "exit" || result.code === 255;
+}
+
+function acceptedWorkspaceRollbackError(error: unknown, rollbackFailure: unknown): Error {
+  const rollbackError = new Error("Accepted workspace publication rollback failed", {
+    cause: error,
+  });
+  Object.defineProperty(rollbackError, "rollbackFailure", { value: rollbackFailure });
+  return rollbackError;
+}
+
 export async function recoverAcceptedWorkspacePublication(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   remoteWorkspaceDir: string;
@@ -107,7 +119,7 @@ function createAcceptedWorkspacePublisher(params: {
     }
 
     const transactionNonce = randomBytes(16).toString("hex");
-    const transactionCommand = async (action: "apply" | "rollback" | "commit") =>
+    const transactionCommand = async (action: "apply" | "rollback" | "commit" | "settle") =>
       await params.runWorkspaceCommand({
         transportRetry: "never",
         argv: [
@@ -181,7 +193,18 @@ function createAcceptedWorkspacePublisher(params: {
 
       const applied = await transactionCommand("apply");
       if (!workerWorkspaceCommandSucceeded(applied)) {
-        throw workspaceSyncError(applied);
+        const applyFailure = workspaceSyncError(applied);
+        let settlementProvedApplied = false;
+        if (isIndeterminateWorkspaceApplyResult(applied)) {
+          try {
+            const settled = await transactionCommand("settle");
+            settlementProvedApplied = workerWorkspaceCommandSucceeded(settled);
+          } catch {
+            // The original apply result remains the primary failure; rollback
+            // still serializes with an unobserved live apply under the remote lock.
+          }
+        }
+        if (!settlementProvedApplied) throw applyFailure;
       }
       await verifyAcceptedWorkspace();
       const committed = await transactionCommand("commit");
@@ -190,15 +213,13 @@ function createAcceptedWorkspacePublisher(params: {
       }
     } catch (error) {
       if (transactionBegun) {
-        const rolledBack = await transactionCommand("rollback");
-        if (!workerWorkspaceCommandSucceeded(rolledBack)) {
-          const rollbackError = new Error("Accepted workspace publication rollback failed", {
-            cause: error,
-          });
-          Object.defineProperty(rollbackError, "rollbackFailure", {
-            value: workspaceSyncError(rolledBack),
-          });
-          throw rollbackError;
+        try {
+          const rolledBack = await transactionCommand("rollback");
+          if (!workerWorkspaceCommandSucceeded(rolledBack)) {
+            throw workspaceSyncError(rolledBack);
+          }
+        } catch (rollbackFailure) {
+          throw acceptedWorkspaceRollbackError(error, rollbackFailure);
         }
       }
       throw error;
