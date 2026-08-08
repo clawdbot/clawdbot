@@ -8,6 +8,7 @@ import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.j
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
+import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 
 function resolveAgentSessionsDir(
   agentId: string,
@@ -306,7 +307,40 @@ export function resolveSessionFilePath(
       // Keep handlers alive when persisted metadata is stale/corrupt.
     }
   }
-  return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+  const defaultPath = resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+  if (fs.existsSync(defaultPath)) {
+    return defaultPath;
+  }
+  // Transcripts generated as `<iso-stamp>_<sessionId>.jsonl` can only be found through
+  // `sessionFile`, which is recorded for the live session only. Without this fallback no
+  // *previous* session in a compaction chain can ever resolve to its own transcript.
+  return findGeneratedTranscriptPath(sessionId, sessionsDir) ?? defaultPath;
+}
+
+/**
+ * Scans for a transcript whose generated file name carries `sessionId`.
+ *
+ * Only reached when the canonical `<sessionId>.jsonl` is absent, so the happy path keeps
+ * its single `stat` and callers creating a brand-new transcript still get the plain name.
+ */
+function findGeneratedTranscriptPath(sessionId: string, sessionsDir: string): string | undefined {
+  let fileNames: string[];
+  try {
+    fileNames = fs.readdirSync(sessionsDir);
+  } catch {
+    return undefined;
+  }
+  for (const fileName of fileNames) {
+    if (extractGeneratedTranscriptSessionId(fileName) !== sessionId) {
+      continue;
+    }
+    try {
+      return resolvePathWithinSessionsDir(sessionsDir, fileName);
+    } catch {
+      // Ignore names that escape the sessions directory.
+    }
+  }
+  return undefined;
 }
 
 export class SessionStoreAgentIdRequiredError extends Error {
