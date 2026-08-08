@@ -192,6 +192,39 @@ describe("closeout tracker", () => {
     );
   });
 
+  it("serializes delivery and manual confirmation so a stale send cannot regress evidence", async () => {
+    const store = createMemoryStore();
+    let finishSend: ((result: Awaited<ReturnType<ConversationSend>>) => void) | undefined;
+    const send = vi.fn<ConversationSend>(
+      async () =>
+        await new Promise((resolve) => {
+          finishSend = resolve;
+        }),
+    );
+    const tracker = createCloseoutTracker({ store, send, now: () => 5_250 });
+
+    const sending = tracker.send(input);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    const confirming = tracker.confirm(
+      "main",
+      "NAC-78",
+      "verified Telegram message 789",
+      "user:kevin",
+    );
+    finishSend?.({
+      status: "unknown",
+      conversationRef: input.conversationRef,
+      channel: "telegram",
+    });
+
+    await expect(sending).resolves.toMatchObject({ status: "uncertain" });
+    await expect(confirming).resolves.toMatchObject({ status: "manually_confirmed" });
+    await expect(tracker.get("main", "NAC-78")).resolves.toMatchObject({
+      status: "manually_confirmed",
+      manualConfirmedBy: "user:kevin",
+    });
+  });
+
   it("rejects oversized gateway metadata without persisting it", async () => {
     const store = createMemoryStore();
     const send = vi.fn<ConversationSend>(async () => ({

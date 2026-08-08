@@ -168,17 +168,16 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 
 `workboard_closeout` is an optional owner-only tool for an unsandboxed agent. Add
 the tool name (or the `workboard` plugin id) to the agent's existing
-`tools.allow` list to expose it:
+`tools.alsoAllow` list to expose it without restricting the active tool profile:
 
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
-        tools: { allow: ["workboard_closeout"] },
+    entries: {
+      main: {
+        tools: { alsoAllow: ["workboard_closeout"] },
       },
-    ],
+    },
   },
 }
 ```

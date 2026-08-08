@@ -206,6 +206,31 @@ export function createCloseoutTracker(params: {
   now?: () => number;
 }): CloseoutTracker {
   const now = params.now ?? Date.now;
+  const pendingByRecord = new Map<string, Promise<void>>();
+
+  async function serializeRecordMutation<T>(
+    agentId: string,
+    closeoutId: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const key = JSON.stringify([agentId, closeoutId]);
+    const predecessor = pendingByRecord.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = predecessor.catch(() => undefined).then(() => current);
+    pendingByRecord.set(key, tail);
+    await predecessor.catch(() => undefined);
+    try {
+      return await run();
+    } finally {
+      release();
+      if (pendingByRecord.get(key) === tail) {
+        pendingByRecord.delete(key);
+      }
+    }
+  }
 
   async function requireRecord(agentId: string, closeoutId: string): Promise<CloseoutRecord> {
     const normalizedAgentId = requireText(agentId, "agentId", MAX_AGENT_ID_LENGTH);
@@ -297,64 +322,78 @@ export function createCloseoutTracker(params: {
   return {
     async send(input) {
       const normalized = normalizeInput(input);
-      const createdAt = now();
-      const initial: CloseoutRecord = {
-        closeoutId: normalized.closeoutId,
-        operationId: `closeout:${normalized.closeoutId}`,
-        agentId: normalized.agentId,
-        ...(normalized.sourceSessionKey ? { sourceSessionKey: normalized.sourceSessionKey } : {}),
-        conversationRef: normalized.conversationRef,
-        message: normalized.message,
-        status: "recorded",
-        attemptCount: 0,
-        createdAt,
-        updatedAt: createdAt,
-      };
-      const created = await params.store.create(initial);
-      const record = created
-        ? initial
-        : await requireRecord(normalized.agentId, normalized.closeoutId);
-      if (!hasSameInput(record, normalized)) {
-        throw new Error(
-          `closeout ${normalized.closeoutId} was already recorded with different input`,
-        );
-      }
-      return await deliver(record);
+      return await serializeRecordMutation(normalized.agentId, normalized.closeoutId, async () => {
+        const createdAt = now();
+        const initial: CloseoutRecord = {
+          closeoutId: normalized.closeoutId,
+          operationId: `closeout:${normalized.closeoutId}`,
+          agentId: normalized.agentId,
+          ...(normalized.sourceSessionKey ? { sourceSessionKey: normalized.sourceSessionKey } : {}),
+          conversationRef: normalized.conversationRef,
+          message: normalized.message,
+          status: "recorded",
+          attemptCount: 0,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        const created = await params.store.create(initial);
+        const record = created
+          ? initial
+          : await requireRecord(normalized.agentId, normalized.closeoutId);
+        if (!hasSameInput(record, normalized)) {
+          throw new Error(
+            `closeout ${normalized.closeoutId} was already recorded with different input`,
+          );
+        }
+        return await deliver(record);
+      });
     },
     async reconcile(agentId, closeoutId) {
-      return await deliver(await requireRecord(agentId, closeoutId));
+      const normalizedAgentId = requireText(agentId, "agentId", MAX_AGENT_ID_LENGTH);
+      const normalizedId = requireText(closeoutId, "closeoutId", MAX_CLOSEOUT_ID_LENGTH);
+      return await serializeRecordMutation(normalizedAgentId, normalizedId, async () =>
+        deliver(await requireRecord(normalizedAgentId, normalizedId)),
+      );
     },
     async confirm(agentId, closeoutId, evidence, confirmedBy) {
-      const record = await requireRecord(agentId, closeoutId);
-      if (
-        record.status === "completed" ||
-        record.status === "confirmed" ||
-        record.status === "manually_confirmed"
-      ) {
-        return record;
-      }
+      const normalizedAgentId = requireText(agentId, "agentId", MAX_AGENT_ID_LENGTH);
+      const normalizedId = requireText(closeoutId, "closeoutId", MAX_CLOSEOUT_ID_LENGTH);
       const manualEvidence = requireText(evidence, "evidence", MAX_EVIDENCE_LENGTH);
       const manualConfirmedBy = requireText(confirmedBy, "confirmedBy", MAX_CONFIRMER_LENGTH);
-      const manualConfirmedAt = now();
-      return await persist({
-        ...record,
-        status: "manually_confirmed",
-        manualEvidence,
-        manualConfirmedBy,
-        manualConfirmedAt,
-        lastError: undefined,
-        updatedAt: manualConfirmedAt,
+      return await serializeRecordMutation(normalizedAgentId, normalizedId, async () => {
+        const record = await requireRecord(normalizedAgentId, normalizedId);
+        if (
+          record.status === "completed" ||
+          record.status === "confirmed" ||
+          record.status === "manually_confirmed"
+        ) {
+          return record;
+        }
+        const manualConfirmedAt = now();
+        return await persist({
+          ...record,
+          status: "manually_confirmed",
+          manualEvidence,
+          manualConfirmedBy,
+          manualConfirmedAt,
+          lastError: undefined,
+          updatedAt: manualConfirmedAt,
+        });
       });
     },
     async complete(agentId, closeoutId) {
-      const record = await requireRecord(agentId, closeoutId);
-      if (record.status === "completed") {
-        return record;
-      }
-      if (record.status !== "confirmed" && record.status !== "manually_confirmed") {
-        throw new Error(`closeout ${record.closeoutId} cannot complete from ${record.status}`);
-      }
-      return await persist({ ...record, status: "completed", updatedAt: now() });
+      const normalizedAgentId = requireText(agentId, "agentId", MAX_AGENT_ID_LENGTH);
+      const normalizedId = requireText(closeoutId, "closeoutId", MAX_CLOSEOUT_ID_LENGTH);
+      return await serializeRecordMutation(normalizedAgentId, normalizedId, async () => {
+        const record = await requireRecord(normalizedAgentId, normalizedId);
+        if (record.status === "completed") {
+          return record;
+        }
+        if (record.status !== "confirmed" && record.status !== "manually_confirmed") {
+          throw new Error(`closeout ${record.closeoutId} cannot complete from ${record.status}`);
+        }
+        return await persist({ ...record, status: "completed", updatedAt: now() });
+      });
     },
     get(agentId, closeoutId) {
       return params.store.get(
