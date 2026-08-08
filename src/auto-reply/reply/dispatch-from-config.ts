@@ -1,5 +1,4 @@
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
@@ -26,8 +25,8 @@ export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
   const ticket = reserveReplyAdmissionTicket([
-    normalizeOptionalString(params.ctx.SessionKey),
-    normalizeOptionalString(params.ctx.CommandTargetSessionKey),
+    params.ctx.SessionKey,
+    params.ctx.CommandTargetSessionKey,
   ]);
   const ticketedParams = ticket
     ? {

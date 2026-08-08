@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringifiedEntries } from "@openclaw/normalization-core/string-coerce";
+import { createDeferred } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 
 export const REPLY_ADMISSION_TICKET = Symbol("openclaw.replyAdmissionTicket");
@@ -14,14 +15,13 @@ const tails = resolveGlobalMap<string, Promise<void>>(Symbol.for("openclaw.reply
 
 /** Briefly orders queue publication across a command's source and target sessions. */
 export function reserveReplyAdmissionTicket(
-  sessionKeys: Iterable<string | undefined>,
+  sessionKeys: ReadonlyArray<string | undefined>,
 ): ReplyAdmissionTicket | undefined {
-  const keys = [...new Set([...sessionKeys].map(normalizeOptionalString).filter(Boolean))].sort();
+  const keys = [...new Set(normalizeStringifiedEntries(sessionKeys))].toSorted();
   if (keys.length === 0) {
     return undefined;
   }
-  let finish = () => {};
-  const completed = new Promise<void>((resolve) => (finish = resolve));
+  const { promise: completed, resolve: finish } = createDeferred();
   const predecessors = keys.map((key) => tails.get(key) ?? Promise.resolve());
   const owned = keys.map((key, index) => {
     const tail = predecessors[index]!.then(() => completed);
@@ -35,7 +35,9 @@ export function reserveReplyAdmissionTicket(
         return false;
       }
       const ready = Promise.all(predecessors).then(() => true);
-      if (!signal) return await ready;
+      if (!signal) {
+        return await ready;
+      }
       return await new Promise<boolean>((resolve) => {
         const abort = () => resolve(false);
         signal.addEventListener("abort", abort, { once: true });
@@ -46,7 +48,9 @@ export function reserveReplyAdmissionTicket(
       });
     },
     release() {
-      if (released) return;
+      if (released) {
+        return;
+      }
       released = true;
       finish();
       for (const { key, tail } of owned) {
