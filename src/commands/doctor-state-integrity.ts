@@ -1474,11 +1474,8 @@ export async function noteStateIntegrity(
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
-    // SQLite-owned transcripts live in the agent DB (post-import), so the
-    // legacy .jsonl is archived and `sessions cleanup` prunes it as
-    // unreferenced. Requiring the legacy file here would make doctor and
-    // cleanup disagree about the same artifact (see the sibling recent-session
-    // check above, which skips SQLite-owned keys the same way).
+    // SQLite-owned transcripts live in the agent DB after import.
+    // Do not require the archived legacy JSONL for those sessions.
     if (mainEntry?.sessionId && !sqliteSessionKeys.has(mainKey)) {
       const transcriptPath = resolveSessionFilePath(
         mainEntry.sessionId,
