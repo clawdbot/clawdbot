@@ -159,7 +159,9 @@ fs.renameSync = function(source, destination) {
       return commandResult;
     };
     const runRsync = async (): Promise<SpawnResult> => {
-      if (!stagingRoot) throw new Error("accepted transaction did not begin before transfer");
+      if (!stagingRoot) {
+        throw new Error("accepted transaction did not begin before transfer");
+      }
       await fs.copyFile(path.join(local, "result.txt"), path.join(stagingRoot, "result.txt"));
       return result();
     };
@@ -199,7 +201,9 @@ fs.renameSync = function(source, destination) {
     await gateWriter.write("release");
     await gateWriter.close();
     await expect(publishing).resolves.toBeUndefined();
-    if (!applyExited) throw new Error("remote apply process was not started");
+    if (!applyExited) {
+      throw new Error("remote apply process was not started");
+    }
     await expect(applyExited).resolves.toMatchObject({ code: 0, signal: null, stderr: "" });
     expect(transactionCalls.map((entry) => entry.action)).toEqual([
       "begin",
@@ -236,12 +240,22 @@ fs.renameSync = function(source, destination) {
     const accepted = manifest("local\n");
     const factory = createAcceptedWorkspacePublisherFactory({
       runWorkspaceCommand: async (command) => {
-        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) return result();
+        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
+          return result();
+        }
         const action = command.argv[3];
-        if (action === "begin") return result({ stdout: "/remote/staging\n" });
-        if (action === "apply") return result({ code: 255, stderr: "apply transport lost" });
-        if (action === "settle") throw new WorkerTunnelOwnerDisconnectedError();
-        if (action === "rollback") throw rollbackFailure;
+        if (action === "begin") {
+          return result({ stdout: "/remote/staging\n" });
+        }
+        if (action === "apply") {
+          return result({ code: 255, stderr: "apply transport lost" });
+        }
+        if (action === "settle") {
+          throw new WorkerTunnelOwnerDisconnectedError();
+        }
+        if (action === "rollback") {
+          throw rollbackFailure;
+        }
         return result();
       },
       runRsync: async () => result(),

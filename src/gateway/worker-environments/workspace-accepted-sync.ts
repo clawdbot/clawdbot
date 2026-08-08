@@ -204,7 +204,9 @@ function createAcceptedWorkspacePublisher(params: {
             // still serializes with an unobserved live apply under the remote lock.
           }
         }
-        if (!settlementProvedApplied) throw applyFailure;
+        if (!settlementProvedApplied) {
+          throw applyFailure;
+        }
       }
       await verifyAcceptedWorkspace();
       const committed = await transactionCommand("commit");
