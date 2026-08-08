@@ -1,7 +1,7 @@
 /** Loopback extension relay with connection-bound Browser Relay Authentication v2. */
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { Duplex } from "node:stream";
+import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
@@ -22,22 +22,24 @@ import {
   parseStrictJsonObject,
   type BrowserRelayAuthV2Authority,
 } from "./auth-v2.js";
+import {
+  boundedRawDataByteLength,
+  handlePreAuthWebSocketUpgrade,
+  MAX_WEBSOCKET_AUTH_MESSAGE_BYTES,
+} from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import { parseExtensionMessage, type PageSharePayload } from "./relay-protocol.js";
+import {
+  firstHeader,
+  isAllowedExtensionOrigin,
+  requestExtensionProtocolToken,
+  requestProtocols,
+} from "./relay-request.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
-const LEGACY_EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
-const LEGACY_EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 const INTERNAL_CDP_USERNAME = "openclaw-internal";
 const MAX_AUTH_BODY_BYTES = 8 * 1024;
-const MAX_WEBSOCKET_AUTH_MESSAGE_BYTES = 16 * 1024;
-// A masked 16 KiB frame needs at most 8 bytes of framing. Keep a small bounded
-// allowance for a few fragments without letting pre-auth traffic approach the
-// authenticated receiver's 64 MiB application limit.
-const MAX_WEBSOCKET_AUTH_WIRE_OVERHEAD_BYTES = 1024;
-const MAX_WEBSOCKET_PREAUTH_WIRE_BYTES =
-  MAX_WEBSOCKET_AUTH_MESSAGE_BYTES + MAX_WEBSOCKET_AUTH_WIRE_OVERHEAD_BYTES;
 
 export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 
@@ -70,28 +72,6 @@ export type ExtensionRelayHandle = {
   bridge: ExtensionRelayBridge;
   close: () => Promise<void>;
 };
-
-function firstHeader(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
-}
-
-function requestProtocols(req: IncomingMessage): string[] {
-  return firstHeader(req.headers["sec-websocket-protocol"])
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-export function requestExtensionProtocolToken(req: IncomingMessage): string {
-  const protocols = requestProtocols(req);
-  if (!protocols.includes(LEGACY_EXTENSION_RELAY_PROTOCOL)) {
-    return "";
-  }
-  const tokenProtocol = protocols.find((value) =>
-    value.startsWith(LEGACY_EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX),
-  );
-  return tokenProtocol?.slice(LEGACY_EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX.length) ?? "";
-}
 
 function decodeBasic(req: IncomingMessage): { username: string; password: string } | null {
   const auth = firstHeader(req.headers.authorization);
@@ -134,11 +114,6 @@ function isAuthorizedLegacy(
   }
   const protocolToken = requestExtensionProtocolToken(req);
   return protocolToken.length > 0 && safeEqualSecret(token, protocolToken);
-}
-
-export function isAllowedExtensionOrigin(req: IncomingMessage): boolean {
-  const origin = firstHeader(req.headers.origin);
-  return origin === "" || origin.startsWith("chrome-extension://");
 }
 
 function hasLoopbackHostHeader(req: IncomingMessage): boolean {
@@ -199,108 +174,6 @@ function bindSocket(
   ws.on("message", (data) => handlers.onMessage(rawDataToString(data)));
   ws.on("close", handlers.onClose);
   ws.on("error", (err) => log.warn(`relay socket error: ${String(err)}`));
-}
-
-function boundedRawDataByteLength(data: RawData, limit: number): number {
-  if (!Array.isArray(data)) {
-    return data.byteLength;
-  }
-  let length = 0;
-  for (const chunk of data) {
-    length += chunk.byteLength;
-    if (length > limit) {
-      break;
-    }
-  }
-  return length;
-}
-
-class PreAuthWebSocketTransport extends Duplex {
-  private guardActive = true;
-  private wireBytes: number;
-
-  constructor(
-    private readonly rawSocket: Duplex,
-    headBytes: number,
-  ) {
-    super();
-    this.wireBytes = headBytes;
-    rawSocket.on("data", this.onRawData);
-    rawSocket.once("end", this.onRawEnd);
-    rawSocket.once("close", this.onRawClose);
-    rawSocket.once("error", this.onRawError);
-  }
-
-  removeGuard = () => {
-    this.guardActive = false;
-  };
-
-  override _read(): void {
-    this.rawSocket.resume();
-  }
-
-  override _write(
-    chunk: Buffer,
-    encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    this.rawSocket.write(chunk, encoding, callback);
-  }
-
-  override _final(callback: (error?: Error | null) => void): void {
-    this.rawSocket.end(callback);
-  }
-
-  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
-    this.rawSocket.off("data", this.onRawData);
-    this.rawSocket.off("end", this.onRawEnd);
-    this.rawSocket.off("close", this.onRawClose);
-    this.rawSocket.off("error", this.onRawError);
-    if (!this.rawSocket.destroyed) {
-      this.rawSocket.destroy();
-    }
-    callback(error);
-  }
-
-  private readonly onRawData = (chunk: Buffer) => {
-    if (this.guardActive) {
-      this.wireBytes += chunk.byteLength;
-      if (this.wireBytes > MAX_WEBSOCKET_PREAUTH_WIRE_BYTES) {
-        this.destroy();
-        return;
-      }
-    }
-    if (!this.push(chunk)) {
-      this.rawSocket.pause();
-    }
-  };
-
-  private readonly onRawEnd = () => this.push(null);
-  private readonly onRawClose = () => this.destroy();
-  private readonly onRawError = (error: Error) => this.destroy(error);
-}
-
-/** Keep both v2 entry points on the same pre-receiver admission path. */
-export function handlePreAuthWebSocketUpgrade(params: {
-  wss: WebSocketServer;
-  req: IncomingMessage;
-  socket: Duplex;
-  head: Buffer;
-  onUpgrade: (ws: WebSocket, removePreAuthGuard: () => void) => void;
-}): boolean {
-  if (params.head.byteLength > MAX_WEBSOCKET_PREAUTH_WIRE_BYTES) {
-    return false;
-  }
-  const transport = new PreAuthWebSocketTransport(params.socket, params.head.byteLength);
-  try {
-    params.wss.handleUpgrade(params.req, transport, params.head, (ws) => {
-      params.onUpgrade(ws, transport.removeGuard);
-    });
-  } catch (err) {
-    transport.destroy();
-    throw err;
-  }
-  return true;
 }
 
 function trackAuthenticatedSocket(authority: BrowserRelayAuthV2Authority, ws: WebSocket): boolean {

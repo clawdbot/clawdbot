@@ -16,20 +16,23 @@ import {
   invalidateBrowserRelayAuthV2Authority,
   parseExtensionRelayResource,
 } from "./auth-v2.js";
+import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
+import {
+  isAllowedExtensionOrigin,
+  LEGACY_EXTENSION_RELAY_PROTOCOL,
+  requestExtensionProtocolToken,
+  requestProtocols,
+} from "./relay-request.js";
 import {
   attachExtensionWebSocket,
   authenticateExtensionWebSocket,
   EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
-  handlePreAuthWebSocketUpgrade,
-  isAllowedExtensionOrigin,
-  requestExtensionProtocolToken,
 } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay-gateway");
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
-const LEGACY_EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 
 let wss: WebSocketServer | null = null;
 function getWss(): WebSocketServer {
@@ -43,15 +46,6 @@ function destroy(socket: Duplex, statusLine: string): void {
   } finally {
     socket.destroy();
   }
-}
-
-function requestProtocols(req: IncomingMessage): string[] {
-  const value = req.headers["sec-websocket-protocol"];
-  const raw = Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
-  return raw
-    .split(",")
-    .map((protocol: string) => protocol.trim())
-    .filter(Boolean);
 }
 
 function requestedProfileName(resource: string, fallback: string): string {

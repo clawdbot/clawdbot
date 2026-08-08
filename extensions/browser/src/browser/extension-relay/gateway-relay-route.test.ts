@@ -286,7 +286,9 @@ describe("handleGatewayExtensionUpgrade", () => {
     server.on("upgrade", (request, socket, head) => {
       void handleGatewayExtensionUpgrade(request, socket, head);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected direct-Gateway test port");
@@ -313,7 +315,9 @@ describe("handleGatewayExtensionUpgrade", () => {
     );
     socket.write(Buffer.concat([request, oversizedMaskedTextFrame()]));
     await closed;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
 
     const text = Buffer.concat(response).toString("utf8");
     expect(text).not.toContain("auth.challenge");

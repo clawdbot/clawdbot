@@ -205,7 +205,9 @@ describe("persisted pairing storage", () => {
       gatewayUrl: route.gatewayUrl,
       authVersion: 2,
     };
-    const set = vi.fn(async (values: Record<string, unknown>) => Object.assign(stored, values));
+    const set = vi.fn(async (values: Record<string, unknown>) => {
+      Object.assign(stored, values);
+    });
     const remove = vi.fn(async (keys: string[]) => {
       for (const key of keys) {
         delete stored[key];

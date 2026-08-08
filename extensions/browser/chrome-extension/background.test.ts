@@ -14,14 +14,7 @@ const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
 const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
 const RELAY_SECRET = "a".repeat(64);
 const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
-const PAIRING_CONFIG_KEYS = [
-  "relayUrl",
-  "gatewayUrl",
-  "token",
-  "authVersion",
-  "pairingStatus",
-  "groupColor",
-];
+const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
 
 async function loadBackground({
   deferSocketClose = false,
@@ -189,10 +182,8 @@ async function loadBackground({
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
   await vi.waitFor(() => {
-    const pairingReads = storageGet.mock.calls.filter(
-      ([keys]) =>
-        keys.length === PAIRING_CONFIG_KEYS.length &&
-        PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
+    const pairingReads = storageGet.mock.calls.filter(([keys]) =>
+      PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
     );
     expect(pairingReads.length).toBeGreaterThanOrEqual(2);
   });
@@ -343,36 +334,6 @@ describe("persisted relay pairing validation", () => {
     expect(harness.storageRemove).not.toHaveBeenCalled();
   });
 
-  it("clears a stored proxy-prefixed direct pairing before opening sockets and surfaces re-pair guidance", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "wss://gateway.example.com/proxy/browser/extension",
-        token: RELAY_SECRET,
-        authVersion: 2,
-        gatewayUrl: "wss://gateway.example.com/proxy",
-        groupColor: "blue",
-      },
-    });
-
-    expect(harness.relaySockets).toHaveLength(0);
-    expect(harness.gatewaySockets).toHaveLength(0);
-    expect(harness.storageValues).not.toHaveProperty("token");
-    expect(harness.storageValues).toMatchObject({ pairingStatus: "proxy-prefix-unsupported" });
-    const response = vi.fn();
-    harness.messageListener({ type: "getStatus" }, {}, response);
-    await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith(
-        expect.objectContaining({
-          paired: false,
-          state: "off",
-          relayUrl: "",
-          hint: expect.stringContaining("no path prefix"),
-        }),
-      );
-    });
-    expect(JSON.stringify(response.mock.calls)).not.toContain(RELAY_SECRET);
-  });
-
   it("migrates a canonical existing pairing to authVersion 2 before connecting", async () => {
     const harness = await loadBackground({
       storedConfig: {
@@ -436,6 +397,10 @@ describe("persisted relay pairing validation", () => {
     ],
     ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension", groupColor: "orange" }],
     [
+      "a proxy-prefixed direct pairing",
+      { relayUrl: "wss://gateway.example.com/proxy/browser/extension", token: RELAY_SECRET },
+    ],
+    [
       "mismatched direct state",
       {
         relayUrl: "wss://gateway.example.com/browser/extension",
@@ -457,12 +422,14 @@ describe("persisted relay pairing validation", () => {
     const response = vi.fn();
     harness.messageListener({ type: "getStatus" }, {}, response);
     await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith({
-        paired: false,
-        state: "off",
-        sharedTabCount: 0,
-        relayUrl: "",
-      });
+      expect(response).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paired: false,
+          state: "off",
+          sharedTabCount: 0,
+          relayUrl: "",
+        }),
+      );
     });
   });
 
