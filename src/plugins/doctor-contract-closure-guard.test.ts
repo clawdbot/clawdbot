@@ -222,6 +222,42 @@ function collectForbiddenClosureImports(entry: ClosureEntry): string[] {
   return violations;
 }
 
+function collectHeavyRuntimeDoctorMigrationImports(): string[] {
+  const entryPath = path.join(REPO_ROOT, "src/plugin-sdk/runtime-doctor-migrations.ts");
+  const forbiddenPrefixes = ["src/plugin-state/plugin-state-store", "src/state/openclaw-state-db"];
+  const violations: string[] = [];
+  const visited = new Set<string>();
+  const pending = [entryPath];
+
+  while (pending.length > 0) {
+    const filePath = pending.pop();
+    if (!filePath || visited.has(filePath)) {
+      continue;
+    }
+    visited.add(filePath);
+    const source = fs.readFileSync(filePath, "utf8");
+    for (const reference of collectStaticValueReferences(filePath, source)) {
+      if (!reference.specifier.startsWith(".")) {
+        continue;
+      }
+      const resolvedPath = resolveRelativeSourceModule(filePath, reference.specifier);
+      if (!resolvedPath || !isInsideRoot(REPO_ROOT, resolvedPath)) {
+        continue;
+      }
+      const repoPath = formatRepoPath(resolvedPath);
+      if (forbiddenPrefixes.some((prefix) => repoPath.startsWith(prefix))) {
+        violations.push(
+          `${formatRepoPath(filePath)}:${reference.line} reaches heavy doctor dependency ${repoPath}`,
+        );
+        continue;
+      }
+      pending.push(resolvedPath);
+    }
+  }
+
+  return violations;
+}
+
 describe("doctor contract import closures", () => {
   it("classifies only static value module edges", () => {
     const source = [
@@ -244,5 +280,9 @@ describe("doctor contract import closures", () => {
   it("keeps broad agent runtime and heavy doctor barrels off doctor enumeration paths", () => {
     const violations = collectClosureEntries().flatMap(collectForbiddenClosureImports).toSorted();
     expect(violations).toStrictEqual([]);
+  });
+
+  it("keeps the runtime doctor migration helper off state DB and plugin-state graphs", () => {
+    expect(collectHeavyRuntimeDoctorMigrationImports()).toStrictEqual([]);
   });
 });

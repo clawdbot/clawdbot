@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BundledChannelLegacyStateMigrationDetector } from "../plugin-sdk/channel-entry-contract.types.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -14,6 +15,18 @@ import {
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
+const listLegacyChannelMigrationEntriesMock = vi.hoisted(() =>
+  vi.fn<
+    (options?: { config?: unknown; pluginIds?: readonly string[] }) => Array<{
+      pluginId: string;
+      detector: BundledChannelLegacyStateMigrationDetector;
+    }>
+  >(() => []),
+);
+
+vi.mock("../channels/plugins/bundled.js", () => ({
+  listBundledChannelLegacyStateMigrationDetectorEntries: listLegacyChannelMigrationEntriesMock,
+}));
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
@@ -33,6 +46,7 @@ let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contr
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
+let listPluginDoctorStateMigrationEntries: typeof import("./doctor-contract-registry.js").listPluginDoctorStateMigrationEntries;
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -58,6 +72,8 @@ describe("doctor-contract-registry module loader", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     doctorContractWarnMock.mockReset();
+    listLegacyChannelMigrationEntriesMock.mockReset();
+    listLegacyChannelMigrationEntriesMock.mockReturnValue([]);
     vi.resetModules();
     ({
       applyPluginDoctorCompatibilityMigrations,
@@ -66,6 +82,7 @@ describe("doctor-contract-registry module loader", () => {
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
       listPluginDoctorSessionStoreAgentIds,
+      listPluginDoctorStateMigrationEntries,
     } = await import("./doctor-contract-registry.js"));
     ({
       clearPluginDoctorContractRegistryCache,
@@ -386,6 +403,46 @@ describe("doctor-contract-registry module loader", () => {
         pluginIds: ["@openclaw/demo"],
       }),
     ).toEqual(["cards", "voice"]);
+  });
+
+  it("adapts deprecated channel detectors into scoped plugin migrations", async () => {
+    const detector = vi.fn(() => [
+      {
+        kind: "move" as const,
+        label: "Legacy credentials",
+        sourcePath: "/oauth/legacy.json",
+        targetPath: "/oauth/demo/legacy.json",
+      },
+    ]);
+    listLegacyChannelMigrationEntriesMock.mockReturnValue([
+      { pluginId: "legacy-channel", detector },
+    ]);
+    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+
+    const entries = listPluginDoctorStateMigrationEntries({
+      config: {},
+      env: {},
+      pluginIds: ["legacy-channel"],
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.pluginId).toBe("legacy-channel");
+    await expect(
+      entries[0]?.migration.detectLegacyState({
+        config: {},
+        env: {},
+        stateDir: "/state",
+        oauthDir: "/oauth",
+        context: { openPluginStateKeyedStore: vi.fn() } as never,
+      }),
+    ).resolves.toEqual({
+      preview: ["- Legacy credentials: /oauth/legacy.json → /oauth/demo/legacy.json"],
+    });
+    expect(detector).toHaveBeenCalledTimes(1);
+    expect(listLegacyChannelMigrationEntriesMock).toHaveBeenCalledWith({
+      config: {},
+      pluginIds: ["legacy-channel"],
+    });
   });
 
   it("deduplicates manifest owners by first id and sorts them by id", () => {

@@ -2,10 +2,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { listBundledChannelLegacyStateMigrationDetectorEntries } from "../channels/plugins/bundled.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/runtime-doctor-migrations.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
@@ -338,12 +340,29 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginDoctorStateMigrationEntry[] {
-  return resolvePluginDoctorContracts({ ...params, surface: "stateMigrations" }).flatMap((entry) =>
+  const declaredEntries = resolvePluginDoctorContracts({
+    ...params,
+    surface: "stateMigrations",
+  }).flatMap((entry) =>
     entry.stateMigrations.map((migration) => ({
       pluginId: entry.pluginId,
       migration,
     })),
   );
+  // Shipped channel setup entries may still declare migration detectors. Keep this
+  // single bridge until the 2027.1 external-plugin migration window closes.
+  const legacyEntries = listBundledChannelLegacyStateMigrationDetectorEntries({
+    config: params?.config,
+    pluginIds: params?.pluginIds,
+  }).map(({ pluginId, detector }) => ({
+    pluginId,
+    migration: definePluginDoctorMigrationFromPlans({
+      id: `${pluginId}-legacy-channel-state`,
+      label: `${pluginId} legacy channel state`,
+      resolvePlans: detector,
+    }),
+  }));
+  return [...declaredEntries, ...legacyEntries];
 }
 
 export function applyPluginDoctorCompatibilityMigrations(

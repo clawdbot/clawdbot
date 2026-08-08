@@ -14,6 +14,8 @@ export {
   defineChannelAliasMigration,
   defineKeyMoveMigration,
   defineLegacyJsonStateMigration,
+  definePluginDoctorMigrationFromPlans,
+  buildLegacyMigrationPreview,
   hasLegacyAccountStreamingAliases,
   hasLegacyStreamingAliases,
   legacyStateFileExists,

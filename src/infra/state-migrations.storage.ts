@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import { parseInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -26,6 +25,7 @@ import {
 } from "./state-migrations.task-sidecar-rows.js";
 
 export { normalizeLegacySqliteInteger };
+export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 
 export type LegacyPluginStateSidecarRow = {
   plugin_id: string;
@@ -54,13 +54,6 @@ class LegacyTaskStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
     super("legacy task-state sidecar conflicts with shared state");
   }
-}
-
-export function buildLegacyMigrationPreview(plan: ChannelLegacyStateMigrationPlan): string {
-  if (plan.kind === "plugin-state-import") {
-    return plan.preview ?? `- ${plan.label}: ${plan.sourcePath}`;
-  }
-  return `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`;
 }
 
 export function resolveLegacyPluginStateSidecarPath(stateDir: string): string {
