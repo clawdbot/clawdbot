@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMediaKind } from "./helpers.js";
 
-export type CachedTelegramMediaFile = {
+type CachedTelegramMediaFile = {
   path: string;
   kind: TelegramMediaKind;
   contentType?: string;
@@ -46,8 +46,4 @@ export function cacheTelegramMediaFile(fileUniqueId: string, entry: CachedTelegr
     mediaFileCache.delete(oldest);
   }
   logVerbose(`telegram: cached media file for ${fileUniqueId}`);
-}
-
-export function clearTelegramMediaFileCache(): void {
-  mediaFileCache.clear();
 }
