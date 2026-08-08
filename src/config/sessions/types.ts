@@ -6,6 +6,8 @@ import type {
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -291,11 +293,6 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
-export type PendingSkillSuggestion = {
-  skillName: string;
-  detectedAt: number;
-};
-
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -410,10 +407,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
     goal?: SessionGoal;
-    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-    pendingSkillSuggestion?: PendingSkillSuggestion;
-    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-    skillCaptureSignalHashes?: string[];
     /** Timestamp (ms) when the current sessionId first became active. */
     sessionStartedAt?: number;
     /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -429,7 +422,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
-    status?: "running" | "done" | "failed" | "killed" | "timeout";
+    status?: SessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
     /**
@@ -521,7 +514,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
-    queueMode?: "steer" | "followup" | "collect" | "interrupt";
+    queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
@@ -597,6 +590,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Run that owns the current non-terminal Gateway lifecycle projection. */
+  lifecycleRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

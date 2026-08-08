@@ -466,13 +466,17 @@ export class ClickClackDiscussionService {
     ) {
       return;
     }
-    this.#store.set(sessionKey, {
+    const nextBinding: ClickClackDiscussionBinding = {
       ...latestBinding,
       externalUrl,
       label,
       section,
-      displayTitle: "display_title" in updated ? updated.display_title : undefined,
-    });
+      ...(updated.display_title !== undefined ? { displayTitle: updated.display_title } : {}),
+    };
+    if (updated.display_title === undefined) {
+      delete nextBinding.displayTitle;
+    }
+    this.#store.set(sessionKey, nextBinding);
   }
 
   #refreshSessionAttachment(

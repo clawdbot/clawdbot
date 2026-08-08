@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createReplyOperation,
+  expireStaleReplyOperation,
+  type ReplyOperation,
+} from "../../../auto-reply/reply/reply-run-registry.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
@@ -30,6 +36,10 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
   runAgentHarnessBeforeAgentFinalizeHook: mocks.runBeforeFinalizeHook,
 }));
 
+import {
+  createEmbeddedAttemptExternalAbortController,
+  createEmbeddedAttemptRunAbort,
+} from "./attempt-abort.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
@@ -45,6 +55,10 @@ function prepareCatalogExecutor(
     runAbortController?: AbortController;
     sandboxSessionKey?: string;
     sessionKey?: string;
+    replyOperation?: ReplyOperation;
+    onAttemptAbort?: () => void;
+    abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
+    markExternalAbort?: () => void;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -53,6 +67,8 @@ function prepareCatalogExecutor(
       runId: "run-output-schema",
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
+      replyOperation: options?.replyOperation,
+      onAttemptAbort: options?.onAttemptAbort,
     } as never,
     activeSession: { agent: {}, isStreaming: false } as never,
     hookRunner: undefined as never,
@@ -62,8 +78,8 @@ function prepareCatalogExecutor(
     toolSearchTargetTranscriptProjections: projections,
     isReplaySafeTool: () => false,
     runAbortController,
-    abortRun: vi.fn(),
-    markExternalAbort: vi.fn(),
+    abortRun: options?.abortRun ?? vi.fn(),
+    markExternalAbort: options?.markExternalAbort ?? vi.fn(),
     getRunState:
       options?.getRunState ??
       (() => ({
@@ -442,5 +458,112 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     aborted = true;
     expect(prepared.queueHandle.isAborted?.()).toBe(true);
+  });
+
+  it("processes aliased cancel and abort through one external-abort sequence", () => {
+    const markExternalAbort = vi.fn();
+    const onAttemptAbort = vi.fn();
+    const abortRun = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      markExternalAbort,
+      onAttemptAbort,
+      abortRun,
+    });
+
+    prepared.queueHandle.abort("restart");
+    prepared.queueHandle.cancel("user_abort");
+
+    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(onAttemptAbort).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledOnce();
+    expect(abortRun.mock.calls[0]?.[0]).toBe(false);
+    expect(isAgentRunRestartAbortReason(abortRun.mock.calls[0]?.[1])).toBe(true);
+  });
+
+  it("runs attempt cleanup once when reply cancellation re-enters through its abort signal", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      resetTriggered: false,
+    });
+    const attemptAbortController = new AbortController();
+    const runAbortController = new AbortController();
+    const markExternalAbort = vi.fn();
+    const markAborted = vi.fn();
+    const abortActiveSession = vi.fn(async () => {});
+    const releaseHeldLockForAbort = vi.fn(async () => {});
+    const abortState = {
+      markAborted,
+      markExternalAbort,
+      markTimedOut: vi.fn(),
+      markTimedOutDuringCompaction: vi.fn(),
+      markTimedOutDuringToolExecution: vi.fn(),
+      readTimedOutDuringCompaction: vi.fn(() => false),
+      setPromptError: vi.fn(),
+    };
+    const externalAbortController = createEmbeddedAttemptExternalAbortController({
+      abortSignal: attemptAbortController.signal,
+      cleanupAfterEarlyAbort: vi.fn(async () => {}),
+      runAbortController,
+      runId: "run-output-schema",
+      state: abortState,
+    });
+    let queueHandle: ReturnType<typeof prepareCatalogExecutor>["queueHandle"] | undefined;
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession,
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        runId: "run-output-schema",
+        sessionFile: "agent:main:main",
+        sessionId: "session-output-schema",
+        sessionKey: "agent:main:main",
+      },
+      getQueueHandle: () => queueHandle,
+      isProbeSession: true,
+      log: { warn: vi.fn() },
+      runAbortController,
+      sessionLockController: { releaseHeldLockForAbort },
+      state: abortState,
+    });
+    externalAbortController.setRunAbort(abortRun);
+    externalAbortController.arm();
+    const relayReplyAbort = () => {
+      attemptAbortController.abort(operation.abortSignal.reason);
+    };
+    operation.abortSignal.addEventListener("abort", relayReplyAbort, { once: true });
+    const onAttemptAbort = vi.fn(() => {
+      if (!operation.abortSignal.aborted) {
+        operation.abortByUser();
+      }
+    });
+
+    try {
+      operation.setPhase("running");
+      const prepared = prepareCatalogExecutor([], {
+        replyOperation: operation,
+        markExternalAbort,
+        onAttemptAbort,
+        abortRun,
+      });
+      queueHandle = prepared.queueHandle;
+
+      expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
+
+      expect(markExternalAbort).toHaveBeenCalledTimes(2);
+      expect(onAttemptAbort).toHaveBeenCalledOnce();
+      expect(markAborted).toHaveBeenCalledOnce();
+      expect(abortActiveSession).toHaveBeenCalledOnce();
+      expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
+      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
+        reason: undefined,
+        terminal: true,
+      });
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(operation.abortSignal.aborted).toBe(true);
+    } finally {
+      externalAbortController.dispose();
+      operation.abortSignal.removeEventListener("abort", relayReplyAbort);
+      operation.complete();
+    }
   });
 });

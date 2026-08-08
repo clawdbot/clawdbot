@@ -175,6 +175,7 @@ describe("cross-OS release checks workflow", () => {
       candidate_sha256: "${{ needs.prepare_release_package.outputs.package_sha256 }}",
       candidate_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       candidate_version: "${{ needs.prepare_release_package.outputs.package_version }}",
+      candidate_artifact_json: "${{ inputs.candidate_artifact_json }}",
     });
 
     expect(job(release, "docker_e2e_release_checks").with).toMatchObject({
@@ -214,6 +215,7 @@ describe("cross-OS release checks workflow", () => {
       "candidate_sha256",
       "candidate_source_sha",
       "candidate_version",
+      "candidate_artifact_json",
     ]) {
       expect(workflow.on?.workflow_dispatch?.inputs?.[inputName], inputName).toMatchObject({
         default: "",
@@ -238,6 +240,14 @@ describe("cross-OS release checks workflow", () => {
       candidate_artifact_run_id: "${{ github.run_id }}",
       candidate_sha256: "${{ steps.candidate_metadata.outputs.sha256 }}",
       candidate_version: "${{ steps.candidate_metadata.outputs.version }}",
+      codex_plugin_file_name: "${{ steps.codex_plugin_metadata.outputs.file_name }}",
+      codex_plugin_sha256: "${{ steps.codex_plugin_metadata.outputs.sha256 }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ steps.upload_generated_plugin_registry.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ steps.upload_generated_plugin_registry.outputs.artifact-id && github.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ steps.upload_generated_plugin_registry.outputs.artifact-id && github.run_id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
       source_sha: "${{ steps.candidate_metadata.outputs.source_sha }}",
     });
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
@@ -369,6 +379,65 @@ describe("cross-OS release checks workflow", () => {
       "${{ needs.prepare.outputs.baseline_sha256 }}",
     );
     expect(verify.run).toContain('"$actual_baseline_sha256" != "$EXPECTED_BASELINE_SHA256"');
+  });
+
+  it("binds OpenAI onboarding to the exact prerelease Codex companion", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const prepare = job(workflow, "prepare");
+    const binding = step(prepare, "Validate prerelease plugin registry artifact binding");
+    expect(binding.run).toContain('verify-upload "Prerelease plugin registry"');
+    expect(binding.env).toMatchObject({
+      ARTIFACT_ID:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      ARTIFACT_RUN_ID:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+      MANIFEST_SHA256:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
+    });
+
+    const sourceCheckout = step(prepare, "Checkout public source ref");
+    expect(sourceCheckout.if).toContain("inputs.provider == 'openai'");
+    expect(sourceCheckout.with?.ref).toBe(
+      "${{ inputs.candidate_artifact_name != '' && inputs.candidate_source_sha || inputs.ref }}",
+    );
+    expect(step(prepare, "Install companion plugin build dependencies").run).toBe(
+      "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    );
+    const pack = step(prepare, "Pack exact Codex companion plugin");
+    expect(pack.run).toContain("prepublish-plugin-registry-artifact.mjs create");
+    expect(pack.run).toContain("--repo-root source");
+    expect(pack.run).toContain(`--required-packages-json '["@openclaw/codex"]'`);
+
+    const metadata = step(prepare, "Resolve exact Codex companion plugin");
+    expect(metadata.run).toContain('any(.name == "@openclaw/codex")');
+    expect(metadata.run).toContain("prepublish-plugin-registry-artifact.mjs verify");
+    expect(metadata.run).toContain('--source-sha "$SOURCE_SHA"');
+    expect(metadata.run).toContain('--candidate-version "$CANDIDATE_VERSION"');
+    expect(metadata.run).toContain("entry.tarball !== path.win32.basename(entry.tarball)");
+    expect(
+      step(prepare, "Upload generated prerelease plugin registry artifact").with,
+    ).toMatchObject({
+      name: "openclaw-cross-os-release-checks-plugins-${{ github.run_id }}-${{ github.run_attempt }}",
+      "if-no-files-found": "error",
+    });
+
+    const consumer = job(workflow, "cross_os_release_checks");
+    const download = step(consumer, "Download prerelease plugin registry artifact");
+    expect(download.with).toMatchObject({
+      "artifact-ids": "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}",
+      "run-id": "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_id }}",
+    });
+    const verify = step(consumer, "Verify release-check inputs");
+    expect(verify.run).toContain('"$actual_codex_sha256" != "$EXPECTED_CODEX_PLUGIN_SHA256"');
+
+    const run = step(consumer, "Run cross-OS release checks");
+    expect(run.env?.CODEX_PLUGIN_FILE_NAME).toBe(
+      "${{ needs.prepare.outputs.codex_plugin_file_name }}",
+    );
+    expect(run.run).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
+    expect(run.run).toContain(
+      "JSON.stringify({ codex: `npm-pack:${process.env.CODEX_PLUGIN_TGZ}` })",
+    );
   });
 
   it("executes the release harness directly with Node", () => {

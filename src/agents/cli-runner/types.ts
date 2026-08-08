@@ -33,6 +33,7 @@ import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -48,6 +49,8 @@ import type {
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -100,6 +103,10 @@ export type RunCliAgentParams = {
   storePath?: string;
   /** Canonical user-turn recorder shared with gateway/queue dispatch. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Context engine resolved once by the outer logical-turn owner. */
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
+  /** Attempt-local facts accepted or discarded by the outer logical-turn owner. */
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   /** Skip current-turn user persistence when a retry/fallback already wrote it. */
   suppressNextUserMessagePersistence?: boolean;
   /** Notification fired after the current user turn has been accepted into the transcript. */
@@ -288,6 +295,8 @@ export type CliSessionBindingFacts = {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   effectiveAuthProfileId?: string;
+  /** Selected profile snapshot used only for terminal health settlement. */
+  authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
   workspaceDir: string;

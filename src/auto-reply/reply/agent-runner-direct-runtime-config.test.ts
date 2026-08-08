@@ -186,7 +186,6 @@ function createDirectRuntimeReplyParams({
     shouldSteer: false,
     shouldFollowup,
     isActive,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: createTelegramSessionCtx(),
     defaultModel: "openai/gpt-5.4",

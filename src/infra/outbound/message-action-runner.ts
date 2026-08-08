@@ -716,6 +716,7 @@ async function resolveResolvedTargetOrThrow(params: {
 type ResolvedActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  idempotencyKey?: string;
   channel: ChannelId;
   channelPlugin?: ChannelPlugin;
   mediaAccess: OutboundMediaAccess;
@@ -1635,6 +1636,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       cfg,
       channel,
       params,
+      idempotencyKey: ctx.idempotencyKey,
       agentId,
       sessionKey: input.sessionKey,
       requesterAccountId: input.requesterAccountId ?? undefined,
@@ -1801,6 +1803,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       cfg,
       channel,
       params,
+      idempotencyKey: ctx.idempotencyKey,
       accountId: accountId ?? undefined,
       agentId,
       requesterAccountId: input.requesterAccountId ?? undefined,
@@ -2065,6 +2068,9 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action],
+    // Trusted direct operators retain opaque resource-id workflows. Native conversation
+    // aliases still normalize above and remain subject to the shared cross-context policy.
+    allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
@@ -2219,6 +2225,7 @@ export async function runMessageAction(
   const context: ResolvedActionContext = {
     cfg,
     params,
+    idempotencyKey: normalizeOptionalString(params.idempotencyKey),
     channel,
     channelPlugin,
     mediaAccess,

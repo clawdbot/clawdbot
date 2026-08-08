@@ -17,6 +17,7 @@ import {
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
@@ -163,14 +164,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @touchstart=${(event: TouchEvent) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -201,14 +195,7 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
       class="settings-sidebar__subitem ${active ? "settings-sidebar__subitem--active" : ""}"
       aria-current=${active ? "location" : nothing}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();

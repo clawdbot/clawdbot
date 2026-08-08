@@ -151,40 +151,51 @@ describe("persistUserTurnTranscript", () => {
   it("persists sender metadata as __openclaw envelope", async () => {
     const dir = createTempDir("openclaw-user-turn-append-sender-");
     const target = createSqliteTranscriptTarget({ dir });
-
-    const appended = await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "hello from group",
-        sender: {
-          id: "8489979671",
-          name: "Ram Shenoy",
-          username: "ram_s",
-        },
-      },
-      updateMode: "none",
-    });
-
-    expect(appended?.message).toMatchObject({
+    // Deliberately attach runtime-only profile fields to prove durable sender
+    // attribution is a whitelist, not a copy of the inbound sender object.
+    const runtimeOnlySenderFields = {
+      senderProfileAvatarUrl: "/api/users/8489979671/avatar?v=1989876543210",
+      profileRevision: 1_989_876_543_210,
+      avatarBytes: "volatile-avatar-bytes",
+      avatarHash: "volatile-avatar-hash",
+    };
+    const sender = {
+      id: "8489979671",
+      name: "Ram Shenoy",
+      username: "ram_s",
+      ...runtimeOnlySenderFields,
+    };
+    const expected = {
       role: "user",
       content: "hello from group",
+      timestamp: 1_700_000_000_000,
       __openclaw: {
         senderId: "8489979671",
         senderName: "Ram Shenoy",
         senderUsername: "ram_s",
       },
+    };
+
+    const appended = await persistUserTurnTranscript({
+      ...target,
+      input: {
+        text: "hello from group",
+        timestamp: expected.timestamp,
+        sender,
+      },
+      updateMode: "none",
     });
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "hello from group",
-        __openclaw: {
-          senderId: "8489979671",
-          senderName: "Ram Shenoy",
-          senderUsername: "ram_s",
-        },
-      }),
-    ]);
+
+    const reloaded = await readTranscriptMessages(target);
+    const durableMessages = [appended?.message, reloaded[0]];
+    expect(durableMessages).toEqual([expected, expected]);
+    for (const durableMessage of durableMessages) {
+      const serialized = JSON.stringify(durableMessage);
+      for (const [key, value] of Object.entries(runtimeOnlySenderFields)) {
+        expect(serialized).not.toContain(key);
+        expect(serialized).not.toContain(String(value));
+      }
+    }
   });
 
   it("omits __openclaw when no sender metadata is provided", async () => {

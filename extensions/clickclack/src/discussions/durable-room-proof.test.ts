@@ -12,7 +12,7 @@ import { setClickClackRuntime } from "../runtime.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
 import { ClickClackDiscussionService } from "./service.js";
 
-type RemoteChannel = ClickClackChannel & { archived_at: string | null };
+type RemoteChannel = ClickClackChannel;
 type RemotePatch = Record<string, unknown>;
 
 function memoryStore<T>(): PluginStateSyncKeyedStore<T> {

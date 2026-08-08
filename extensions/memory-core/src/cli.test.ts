@@ -612,6 +612,40 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("reports a complete persisted vector index without probing the store", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector store probe");
+    });
+    const probeVectorAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector probe");
+    });
+    const probeEmbeddingAvailability = vi.fn(async () => {
+      throw new Error("unexpected embedding probe");
+    });
+    mockManager({
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          chunks: 5,
+          vector: { enabled: true, index: { state: "complete" } },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
+    expect(probeVectorAvailability).not.toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+    expectLogged(log, "Vector store: indexed (unprobed)");
+    expectNotLogged(log, "Vector store: unknown");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("fans JSON status out to every keyed agent entry", async () => {
     const agentIds = ["main", ...Array.from({ length: 21 }, (_, index) => `agent-${index + 1}`)];
     getRuntimeConfig.mockReturnValue({
@@ -772,6 +806,7 @@ describe("memory cli", () => {
           dirty: true,
           vector: {
             enabled: true,
+            index: { state: "complete" },
             storeAvailable: false,
             semanticAvailable: false,
             available: false,

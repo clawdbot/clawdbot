@@ -527,9 +527,9 @@ export type RunReplyAgentParams = {
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
   shouldFollowup: boolean;
+  queueAdmissionState?: "empty" | "steering" | "ready";
   isActive: boolean;
   isRunActive?: () => boolean;
-  isStreaming: boolean;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;

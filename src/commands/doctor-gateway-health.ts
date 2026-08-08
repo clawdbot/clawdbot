@@ -27,6 +27,7 @@ import {
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
 
 type GatewayMemoryProbe = {
   checked: boolean;
@@ -112,14 +113,22 @@ export async function checkGatewayHealth(params: {
         "Plugins configured unavailable",
       );
     }
-    try {
-      const statusLocal = await callGateway({
+    const [channelsResult, exporterResult] = await Promise.allSettled([
+      callGateway({
         method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
         config: params.cfg,
-      });
-      const issues = collectChannelStatusIssues(statusLocal);
+      }),
+      callGateway({
+        method: "diagnostics.stability",
+        params: { type: "telemetry.exporter", limit: 1000 },
+        timeoutMs: Math.min(timeoutMs, 6000),
+        config: params.cfg,
+      }),
+    ]);
+    if (channelsResult.status === "fulfilled") {
+      const issues = collectChannelStatusIssues(channelsResult.value);
       if (issues.length > 0) {
         note(
           issues
@@ -133,14 +142,20 @@ export async function checkGatewayHealth(params: {
           "Channel warnings",
         );
       }
-    } catch (error) {
+    } else {
       note(
         [
-          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(channelsResult.reason))}`,
           `Retry: ${formatCliCommand("openclaw channels status --probe")}`,
         ].join("\n"),
         "Channel warnings",
       );
+    }
+    if (exporterResult.status === "fulfilled") {
+      const exporterSummary = formatTelemetryExporterSummary(exporterResult.value);
+      if (exporterSummary) {
+        note(exporterSummary.lines.join("\n"), exporterSummary.title);
+      }
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {

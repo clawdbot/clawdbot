@@ -120,6 +120,25 @@ async function fetchControlledAsset(
       throw new Error(`Build asset request failed with HTTP ${response.status}`);
     }
     const digest = await crypto.subtle.digest("SHA-256", await response.arrayBuffer());
+    await new Promise<void>((resolve) => {
+      let observedController: ServiceWorker | null = null;
+      const observeController = () => {
+        const controller = navigator.serviceWorker.controller;
+        if (controller !== observedController) {
+          observedController?.removeEventListener("statechange", observeController);
+          observedController = controller;
+          observedController?.addEventListener("statechange", observeController);
+        }
+        if (controller?.state !== "activated") {
+          return;
+        }
+        observedController?.removeEventListener("statechange", observeController);
+        navigator.serviceWorker.removeEventListener("controllerchange", observeController);
+        resolve();
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", observeController);
+      observeController();
+    });
     return {
       controllerState: navigator.serviceWorker.controller?.state ?? null,
       sha256: [...new Uint8Array(digest)]

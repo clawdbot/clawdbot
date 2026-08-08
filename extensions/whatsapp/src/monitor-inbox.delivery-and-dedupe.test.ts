@@ -24,7 +24,7 @@ describe("web monitor inbox delivery and dedupe", () => {
 
   it("delivery coordinator streams inbound messages", async () => {
     const onMessage = vi.fn(async (msg) => {
-      await msg.sendComposing();
+      await msg.platform.sendComposing();
       await msg.reply("flat reply works");
       await msg.sendMedia({ text: "flat media works" });
     });

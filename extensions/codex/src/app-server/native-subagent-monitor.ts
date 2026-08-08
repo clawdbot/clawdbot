@@ -108,6 +108,7 @@ type MonitorOptions = {
   completionDeliveryMaxRetries?: number;
   now?: () => number;
   retainClient?: () => (() => void) | undefined;
+  retainParentThread?: (threadId: string) => (() => void) | undefined;
 };
 
 const DEFAULT_RECOVERY_POLL_DELAYS_MS = [
@@ -153,11 +154,13 @@ function registerMonitor(params: {
   agentId?: string;
   runtime?: NativeSubagentMonitorRuntime;
   retainClient?: () => (() => void) | undefined;
+  retainParentThread?: (threadId: string) => (() => void) | undefined;
 }): { unregister: () => void } {
   let monitor = monitors.get(params.client);
   if (!monitor) {
     monitor = new Monitor(params.client, params.runtime ?? defaultRuntime, {
       retainClient: params.retainClient,
+      retainParentThread: params.retainParentThread,
     });
     monitors.set(params.client, monitor);
   }
@@ -183,6 +186,8 @@ class Monitor {
   private readonly removeNotificationHandler: () => void;
   private readonly removeCloseHandler: () => void;
   private readonly retainClient?: () => (() => void) | undefined;
+  private readonly retainParentThread?: (threadId: string) => (() => void) | undefined;
+  private readonly parentThreadRetentions = new Map<string, () => void>();
   private releaseClientRetention?: () => void;
   private disposed = false;
 
@@ -198,6 +203,7 @@ class Monitor {
       options.completionDeliveryMaxRetries ?? this.completionDeliveryRetryDelaysMs.length;
     this.now = options.now ?? Date.now;
     this.retainClient = options.retainClient;
+    this.retainParentThread = options.retainParentThread;
     this.removeNotificationHandler = client.addNotificationHandler(async (notification) => {
       if (!NATIVE_SUBAGENT_NOTIFICATION_METHODS.has(notification.method)) {
         return;
@@ -228,6 +234,10 @@ class Monitor {
       this.unregisterChild(childState);
     }
     this.releaseRetainedClient();
+    for (const release of this.parentThreadRetentions.values()) {
+      release();
+    }
+    this.parentThreadRetentions.clear();
     for (const state of this.parentStates.values()) {
       state.ownerCount = 0;
     }
@@ -999,6 +1009,14 @@ class Monitor {
     }
     if (!childState) {
       this.releaseClientRetention ??= this.retainClient?.();
+      if (!this.parentThreadRetentions.has(parentThreadId)) {
+        const releaseParentThread = this.retainParentThread?.(parentThreadId);
+        if (releaseParentThread) {
+          // Child completion can be announced on its parent's subscription
+          // after the foreground parent turn has already released ownership.
+          this.parentThreadRetentions.set(parentThreadId, releaseParentThread);
+        }
+      }
       childState = {
         childThreadId,
         parentThreadId,
@@ -1061,6 +1079,15 @@ class Monitor {
     }
     if (this.childStates.get(childState.childThreadId) === childState) {
       this.childStates.delete(childState.childThreadId);
+    }
+    if (
+      ![...this.childStates.values()].some(
+        (remainingChild) => remainingChild.parentThreadId === childState.parentThreadId,
+      )
+    ) {
+      const releaseParentThread = this.parentThreadRetentions.get(childState.parentThreadId);
+      this.parentThreadRetentions.delete(childState.parentThreadId);
+      releaseParentThread?.();
     }
     const statusRevision = this.threadStatusRevisions.get(childState.childThreadId);
     if (statusRevision?.readers === 0) {

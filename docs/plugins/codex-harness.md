@@ -66,10 +66,10 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.146.0`. The plugin ships and manages `@openai/codex`
-  `0.146.0` by default, so a `codex` command on `PATH` does not affect normal
+- Codex app-server `0.146.1`. The plugin ships and manages `@openai/codex`
+  `0.146.1` by default, so a `codex` command on `PATH` does not affect normal
   startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.146.0` version.
+  report the same exact stable `0.146.1` version.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -1181,7 +1181,7 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.146.0`. Older or
+**The app-server is rejected:** use exactly stable Codex `0.146.1`. Older or
 newer versions, prereleases, build-suffixed versions, and unversioned servers
 are rejected because OpenClaw validates generated schemas and runtime contracts
 against the Codex version it ships. Update or remove custom, remote, or desktop
@@ -1202,8 +1202,17 @@ for Gateway pressure, and inspect host or container memory for the Codex child.
 
 The bundled Codex has no heap or RSS limit and no configurable idle-unload
 delay. After the last client unsubscribes, an inactive thread can remain loaded
-for up to 30 minutes. On constrained hosts, reduce native Codex subagent fan-out
-before increasing the Gateway heap:
+for up to 30 minutes. OpenClaw independently keeps up to 64 idle conversation
+threads subscribed on each Codex app-server for 30 minutes after their last
+activity. This preserves warm sessions and session-scoped approvals when several
+conversations alternate. Active turns and parents with unfinished native
+subagents are protected from idle eviction; session reset or deletion releases
+its own thread immediately. Idle-limit eviction unsubscribes the least recently
+used conversation, after which Codex applies its separate unloading delay and a
+later resumed session can require approvals again.
+
+On constrained hosts, reduce native Codex subagent fan-out before increasing the
+Gateway heap:
 
 ```json5
 {

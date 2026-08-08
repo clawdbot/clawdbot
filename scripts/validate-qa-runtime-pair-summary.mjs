@@ -27,6 +27,8 @@ const FROZEN_CORE_RUNTIME_PAIR_MANIFEST = {
     "thread-memory-isolation",
     "model-switch-tool-continuity",
     "approval-turn-tool-followthrough",
+    // Preserve the serialized reports from these fixed candidate SHAs. These
+    // are not live catalog entries or current plugin-compatibility evidence.
     "codex-plugin-pinned-new",
     "codex-plugin-pinned-old",
     "compaction-retry-mutating-tool",

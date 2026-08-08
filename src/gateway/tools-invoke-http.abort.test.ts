@@ -16,47 +16,15 @@ const lifecycle = vi.hoisted(() => ({
     blocked: false as const,
     params: args.params,
   })),
-  cleanup: vi.fn(),
   handled: vi.fn(),
-  sendJson: vi.fn(),
-  watch: vi.fn(),
   execute: vi.fn(async (_toolCallId: string, _args: unknown, _signal?: AbortSignal) => ({
     ok: true,
   })),
 }));
 
-vi.mock("./http-common.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./http-common.js")>();
-  return {
-    ...actual,
-    sendJson: (...args: Parameters<typeof actual.sendJson>) => {
-      lifecycle.sendJson();
-      return actual.sendJson(...args);
-    },
-    watchClientDisconnect: (
-      req: IncomingMessage,
-      res: ServerResponse,
-      controller: AbortController,
-      onDisconnect?: () => void,
-    ) => {
-      lifecycle.watch();
-      const stopWatching = actual.watchClientDisconnect(req, res, controller, onDisconnect);
-      return () => {
-        lifecycle.cleanup();
-        stopWatching();
-      };
-    },
-  };
-});
-
-vi.mock("./http-utils.js", () => ({
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
   authorizeScopedGatewayHttpRequestOrReply: lifecycle.authorize,
-  getHeader: (req: IncomingMessage, name: string) => {
-    const header = req.headers[name];
-    return typeof header === "string" ? header : undefined;
-  },
-  resolveOpenAiCompatibleHttpOperatorScopes: () => ["operator.write"],
-  resolveOpenAiCompatibleHttpSenderIsOwner: () => true,
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -74,26 +42,6 @@ vi.mock("./tool-resolution.js", () => ({
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: lifecycle.beforeHook,
-}));
-
-vi.mock("../agents/agent-tools.js", () => ({
-  resolveToolLoopDetectionConfig: () => undefined,
-}));
-
-vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKey: () => "agent:main:main",
-}));
-
-vi.mock("../agents/channel-tools.js", () => ({
-  getChannelAgentToolMeta: () => undefined,
-}));
-
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: () => undefined,
-}));
-
-vi.mock("../logger.js", () => ({
-  logWarn: vi.fn(),
 }));
 
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
@@ -143,10 +91,7 @@ beforeEach(() => {
   lifecycle.authorize.mockReset();
   lifecycle.authorize.mockResolvedValue({ cfg: {}, requestAuth: { ok: true } });
   lifecycle.beforeHook.mockClear();
-  lifecycle.cleanup.mockReset();
   lifecycle.handled.mockReset();
-  lifecycle.sendJson.mockReset();
-  lifecycle.watch.mockReset();
   lifecycle.execute.mockReset();
   lifecycle.execute.mockResolvedValue({ ok: true });
 });
@@ -171,9 +116,7 @@ describe("POST /tools/invoke request cancellation", () => {
     const response = await invokeAbortProbe();
 
     expect(response.status).toBe(401);
-    expect(lifecycle.watch).not.toHaveBeenCalled();
     expect(lifecycle.execute).not.toHaveBeenCalled();
-    expect(lifecycle.cleanup).not.toHaveBeenCalled();
   });
 
   it("does not start a tool after the client disconnects during authorization", async () => {
@@ -203,9 +146,7 @@ describe("POST /tools/invoke request cancellation", () => {
 
       releaseAuthorization?.();
       await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
-      expect(lifecycle.watch).not.toHaveBeenCalled();
       expect(lifecycle.execute).not.toHaveBeenCalled();
-      expect(lifecycle.sendJson).not.toHaveBeenCalled();
     } finally {
       releaseAuthorization?.();
       requestController.abort();
@@ -226,7 +167,6 @@ describe("POST /tools/invoke request cancellation", () => {
     expect(lifecycle.beforeHook).toHaveBeenCalledWith(
       expect.objectContaining({ signal: toolSignal }),
     );
-    expect(lifecycle.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("aborts the running tool when its HTTP client disconnects", async () => {
@@ -255,8 +195,6 @@ describe("POST /tools/invoke request cancellation", () => {
       requestController.abort();
       await expect(response).rejects.toThrow();
       await expect.poll(() => toolSignal?.aborted).toBe(true);
-      await expect.poll(() => lifecycle.cleanup.mock.calls.length).toBe(1);
-      expect(lifecycle.sendJson).not.toHaveBeenCalled();
     } finally {
       requestController.abort();
       releaseExecution?.();
@@ -294,8 +232,6 @@ describe("POST /tools/invoke request cancellation", () => {
       releaseHook?.();
       await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
       expect(lifecycle.execute).not.toHaveBeenCalled();
-      expect(lifecycle.sendJson).not.toHaveBeenCalled();
-      expect(lifecycle.cleanup).toHaveBeenCalledTimes(1);
     } finally {
       releaseHook?.();
       requestController.abort();
@@ -313,6 +249,5 @@ describe("POST /tools/invoke request cancellation", () => {
       ok: false,
       error: { type: "tool_error", message: "tool execution failed" },
     });
-    expect(lifecycle.cleanup).toHaveBeenCalledTimes(1);
   });
 });

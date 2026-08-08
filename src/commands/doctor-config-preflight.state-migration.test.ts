@@ -639,6 +639,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(runPostCorePluginConvergence).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
+      compatibilityHostVersion: expect.any(String),
       baselineInstallRecords: {},
     });
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
@@ -647,6 +648,33 @@ describe("runDoctorConfigPreflight state migration", () => {
       lease: startupMigrationLease,
     });
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("pins startup plugin convergence to the explicit compatibility host version", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.7.2-beta.7";
+
+    try {
+      await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      });
+    } finally {
+      if (previousHostVersion === undefined) {
+        delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      } else {
+        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousHostVersion;
+      }
+    }
+
+    expect(runPostCorePluginConvergence).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+      env: expect.any(Object),
+      compatibilityHostVersion: "2026.7.2-beta.7",
+      baselineInstallRecords: {},
+    });
   });
 
   it("refuses startup when plugin migration inputs change during convergence", async () => {

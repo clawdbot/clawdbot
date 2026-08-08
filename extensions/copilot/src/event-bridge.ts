@@ -45,6 +45,7 @@ export interface SessionLike {
       cancelBackgroundCompaction?: () => Promise<unknown>;
     };
   };
+  send(options: MessageOptions): Promise<string>;
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }
@@ -349,7 +350,7 @@ export function attachEventBridge(
       toolMetas[toolMetaIndex] = {
         ...(meta ? { meta } : {}),
         toolName,
-        ...(event.data.success ? {} : { isError: true }),
+        isError: !event.data.success,
       };
     }
     const projection = options.transcriptProjection;

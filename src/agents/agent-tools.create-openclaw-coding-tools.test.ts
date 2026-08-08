@@ -1341,6 +1341,41 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
   });
 
+  it("removes message from persisted visible child sessions on every turn", async () => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-visible-subagent-message-"));
+    const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
+    const agentId = "visible-subagent-message";
+    const childSessionKey = `agent:${agentId}:dashboard:child`;
+    const rootSessionKey = `agent:${agentId}:dashboard:root`;
+    try {
+      await writeSessionStore(storeTemplate, agentId, {
+        [childSessionKey]: {
+          sessionId: "visible-child",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          spawnedBy: `agent:${agentId}:main`,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+        [rootSessionKey]: {
+          sessionId: "root-dashboard",
+          updatedAt: Date.now(),
+          spawnDepth: 0,
+        },
+      });
+
+      const firstChildTurn = createToolsForStoredSession(storeTemplate, childSessionKey);
+      const resumedChildTurn = createToolsForStoredSession(storeTemplate, childSessionKey);
+      const rootTurn = createToolsForStoredSession(storeTemplate, rootSessionKey);
+
+      expect(toolNameList(firstChildTurn)).not.toContain("message");
+      expect(toolNameList(resumedChildTurn)).not.toContain("message");
+      expect(toolNameList(rootTurn)).toContain("message");
+    } finally {
+      await fs.rm(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

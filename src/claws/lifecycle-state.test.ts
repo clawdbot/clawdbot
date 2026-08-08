@@ -195,6 +195,107 @@ describe("Claw status and remove", () => {
     });
   });
 
+  it("reports adapter identity drift for an installed extension without mutating provenance", async () => {
+    const current = await addFixture();
+    const extension = {
+      id: "audit-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["skills"],
+      unavailable: ["agents"],
+      adapterIdentity: "openclaw/previous",
+    };
+    persistClawPackageRef(
+      current.plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: packageIntegrity,
+        extension,
+      },
+      { env: current.env, nowMs: 2, relationship: "referenced" },
+    );
+
+    const status = await readClawStatus("worker", {
+      env: current.env,
+      config: current.getConfig(),
+      packageDeps: {
+        resolvePlugin: async () => ({
+          status: "found" as const,
+          pluginId: "audit",
+          installedVersion: "2.0.0",
+          record: { source: "clawhub", integrity: packageIntegrity },
+        }),
+      },
+    });
+
+    expect(status.summary.driftedPackages).toBe(1);
+    expect(status.records[0]?.packages[0]).toMatchObject({
+      state: "present",
+      extension,
+      extensionCompatibility: {
+        state: "drifted",
+        mapped: ["agents", "skills"],
+        unavailable: [],
+        adapterIdentity: "openclaw/v1",
+      },
+    });
+    expect(readClawPackageRefs({ env: current.env })[0]?.extension).toEqual(extension);
+  });
+
+  it("reports unavailable extension inspection separately from package drift", async () => {
+    const current = await addFixture();
+    const extension = {
+      id: "audit-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["skills"],
+      unavailable: ["agents"],
+      adapterIdentity: "openclaw/current",
+    };
+    persistClawPackageRef(
+      current.plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: packageIntegrity,
+        extension,
+      },
+      { env: current.env, nowMs: 2, relationship: "referenced" },
+    );
+
+    const status = await readClawStatus("worker", {
+      env: current.env,
+      config: current.getConfig(),
+      packageDeps: {
+        resolvePlugin: async () => ({
+          status: "found" as const,
+          pluginId: "audit",
+          installedVersion: "2.0.0",
+          record: { source: "clawhub", integrity: packageIntegrity },
+        }),
+      },
+      packagePreflight: async () => ({
+        ok: false,
+        code: "extension_unavailable",
+        message: "Canonical extension inspection is unavailable.",
+      }),
+    });
+
+    expect(status.summary).toMatchObject({ driftedPackages: 0, unavailableExtensions: 1 });
+    expect(status.records[0]?.packages[0]).toMatchObject({
+      state: "present",
+      extensionCompatibility: {
+        state: "unavailable",
+        message: "Canonical extension inspection is unavailable.",
+      },
+    });
+  });
+
   it("counts every non-complete root install as partial", async () => {
     const current = await fixture();
     persistClawInstallRecord(current.plan, { env: current.env, status: "config_committed" });
@@ -835,6 +936,14 @@ describe("Claw status and remove", () => {
       config,
       packageDeps,
     });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "packageRef",
+        action: "release",
+        reason: expect.stringContaining("Claw add introduced this shared requirement"),
+        details: expect.objectContaining({ introducedByClawAdd: true }),
+      }),
+    );
 
     await expect(
       applyClawRemovePlan(plan, {

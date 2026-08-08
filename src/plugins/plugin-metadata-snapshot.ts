@@ -292,6 +292,25 @@ export function loadPluginMetadataSnapshot(
   );
 }
 
+/** Promotes a planning-scoped graph to the complete process-lifecycle metadata snapshot. */
+export function completePluginMetadataSnapshot(params: {
+  snapshot?: PluginMetadataSnapshot;
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot | undefined {
+  if (!params.snapshot || params.snapshot.pluginIds === undefined) {
+    return params.snapshot;
+  }
+  const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
+  return loadPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env ?? process.env,
+    index: params.snapshot.index,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+}
+
 export function resolvePluginMetadataSnapshot(
   params: ResolvePluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
@@ -303,6 +322,7 @@ export function resolvePluginMetadataSnapshot(
     const current = getCurrentPluginMetadataSnapshot({
       config: params.config,
       env: params.env,
+      ...(params.config === undefined ? { requireDefaultDiscoveryContext: true } : {}),
       ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
       ...(params.pluginIdScope !== undefined ? { pluginIdScope: params.pluginIdScope } : {}),
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),

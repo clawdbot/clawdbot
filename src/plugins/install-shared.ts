@@ -30,6 +30,10 @@ export async function loadPluginInstallRuntime() {
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+type PluginCompatibilityRuntime = Pick<
+  PluginInstallRuntime,
+  "checkMinHostVersion" | "resolveCompatibilityHostVersion"
+>;
 
 export const defaultLogger: PluginInstallLogger = {};
 
@@ -65,7 +69,7 @@ function validateOpenClawPackageCompatibility(params: {
 }
 
 export function validateOpenClawPackageInstallCompatibility(params: {
-  runtime: PluginInstallRuntime;
+  runtime: PluginCompatibilityRuntime;
   pluginId: string;
   packageMetadata?: OpenClawPackageManifest;
 }): PluginInstallFailureResult | null {

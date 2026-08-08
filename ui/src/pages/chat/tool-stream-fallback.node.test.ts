@@ -234,7 +234,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.sessions.state.modelOverrides.main).toBeNull();
   });
 
-  it("tags stream segments with the tool they precede", () => {
+  it("tags stream segments with the tool they precede without resetting elapsed time", () => {
     useToolStreamFakeTimers();
     const host = createHost({
       chatRunId: "run-1",
@@ -258,7 +258,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.chatStreamSegments).toEqual([
       {
         text: "visible text before tool",
-        ts: TOOL_STREAM_TEST_NOW,
+        ts: TOOL_STREAM_TEST_NOW - 10,
         runId: "run-1",
         toolCallId: "call_1",
       },
