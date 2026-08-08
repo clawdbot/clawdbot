@@ -486,19 +486,23 @@ jobs:
               echo "::error::Refusing to adopt invalid ${workflow} run ID ${candidate_run_id}." >&2
               return 1
             fi
-            # GitHub evaluates run-name asynchronously: a run adopted from the dispatch
-            # response can briefly report its default display_title. Identity fields are
-            # immediate-refuse; a lone title mismatch retries until the template lands.
+            # GitHub materializes a dispatched run asynchronously: the API can 404 the
+            # fresh run id (read-after-write lag) and can briefly report the default
+            # display_title before run-name evaluates. Both are retryable; a REAL run
+            # object with mismatched identity fields still refuses immediately.
             for attempt in $(seq 1 12); do
-              candidate_run_json="$(
+              if ! candidate_run_json="$(
                 gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
-              )"
+              )" || ! jq -e --argjson id "$candidate_run_id" '.id == $id' \
+                <<< "$candidate_run_json" >/dev/null 2>&1; then
+                echo "Waiting for ${workflow} run ${candidate_run_id} to become readable (attempt ${attempt})." >&2
+                sleep 5
+                continue
+              fi
               if ! jq -e \
-                --argjson id "$candidate_run_id" \
                 --argjson workflow_id "$expected_workflow_id" \
                 --arg branch "$CHILD_WORKFLOW_REF" \
-                '(.id == $id)
-                  and (.workflow_id == $workflow_id)
+                '(.workflow_id == $workflow_id)
                   and (.head_branch == $branch)
                   and (.event == "workflow_dispatch")' \
                 <<< "$candidate_run_json" >/dev/null; then
@@ -515,9 +519,9 @@ jobs:
               echo "Waiting for ${workflow} run ${candidate_run_id} display title (attempt ${attempt})." >&2
               sleep 5
             done
-            echo "::error::Refusing to adopt ${workflow} run ${candidate_run_id}: display title never matched ${dispatch_run_name}." >&2
+            echo "::error::Refusing to adopt ${workflow} run ${candidate_run_id}: run never became readable with display title ${dispatch_run_name}." >&2
             jq '{id, workflow_id, path, display_title, head_branch, head_sha, event, html_url}' \
-              <<< "$candidate_run_json" >&2
+              <<< "$candidate_run_json" >&2 || printf '%s\n' "$candidate_run_json" >&2
             return 1
           }
 
