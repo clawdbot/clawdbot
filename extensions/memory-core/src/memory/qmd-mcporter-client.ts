@@ -168,6 +168,12 @@ export class QmdMcporterClient {
 
   private async resolveConfiguredMcporterServer(): Promise<ConfiguredMcporterServer | null> {
     const serverName = this.qmd.mcporter.serverName;
+    const explicitMcporterConfig = this.mcporterEnv.MCPORTER_CONFIG;
+    // An explicit config is authoritative. Only implicit default QMD discovery may
+    // fall back to a generated sidecar, or user configuration failures are hidden.
+    const canUseGeneratedFallback =
+      serverName === "qmd" &&
+      (explicitMcporterConfig === undefined || explicitMcporterConfig === "");
     let result: { stdout: string; stderr: string };
     try {
       result = await this.runMcporterCommand(["config", "get", serverName, "--json"], {
@@ -176,7 +182,7 @@ export class QmdMcporterClient {
         timeoutMs: 5_000,
       });
     } catch (err) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(
@@ -191,14 +197,14 @@ export class QmdMcporterClient {
     try {
       parsed = parseMcporterResponseJson(result.stdout);
     } catch (err) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned invalid JSON`, { cause: err });
     }
     const serialized = asRecord(parsed);
     if (!serialized) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
@@ -217,7 +223,7 @@ export class QmdMcporterClient {
       source?.kind === "local" ? (extractMcporterSourcePath(serialized) ?? null) : null;
     const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
-      if (serverName === "qmd") {
+      if (canUseGeneratedFallback) {
         return null;
       }
       throw new Error(`mcporter server "${serverName}" returned an unsupported definition`);

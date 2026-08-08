@@ -4137,7 +4137,9 @@ describe("QmdMemoryManager", () => {
     });
   });
 
-  it("passes agent-scoped QMD env through generated mcporter config", async () => {
+  it("treats empty MCPORTER_CONFIG as implicit for agent-scoped generated config", async () => {
+    process.env.MCPORTER_CONFIG = "";
+
     cfg = {
       ...cfg,
       memory: {
@@ -6657,6 +6659,100 @@ describe("QmdMemoryManager", () => {
 
     await manager.close();
   });
+
+  it.each([
+    {
+      name: "command failure",
+      configValue: "path",
+      emitConfigResult: (child: ReturnType<typeof createMockChild>) =>
+        emitAndClose(child, "stderr", "config file not found", 1),
+      expectedError: /mcporter server "qmd" is not configured or could not be read/,
+    },
+    {
+      name: "whitespace-only explicit config command failure",
+      configValue: "whitespace",
+      emitConfigResult: (child: ReturnType<typeof createMockChild>) =>
+        emitAndClose(child, "stderr", "config file not found", 1),
+      expectedError: /mcporter server "qmd" is not configured or could not be read/,
+    },
+    {
+      name: "invalid JSON",
+      configValue: "path",
+      emitConfigResult: (child: ReturnType<typeof createMockChild>) =>
+        emitAndClose(child, "stdout", "{"),
+      expectedError: /mcporter server "qmd" returned invalid JSON/,
+    },
+    {
+      name: "non-record JSON",
+      configValue: "path",
+      emitConfigResult: (child: ReturnType<typeof createMockChild>) =>
+        emitAndClose(child, "stdout", JSON.stringify([])),
+      expectedError: /mcporter server "qmd" returned an invalid JSON definition/,
+    },
+    {
+      name: "unsupported definition",
+      configValue: "path",
+      emitConfigResult: (child: ReturnType<typeof createMockChild>) =>
+        emitAndClose(child, "stdout", JSON.stringify({ name: "qmd", source: "user" })),
+      expectedError: /mcporter server "qmd" returned an unsupported definition/,
+    },
+  ])(
+    "rejects $name for explicit MCPORTER_CONFIG instead of generating fallback qmd config",
+    async ({ configValue, emitConfigResult, expectedError }) => {
+      const explicitMcporterConfig =
+        configValue === "whitespace" ? "   " : path.join(tmpRoot, "missing-user-mcporter.json");
+      process.env.MCPORTER_CONFIG = explicitMcporterConfig;
+      delete process.env.XDG_CONFIG_HOME;
+
+      cfg = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+
+      spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        const child = createMockChild({ autoClose: false });
+        if (isMcporterCommand(cmd) && args[0] === "config") {
+          emitConfigResult(child);
+          return child;
+        }
+        if (isMcporterCommand(cmd) && args[0] === "call") {
+          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+          return child;
+        }
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      });
+
+      const { manager } = await createManager();
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).rejects.toThrow(expectedError);
+
+      const configProbe = spawnMock.mock.calls.find(
+        (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "config",
+      );
+      const probeOpts = configProbe?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      expect(probeOpts?.env?.MCPORTER_CONFIG).toBe(explicitMcporterConfig);
+      expect(
+        spawnMock.mock.calls.some(
+          (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+        ),
+      ).toBe(false);
+      await expect(
+        fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      await manager.close();
+    },
+  );
 
   it("does not use an imported editor config as MCPORTER_CONFIG", async () => {
     const editorConfig = path.join(tmpRoot, "editor-mcp.json");
