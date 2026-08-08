@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   compactionFailureFromFailoverReason,
-  fallbackCompactionFailure,
   failoverReasonFromCompactionFailure,
   isStructuredCompactionFailure,
   terminalCompactionFailure,
@@ -51,7 +50,7 @@ describe("compaction failure policy", () => {
   it.each(["missing_thread_binding", "stale_thread_binding"] as const)(
     "classifies %s as synchronous owner fallback",
     (reason) => {
-      const failure = fallbackCompactionFailure(reason);
+      const failure = { disposition: "fallback", reason } as const;
 
       expect(failure).toEqual({ disposition: "fallback", reason });
       expect(isStructuredCompactionFailure(failure)).toBe(true);

@@ -119,18 +119,6 @@ function retryableCompactionFailure(
   };
 }
 
-export function fallbackCompactionFailure(
-  reason: FallbackCompactionFailureReason,
-  status?: unknown,
-): CompactionFailure {
-  const normalizedStatus = normalizeStatus(status);
-  return {
-    disposition: "fallback",
-    reason,
-    ...(normalizedStatus === undefined ? {} : { status: normalizedStatus }),
-  };
-}
-
 export function terminalCompactionFailure(
   reason: TerminalCompactionFailureReason,
   status?: unknown,
