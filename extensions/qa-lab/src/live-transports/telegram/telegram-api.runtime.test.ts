@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 
@@ -10,7 +10,6 @@ import {
   isRecoverableTelegramQaPollError,
   normalizeTelegramObservedMessage,
   parseTelegramQaCredentialPayload,
-  resolveTelegramPollRetryDelayMs,
   resolveTelegramQaRuntimeEnv,
   TelegramQaApiError,
   waitForTelegramPollRetryDelay,
@@ -20,6 +19,10 @@ import {
 describe("Telegram QA API boundary", () => {
   beforeEach(() => {
     fetchWithSsrFGuard.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("parses env and leased credential payloads", () => {
@@ -213,7 +216,8 @@ describe("Telegram QA API boundary", () => {
     ).toBe(true);
   });
 
-  it("honors retry_after and caps exponential poll backoff", () => {
+  it("honors retry_after and caps exponential poll backoff", async () => {
+    vi.useFakeTimers();
     const rateLimit = new TelegramQaApiError(
       "getUpdates",
       429,
@@ -222,16 +226,35 @@ describe("Telegram QA API boundary", () => {
       429,
     );
     const serverError = new TelegramQaApiError("getUpdates", 502, "Bad Gateway", undefined, 502);
+    const cases = [
+      { error: rateLimit, attempt: 7, delayMs: 3_000 },
+      ...[250, 500, 1_000, 2_000, 2_000].map((delayMs, index) => ({
+        error: serverError,
+        attempt: index + 1,
+        delayMs,
+      })),
+      ...[250, 500, 1_000, 2_000, 2_000].map((delayMs, index) => ({
+        error: new Error("fetch failed"),
+        attempt: index + 1,
+        delayMs,
+      })),
+    ];
 
-    expect(resolveTelegramPollRetryDelayMs(rateLimit, 7)).toBe(3_000);
-    expect(
-      [1, 2, 3, 4, 5].map((attempt) => resolveTelegramPollRetryDelayMs(serverError, attempt)),
-    ).toEqual([250, 500, 1_000, 2_000, 2_000]);
-    expect(
-      [1, 2, 3, 4, 5].map((attempt) =>
-        resolveTelegramPollRetryDelayMs(new Error("fetch failed"), attempt),
-      ),
-    ).toEqual([250, 500, 1_000, 2_000, 2_000]);
+    for (const testCase of cases) {
+      let settled = false;
+      const waiting = waitForTelegramPollRetryDelay(
+        testCase.error,
+        testCase.attempt,
+        new AbortController().signal,
+      ).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(testCase.delayMs - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waiting;
+      expect(settled).toBe(true);
+    }
   });
 
   it("aborts an in-flight Telegram poll retry delay", async () => {

@@ -439,7 +439,7 @@ function readTelegramQaRetryAfterMs(error: unknown) {
     : undefined;
 }
 
-export function resolveTelegramPollRetryDelayMs(error: unknown, attempt: number) {
+function resolveTelegramPollRetryDelayMs(error: unknown, attempt: number) {
   return (
     readTelegramQaRetryAfterMs(error) ??
     computeBackoff(TELEGRAM_QA_POLL_RETRY_BACKOFF, Math.max(1, attempt))
