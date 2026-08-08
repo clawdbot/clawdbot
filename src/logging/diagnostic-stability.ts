@@ -4,6 +4,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 // Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
@@ -801,8 +802,19 @@ function parseOptionalNonNegativeInteger(value: unknown, field: string): number 
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
-  const parsed =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (typeof value === "string") {
+    // Gate on strict decimal digits before parsing so non-decimal forms such as
+    // "0x2", "1e2", "0b101", "+5", or " 5 " are rejected instead of coerced.
+    if (!/^\d+$/.test(value)) {
+      throw new Error(`${field} must be a non-negative integer`);
+    }
+    const parsedString = parseStrictNonNegativeInteger(value);
+    if (parsedString === undefined) {
+      throw new Error(`${field} must be a non-negative integer`);
+    }
+    return parsedString;
+  }
+  const parsed = typeof value === "number" ? value : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`${field} must be a non-negative integer`);
   }

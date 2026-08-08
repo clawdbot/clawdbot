@@ -1003,4 +1003,18 @@ describe("diagnostic stability recorder", () => {
       "sinceSeq must be a non-negative integer",
     );
   });
+
+  it("rejects non-decimal stability query integer strings", () => {
+    for (const malformed of ["0x2", "1e2", "+5", " 5 "]) {
+      expect(() => normalizeDiagnosticStabilityQuery({ limit: malformed })).toThrow(
+        "limit must be a non-negative integer",
+      );
+      expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: malformed })).toThrow(
+        "sinceSeq must be a non-negative integer",
+      );
+    }
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: "0" }).sinceSeq).toBe(0);
+    expect(normalizeDiagnosticStabilityQuery({ limit: "42" }).limit).toBe(42);
+    expect(normalizeDiagnosticStabilityQuery({ limit: 7 }).limit).toBe(7);
+  });
 });
