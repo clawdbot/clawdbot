@@ -425,7 +425,7 @@ export async function exportClawAgent(
     contents.push(avatar.sidecar);
   }
   let pendingPackageBootstrap: Buffer | undefined;
-  if (record.bootstrapState === "pending" && !authorBootstrap) {
+  if (!authorBootstrap && record.install.bootstrap && record.bootstrapState === "pending") {
     try {
       pendingPackageBootstrap = await workspace.readBytes("BOOTSTRAP.md", {
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -439,10 +439,7 @@ export async function exportClawAgent(
     const contentDigest = `sha256:${createHash("sha256")
       .update(pendingPackageBootstrap)
       .digest("hex")}`;
-    if (
-      !record.install.bootstrap?.contentDigest ||
-      contentDigest !== record.install.bootstrap.contentDigest
-    ) {
+    if (contentDigest !== record.install.bootstrap.contentDigest) {
       throw new ClawExportError(
         "bootstrap_drifted",
         "Cannot export the package bootstrap because BOOTSTRAP.md changed after inspection.",
@@ -524,8 +521,7 @@ export async function exportClawAgent(
   }
   const aggregateBytes =
     contents.reduce((total, file) => total + file.content.byteLength, 0) +
-    (clawMarkdownBody?.byteLength ?? 0) +
-    (exportedBootstrap?.byteLength ?? 0);
+    (clawMarkdownBody?.byteLength ?? 0);
   if (aggregateBytes > MAX_MANAGED_WORKSPACE_BYTES) {
     throw new ClawExportError(
       "workspace_files_oversized",
