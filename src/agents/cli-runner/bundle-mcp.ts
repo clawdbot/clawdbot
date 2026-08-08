@@ -40,6 +40,7 @@ import {
   writeGeminiWebSearchDisabledSettings,
 } from "./bundle-mcp-gemini.js";
 import { injectBundleMcpBackendArgs, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
+import { bundleMcpOwnedMkdtempPrefixName } from "./bundle-mcp-sweep.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -259,13 +260,16 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
-  const runtimeConfig = resolveOpenClawMcpEnvTemplates(
-    params.mergedConfig,
-    params.env,
-  ) as BundleMcpConfig;
+  // The temp dir name encodes the owning gateway (pid + boot-id prefix + process
+  // start time), so the prepared run carries durable ownership atomically — a
+  // concurrent gateway's startup sweep will not reclaim this dir while the run
+  // still waits in the serialization queue (its CLI child, which would put the
+  // path in argv, has not spawned yet). Reuse the shared temporary-config writer
+  // (which rolls the dir back on a failed write) so Claude cleanup stays in lock
+  // step with the Codex and Gemini backends.
   const temporary = await writeTemporaryBundleMcpJson(
-    "openclaw-cli-mcp-",
-    runtimeConfig,
+    await bundleMcpOwnedMkdtempPrefixName(),
+    resolveOpenClawMcpEnvTemplates(params.mergedConfig, params.env) as BundleMcpConfig,
     "mcp.json",
     false,
   );

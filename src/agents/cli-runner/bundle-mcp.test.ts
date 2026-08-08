@@ -1,7 +1,7 @@
 /** Tests Claude-style bundle-MCP config-file overlays for CLI backends. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveBundlePluginRoot,
   writeBundleTextFiles,
@@ -58,6 +58,58 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(raw.mcpServers).toStrictEqual({});
 
     await prepared.cleanup?.();
+  });
+
+  it("rolls back the temp dir when the config write fails (no leaked dir)", async () => {
+    const realWriteFile = fs.writeFile.bind(fs);
+    const realMkdtemp = fs.mkdtemp.bind(fs);
+    const created: string[] = [];
+    const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation((async (
+      prefix: unknown,
+      ...rest: unknown[]
+    ) => {
+      const dir = (await (realMkdtemp as (...a: unknown[]) => Promise<unknown>)(
+        prefix,
+        ...rest,
+      )) as string;
+      created.push(dir);
+      return dir;
+    }) as typeof fs.mkdtemp);
+    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (String(file).endsWith("mcp.json")) {
+        throw new Error("simulated config write failure");
+      }
+      return (realWriteFile as (...a: unknown[]) => Promise<void>)(file, ...rest);
+    }) as typeof fs.writeFile);
+
+    try {
+      const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+        "openclaw-cli-bundle-mcp-rollback-",
+      );
+      await expect(
+        prepareCliBundleMcpConfig({
+          enabled: true,
+          mode: "claude-config-file",
+          backend: { command: "node", args: ["./fake-claude.mjs"] },
+          workspaceDir,
+          config: { plugins: { enabled: false } },
+        }),
+      ).rejects.toThrow(/config write failure/);
+
+      // The bundle-MCP temp dir must have been rolled back (the cleanup callback
+      // is never returned on this path), leaving no config to be queued.
+      const bundleDirs = created.filter((d) => path.basename(d).startsWith("openclaw-cli-mcp-"));
+      expect(bundleDirs.length).toBeGreaterThan(0);
+      for (const dir of bundleDirs) {
+        await expect(fs.stat(dir)).rejects.toThrow();
+      }
+    } finally {
+      writeFileSpy.mockRestore();
+      mkdtempSpy.mockRestore();
+    }
   });
 
   it("serves only the exclusive config, ignoring user and plugin servers", async () => {

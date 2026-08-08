@@ -24,16 +24,24 @@ export async function writeTemporaryBundleMcpJson(
   atomic = true,
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  const filePath = path.join(tempDir, fileName);
-  if (atomic) {
-    await writeJson(filePath, value, { trailingNewline: true });
-  } else {
-    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  try {
+    const filePath = path.join(tempDir, fileName);
+    if (atomic) {
+      await writeJson(filePath, value, { trailingNewline: true });
+    } else {
+      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+    }
+    return {
+      filePath,
+      cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),
+    };
+  } catch (err) {
+    // Roll the temp dir back if the write fails, so a failed prepare never leaks
+    // a dir (the returned cleanup callback is not registered until we return).
+    // Swallow a rollback failure so it cannot mask the original error.
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    throw err;
   }
-  return {
-    filePath,
-    cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),
-  };
 }
 
 export function withOpenClawMcpCaptureHeader(
