@@ -1,4 +1,9 @@
-import type { SessionsArchiveManyResult } from "../../../packages/gateway-protocol/src/schema/sessions-archive-many.js";
+import {
+  SESSIONS_ARCHIVE_MANY_MAX_TARGETS,
+  type SessionsArchiveManyParams,
+  type SessionsArchiveManyResult,
+} from "../../../packages/gateway-protocol/src/schema/sessions-archive-many.js";
+import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type {
   SidebarRecentSession,
@@ -55,42 +60,78 @@ export async function archiveSessionRows(
   scope: SidebarSessionMutationScope,
   deferListRefresh = false,
 ): Promise<SidebarRecentSession[] | null> {
-  const targets = rows.map((row) => ({ key: row.key, agentId: sessionRowAgentId(row, scope) }));
-  let result;
-  try {
-    result = await scope.client.request<SessionsArchiveManyResult>("sessions.archiveMany", {
-      targets,
-      archived,
-    });
+  const dispatched: Array<{
+    rows: readonly SidebarRecentSession[];
+    result: SessionsArchiveManyResult;
+  }> = [];
+  let terminalError: unknown = null;
+  for (let offset = 0; offset < rows.length; offset += SESSIONS_ARCHIVE_MANY_MAX_TARGETS) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return null;
     }
-    if (!deferListRefresh) {
-      const refreshResult = await refreshSessionsAfterBatch(host, scope, rows);
-      if (refreshResult === "stale") {
+    const chunkRows = rows.slice(offset, offset + SESSIONS_ARCHIVE_MANY_MAX_TARGETS);
+    const params: SessionsArchiveManyParams = {
+      targets: chunkRows.map((row) => ({
+        key: row.key,
+        agentId: sessionRowAgentId(row, scope),
+      })),
+      archived,
+    };
+    const access = readSessionMethodAccess(scope.gateway.snapshot, {
+      method: "sessions.archiveMany",
+      params,
+      requiredScope: "operator.write",
+    });
+    if (!access.allowed) {
+      terminalError = access.reason;
+      host.sessionData.publishSessionMutationError(scope, access.reason);
+      break;
+    }
+    try {
+      const result = await scope.client.request<SessionsArchiveManyResult>(
+        "sessions.archiveMany",
+        params,
+      );
+      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return null;
       }
+      dispatched.push({ rows: chunkRows, result });
+    } catch (error) {
+      terminalError = error;
+      host.sessionData.publishSessionMutationError(scope, error);
+      break;
     }
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+  }
+  if (dispatched.length === 0) {
     return null;
+  }
+  if (!deferListRefresh) {
+    const refreshResult = await refreshSessionsAfterBatch(host, scope, rows);
+    if (refreshResult === "stale") {
+      return null;
+    }
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return null;
   }
   const errors: string[] = [];
-  const successful = result.outcomes.flatMap((outcome, index) => {
-    if (!outcome.ok) {
-      errors.push(`${outcome.key}: ${outcome.error.message}`);
-      return [];
-    }
-    const row = rows[index];
-    if (row?.pinned && archived) {
-      host.pruneSidebarSessionEntry(row.key);
-    }
-    return row ? [row] : [];
-  });
+  const successful = dispatched.flatMap(({ rows: chunkRows, result }) =>
+    result.outcomes.flatMap((outcome, index) => {
+      if (!outcome.ok) {
+        errors.push(`${outcome.key}: ${outcome.error.message}`);
+        return [];
+      }
+      const row = chunkRows[index];
+      if (row?.pinned && archived) {
+        host.pruneSidebarSessionEntry(row.key);
+      }
+      return row ? [row] : [];
+    }),
+  );
   if (errors.length > 0) {
+    if (terminalError !== null) {
+      errors.push(String(terminalError));
+    }
     host.sessionData.publishSessionMutationError(scope, errors.join("; "));
   }
   return successful;

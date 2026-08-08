@@ -12,6 +12,7 @@ import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export {
+  SESSIONS_ARCHIVE_MANY_MAX_TARGETS,
   SessionsArchiveManyParamsSchema,
   SessionsArchiveManyResultSchema,
   SessionsArchiveManyTargetSchema,

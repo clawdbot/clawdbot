@@ -4,6 +4,8 @@ import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString } from "./primitives.js";
 
+export const SESSIONS_ARCHIVE_MANY_MAX_TARGETS = 100;
+
 export const SessionsArchiveManyTargetSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
@@ -12,7 +14,10 @@ export const SessionsArchiveManyTargetSchema = closedObject({
 });
 
 export const SessionsArchiveManyParamsSchema = closedObject({
-  targets: Type.Array(SessionsArchiveManyTargetSchema, { minItems: 1, maxItems: 100 }),
+  targets: Type.Array(SessionsArchiveManyTargetSchema, {
+    minItems: 1,
+    maxItems: SESSIONS_ARCHIVE_MANY_MAX_TARGETS,
+  }),
   archived: Type.Boolean(),
 });
 
