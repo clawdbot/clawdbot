@@ -249,7 +249,7 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
       continue;
     }
-    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {
+    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName) && !dockerSelectedBuildIds?.has(dirName)) {
       continue;
     }
 

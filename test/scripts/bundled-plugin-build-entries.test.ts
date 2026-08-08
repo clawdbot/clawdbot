@@ -291,7 +291,7 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("preserves known dependency-only Docker plugin selections", () => {
+  it("builds explicitly selected downloadable plugins only for Docker", () => {
     const baselineEnv = { ...process.env };
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
@@ -302,9 +302,14 @@ describe("bundled plugin build entries", () => {
       },
     });
 
-    expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/qqbot/");
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
+    expectNoPrefixMatches(Object.keys(baselineEntries), "extensions/qqbot/");
+    expectNoPrefixMatches(Object.keys(baselineEntries), "extensions/whatsapp/");
+    expectSomePrefixMatch(Object.keys(selectedEntries), "extensions/qqbot/");
+    expectSomePrefixMatch(Object.keys(selectedEntries), "extensions/whatsapp/");
+    expect(selectedEntries["extensions/whatsapp/index"]).toBe("extensions/whatsapp/index.ts");
+    expect(selectedEntries["extensions/whatsapp/setup-entry"]).toBe(
+      "extensions/whatsapp/setup-entry.ts",
+    );
   });
 
   it("preserves known package-less bundled Docker plugin selections", () => {

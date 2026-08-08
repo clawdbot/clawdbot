@@ -32,6 +32,10 @@ const selected = {
     entries: ["index.js", "setup-entry.js"],
     capability: "channel",
   },
+  whatsapp: {
+    entries: ["index.js", "setup-entry.js"],
+    capability: "channel",
+  },
   clawrouter: {
     entries: ["index.js"],
     capability: "text-inference",
@@ -92,6 +96,7 @@ const declaredDependencies = {
   clickclack: ["ws"],
   slack: ["@slack/bolt", "@slack/web-api"],
   msteams: ["@microsoft/teams.apps"],
+  whatsapp: ["audio-decode", "baileys", "typebox"],
 };
 for (const [pluginId, dependencies] of Object.entries(declaredDependencies)) {
   const packageJson = readJson(`/app/dist/extensions/${pluginId}/package.json`);
@@ -103,7 +108,7 @@ for (const [pluginId, dependencies] of Object.entries(declaredDependencies)) {
   }
 }
 
-for (const dependency of ["@microsoft/teams.apps", "@slack/bolt", "@slack/web-api", "ws"]) {
+for (const dependency of Object.values(declaredDependencies).flat()) {
   assertFile(path.join("/app/node_modules", dependency, "package.json"));
 }
 
