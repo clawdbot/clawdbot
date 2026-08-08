@@ -331,6 +331,24 @@ struct UpdateOrchestrationTests {
         updater.checkForUpdates(nil)
         #expect(!updater.isAvailable)
     }
+
+    @Test func `Sparkle retries Gateway channel resolution without starting unfiltered`() async {
+        var channels: [String?] = [nil, "extended-stable"]
+        var starts = 0
+        let updater = SparkleUpdaterController(
+            savedAutoUpdate: false,
+            gatewayUpdateChannelResolver: { channels.removeFirst() },
+            gatewayUpdateChannelRetryDelayNanoseconds: 0,
+            onStart: { starts += 1 })
+
+        updater.startAfterResolvingGatewayUpdateChannel()
+        for _ in 0 ..< 10 where !updater.isAvailable {
+            await Task.yield()
+        }
+
+        #expect(updater.isAvailable)
+        #expect(starts == 1)
+    }
     #endif
 
     @Test func `dashboard accepts only start update payloads`() {

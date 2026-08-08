@@ -810,6 +810,7 @@ import Sparkle
 
 @MainActor
 final class SparkleUpdaterController: NSObject, UpdaterProviding {
+    private static let gatewayUpdateChannelRetryDelayNanoseconds: UInt64 = 5_000_000_000
     private lazy var controller = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: self,
@@ -817,8 +818,30 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     let updateStatus = UpdateStatus()
     private var started = false
     private var gatewayUpdateChannel: String?
+    private var resolvingGatewayUpdateChannel = false
+    private let gatewayUpdateChannelResolver: @MainActor () async -> String?
+    private let gatewayUpdateChannelRetryDelayNanoseconds: UInt64
+    private let onStart: (() -> Void)?
 
-    init(savedAutoUpdate: Bool) {
+    init(
+        savedAutoUpdate: Bool,
+        gatewayUpdateChannelResolver: (@escaping @MainActor () async -> String?)? = nil,
+        gatewayUpdateChannelRetryDelayNanoseconds: UInt64 = Self.gatewayUpdateChannelRetryDelayNanoseconds,
+        onStart: (() -> Void)? = nil)
+    {
+        self.gatewayUpdateChannelResolver = gatewayUpdateChannelResolver ?? {
+            struct UpdateStatusResponse: Decodable {
+                let effectiveChannel: String?
+            }
+            guard let data = try? await GatewayConnection.shared.requestRaw(
+                method: "update.status",
+                timeoutMs: 5000),
+                let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data)
+            else { return nil }
+            return OpenClawConfigFile.normalizedGatewayUpdateChannel(response.effectiveChannel)
+        }
+        self.gatewayUpdateChannelRetryDelayNanoseconds = gatewayUpdateChannelRetryDelayNanoseconds
+        self.onStart = onStart
         super.init()
         let updater = self.controller.updater
         updater.automaticallyChecksForUpdates = savedAutoUpdate
@@ -828,22 +851,30 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     func start() {
         guard !self.started else { return }
         self.started = true
-        self.controller.startUpdater()
+        if let onStart = self.onStart {
+            onStart()
+        } else {
+            self.controller.startUpdater()
+        }
     }
 
     func startAfterResolvingGatewayUpdateChannel() {
-        Task { @MainActor in
-            struct UpdateStatusResponse: Decodable {
-                let effectiveChannel: String?
+        guard !self.started, !self.resolvingGatewayUpdateChannel else { return }
+        self.resolvingGatewayUpdateChannel = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.resolvingGatewayUpdateChannel = false }
+            while !self.started {
+                if let channel = await self.gatewayUpdateChannelResolver() {
+                    self.gatewayUpdateChannel = channel
+                    self.start()
+                    return
+                }
+                // Do not start unfiltered after a Gateway timeout: default Sparkle
+                // channels include stable releases. Retry until the Gateway supplies
+                // the verified channel so direct extended-stable installs stay pinned.
+                try? await Task.sleep(nanoseconds: self.gatewayUpdateChannelRetryDelayNanoseconds)
             }
-            guard let data = try? await GatewayConnection.shared.requestRaw(
-                method: "update.status",
-                timeoutMs: 5000),
-                let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data),
-                let channel = OpenClawConfigFile.normalizedGatewayUpdateChannel(response.effectiveChannel)
-            else { return }
-            self.gatewayUpdateChannel = channel
-            self.start()
         }
     }
 
