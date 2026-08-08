@@ -86,6 +86,56 @@ suite.define(() => {
     }
   });
 
+  it.each([
+    {
+      name: "missing token",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      },
+      expectedKind: "auth-required",
+      expectedTitle: "Auth required",
+    },
+    {
+      name: "pairing approval",
+      error: {
+        code: "NOT_PAIRED",
+        message: "device is not approved",
+        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+      },
+      expectedKind: "pairing-required",
+      expectedTitle: "Device pairing required",
+    },
+    {
+      name: "generic transport",
+      error: {
+        code: "UNAVAILABLE",
+        message: "WebSocket connection failed",
+      },
+      expectedKind: "network",
+      expectedTitle: "Could not connect",
+    },
+  ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", fixture.error);
+
+      const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
+      await failure.waitFor({ timeout: 10_000 });
+      expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
+        fixture.expectedTitle,
+      );
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("keeps mobile controls compact, touchable, and keyboard-friendly", async () => {
     const context = await suite.browser.newContext({
       hasTouch: true,

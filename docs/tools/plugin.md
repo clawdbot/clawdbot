@@ -3,7 +3,7 @@ summary: "Install, configure, and manage OpenClaw plugins"
 read_when:
   - Installing or configuring plugins
   - Understanding plugin discovery and load rules
-  - Working with Codex/Claude-compatible plugin bundles
+  - Working with Agent Plugins, Codex, Claude, or Cursor-compatible plugin bundles
 title: "Plugins"
 sidebarTitle: "Getting Started"
 doc-schema-version: 1

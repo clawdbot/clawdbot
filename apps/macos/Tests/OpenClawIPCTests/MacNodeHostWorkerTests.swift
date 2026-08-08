@@ -1,5 +1,5 @@
 import Foundation
-@_spi(AgentExecutionAttribution) import OpenClawKit
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -235,47 +235,6 @@ struct MacNodeHostWorkerTests {
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
         #expect(response.ok)
         #expect(response.payload != nil)
-        await worker.stop()
-    }
-
-    @Test func `worker forwards only negotiated session envelopes`() async throws {
-        let worker = MacNodeHostWorker(session: GatewayNodeSession())
-        let script = """
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        IFS= read -r attributed
-        printf '%s' "$attributed" | grep -q '"sessionKey":"agent:main:main"' || exit 40
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"attributed","ok":true}}'
-        IFS= read -r cleared
-        printf '%s' "$cleared" | grep -q '"sessionKey":null' || exit 41
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"cleared","ok":true}}'
-        IFS= read -r legacy
-        if printf '%s' "$legacy" | grep -q '"sessionKey"'; then exit 42; fi
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"legacy","ok":true}}'
-        while IFS= read -r line; do :; done
-        """
-
-        _ = try await worker.start(command: ["/bin/sh", "-c", script])
-        let attributed = await GatewayNodeInvokeContext.$sessionKeyEnvelope.withValue(
-            .authoritative("agent:main:main"))
-        {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "attributed",
-                command: "system.run"))
-        }
-        let cleared = await GatewayNodeInvokeContext.$sessionKeyEnvelope.withValue(.authoritative(nil)) {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "cleared",
-                command: "system.run"))
-        }
-        let legacy = await GatewayNodeInvokeContext.$sessionKeyEnvelope.withValue(.legacy) {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "legacy",
-                command: "system.run"))
-        }
-
-        #expect(attributed.ok)
-        #expect(cleared.ok)
-        #expect(legacy.ok)
         await worker.stop()
     }
 

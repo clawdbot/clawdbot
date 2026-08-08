@@ -119,10 +119,6 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: waitForEmbeddedAgentRunEndMock,
 }));
 
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: runEmbeddedAgentMock,
-}));
-
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
     outcome.reason && outcome.sessionId
@@ -319,7 +315,6 @@ function makeRunReplyAgentParams(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,
@@ -449,7 +444,6 @@ describe("runReplyAgent media path normalization", () => {
         shouldSteer: true,
         shouldFollowup: true,
         isActive: true,
-        isStreaming: false,
         followupRun,
       }),
     );
@@ -584,7 +578,6 @@ describe("runReplyAgent media path normalization", () => {
         shouldFollowup: true,
         isActive: true,
         isRunActive: () => true,
-        isStreaming: true,
       }),
     );
 
@@ -609,7 +602,6 @@ describe("runReplyAgent media path normalization", () => {
         shouldFollowup: true,
         isActive: true,
         isRunActive: () => true,
-        isStreaming: true,
       }),
     );
 

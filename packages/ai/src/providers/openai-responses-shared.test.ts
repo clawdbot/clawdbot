@@ -969,6 +969,28 @@ describe("processResponsesStream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
+  it("records the effective model from the terminal response", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_rerouted",
+            status: "completed",
+            model: "gpt-5.5-rerouted",
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.responseModel).toBe("gpt-5.5-rerouted");
+  });
+
   it("keeps interleaved reasoning items bound to their output indices", async () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();

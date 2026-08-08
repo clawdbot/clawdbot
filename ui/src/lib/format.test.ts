@@ -7,6 +7,7 @@ import {
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
+  formatContextTokenCapacity,
   formatDurationCompact,
   formatDurationHuman,
   formatMs,
@@ -209,6 +210,7 @@ describe("formatCompactTokenCount", () => {
 
   it("formats millions with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000_000)).toBe("1M");
+    expect(formatCompactTokenCount(1_050_000)).toBe("1.1M");
     expect(formatCompactTokenCount(1_500_000)).toBe("1.5M");
   });
 
@@ -232,6 +234,21 @@ describe("formatCompactTokenCount", () => {
       "1.0K",
     );
     expect(formatCompactTokenCount(1_000_000, { trimTrailingZero: false })).toBe("1.0M");
+  });
+});
+
+describe("formatContextTokenCapacity", () => {
+  it("truncates million-scale capacity to at most one decimal", () => {
+    expect(formatContextTokenCapacity(1_000_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_050_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_100_000)).toBe("1.1M");
+  });
+
+  it("preserves shared compact formatting below one million", () => {
+    expect(formatContextTokenCapacity(999)).toBe("999");
+    expect(formatContextTokenCapacity(1_000)).toBe("1k");
+    expect(formatContextTokenCapacity(32_768)).toBe("32.8k");
+    expect(formatContextTokenCapacity(999_999)).toBe("1M");
   });
 });
 

@@ -2,10 +2,6 @@
  * Bundled Codex plugin entry: app-server harness, media understanding,
  * migration provider, CLI-session commands, and binding hooks.
  */
-import {
-  createOpenClawCodingToolsForAgentHarness,
-  createOpenClawCodingToolsForAgentHarnessSideQuestion,
-} from "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
@@ -170,10 +166,6 @@ export default definePluginEntry({
       createCodexAppServerAgentHarness({
         bindingStore,
         sessionCatalogControl,
-        toolAuthority: {
-          createForAttempt: createOpenClawCodingToolsForAgentHarness,
-          createForSideQuestion: createOpenClawCodingToolsForAgentHarnessSideQuestion,
-        },
         resolveConfig: resolveCurrentConfig,
         resolvePluginConfig: resolveCurrentPluginConfig,
         runtime: api.runtime,

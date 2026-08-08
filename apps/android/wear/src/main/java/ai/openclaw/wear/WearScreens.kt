@@ -312,92 +312,161 @@ private fun ChatPage(
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
-  WearPage(pageLabel = stringResource(R.string.chat)) {
-    item {
-      ConversationIdentity(
-        snapshot = snapshot,
-        actionBusy = actionBusy,
-        onSelectAgent = onSelectAgent,
-        onSelectSession = onSelectSession,
-        onSelectModel = onSelectModel,
+  val listState = rememberTransformingLazyColumnState()
+  val coroutineScope = rememberCoroutineScope()
+  val visibleMessages = snapshot.messages.takeLast(VISIBLE_MESSAGE_COUNT)
+  val streamingText = snapshot.streamingAssistantText?.takeIf(String::isNotBlank)
+  val hasAssistant = snapshot.messages.any { message -> message.chatRole == WearChatRole.ASSISTANT }
+  val latestAnchorIndex =
+    wearChatLatestAnchorIndex(
+      visibleMessageCount = visibleMessages.size,
+      hasStreaming = streamingText != null,
+      canAbort = canAbort,
+      hasAssistant = hasAssistant,
+      hasFailure = snapshot.failure != null,
+    )
+  val contentRevision =
+    wearChatContentRevision(
+      sessionId = snapshot.activeSessionId,
+      messages = visibleMessages,
+      streamingText = streamingText,
+      latestAnchorIndex = latestAnchorIndex,
+    )
+  var followState by remember(snapshot.activeSessionId) { mutableStateOf(WearThreadFollowState()) }
+
+  LaunchedEffect(listState, snapshot.activeSessionId) {
+    snapshotFlow {
+      WearThreadViewport(
+        atLatest = !listState.canScrollForward,
+        scrollingBackward = listState.isScrollInProgress && listState.lastScrolledBackward,
       )
+    }.collect { viewport ->
+      followState =
+        nextWearThreadFollowForViewport(
+          state = followState,
+          atLatest = viewport.atLatest,
+          scrollingBackward = viewport.scrollingBackward,
+        )
     }
-    item {
-      ConversationStatus(
-        interaction = interaction,
-        speaking = speaking,
-        gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
+  }
+  LaunchedEffect(snapshot.activeSessionId, contentRevision) {
+    val update =
+      nextWearThreadFollowForContent(
+        state = followState,
+        contentRevision = contentRevision,
       )
+    followState = update.state
+    if (update.scrollToLatest && latestAnchorIndex >= 0) {
+      listState.requestScrollToItem(latestAnchorIndex)
     }
-    item {
-      Row(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        ActionButton(
-          label = stringResource(R.string.talk),
-          enabled = inputEnabled && !actionBusy && !speaking,
-          onClick = onTalk,
-          modifier = Modifier.weight(1f),
-        )
-        ActionButton(
-          label = stringResource(R.string.type),
-          enabled = inputEnabled && !actionBusy && !speaking,
-          onClick = onType,
-          modifier = Modifier.weight(1f),
-        )
-      }
-    }
-    if (canAbort) {
+  }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    WearPage(
+      pageLabel = stringResource(R.string.chat),
+      listState = listState,
+    ) {
       item {
-        SecondaryButton(
-          label = stringResource(R.string.abort_run),
-          enabled = true,
-          onClick = onAbort,
+        ConversationIdentity(
+          snapshot = snapshot,
+          actionBusy = actionBusy,
+          onSelectAgent = onSelectAgent,
+          onSelectSession = onSelectSession,
+          onSelectModel = onSelectModel,
         )
       }
-    }
-    if (snapshot.messages.isEmpty() && snapshot.streamingAssistantText.isNullOrBlank()) {
       item {
-        EmptyConversation()
+        ConversationStatus(
+          interaction = interaction,
+          speaking = speaking,
+          gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
+        )
       }
-    } else {
-      snapshot.messages
-        .takeLast(VISIBLE_MESSAGE_COUNT)
-        .forEach { message ->
+      item {
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          ActionButton(
+            label = stringResource(R.string.talk),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onTalk,
+            modifier = Modifier.weight(1f),
+          )
+          ActionButton(
+            label = stringResource(R.string.type),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onType,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+      if (canAbort) {
+        item {
+          SecondaryButton(
+            label = stringResource(R.string.abort_run),
+            enabled = true,
+            onClick = onAbort,
+          )
+        }
+      }
+      if (visibleMessages.isEmpty() && streamingText == null) {
+        item {
+          EmptyConversation()
+        }
+      } else {
+        visibleMessages.forEach { message ->
           item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
             MessageBubble(message = message)
           }
         }
-      snapshot.streamingAssistantText
-        ?.takeIf(String::isNotBlank)
-        ?.let { streaming ->
+        streamingText?.let { streaming ->
           item {
             StreamingBubble(text = streaming)
           }
         }
-    }
-    if (snapshot.messages.any { message -> message.chatRole == WearChatRole.ASSISTANT }) {
-      item {
-        SecondaryButton(
-          label =
-            if (speaking) {
-              stringResource(R.string.stop_speaking)
-            } else {
-              stringResource(R.string.speak_reply)
-            },
-          enabled = !actionBusy || speaking,
-          onClick = if (speaking) onStopSpeaking else onSpeakLatest,
-        )
+      }
+      if (hasAssistant) {
+        item {
+          SecondaryButton(
+            label =
+              if (speaking) {
+                stringResource(R.string.stop_speaking)
+              } else {
+                stringResource(R.string.speak_reply)
+              },
+            enabled = !actionBusy || speaking,
+            onClick = if (speaking) onStopSpeaking else onSpeakLatest,
+          )
+        }
+      }
+      snapshot.failure?.let { failure ->
+        item {
+          InlineError(text = failureDetail(failure))
+        }
+      }
+      if (latestAnchorIndex >= 0) {
+        item(key = "chat-end") {
+          Spacer(modifier = Modifier.height(1.dp))
+        }
       }
     }
-    snapshot.failure?.let { failure ->
-      item {
-        InlineError(text = failureDetail(failure))
+    if (followState.hasNewContent) {
+      NewMessagesAction(
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 8.dp),
+      ) {
+        followState = wearThreadFollowLatest(followState)
+        if (latestAnchorIndex >= 0) {
+          coroutineScope.launch {
+            listState.animateScrollToItem(latestAnchorIndex)
+          }
+        }
       }
     }
   }
@@ -870,33 +939,18 @@ private fun ThreadVoiceMode(
       }
     }
     if (followState.hasNewContent) {
-      Box(
+      NewMessagesAction(
         modifier =
           Modifier
             .align(Alignment.BottomCenter)
-            .padding(bottom = 44.dp)
-            .minimumInteractiveComponentSize()
-            .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
-            .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
-            .clickable(
-              role = Role.Button,
-              onClickLabel = stringResource(R.string.show_new_messages),
-            ) {
-              followState = wearThreadFollowLatest(followState)
-              if (latestAnchorIndex >= 0) {
-                coroutineScope.launch {
-                  listState.animateScrollToItem(latestAnchorIndex)
-                }
-              }
-            }.padding(horizontal = 10.dp, vertical = 5.dp),
-        contentAlignment = Alignment.Center,
+            .padding(bottom = 44.dp),
       ) {
-        Text(
-          text = stringResource(R.string.new_messages) + " ↓",
-          color = colors.voiceAccent,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold,
-        )
+        followState = wearThreadFollowLatest(followState)
+        if (latestAnchorIndex >= 0) {
+          coroutineScope.launch {
+            listState.animateScrollToItem(latestAnchorIndex)
+          }
+        }
       }
     }
     Row(
@@ -965,6 +1019,34 @@ private fun ThreadVoiceMode(
 }
 
 @Composable
+private fun NewMessagesAction(
+  modifier: Modifier,
+  onClick: () -> Unit,
+) {
+  val colors = OpenClawWearTheme.colors
+  Box(
+    modifier =
+      modifier
+        .minimumInteractiveComponentSize()
+        .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
+        .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
+        .clickable(
+          role = Role.Button,
+          onClickLabel = stringResource(R.string.show_new_messages),
+          onClick = onClick,
+        ).padding(horizontal = 10.dp, vertical = 5.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = stringResource(R.string.new_messages) + " ↓",
+      color = colors.voiceAccent,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.Bold,
+    )
+  }
+}
+
+@Composable
 private fun WearThreadThinking() {
   val colors = OpenClawWearTheme.colors
   Box(
@@ -1021,6 +1103,48 @@ internal fun wearThreadContentRevision(
     latestStreaming = latest?.streaming == true,
     thinking = thinking,
   )
+}
+
+internal fun wearChatContentRevision(
+  sessionId: String?,
+  messages: List<WearChatMessage>,
+  streamingText: String?,
+  latestAnchorIndex: Int,
+): WearThreadContentRevision =
+  WearThreadContentRevision(
+    entryCount = messages.size,
+    latestEntryId = sessionId,
+    latestText =
+      buildString {
+        append(latestAnchorIndex)
+        messages.forEach { message ->
+          append('\u0000')
+          append(message.id)
+          append('\u0001')
+          append(message.role)
+          append('\u0001')
+          append(message.timestamp)
+          append('\u0001')
+          append(message.text)
+        }
+        append('\u0000')
+        append(streamingText)
+      },
+    latestStreaming = !streamingText.isNullOrBlank(),
+    thinking = false,
+  )
+
+internal fun wearChatLatestAnchorIndex(
+  visibleMessageCount: Int,
+  hasStreaming: Boolean,
+  canAbort: Boolean,
+  hasAssistant: Boolean,
+  hasFailure: Boolean,
+): Int {
+  if (visibleMessageCount == 0 && !hasStreaming) return -1
+  return CHAT_FIXED_ITEM_COUNT +
+    visibleMessageCount +
+    listOf(canAbort, hasStreaming, hasAssistant, hasFailure).count { it }
 }
 
 internal fun wearThreadLatestAnchorIndex(
@@ -1353,17 +1477,18 @@ private fun ConnectionStateScreen(
 @Composable
 private fun WearPage(
   pageLabel: String,
+  listState: androidx.wear.compose.foundation.lazy.TransformingLazyColumnState? = null,
   content: androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope.() -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
+  val resolvedListState = listState ?: rememberTransformingLazyColumnState()
+  ScreenScaffold(scrollState = resolvedListState) { contentPadding ->
     TransformingLazyColumn(
       modifier =
         Modifier
           .fillMaxSize()
           .background(colors.canvas),
-      state = listState,
+      state = resolvedListState,
       contentPadding = contentPadding,
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2062,5 +2187,6 @@ private fun failureDetail(failure: WearConversationFailure?): String =
     -> stringResource(R.string.try_again)
   }
 
+private const val CHAT_FIXED_ITEM_COUNT = 4
 private const val VISIBLE_MESSAGE_COUNT = 8
 private const val VISIBLE_REALTIME_ENTRY_COUNT = 6

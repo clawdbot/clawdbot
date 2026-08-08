@@ -6,6 +6,21 @@ import {
   buildMockFunctionCall,
   buildToolCallEventsWithArgs,
 } from "./mock-openai-tooling.js";
+
+export function buildFailedResponseEvents(): StreamEvent[] {
+  const responseId = `resp_qa_failed_${Date.now()}`;
+  return [
+    { type: "response.created", response: { id: responseId } },
+    {
+      type: "response.failed",
+      response: {
+        id: responseId,
+        status: "failed",
+      },
+    },
+  ];
+}
+
 export function buildToolCallEvents(prompt: string): StreamEvent[] {
   const targetPath = readTargetFromPrompt(prompt);
   return buildToolCallEventsWithArgs("read", { path: targetPath });

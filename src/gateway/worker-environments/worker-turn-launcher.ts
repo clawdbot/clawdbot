@@ -236,10 +236,6 @@ async function executeWorkerTurn(params: {
 
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
-  turn.onExecutionAttributionChanged?.({
-    lifecycleGeneration: turn.lifecycleGeneration,
-    attribution: turn.attribution,
-  });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const manager = SessionManager.open(transcriptTarget);
