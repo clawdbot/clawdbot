@@ -412,7 +412,7 @@ function resolveSessionMutationTargets(params: {
   context: GatewayRequestContext;
   getCfg: () => OpenClawConfig;
 }): SessionMutationTarget[] | undefined {
-  if (params.method === "sessions.archiveMany") {
+  if (params.method === "sessions.patchMany") {
     const targets = (params.requestParams as { targets?: unknown } | null)?.targets;
     return Array.isArray(targets)
       ? targets.slice(0, 101).flatMap((target): SessionMutationTarget[] => {
@@ -543,7 +543,7 @@ export function resolveSessionMutationAuthorization(params: {
       ...lookupCaches,
     });
     const error =
-      (params.method === "sessions.archiveMany"
+      (params.method === "sessions.patchMany"
         ? authorizeIncognitoSessionTarget({
             client: params.client,
             sessionKey: targetRef.sessionKey,
@@ -610,7 +610,14 @@ export function resolveSessionMutationAuthorization(params: {
         if (!current) {
           return;
         }
-        const error = authorizeSessionSharingTarget({ client: params.client, target: current });
+        const error =
+          (params.method === "sessions.patchMany"
+            ? authorizeIncognitoSessionTarget({
+                client: params.client,
+                sessionKey: targetRef.sessionKey,
+                target: current,
+              })
+            : null) ?? authorizeSessionSharingTarget({ client: params.client, target: current });
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }

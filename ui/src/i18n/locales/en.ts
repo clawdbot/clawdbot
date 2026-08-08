@@ -864,6 +864,7 @@ export const en: TranslationMap = {
     archiveSession: "Archive session",
     archiveSessionCount: "Archive {count}",
     restoreSession: "Restore session",
+    restoreSessionCount: "Restore {count}",
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",

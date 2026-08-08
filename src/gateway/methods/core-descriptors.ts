@@ -486,7 +486,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
   // Additive audit inspection appends so older advertised method indices stay stable.
   ["audit.run.inspect", "audit", "operator.read", "2026.7"],
-  ["sessions.archiveMany", "sessions-mutations", "operator.write", "2026.8"],
+  ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
   // Update campaign mutations share update.run's admin and control-plane write policy.
   ["update.hold", "update", "operator.admin", "2026.8", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

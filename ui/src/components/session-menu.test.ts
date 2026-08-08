@@ -202,6 +202,13 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain("Mark 2 as read");
   });
 
+  it("offers Restore N when every selected session is archived", async () => {
+    const menu = await mountMenu({ selectionCount: 2, session: { archived: true } });
+
+    expect(menuItemLabels(menu)).toContain("Restore 2");
+    expect(menuItemLabels(menu)).not.toContain("Archive 2");
+  });
+
   it("omits Open chat and Workboard when unavailable", async () => {
     const menu = await mountMenu({ canOpenChat: false, workboard: null });
 
