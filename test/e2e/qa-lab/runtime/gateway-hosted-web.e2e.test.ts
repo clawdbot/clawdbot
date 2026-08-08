@@ -61,7 +61,9 @@ function waitForWebSocketMessage(ws: WebSocket, expected: string): Promise<void>
     ws.on("message", (data) => {
       const message = Array.isArray(data)
         ? Buffer.concat(data).toString("utf8")
-        : Buffer.from(data).toString("utf8");
+        : Buffer.isBuffer(data)
+          ? data.toString("utf8")
+          : Buffer.from(data).toString("utf8");
       if (message !== expected) {
         return;
       }

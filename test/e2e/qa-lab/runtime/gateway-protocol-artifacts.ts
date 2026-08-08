@@ -243,10 +243,17 @@ export function buildCanonicalProtocolSchema(
       },
     },
     methods: Object.fromEntries(
-      methodMetadata.map(({ name, scope, since }) => [name, { since, scope }]),
+      // Omit undefined `since` so structuredClone matches the prior JSON
+      // round-trip byte shape and the document satisfies the schema type.
+      methodMetadata.map(({ name, scope, since }) => [
+        name,
+        { ...(since === undefined ? {} : { since }), scope },
+      ]),
     ),
     definitions: schemas,
-  }) as ProtocolSchemaDocument;
+    // The runtime consumers validate this JSON document; the literal cannot
+    // structurally satisfy ProtocolSchemaDocument's stricter schema shapes.
+  }) as unknown as ProtocolSchemaDocument;
 }
 
 export function assertPublishedProtocolSchema(params: {
