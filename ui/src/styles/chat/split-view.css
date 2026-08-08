@@ -437,6 +437,11 @@ openclaw-chat-pane {
   .chat-pane__header:has(.chat-pane__close-pane) .chat-workspace-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-session-discussion-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) [data-board-dock-menu],
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__gateway-menu,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
+  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
   .chat-pane__header:has(.chat-pane__close-pane) openclaw-session-owner-chip {
     display: none;
   }

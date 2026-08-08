@@ -864,6 +864,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         `<!doctype html><html><head><style>${readUiCss()}\n${settingsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
             <div class="chat-pane__header">
+              <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
               <span class="chat-pane__session-title">A deliberately long split-pane session title</span>
               <openclaw-session-owner-chip>
                 <span class="session-owner-chip session-owner-chip--header">O</span>
@@ -877,6 +878,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <button class="settings-segmented__btn" type="button">Board</button>
                 </div>
               </div>
+              <wa-dropdown class="chat-pane__sharing-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
+              </wa-dropdown>
+              <wa-dropdown class="chat-pane__branches-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger" type="button">R</button>
+              </wa-dropdown>
+              <wa-dropdown class="chat-pane__gateway-menu">
+                <button class="chat-pane__gateway-chip" type="button">
+                  <span class="chat-pane__gateway-health"></span>
+                  <span class="chat-pane__gateway-name">A long native gateway name</span>
+                </button>
+              </wa-dropdown>
               <div class="chat-pane__actions">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle" type="button">D</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle" type="button">T</button>
@@ -886,6 +899,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right" type="button">H</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open" type="button">P</button>
               </div>
             </div>
           </div>
@@ -899,6 +913,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ".chat-workspace-toggle",
         ".chat-session-discussion-toggle",
         "[data-board-dock-menu]",
+        ".chat-pane__sharing-menu",
+        ".chat-pane__branches-menu",
+        ".chat-pane__gateway-menu",
+        ".chat-pane__nav-toggle",
+        ".chat-pane__palette-open",
         ".chat-pane__split-down",
         ".chat-pane__split-right",
       ];
