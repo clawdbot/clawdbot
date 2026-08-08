@@ -117,6 +117,7 @@ function runWithPluginToolScope<T>(entry: PluginToolRegistration, run: () => T):
     {
       pluginId: entry.pluginId,
       ...(entry.source ? { pluginSource: entry.source } : {}),
+      ...(entry.origin ? { pluginOrigin: entry.origin } : {}),
     },
     run,
   );

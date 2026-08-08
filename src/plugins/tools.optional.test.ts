@@ -538,12 +538,14 @@ describe("resolvePluginTools optional tools", () => {
       phase: "factory" | "prepare" | "execute";
       pluginId?: string;
       pluginSource?: string;
+      pluginOrigin?: "bundled" | "global" | "workspace" | "config";
     }> = [];
 
     setRegistry(
       ["multi", "optional-demo"].map((pluginId) => ({
         pluginId,
         optional: false,
+        origin: "bundled" as const,
         source: `/tmp/${pluginId}.js`,
         names: [`${pluginId}_tool`],
         factory: () => {
@@ -552,6 +554,7 @@ describe("resolvePluginTools optional tools", () => {
             phase: "factory",
             pluginId: scope?.pluginId,
             pluginSource: scope?.pluginSource,
+            pluginOrigin: scope?.pluginOrigin,
           });
           return {
             name: `${pluginId}_tool`,
@@ -563,6 +566,7 @@ describe("resolvePluginTools optional tools", () => {
                 phase: "prepare",
                 pluginId: prepareScope?.pluginId,
                 pluginSource: prepareScope?.pluginSource,
+                pluginOrigin: prepareScope?.pluginOrigin,
               });
               return args;
             },
@@ -572,6 +576,7 @@ describe("resolvePluginTools optional tools", () => {
                 phase: "execute",
                 pluginId: executeScope?.pluginId,
                 pluginSource: executeScope?.pluginSource,
+                pluginOrigin: executeScope?.pluginOrigin,
               });
               return { content: [{ type: "text", text: pluginId }] };
             },
@@ -601,23 +606,41 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
     expect(observed).toEqual([
-      { phase: "factory", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "factory",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        pluginOrigin: "bundled",
+      },
       {
         phase: "factory",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
+        pluginOrigin: "bundled",
       },
-      { phase: "prepare", pluginId: "multi", pluginSource: "/tmp/multi.js" },
-      { phase: "execute", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "prepare",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        pluginOrigin: "bundled",
+      },
+      {
+        phase: "execute",
+        pluginId: "multi",
+        pluginSource: "/tmp/multi.js",
+        pluginOrigin: "bundled",
+      },
       {
         phase: "prepare",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
+        pluginOrigin: "bundled",
       },
       {
         phase: "execute",
         pluginId: "optional-demo",
         pluginSource: "/tmp/optional-demo.js",
+        pluginOrigin: "bundled",
       },
     ]);
   });
