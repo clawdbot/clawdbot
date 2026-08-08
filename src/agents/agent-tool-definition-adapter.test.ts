@@ -8,7 +8,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { runAgentLoop, type StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -41,11 +41,11 @@ const FAUX_MODEL = {
   api: "faux",
   baseUrl: "http://localhost:0",
   reasoning: false,
-  input: ["text"] as const,
+  input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 1024,
-};
+} satisfies Model;
 
 async function runToolCallTranscript(params: {
   tools: AgentTool[];
@@ -62,6 +62,7 @@ async function runToolCallTranscript(params: {
               role: "assistant" as const,
               content: [{ type: "toolCall" as const, ...params.toolCall }],
               ...FAUX_MODEL,
+              model: FAUX_MODEL.id,
               usage: ZERO_USAGE,
               stopReason: "toolUse" as const,
               timestamp: Date.now(),
@@ -70,6 +71,7 @@ async function runToolCallTranscript(params: {
               role: "assistant" as const,
               content: [{ type: "text" as const, text: "done" }],
               ...FAUX_MODEL,
+              model: FAUX_MODEL.id,
               usage: ZERO_USAGE,
               stopReason: "stop" as const,
               timestamp: Date.now(),
@@ -517,7 +519,17 @@ describe("toClientToolDefinitions – param coercion", () => {
   it("preserves a client tool loop warning in the session transcript", async () => {
     const runId = "run-transcript-warning";
     const toolCallId = "call-transcript-warning";
-    const tools = toClientToolDefinitions([makeClientTool("update_plan")], undefined, { runId });
+    const clientTools = toClientToolDefinitions([makeClientTool("update_plan")], undefined, {
+      runId,
+    });
+    const tools: AgentTool[] = clientTools.map((tool) => ({
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+      execute: async (callId, params, signal, onUpdate) =>
+        await tool.execute(callId, params, signal, onUpdate, extensionContext),
+    }));
     recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
     const messages = await runToolCallTranscript({
       tools,
