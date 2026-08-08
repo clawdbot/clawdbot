@@ -2569,6 +2569,15 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.chat-view-menu__provenance {
+  margin: 4px 6px 2px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);

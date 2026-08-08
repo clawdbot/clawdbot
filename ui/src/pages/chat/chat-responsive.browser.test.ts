@@ -775,7 +775,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <wa-dropdown class="chat-pane__gateway-menu">
-            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
+            <template shadowrootmode="open"><div part="menu">Gateways<slot></slot></div></template>
             <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
           </wa-dropdown>
         </body></html>`,
@@ -901,6 +901,61 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         callBackground: "rgba(0, 0, 0, 0)",
         tool: "text",
       });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("insets only the bundled logo inside the unchanged avatar box", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <img class="chat-avatar assistant chat-avatar--logo" src="/apple-touch-icon.png" alt="Logo" />
+        <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
+        <img class="chat-avatar user" src="/avatar/user" alt="User" />
+      </body></html>`);
+
+      const avatars = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>(".chat-avatar")].map((avatar) => {
+          const style = getComputedStyle(avatar);
+          const bounds = avatar.getBoundingClientRect();
+          return {
+            width: bounds.width,
+            height: bounds.height,
+            boxSizing: style.boxSizing,
+            objectFit: style.objectFit,
+            padding: style.padding,
+            borderWidth: style.borderTopWidth,
+          };
+        }),
+      );
+
+      expect(avatars).toEqual([
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "contain",
+          padding: "2px",
+          borderWidth: "1px",
+        },
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "cover",
+          padding: "0px",
+          borderWidth: "1px",
+        },
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "cover",
+          padding: "0px",
+          borderWidth: "1px",
+        },
+      ]);
     } finally {
       await closeBrowserPage(page);
     }

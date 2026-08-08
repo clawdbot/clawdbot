@@ -2,6 +2,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnContext, type CommandTurnContext } from "../command-turn-context.js";
@@ -20,6 +21,7 @@ export type SourceReplyDeliveryModeContext = {
   CommandSource?: "text" | "native";
   CommandTurn?: CommandTurnContext;
   BotUsername?: string;
+  InputProvenance?: InputProvenance;
 };
 
 function toSessionStableDeliveryModeContext(
@@ -115,6 +117,18 @@ export function resolveSourceReplyDeliveryMode(params: {
   return mode;
 }
 
+/** Returns true when a lifecycle turn must not redefine session-stable reply policy. */
+export function isSyntheticSourceReplyTurn(params: {
+  inputProvenance?: InputProvenance;
+  isHeartbeat?: boolean;
+}): boolean {
+  return (
+    params.isHeartbeat === true ||
+    params.inputProvenance?.kind === "inter_session" ||
+    params.inputProvenance?.kind === "internal_system"
+  );
+}
+
 /** Full source-reply suppression decision consumed by run and hook code. */
 type SourceReplyVisibilityPolicy = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
@@ -140,6 +154,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   shouldSuppressTyping?: boolean;
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
+  isHeartbeat?: boolean;
 }): SourceReplyVisibilityPolicy {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode({
     cfg: params.cfg,
@@ -149,9 +164,13 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,
   });
-  const hasTurnDeliveryOverride =
-    params.requested !== undefined || isExplicitSourceReplyCommand(params.ctx, params.cfg);
-  const sessionStableSourceReplyDeliveryMode = hasTurnDeliveryOverride
+  const hasStableTurnOverride =
+    !isSyntheticSourceReplyTurn({
+      inputProvenance: params.ctx.InputProvenance,
+      isHeartbeat: params.isHeartbeat,
+    }) &&
+    (params.requested !== undefined || isExplicitSourceReplyCommand(params.ctx, params.cfg));
+  const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride
     ? sourceReplyDeliveryMode
     : resolveSourceReplyDeliveryMode({
         cfg: params.cfg,

@@ -61,6 +61,31 @@ function isTrackedActiveSessionRunForKey(
     : false;
 }
 
+export function hasRegisteredChatRunForSessionKey(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  sessionKey: string;
+  agentId: string | undefined;
+}): boolean {
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return false;
+  }
+  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  for (const active of params.context.chatAbortControllers.values()) {
+    if (active.sessionKey?.trim() !== params.sessionKey) {
+      continue;
+    }
+    if (params.sessionKey !== "global") {
+      return true;
+    }
+    const activeAgentId =
+      typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined;
+    if (!requestedAgentId || !activeAgentId || requestedAgentId === activeAgentId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Returns true when either requested or canonical session key has a visible active run. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;

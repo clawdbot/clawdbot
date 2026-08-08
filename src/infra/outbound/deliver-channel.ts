@@ -329,7 +329,13 @@ function createPluginHandler(
         }
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
-    presentationCapabilities: outbound?.presentationCapabilities,
+    presentationCapabilities: outbound?.resolvePresentationCapabilities
+      ? outbound.resolvePresentationCapabilities({
+          cfg: params.cfg,
+          accountId: params.accountId,
+          formatting: params.formatting,
+        })
+      : outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
       ? async (payload) => {
           // The delivery owner already normalized/adapted this; cloning drops fallback fragments.

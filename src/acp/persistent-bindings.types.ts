@@ -25,6 +25,7 @@ export type ConfiguredAcpBindingSpec = {
   /** ACP harness agent id override (falls back to agentId when omitted). */
   acpAgentId?: string;
   mode: AcpRuntimeSessionMode;
+  model?: string;
   cwd?: string;
   backend?: string;
   label?: string;
@@ -101,6 +102,7 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
       agentId: spec.agentId,
       ...(spec.acpAgentId ? { acpAgentId: spec.acpAgentId } : {}),
       label: spec.label,
+      ...(spec.model ? { model: spec.model } : {}),
       ...(spec.backend ? { backend: spec.backend } : {}),
       ...(spec.cwd ? { cwd: spec.cwd } : {}),
     },
@@ -158,6 +160,7 @@ export function resolveConfiguredAcpBindingSpecFromRecord(
     agentId,
     acpAgentId: normalizeText(record.metadata?.acpAgentId),
     mode: normalizeMode(record.metadata?.mode),
+    model: normalizeText(record.metadata?.model),
     cwd: normalizeText(record.metadata?.cwd),
     backend: normalizeText(record.metadata?.backend),
     label: normalizeText(record.metadata?.label),

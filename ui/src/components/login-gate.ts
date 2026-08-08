@@ -178,11 +178,7 @@ function resolveLoginFailureFeedback(
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
       titleKey: "login.failure.insecure.title",
       summaryKey: "login.failure.insecure.summary",
-      stepKeys: [
-        "login.failure.insecure.stepHttps",
-        "login.failure.insecure.stepLocalCompat",
-        "login.failure.insecure.stepAvoidDisable",
-      ],
+      stepKeys: ["login.failure.insecure.stepHttps", "login.failure.insecure.stepAvoidDisable"],
     });
   }
 

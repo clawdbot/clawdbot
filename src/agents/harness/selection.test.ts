@@ -2,10 +2,12 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
@@ -14,6 +16,7 @@ import type {
 } from "../embedded-agent-runner/run/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
+import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   agentHarnessBuildsOpenClawTools,
@@ -50,6 +53,33 @@ const compactAuthMocks = vi.hoisted(() => ({
 const providerOwnerMocks = vi.hoisted(() => ({
   resolveProviderRefOwnership: vi.fn(),
 }));
+const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
+  drainPendingContextEngineTurnsBeforeRun: vi.fn(async (_params: unknown) => {}),
+}));
+
+function createTranscriptRecorder(
+  admission: ReturnType<typeof createTranscriptAnchor> & {
+    logicalTurnId: string;
+    role: "user";
+  },
+): UserTurnTranscriptRecorder {
+  const message = { role: "user" as const, content: "hello", timestamp: 1 };
+  return {
+    message,
+    resolveMessage: async () => message,
+    getAdmissionReceipt: () => admission,
+    markRuntimePersistencePending: () => {},
+    markRuntimePersisted: () => {},
+    markBlocked: () => {},
+    hasPersisted: () => true,
+    isBlocked: () => false,
+    hasRuntimePersistencePending: () => false,
+    waitForRuntimePersistence: async () => {},
+    persistApproved: async () => undefined,
+    persistBlocked: async () => undefined,
+    persistFallback: async () => undefined,
+  };
+}
 
 it("identifies harnesses that expose OpenClaw tools", () => {
   expect(agentHarnessBuildsOpenClawTools("openclaw")).toBe(false);
@@ -93,6 +123,10 @@ vi.mock("../runtime-plan/prepare-auth.js", async (importOriginal) => {
 vi.mock("../../plugins/providers.js", () => ({
   resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
 }));
+vi.mock("./context-engine-turn-attempt.js", () => ({
+  drainPendingContextEngineTurnsBeforeRun:
+    contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
+}));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
@@ -109,6 +143,9 @@ beforeEach(() => {
   compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({ status: "unowned" });
+  contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun
+    .mockReset()
+    .mockResolvedValue(undefined);
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
       providers: [],
@@ -144,6 +181,7 @@ afterEach(() => {
   compactAuthMocks.ensureAuthProfileStore.mockReset();
   compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
+  contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockReset();
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
@@ -185,6 +223,24 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createTranscriptAnchor(
+  entryId: string,
+  rawSeq: number,
+  activeMessagePosition: number,
+): TranscriptEntryAnchor {
+  return {
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    storePath: "/tmp/openclaw-agent.sqlite",
+    generation: "generation-1",
+    entryId,
+    effectiveParentId: rawSeq === 1 ? null : "user-1",
+    rawSeq,
+    activeMessagePosition,
   };
 }
 
@@ -506,6 +562,143 @@ describe("runAgentHarnessAttempt", () => {
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
+
+  it.each(["heartbeat", "commitment-only"] as const)(
+    "records %s classification on the host-owned turn candidate",
+    async (bootstrapContextRunKind) => {
+      const admission = {
+        ...createTranscriptAnchor("user-1", 1, 0),
+        logicalTurnId: "heartbeat-turn",
+        role: "user" as const,
+      };
+      const terminal = createTranscriptAnchor("assistant-1", 2, 1);
+      const onContextEngineTurnCandidate = vi.fn();
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: async () => ({
+            ...createAttemptResult("session-1"),
+            contextEngineTerminalAnchor: terminal,
+          }),
+        },
+        { ownerPluginId: "codex" },
+      );
+      const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+      params.agentHarnessRuntimeOverride = "codex";
+      params.sessionKey = admission.sessionKey;
+      params.sessionTarget = {
+        agentId: admission.agentId,
+        sessionId: admission.sessionId,
+        sessionKey: admission.sessionKey,
+        storePath: admission.storePath,
+      };
+      params.bootstrapContextRunKind = bootstrapContextRunKind;
+      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
+
+      await runAgentHarnessAttempt(params);
+
+      expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boundary: { admission, terminal },
+          harnessId: "codex",
+          isHeartbeat: true,
+          promptError: false,
+          aborted: false,
+          yieldAborted: false,
+        }),
+      );
+    },
+  );
+
+  it("drains pending context-engine turns before pinning a plugin harness", async () => {
+    const order: string[] = [];
+    const configuredEngine = createContextEngineRequiringAssembly();
+    const fallbackEngine = {
+      ...configuredEngine,
+      info: { id: "legacy", name: "Legacy" },
+    } satisfies ContextEngine;
+    let effectiveEngine = configuredEngine;
+    let degradedReason: string | undefined;
+    const asEffective = (): ReturnType<ContextEngineLogicalTurnLease["begin"]> => ({
+      engine: effectiveEngine,
+      registeredId: effectiveEngine.info.id,
+      mode: degradedReason ? "legacy-degraded" : "configured",
+      ...(degradedReason ? { reason: degradedReason } : {}),
+    });
+    const lease = {
+      get engine() {
+        return effectiveEngine;
+      },
+      get effectiveEngine() {
+        return effectiveEngine;
+      },
+      get effectiveEngineId() {
+        return effectiveEngine.info.id;
+      },
+      get effectiveEnginePluginId() {
+        return undefined;
+      },
+      get degraded() {
+        return degradedReason !== undefined;
+      },
+      get degradedReason() {
+        return degradedReason;
+      },
+      selectForHost: vi.fn(() => asEffective()),
+      degradeBeforeStart: vi.fn((reason: string) => {
+        degradedReason = reason;
+        effectiveEngine = fallbackEngine;
+        return asEffective();
+      }),
+      begin: vi.fn(() => {
+        order.push("begin");
+        return asEffective();
+      }),
+      deferDisposalUntil: vi.fn(),
+      dispose: vi.fn(async () => {}),
+    } satisfies ContextEngineLogicalTurnLease;
+    contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockImplementationOnce(
+      async (params) => {
+        const { lease: drainLease } = params as { lease: ContextEngineLogicalTurnLease };
+        order.push("drain");
+        drainLease.degradeBeforeStart("pending durable turn advancement is blocked");
+      },
+    );
+    const receivedContextEngines: Array<ContextEngine | undefined> = [];
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attemptParams) => {
+          order.push("run");
+          receivedContextEngines.push(attemptParams.contextEngine);
+          return createAttemptResult("session-1");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const admission = {
+      ...createTranscriptAnchor("user-1", 1, 0),
+      logicalTurnId: "turn-1",
+      role: "user" as const,
+    };
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.agentHarnessRuntimeOverride = "codex";
+    params.contextEngineLogicalTurnLease = lease;
+    params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+
+    await runAgentHarnessAttempt(params);
+
+    expect(
+      contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
+    ).toHaveBeenCalledWith({ admission, isHeartbeat: false, lease });
+    expect(order).toEqual(["drain", "begin", "run"]);
+    expect(receivedContextEngines).toEqual([undefined]);
+  });
 
   it.each([
     { name: "missing", toolsAllow: undefined },
@@ -904,7 +1097,7 @@ describe("runAgentHarnessAttempt", () => {
 
     const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
-    expect(classifyCall?.[1]).toBe(params);
+    expect(classifyCall?.[1]).toStrictEqual(params);
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });

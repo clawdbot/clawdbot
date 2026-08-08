@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { isScalar, parseDocument, visit } from "yaml";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
@@ -33,7 +34,6 @@ type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind"
 };
 
 const CLAW_MARKDOWN_FILENAME = "CLAW.md";
-
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
 async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
@@ -102,6 +102,7 @@ async function buildDevelopmentSnapshot(params: {
       integrity: string;
       byteLength: number;
       workspaceSources: ClawWorkspaceSourceSnapshot[];
+      packageBootstrap?: ClawWorkspaceSourceSnapshot;
     }
   | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
@@ -128,6 +129,54 @@ async function buildDevelopmentSnapshot(params: {
     add("package.json", packageJson);
   }
 
+  const sourceRoot = await fsSafeRoot(params.source.packageRoot);
+  let packageBootstrap: ClawWorkspaceSourceSnapshot | undefined;
+  if (await sourceRoot.exists("BOOTSTRAP.md")) {
+    try {
+      const read = await sourceRoot.read("BOOTSTRAP.md", {
+        hardlinks: "reject",
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
+      if (text.trim().length === 0) {
+        return {
+          ok: false,
+          diagnostics: [
+            fileDiagnostic(
+              "package_bootstrap_empty",
+              "Package-root BOOTSTRAP.md must contain first-run instructions.",
+              "$.bootstrap",
+            ),
+          ],
+        };
+      }
+      const digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
+      add("bootstrap:BOOTSTRAP.md", read.buffer);
+      packageBootstrap = {
+        sourcePath: "BOOTSTRAP.md",
+        realPath: read.realPath,
+        byteLength: read.buffer.byteLength,
+        digest,
+      };
+    } catch (error) {
+      const tooLarge = error instanceof FsSafeError && error.code === "too-large";
+      return {
+        ok: false,
+        diagnostics: [
+          fileDiagnostic(
+            tooLarge ? "package_bootstrap_too_large" : "package_bootstrap_invalid",
+            tooLarge
+              ? `Package-root BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`
+              : `Package-root BOOTSTRAP.md must be a safe UTF-8 regular file: ${(error as Error).message}`,
+            "$.bootstrap",
+          ),
+        ],
+      };
+    }
+  }
+
   const declaredSources = [
     ...Object.values(params.manifest.workspace.bootstrapFiles)
       .filter((entry): entry is { source: string } => entry !== undefined)
@@ -135,7 +184,6 @@ async function buildDevelopmentSnapshot(params: {
     ...params.manifest.workspace.files.map((entry) => entry.source),
   ].toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
 
-  const sourceRoot = await fsSafeRoot(params.source.packageRoot);
   const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
   const workspaceSources: ClawWorkspaceSourceSnapshot[] = [];
   try {
@@ -220,7 +268,13 @@ async function buildDevelopmentSnapshot(params: {
     await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
   }
 
-  return { ok: true, integrity: `sha256:${hash.digest("hex")}`, byteLength, workspaceSources };
+  return {
+    ok: true,
+    integrity: `sha256:${hash.digest("hex")}`,
+    byteLength,
+    workspaceSources,
+    ...(packageBootstrap ? { packageBootstrap } : {}),
+  };
 }
 
 function parsePackageJson(value: unknown): PackageJson | undefined {
@@ -561,7 +615,7 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   }
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
-    manifest: parsed.manifest,
+    metadata: parsed.manifest.metadata,
   });
   if (!profile.ok) {
     return profile;
@@ -592,9 +646,13 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
     ok: true,
     manifest: parsed.manifest,
     ...(hasMarkdownBody ? { clawMarkdownBody: manifestResult.body } : {}),
+    ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
-    snapshot: { workspaceSources: snapshot.workspaceSources },
-    diagnostics: parsed.diagnostics,
+    snapshot: {
+      workspaceSources: snapshot.workspaceSources,
+      ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
+    },
+    diagnostics: [...parsed.diagnostics, ...(profile.diagnostics ?? [])],
   };
 }

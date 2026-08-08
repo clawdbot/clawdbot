@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   bootstrapLoadsServiceOnFailure: false,
+  bootstrapTransient: false,
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
@@ -223,6 +224,23 @@ async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaun
   }
 }
 
+async function runRestartLaunchAgentWithFakeTimers(args: Parameters<typeof restartLaunchAgent>[0]) {
+  vi.useFakeTimers();
+  try {
+    const restartPromise = restartLaunchAgent(args)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+    await vi.runAllTimersAsync();
+    const result = await restartPromise;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
   const label = "ai.openclaw.gateway";
@@ -343,11 +361,18 @@ function executeLaunchctlMock(file: string, args: string[]) {
   }
   if (call[0] === "bootstrap") {
     if (state.bootstrapError) {
+      const detail = state.bootstrapError;
+      // Transient failures clear after one attempt so recovery paths that retry
+      // a bootstrap can be exercised the way launchd behaves once a booted-out
+      // job finishes tearing down.
+      if (state.bootstrapTransient) {
+        state.bootstrapError = "";
+      }
       if (state.bootstrapLoadsServiceOnFailure) {
         state.serviceLoaded = true;
         state.serviceRunning = true;
       }
-      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+      return { stdout: "", stderr: detail, code: state.bootstrapCode };
     }
     state.serviceLoaded = true;
     state.serviceRunning = true;
@@ -523,6 +548,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.bootstrapLoadsServiceOnFailure = false;
+  state.bootstrapTransient = false;
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
@@ -2552,6 +2578,28 @@ describe("launchd install", () => {
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "bootstrap" }]]);
   });
 
+  it("fails an already-loaded bootstrap immediately instead of waiting out the teardown deadline", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+    // launchd answers EIO for a label that is still registered. `startLaunchAgent`
+    // never booted the job out, so there is no teardown to wait for: retrying
+    // until the teardown deadline would stall the start for no gain. Real timers
+    // here so a reintroduced retry loop blows the test timeout rather than
+    // passing under vi.runAllTimersAsync().
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 5;
+
+    await expect(startLaunchAgent({ env, stdout: new PassThrough(), onMutation })).rejects.toThrow(
+      "launchctl bootstrap failed: Could not bootstrap service: 5: Input/output error",
+    );
+
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "bootstrap")).toBe(1);
+    expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
   it("audits enable but not kickstart when the later launch fails", async () => {
     const env = createDefaultLaunchdEnv();
     const onMutation = vi.fn();
@@ -2647,12 +2695,111 @@ describe("launchd install", () => {
       restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
 
+    // The trailing enable comes from the post-failure recovery attempt, which
+    // cannot report a bootstrap mutation because this bootstrap keeps failing.
     expect(onMutation.mock.calls).toEqual([
       [{ mode: "enable" }],
       [{ mode: "bootout" }],
       [{ mode: "enable" }],
+      [{ mode: "enable" }],
     ]);
     expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("reloads the LaunchAgent through a transient reload bootstrap failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // launchd answers EIO while the just-booted-out job is still tearing down.
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapCode = 5;
+    state.bootstrapTransient = true;
+    const onMutation = vi.fn();
+
+    const result = await runRestartLaunchAgentWithFakeTimers({
+      env,
+      stdout: new PassThrough(),
+      onMutation,
+    });
+
+    // Teardown is transient, so the retry must land a real bootstrap rather than
+    // surfacing an error the operator has to recover from by hand.
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.serviceLoaded).toBe(true);
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("reports the LaunchAgent as unloaded when bootstrap teardown never clears", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // EIO that never clears must stay bounded instead of retrying forever, and
+    // the restore attempt fails with it, so the label really does stay absent.
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapCode = 5;
+
+    const error = await runRestartLaunchAgentWithFakeTimers({
+      env,
+      stdout: new PassThrough(),
+    }).catch((caught: unknown) => caught);
+
+    // bootout already removed the job, so the operator has to learn both why the
+    // bootstrap failed and that nothing is left for KeepAlive to respawn.
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    expect(state.serviceLoaded).toBe(false);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(
+      "launchctl bootstrap failed: Bootstrap failed: 5: Input/output error",
+    );
+    expect(message).toContain(`LaunchAgent ${domain}/ai.openclaw.gateway is not loaded`);
+    expect(message).toContain("The gateway is down and launchd has no job left to respawn it.");
+    expect(message).toContain("openclaw gateway start");
+  });
+
+  it("does not wait out the teardown deadline when the reload bootstrap reports already-loaded", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // Same EIO code as a pending teardown, but the label is still registered
+    // rather than draining, so there is nothing to wait for. Real timers here:
+    // a retry loop would blow the test timeout instead of quietly passing.
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 5;
+    state.bootstrapLoadsServiceOnFailure = true;
+
+    const error = await restartLaunchAgent({ env, stdout: new PassThrough() }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "bootstrap")).toBe(1);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(
+      "launchctl bootstrap failed: Could not bootstrap service: 5: Input/output error",
+    );
+    // The label is still registered, so the recovery probe finds it and the
+    // failure must not claim the gateway was left unloaded.
+    expect(message).not.toContain("is not loaded");
   });
 
   it("completes reload when the mutation observer fails after bootout", async () => {

@@ -1,7 +1,8 @@
-// Covers plugin install flows, manifests, and install records.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+// Covers plugin install flows, manifests, and install records.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -642,12 +643,7 @@ function expectWarningExcludes(warnings: readonly string[], fragment: string) {
   expect(warnings.join("\n")).not.toContain(fragment);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] | undefined {
   return mock.mock.calls[0];
@@ -3757,6 +3753,16 @@ describe("installPluginFromDir", () => {
   });
 
   it.each([
+    {
+      name: "installs Agent Plugins bundles from a local directory",
+      setup: () =>
+        setupBundleInstallFixture({
+          bundleFormat: "agent",
+          name: "Portable Sample",
+        }),
+      expectedPluginId: "portable-sample",
+      expectedFiles: ["plugin.json", "skills/fixture/SKILL.md"],
+    },
     {
       name: "installs Codex bundles from a local directory",
       setup: () =>

@@ -31,12 +31,14 @@ import {
   loadTranscriptEvents,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
+  type TranscriptEntryAnchor,
 } from "./session-accessor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
 import {
@@ -65,7 +67,12 @@ type SessionTranscriptAppendTarget = {
 };
 
 export type SessionTranscriptAppendResult =
-  | { ok: true; target: SessionTranscriptAppendTarget; messageId: string }
+  | {
+      ok: true;
+      target: SessionTranscriptAppendTarget;
+      messageId: string;
+      anchor?: TranscriptEntryAnchor;
+    }
   | {
       ok: false;
       reason: string;
@@ -708,10 +715,15 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       };
     }
     if (latestEquivalentAssistantId) {
+      const anchor = readActiveTranscriptEntryAnchor({
+        ...target,
+        entryId: latestEquivalentAssistantId,
+      });
       return {
         ok: true,
         target,
         messageId: latestEquivalentAssistantId,
+        ...(anchor ? { anchor } : {}),
       };
     }
     const appendedResult = turn.messages[0];
@@ -722,7 +734,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         reason: "blocked by before_message_write",
       };
     }
-    const { messageId } = appendedResult;
+    const { anchor, messageId } = appendedResult;
     if (!params.expectedSessionId) {
       try {
         await touchSqliteAssistantAppendSessionEntry({
@@ -738,7 +750,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         };
       }
     }
-    return { ok: true, target, messageId };
+    return { ok: true, target, messageId, ...(anchor ? { anchor } : {}) };
   };
   return await appendToSession(entry);
 }

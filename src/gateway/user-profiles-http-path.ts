@@ -1,7 +1,8 @@
 const USER_PROFILE_AVATAR_PATH = /^\/api\/users\/([^/]+)\/avatar$/u;
 
-export function formatUserProfileAvatarPath(profileId: string): string {
-  return `/api/users/${encodeURIComponent(profileId)}/avatar`;
+export function formatUserProfileAvatarPath(profileId: string, revision?: string | number): string {
+  const path = `/api/users/${encodeURIComponent(profileId)}/avatar`;
+  return revision === undefined ? path : `${path}?v=${encodeURIComponent(String(revision))}`;
 }
 
 export function matchUserProfileAvatarPath(pathname: string): string | undefined {

@@ -318,37 +318,3 @@ jobs:
           else
             echo "::warning::Skipping ClawSweeper comment dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
-
-      - name: Dispatch ClawSweeper commit review
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.deleted != true }}
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          TARGET_REPO: ${{ github.repository }}
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.sha }}
-          SOURCE_REF: ${{ github.ref }}
-          CREATE_CHECKS: ${{ vars.CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS || 'false' }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::Skipping ClawSweeper commit dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
-            exit 0
-          fi
-          . "$RUNNER_TEMP/github-api-backoff.sh"
-          case "$CREATE_CHECKS" in
-            true|TRUE|1|yes|YES|on|ON) create_checks=true ;;
-            *) create_checks=false ;;
-          esac
-          payload="$(jq -nc \
-            --arg target_repo "$TARGET_REPO" \
-            --arg before_sha "$BEFORE_SHA" \
-            --arg after_sha "$AFTER_SHA" \
-            --arg ref "$SOURCE_REF" \
-            --argjson create_checks "$create_checks" \
-            '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:$create_checks}}')"
-          if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
-            --method POST \
-            --input - <<< "$payload"; then
-            echo "Dispatched ClawSweeper commit review."
-          else
-            echo "::warning::Skipping ClawSweeper commit dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
-          fi

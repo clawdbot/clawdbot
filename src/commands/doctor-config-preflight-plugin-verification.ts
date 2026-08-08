@@ -8,6 +8,7 @@ import {
   formatPluginVerificationDiagnostic,
   type DegradedPlugin,
 } from "../plugins/runtime-degraded-state.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 
 type StartupPluginVerificationDiagnostic = {
@@ -95,6 +96,7 @@ export async function runStartupUpgradeConvergence(params: {
       runPostCorePluginConvergence({
         cfg: params.cfg,
         env: params.env,
+        compatibilityHostVersion: resolveCompatibilityHostVersion(params.env),
         baselineInstallRecords: plan.installRecords,
       }),
     params.measure,

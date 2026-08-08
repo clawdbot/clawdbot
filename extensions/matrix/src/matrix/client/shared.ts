@@ -75,20 +75,18 @@ type SharedMatrixClientParams = {
 const sharedClientStates = new Map<string, SharedMatrixClientState>();
 const sharedClientPromises = new Map<string, Promise<SharedMatrixClientState>>();
 
-function serializeDispatcherPolicyKey(auth: MatrixAuth): string {
-  return JSON.stringify(auth.dispatcherPolicy ?? null);
-}
-
 function buildSharedClientKey(auth: MatrixAuth): string {
-  return [
+  // Serialize the tuple as a whole: Matrix URLs and credentials may contain `|`,
+  // so delimiter-joined keys can alias distinct clients and couple crypto/leases.
+  return JSON.stringify([
     auth.homeserver,
     auth.userId,
     auth.accessToken,
     auth.encryption ? "e2ee" : "plain",
     auth.allowPrivateNetwork ? "private-net" : "strict-net",
-    serializeDispatcherPolicyKey(auth),
+    auth.dispatcherPolicy ?? null,
     auth.accountId,
-  ].join("|");
+  ]);
 }
 
 async function createSharedMatrixClient(params: {

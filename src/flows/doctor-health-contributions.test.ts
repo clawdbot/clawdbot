@@ -170,7 +170,16 @@ const mocks = vi.hoisted(() => ({
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
   isSystemdUserServiceAvailable: vi.fn(async () => true),
-  readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
+  readSystemdUserLingerStatus: vi.fn(
+    async (_params: {
+      env: Record<string, string | undefined>;
+      user?: string;
+    }): Promise<{ user: string; linger: "yes" | "no" } | null> => ({
+      user: "alice",
+      linger: "no",
+    }),
+  ),
+  resolveSystemdUserServiceAccount: vi.fn(() => "alice" as string | null),
   gatewayServiceIsLoaded: vi.fn(async () => true),
   resolveGatewayService: vi.fn(),
   getSkillCuratorDoctorWarning: vi.fn(),
@@ -256,6 +265,7 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
     ...actual,
     isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
     readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
+    resolveSystemdUserServiceAccount: mocks.resolveSystemdUserServiceAccount,
   };
 });
 
@@ -773,6 +783,8 @@ describe("doctor health contributions", () => {
     mocks.isSystemdUserServiceAvailable.mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus.mockReset();
     mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "alice", linger: "no" });
+    mocks.resolveSystemdUserServiceAccount.mockReset();
+    mocks.resolveSystemdUserServiceAccount.mockReturnValue("alice");
     mocks.replaceConfigFile.mockReset();
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.applyWizardMetadata.mockReset();
@@ -2067,6 +2079,39 @@ describe("doctor health contributions", () => {
       });
     });
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+  });
+
+  it("reports the Gateway service owner under sudo-to-root", async () => {
+    mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
+    mocks.readSystemdUserLingerStatus.mockImplementation(async (params) =>
+      params?.user === "debian" ? { user: "debian", linger: "no" } : null,
+    );
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toBeDefined();
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [systemdLingerCheck!],
+          onlyIds: ["core/doctor/systemd-linger"],
+        }),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            fixHint: "Run: sudo loginctl enable-linger debian",
+            target: "systemd.user.debian",
+          }),
+        ],
+      });
+    });
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {

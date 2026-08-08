@@ -1,5 +1,7 @@
 // Observes and recovers config files that appear missing, corrupt, or clobbered.
 import type fs from "node:fs";
+import path from "node:path";
+import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
@@ -22,8 +24,13 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveConfigSnapshotHash } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type {
+  ConfigRecoveryCandidatePreparation,
+  NormalizedConfigIoDeps,
+  PrepareConfigRecoveryCandidate,
+} from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -83,8 +90,7 @@ type ConfigReadRecoveryParams = {
   configPath: string;
   raw: string;
   parsed: unknown;
-  validateBackup?: (backup: { raw: string; parsed: unknown }) => Promise<boolean>;
-  validateBackupSync?: (backup: { raw: string; parsed: unknown }) => boolean;
+  prepareBackup: PrepareConfigRecoveryCandidate;
   allowBackupRecovery?: () => Promise<boolean>;
 };
 
@@ -92,6 +98,29 @@ type ConfigReadRecoveryResult = {
   raw: string;
   parsed: unknown;
 };
+
+function createRecoveryCommitEffect(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  raw: string;
+}): ConfigRecoveryEffect<void> {
+  const options = {
+    filePath: params.configPath,
+    content: params.raw,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(params.configPath),
+    fileSystem: params.deps.fs,
+  };
+  return {
+    sync: () => {
+      replaceFileAtomicSync(options);
+    },
+    async: async () => {
+      await replaceFileAtomic(options);
+    },
+  };
+}
 
 type ConfigObserveAuditRecordParams = Parameters<typeof createConfigObserveAuditRecord>[0];
 
@@ -374,13 +403,14 @@ function* recoverSuspiciousConfigRead(
     return returnOriginalConfigRead(params);
   }
   const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
-  const validBackup = (yield {
-    sync: () => params.validateBackupSync?.(backupCandidate) ?? true,
-    async: () => params.validateBackup?.(backupCandidate) ?? true,
-  }) as boolean;
-  if (!validBackup) {
+  const prepared = (yield {
+    sync: () => params.prepareBackup(backupCandidate),
+    async: () => params.prepareBackup(backupCandidate),
+  }) as ConfigRecoveryCandidatePreparation;
+  if (!prepared.ok) {
     return returnOriginalConfigRead(params);
   }
+  const preparedCandidate = prepared.candidate;
   // Eligibility must describe the approved backup bytes, never an older healthy config.
   const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
@@ -413,11 +443,14 @@ function* recoverSuspiciousConfigRead(
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
-    const options = { encoding: "utf-8" as const, mode: 0o600 };
-    yield {
-      sync: () => deps.fs.writeFileSync(configPath, backupRaw, options),
-      async: () => deps.fs.promises.writeFile(configPath, backupRaw, options),
-    };
+    if (preparedCandidate.raw !== backupRaw) {
+      warnIfJSON5CommentsWillBeStripped({
+        raw: backupRaw,
+        filePath: configPath,
+        warn: (message) => deps.logger.warn(message),
+      });
+    }
+    yield createRecoveryCommitEffect({ deps, configPath, raw: preparedCandidate.raw });
     const chmodParams = { deps, configPath, context: "backup restore" };
     yield {
       sync: () => chmodConfigBestEffortSync(chmodParams),
@@ -462,7 +495,7 @@ function* recoverSuspiciousConfigRead(
       }),
     );
   }
-  return backupCandidate;
+  return preparedCandidate;
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(params: {
@@ -519,6 +552,7 @@ export async function recoverConfigFromLastKnownGood(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   reason: string;
+  prepareCandidate: PrepareConfigRecoveryCandidate;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
@@ -549,7 +583,18 @@ export async function recoverConfigFromLastKnownGood(params: {
   } catch {
     return false;
   }
-  const polluted = collectPollutedSecretPlaceholders(backupParsed);
+  // Historical bytes become live config only after their owner has migrated and validated them.
+  // This prevents Doctor recovery from exposing a schema-invalid intermediate file.
+  const originalCandidate = { raw: backupRaw, parsed: backupParsed };
+  const prepared = params.prepareCandidate(originalCandidate);
+  if (!prepared.ok) {
+    deps.logger.warn(
+      `Config last-known-good recovery skipped: ${prepared.reason} (${params.reason})`,
+    );
+    return false;
+  }
+  const recoveryCandidate = prepared.candidate;
+  const polluted = collectPollutedSecretPlaceholders(recoveryCandidate.parsed);
   if (polluted.length > 0) {
     deps.logger.warn(
       `Config last-known-good recovery skipped: redacted secret placeholder at ${polluted[0]}`,
@@ -571,10 +616,18 @@ export async function recoverConfigFromLastKnownGood(params: {
     snapshot,
     observedAt: now,
   });
-  await deps.fs.promises.writeFile(snapshot.path, backupRaw, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  if (recoveryCandidate.raw !== backupRaw) {
+    warnIfJSON5CommentsWillBeStripped({
+      raw: backupRaw,
+      filePath: snapshot.path,
+      warn: (message) => deps.logger.warn(message),
+    });
+  }
+  await createRecoveryCommitEffect({
+    deps,
+    configPath: snapshot.path,
+    raw: recoveryCandidate.raw,
+  }).async();
   await chmodConfigBestEffort({
     deps,
     configPath: snapshot.path,

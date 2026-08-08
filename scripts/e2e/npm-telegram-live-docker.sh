@@ -414,6 +414,7 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER" \
+  -v "$ROOT_DIR/dist:/app/.openclaw-qa-harness-dist:ro" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$npm_prefix_host:/npm-global" \
@@ -453,6 +454,8 @@ rm -rf /app/node_modules/openclaw
 ln -sfnT "$openclaw_package_dir" /app/node_modules/openclaw
 rm -rf /app/dist
 ln -sfnT "$openclaw_package_dir/dist" /app/dist
+rm -rf "$openclaw_package_dir/.openclaw-qa-harness-dist"
+ln -sfnT /app/.openclaw-qa-harness-dist "$openclaw_package_dir/.openclaw-qa-harness-dist"
 cp "$openclaw_package_dir/package.json" /app/package.json
 node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs \
   /app/package.json \

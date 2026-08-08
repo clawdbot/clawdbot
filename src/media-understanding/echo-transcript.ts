@@ -26,6 +26,8 @@ export async function sendTranscriptEcho(params: {
   cfg: OpenClawConfig;
   transcript: string;
   format?: string;
+  logSuccess?: boolean;
+  failureLogPrefix?: string;
 }): Promise<void> {
   const { ctx, cfg, transcript } = params;
   const channel = ctx.Provider ?? ctx.Surface ?? "";
@@ -65,10 +67,11 @@ export async function sendTranscriptEcho(params: {
     if (send.status === "failed") {
       throw send.error;
     }
-    if (shouldLogVerbose()) {
+    if ((params.logSuccess ?? true) && shouldLogVerbose()) {
       logVerbose(`media: echo-transcript sent to ${normalizedChannel}/${to}`);
     }
   } catch (err) {
-    logVerbose(`media: echo-transcript delivery failed: ${String(err)}`);
+    const prefix = params.failureLogPrefix ?? "media: echo-transcript delivery failed";
+    logVerbose(`${prefix}: ${String(err)}`);
   }
 }

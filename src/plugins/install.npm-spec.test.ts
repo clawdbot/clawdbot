@@ -222,6 +222,7 @@ function writeInstalledNpmPlugin(params: {
   packageName: string;
   version: string;
   pluginId?: string;
+  legacyPluginIds?: string[];
   indexJs?: string;
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
@@ -253,6 +254,7 @@ function writeInstalledNpmPlugin(params: {
     JSON.stringify({
       id: params.pluginId ?? params.packageName,
       name: params.pluginId ?? params.packageName,
+      ...(params.legacyPluginIds ? { legacyPluginIds: params.legacyPluginIds } : {}),
       configSchema: { type: "object" },
     }),
     "utf-8",
@@ -300,6 +302,7 @@ type MockNpmPackage = {
   version: string;
   npmRoot: string;
   pluginId?: string;
+  legacyPluginIds?: string[];
   integrity?: string;
   shasum?: string;
   indexJs?: string;
@@ -3369,6 +3372,89 @@ describe("installPluginFromNpmSpec", () => {
       });
     },
   );
+
+  it("accepts a trusted manifest-declared plugin id replacement during update", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      packageName: "@openclaw/fish-audio-speech",
+      version: "2026.8.1-beta.0",
+      pluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      npmDir: npmRoot,
+      mode: "update",
+      expectedPluginId: "fish-audio",
+      expectedReplacementPluginId: "fish-audio-speech",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("fish-audio-speech");
+    }
+  });
+
+  it.each([
+    {
+      name: "untrusted source",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: false,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "different catalog replacement",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "different-plugin",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "fresh install",
+      mode: "install" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "manifest without the legacy id",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: undefined,
+    },
+  ])("rejects a manifest id replacement for a $name", async (testCase) => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      packageName: "@openclaw/fish-audio-speech",
+      version: "2026.8.1-beta.0",
+      pluginId: "fish-audio-speech",
+      legacyPluginIds: testCase.legacyPluginIds,
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      npmDir: npmRoot,
+      mode: testCase.mode,
+      expectedPluginId: "fish-audio",
+      expectedReplacementPluginId: testCase.expectedReplacementPluginId,
+      trustedSourceLinkedOfficialInstall: testCase.trustedSourceLinkedOfficialInstall,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH);
+    }
+  });
 
   it("rejects non-registry npm specs", async () => {
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });

@@ -36,6 +36,7 @@ import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 const MAX_RECOVERY_ATTEMPTS = 2;
 const RECOVERY_ATTEMPT_WINDOW_MS = 2 * 60_000;
+type SubagentRunManager = ReturnType<typeof createSubagentRunManager>;
 
 export type RestartRecoveryResult =
   | { status: "ignored" }
@@ -56,33 +57,17 @@ export type RestartRecoveryParams = {
   entry: SubagentRunRecord;
   now: number;
   gatewayRuntime: GatewayRecoveryRuntime | undefined;
-  isCurrent: () => boolean;
-  abandonLaunch: ReturnType<
-    typeof createSubagentRunManager
-  >["abandonSubagentRestartRecoveryLaunch"];
-  clearAcceptedRecovery: ReturnType<
-    typeof createSubagentRunManager
-  >["clearAcceptedSubagentRestartRecovery"];
+  isCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
+  abandonLaunch: SubagentRunManager["abandonSubagentRestartRecoveryLaunch"];
+  clearAcceptedRecovery: SubagentRunManager["clearAcceptedSubagentRestartRecovery"];
   getRun: (runId: string) => SubagentRunRecord | undefined;
-  replaceRun: ReturnType<typeof createSubagentRunManager>["replaceSubagentRunAfterSteer"];
-  markLaunchAttempted: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchAttempted"];
-  markLaunchAccepted: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchAccepted"];
-  markLaunchConsumed: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchConsumed"];
-  resetLaunchAttempt: ReturnType<
-    typeof createSubagentRunManager
-  >["resetSubagentRestartRecoveryLaunchAttempt"];
-  reserveLaunch: ReturnType<
-    typeof createSubagentRunManager
-  >["reserveSubagentRestartRecoveryLaunch"];
-  resumeAcceptedRecovery: ReturnType<
-    typeof createSubagentRunManager
-  >["resumeSettledSubagentRestartRecovery"];
+  replaceRun: SubagentRunManager["replaceSubagentRunAfterSteer"];
+  markLaunchAttempted: SubagentRunManager["markSubagentRestartRecoveryLaunchAttempted"];
+  markLaunchAccepted: SubagentRunManager["markSubagentRestartRecoveryLaunchAccepted"];
+  markLaunchConsumed: SubagentRunManager["markSubagentRestartRecoveryLaunchConsumed"];
+  resetLaunchAttempt: SubagentRunManager["resetSubagentRestartRecoveryLaunchAttempt"];
+  reserveLaunch: SubagentRunManager["reserveSubagentRestartRecoveryLaunch"];
+  resumeAcceptedRecovery: SubagentRunManager["resumeSettledSubagentRestartRecovery"];
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
@@ -95,7 +80,7 @@ async function reconcileAcceptedRecovery(params: {
   clearAcceptedRecovery: RestartRecoveryParams["clearAcceptedRecovery"];
   entry: SubagentRunRecord;
   getRun: RestartRecoveryParams["getRun"];
-  isCurrent: () => boolean;
+  isCurrent: RestartRecoveryParams["isCurrent"];
   now: number;
   receipt: SubagentRestartRecoveryReceipt;
   replaceRun: RestartRecoveryParams["replaceRun"];
@@ -117,7 +102,7 @@ async function reconcileAcceptedRecovery(params: {
     let remapped = false;
     try {
       remapped =
-        params.isCurrent() &&
+        params.isCurrent(params.runId, params.entry) &&
         params.replaceRun({
           previousRunId: params.runId,
           nextRunId: params.receipt.idempotencyKey,
@@ -143,7 +128,11 @@ async function reconcileAcceptedRecovery(params: {
       };
     }
     const successor = params.getRun(params.receipt.idempotencyKey);
-    if (!successor || successor.execution.restartRecovery !== params.receipt) {
+    if (
+      !successor ||
+      successor.execution.restartRecovery !== params.receipt ||
+      !params.isCurrent(successor.runId, successor)
+    ) {
       params.warn("accepted subagent restart recovery lost its remapped owner", {
         runId: params.runId,
         childSessionKey: params.childSessionKey,
@@ -152,6 +141,10 @@ async function reconcileAcceptedRecovery(params: {
     }
     owner = successor;
   }
+  const ownsAcceptedTarget = () =>
+    params.isCurrent(owner.runId, owner) &&
+    owner.execution.restartRecovery === params.receipt &&
+    isRestartRecoveryLifecycleCurrent(params.receipt);
 
   if (
     !params.currentSessionId ||
@@ -173,10 +166,7 @@ async function reconcileAcceptedRecovery(params: {
       !(await settleAcceptedRecoverySession({
         attempts: params.attempts,
         childSessionKey: params.childSessionKey,
-        isOwnerCurrent: () =>
-          params.getRun(owner.runId) === owner &&
-          owner.execution.restartRecovery === params.receipt &&
-          isRestartRecoveryLifecycleCurrent(params.receipt),
+        isOwnerCurrent: ownsAcceptedTarget,
         sessionId: params.receipt.sessionId,
         sessionLifecycleRevision: params.receipt.sessionLifecycleRevision,
         now: params.now,
@@ -222,9 +212,9 @@ async function reconcileAcceptedRecovery(params: {
       target: { runId: owner.runId, entry: owner },
     };
   }
-
   try {
     if (
+      !ownsAcceptedTarget() ||
       !params.clearAcceptedRecovery({
         runId: owner.runId,
         expected: owner,
@@ -247,6 +237,7 @@ async function reconcileAcceptedRecovery(params: {
     return { status: "deferred" };
   }
   if (
+    !params.isCurrent(owner.runId, owner) ||
     !params.resumeAcceptedRecovery({
       runId: owner.runId,
       expected: owner,
@@ -272,9 +263,10 @@ export async function recoverInterruptedSubagentRow(
     params.entry.execution.outcome?.status === "timeout" &&
     typeof params.entry.execution.endedAt === "number";
   const acceptedRecoveryCurrent =
-    initialRecoveryReceipt?.phase === "accepted" && params.isCurrent();
+    initialRecoveryReceipt?.phase === "accepted" && params.isCurrent(params.runId, params.entry);
   const isRecoverySourceCurrent = () =>
-    params.isCurrent() &&
+    isRecoveryAttemptLifecycleCurrent() &&
+    params.isCurrent(params.runId, params.entry) &&
     params.entry.pauseReason !== "sessions_yield" &&
     params.entry.suppressAnnounceReason !== "steer-restart" &&
     params.entry.killReconciliation === undefined &&
@@ -542,7 +534,7 @@ export async function recoverInterruptedSubagentRow(
           expected: params.entry,
           sessionMarker: marker,
           idempotencyKey,
-          lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+          lifecycleGeneration: recoveryLifecycleGeneration,
         });
         if (!attempted || attempted.phase === "accepted") {
           earlyResult = { status: "handled" };

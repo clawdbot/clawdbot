@@ -29,6 +29,7 @@ import {
   formatUpdateRestartStatusValue,
 } from "../status-update-restart.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
+import { formatTelemetryExporterSummary } from "../telemetry-exporter-summary.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
@@ -157,6 +158,7 @@ export async function appendStatusAllDiagnosis(params: {
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
   deliveryDiagnostics: unknown;
+  exporterDiagnostics: unknown;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
   health: unknown;
@@ -332,6 +334,14 @@ export async function appendStatusAllDiagnosis(params: {
       lines.push(
         `  ${muted("No agent session was updated in the last 30m; if channels received messages, verify inbound dispatch and turn creation.")}`,
       );
+    }
+  }
+
+  const exporterSummary = formatTelemetryExporterSummary(params.exporterDiagnostics);
+  if (exporterSummary) {
+    emitCheck(exporterSummary.title, exporterSummary.status);
+    for (const line of exporterSummary.lines) {
+      lines.push(`  ${muted(line)}`);
     }
   }
 

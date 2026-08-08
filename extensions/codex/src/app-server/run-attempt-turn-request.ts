@@ -107,6 +107,7 @@ export async function prepareCodexAttemptTurnRequest(
       promptText: turnState.codexTurnPromptText,
       sandboxPolicy: resourceState.codexSandboxPolicy,
       environmentSelection: resourceState.codexEnvironmentSelection,
+      clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
       ...(usesSupervisionConnection
         ? {}
         : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),

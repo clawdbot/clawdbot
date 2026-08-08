@@ -168,6 +168,7 @@ export function createSubagentRegistrySweeper(params: {
 
   const recovery = createInterruptedRecoveryCoordinator({
     runs,
+    getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
     abandonLaunch: params.abandonSubagentRestartRecoveryLaunch,
     clearAcceptedRecovery: params.clearAcceptedSubagentRestartRecovery,
@@ -321,6 +322,7 @@ export function createSubagentRegistrySweeper(params: {
               runId,
               entry,
               runs,
+              getRunsForChildSession: params.getRunsForChildSession,
               loadKillRuntime: () => killRuntimeLoader.load(),
               completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
               retireSupersededRun: params.retireSupersededRun,
