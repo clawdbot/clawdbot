@@ -182,16 +182,16 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
-    const announcedSchedule = getUpdateSchedule();
-    const announcedDevTargetRef =
-      announcedSchedule?.campaign &&
-      announcedSchedule.channel === "dev" &&
-      announcedSchedule.target?.kind === "git"
-        ? announcedSchedule.target.upstreamSha.trim() || undefined
-        : undefined;
     const adoptedCampaign = gatewayUpdateCampaign.adopt();
-    const adoptedCampaignId = adoptedCampaign ? gatewayUpdateCampaign.getState()?.id : undefined;
-    const adoptedDevTargetRef = adoptedCampaign ? announcedDevTargetRef : undefined;
+    const adoptedCampaignId = adoptedCampaign?.campaignId;
+    const adoptedDevTargetRef =
+      adoptedCampaign?.target.kind === "git"
+        ? adoptedCampaign.target.upstreamSha.trim() || undefined
+        : undefined;
+    const adoptedPackageTargetVersion =
+      adoptedCampaign?.target.kind === "package"
+        ? adoptedCampaign.target.version.trim() || undefined
+        : undefined;
     const actor = resolveControlPlaneActor(client);
     const {
       sessionKey,
@@ -293,6 +293,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
           ...(handoffChannel ? { channel: handoffChannel } : {}),
+          ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
         });
         if (supervisor && hasHandoffContext) {
           try {
@@ -314,6 +315,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
+              ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
               ...(adoptedDevTargetRef
                 ? {
                     env: {
@@ -430,6 +432,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
           ...(adoptedDevTargetRef ? { devTargetRef: adoptedDevTargetRef } : {}),
           allowGatewayServiceRepair: false,
           allowGatewayActivation: false,

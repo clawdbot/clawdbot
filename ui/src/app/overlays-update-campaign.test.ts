@@ -63,6 +63,37 @@ describe("application update campaign overlays", () => {
     overlays.dispose();
   });
 
+  it("keeps an expired hold consumed after reconnect", async () => {
+    const request = vi.fn<RequestFn>(async () => ({}));
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        snapshot: {
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: true,
+            target: { kind: "package", version: "2.0.0" },
+            campaign: {
+              id: "campaign-held",
+              state: "waiting-for-idle",
+              announcedAtMs: 1_000,
+              holdUntilMs: 2_000,
+              forceAtMs: 902_000,
+              updatedAtMs: 2_000,
+            },
+          },
+        },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    expect(overlays.snapshot.heldUpdateCampaignId).toBe("campaign-held");
+    await expect(overlays.holdUpdate()).resolves.toBe(false);
+    expect(request.mock.calls.filter(([method]) => method === "update.hold")).toHaveLength(0);
+    overlays.dispose();
+  });
+
   it("polls update.status only for administrators with an active campaign", async () => {
     vi.useFakeTimers();
     const request = vi.fn<RequestFn>((method) =>

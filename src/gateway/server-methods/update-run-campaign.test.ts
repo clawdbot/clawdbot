@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
+import type { UpdateCampaignController } from "../../infra/update-campaign.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -11,7 +12,12 @@ import { withEnvAsync } from "../../test-utils/env.js";
 let currentCampaignId: string | undefined;
 let updateSchedule: UpdateScheduleState | null;
 let updateChannel: "stable" | "beta" | "dev" | null;
-const adoptCampaignMock = vi.fn(() => true);
+type UpdateCampaignAdoption = NonNullable<ReturnType<UpdateCampaignController["adopt"]>>;
+
+const adoptCampaignMock = vi.fn<() => UpdateCampaignAdoption | undefined>(() => ({
+  campaignId: "campaign-1",
+  target: { kind: "package", version: "2.0.0" },
+}));
 const clearCampaignMock = vi.fn();
 const getCampaignStateMock = vi.fn(() =>
   currentCampaignId
@@ -151,7 +157,10 @@ beforeEach(() => {
   updateSchedule = null;
   updateChannel = null;
   adoptCampaignMock.mockReset();
-  adoptCampaignMock.mockReturnValue(true);
+  adoptCampaignMock.mockReturnValue({
+    campaignId: "campaign-1",
+    target: { kind: "package", version: "2.0.0" },
+  });
   clearCampaignMock.mockClear();
   getCampaignStateMock.mockClear();
   runGatewayUpdateMock.mockReset();
@@ -171,6 +180,15 @@ beforeEach(() => {
 
 function setDevCampaignSchedule(upstreamSha = "frozen-upstream-sha"): void {
   updateChannel = "dev";
+  adoptCampaignMock.mockReturnValue({
+    campaignId: "campaign-1",
+    target: {
+      kind: "git",
+      upstreamRef: "origin/main",
+      upstreamSha,
+      commitsBehind: 3,
+    },
+  });
   updateSchedule = {
     channel: "dev",
     autoEnabled: true,
@@ -204,6 +222,57 @@ async function invokeUpdateRun(): Promise<void> {
 }
 
 describe("update.run campaign ownership", () => {
+  it("pins a directly applied package campaign to its announced version", async () => {
+    updateChannel = "beta";
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "package-root",
+      mode: "unknown",
+      root: "/tmp/openclaw",
+      packageRoot: "/tmp/openclaw",
+    });
+
+    await invokeUpdateRun();
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "beta", tag: "2.0.0" }),
+    );
+  });
+
+  it("pins a managed package campaign handoff to its announced version", async () => {
+    updateChannel = "beta";
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "global",
+      mode: "npm",
+      root: "/tmp/openclaw",
+      packageRoot: "/tmp/openclaw",
+    });
+
+    await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, invokeUpdateRun);
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "beta", tag: "2.0.0" }),
+    );
+  });
+
+  it("keeps a plain package update on the moving configured channel", async () => {
+    updateChannel = "beta";
+    adoptCampaignMock.mockReturnValueOnce(undefined);
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "package-root",
+      mode: "unknown",
+      root: "/tmp/openclaw",
+      packageRoot: "/tmp/openclaw",
+    });
+
+    await invokeUpdateRun();
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(expect.objectContaining({ channel: "beta" }));
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ tag: expect.anything() }),
+    );
+  });
+
   it("pins a directly applied dev campaign to its announced commit", async () => {
     setDevCampaignSchedule();
 
@@ -234,7 +303,7 @@ describe("update.run campaign ownership", () => {
 
   it("does not pin a plain dev update without a campaign", async () => {
     updateChannel = "dev";
-    adoptCampaignMock.mockReturnValueOnce(false);
+    adoptCampaignMock.mockReturnValueOnce(undefined);
 
     await invokeUpdateRun();
 
@@ -245,7 +314,7 @@ describe("update.run campaign ownership", () => {
 
   it("does not add a pin environment to a non-campaign managed handoff", async () => {
     updateChannel = "dev";
-    adoptCampaignMock.mockReturnValueOnce(false);
+    adoptCampaignMock.mockReturnValueOnce(undefined);
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
 
     await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, invokeUpdateRun);
@@ -264,7 +333,7 @@ describe("update.run campaign ownership", () => {
 
   it("does not clear a campaign that update.run did not adopt", async () => {
     setDevCampaignSchedule();
-    adoptCampaignMock.mockReturnValueOnce(false);
+    adoptCampaignMock.mockReturnValueOnce(undefined);
 
     await invokeUpdateRun();
 
@@ -281,15 +350,15 @@ describe("update.run campaign ownership", () => {
     const updateRun = invokeUpdateRun();
     await vi.waitFor(() => {
       expect(adoptCampaignMock).toHaveBeenCalledOnce();
-      expect(getCampaignStateMock).toHaveBeenCalledOnce();
       expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
     });
+    expect(getCampaignStateMock).not.toHaveBeenCalled();
     currentCampaignId = "campaign-2";
     deferredUpdate.resolve(failedUpdate);
 
     await updateRun;
 
-    expect(getCampaignStateMock).toHaveBeenCalledTimes(2);
+    expect(getCampaignStateMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).not.toHaveBeenCalled();
   });
 

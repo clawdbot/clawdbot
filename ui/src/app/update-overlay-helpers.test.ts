@@ -79,6 +79,29 @@ async function verifyUpdate(params: {
 }
 
 describe("update schedule hydration", () => {
+  it("preserves an active hold deadline after reconnect", () => {
+    const holdUntilMs = 3_601_000;
+    const hello = {
+      snapshot: {
+        updateSchedule: {
+          channel: "stable",
+          autoEnabled: true,
+          target: { kind: "package", version: "2.0.0" },
+          campaign: {
+            id: "campaign-held",
+            state: "waiting-for-idle",
+            announcedAtMs: 1_000,
+            holdUntilMs,
+            forceAtMs: 4_501_000,
+            updatedAtMs: 2_000,
+          },
+        },
+      },
+    } as GatewayHelloOk;
+
+    expect(readUpdateSchedule(hello)?.campaign?.holdUntilMs).toBe(holdUntilMs);
+  });
+
   it("preserves additive git availability and the hello schedule DTO", () => {
     const updateSchedule = {
       channel: "dev",

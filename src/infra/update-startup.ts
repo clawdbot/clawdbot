@@ -91,6 +91,7 @@ type AutoUpdateRunner = (params: {
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
+  packageTargetVersion?: string;
   devTargetSha?: string;
 }) => Promise<AutoUpdateRunResult>;
 
@@ -427,6 +428,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
+  packageTargetVersion?: string;
   devTargetSha?: string;
   supervisor: RespawnSupervisor;
 }): Promise<AutoUpdateRunResult> {
@@ -438,6 +440,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
       timeoutMs: params.timeoutMs,
       restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       channel: params.channel,
+      ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
       restartDelayMs,
       supervisor: params.supervisor,
       handoffId,
@@ -485,6 +488,7 @@ async function runAutoUpdateCommand(params: {
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
+  packageTargetVersion?: string;
   devTargetSha?: string;
 }): Promise<AutoUpdateRunResult> {
   if (isGatewayExternallySupervised()) {
@@ -503,12 +507,18 @@ async function runAutoUpdateCommand(params: {
       timeoutMs: params.timeoutMs,
       restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       root: params.root,
-      devTargetSha: params.devTargetSha,
+      ...(params.packageTargetVersion ? { packageTargetVersion: params.packageTargetVersion } : {}),
+      ...(params.devTargetSha ? { devTargetSha: params.devTargetSha } : {}),
       supervisor,
     });
   }
 
-  const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
+  const targetArgs = [
+    "--channel",
+    params.channel,
+    ...(params.packageTargetVersion ? ["--tag", params.packageTargetVersion] : []),
+  ];
+  const baseArgs = ["update", "--yes", ...targetArgs, "--json"];
   const execPath = process.execPath?.trim();
   const argv1 = process.argv[1]?.trim();
   const lowerExecBase = execPath ? normalizeLowercaseStringOrEmpty(path.basename(execPath)) : "";
@@ -652,6 +662,7 @@ async function runCampaignUpdate(params: {
     timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
     restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
     ...(params.root ? { root: params.root } : {}),
+    ...(params.channel === "dev" ? {} : { packageTargetVersion: params.version }),
     ...(params.devTargetSha ? { devTargetSha: params.devTargetSha } : {}),
   });
   if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
@@ -699,6 +710,7 @@ export async function runGatewayUpdateCheck(params: {
     timeoutMs: number;
     restartDrainTimeoutMs: number | undefined;
     root?: string;
+    packageTargetVersion?: string;
     devTargetSha?: string;
   }) => Promise<AutoUpdateRunResult>;
 }): Promise<void> {

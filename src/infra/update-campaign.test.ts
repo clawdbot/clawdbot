@@ -126,7 +126,10 @@ describe("UpdateCampaignController", () => {
       apply,
       onChange: vi.fn(),
     });
-    expect(controller.adopt()).toBe(true);
+    expect(controller.adopt()).toEqual({
+      campaignId: "campaign-1",
+      target: { kind: "package", version: "2.0.0" },
+    });
     expect(controller.getState()?.state).toBe("applying");
     expect(controller.hold()).toBe(false);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
@@ -155,7 +158,12 @@ describe("UpdateCampaignController", () => {
     expect(controller.hold()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    expect(controller.getState()).toMatchObject({
+      state: "waiting-for-idle",
+      holdUntilMs: 4_600_000,
+    });
+    expect(controller.hold()).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
     expect(apply).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(controller.getState()?.state).toBe("applying");
@@ -185,9 +193,35 @@ describe("UpdateCampaignController", () => {
     expect(controller.getState()?.state).toBe("waiting-for-idle");
     expect(apply).not.toHaveBeenCalled();
 
-    expect(controller.adopt()).toBe(true);
+    expect(controller.adopt()).toMatchObject({
+      campaignId: "campaign-1",
+      target: { kind: "package", version: "2.0.0" },
+    });
     expect(controller.getState()?.state).toBe("applying");
     await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("preserves a consumed hold while returning to countdown without spinning timers", async () => {
+    const controller = createController();
+    const apply = vi.fn(async () => "applied" as const);
+
+    controller.announce({
+      target: { kind: "package", version: "2.0.0" },
+      inspect: createInspectors(() => 0),
+      apply,
+      onChange: vi.fn(),
+    });
+    expect(controller.hold(10_000)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(controller.getState()).toMatchObject({
+      state: "countdown",
+      holdUntilMs: 1_010_000,
+      applyAtMs: 1_070_000,
+    });
+    expect(controller.hold()).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
     expect(apply).not.toHaveBeenCalled();
   });
 

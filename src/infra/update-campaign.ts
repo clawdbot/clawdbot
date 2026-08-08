@@ -14,6 +14,11 @@ const CAMPAIGN_POLL_MS = 5_000;
 type UpdateCampaignState = NonNullable<UpdateScheduleState["campaign"]>;
 type UpdateCampaignTarget = NonNullable<UpdateScheduleState["target"]>;
 
+type UpdateCampaignAdoption = {
+  campaignId: string;
+  target: UpdateCampaignTarget;
+};
+
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
   inspect?: Partial<GatewayActiveWorkInspectors>;
@@ -97,12 +102,14 @@ export class UpdateCampaignController {
     }
   }
 
-  adopt(): boolean {
-    if (!this.campaign || this.campaign.state === "applying") {
-      return false;
+  adopt(): UpdateCampaignAdoption | undefined {
+    const campaign = this.campaign;
+    const target = this.target;
+    if (!campaign || !target || campaign.state === "applying") {
+      return undefined;
     }
     this.beginApplying(false, false);
-    return true;
+    return { campaignId: campaign.id, target: { ...target } };
   }
 
   hold(durationMs = CAMPAIGN_HOLD_MS): boolean {
@@ -167,6 +174,7 @@ export class UpdateCampaignController {
         id: campaign.id,
         state: "waiting-for-idle",
         announcedAtMs: campaign.announcedAtMs,
+        ...(campaign.holdUntilMs === undefined ? {} : { holdUntilMs: campaign.holdUntilMs }),
         forceAtMs: campaign.forceAtMs,
         updatedAtMs: now,
       });
@@ -180,6 +188,7 @@ export class UpdateCampaignController {
         state: "countdown",
         announcedAtMs: campaign.announcedAtMs,
         applyAtMs: now + CAMPAIGN_COUNTDOWN_MS,
+        ...(campaign.holdUntilMs === undefined ? {} : { holdUntilMs: campaign.holdUntilMs }),
         forceAtMs: campaign.forceAtMs,
         updatedAtMs: now,
       });
@@ -220,6 +229,7 @@ export class UpdateCampaignController {
       id: campaign.id,
       state: "applying",
       announcedAtMs: campaign.announcedAtMs,
+      ...(campaign.holdUntilMs === undefined ? {} : { holdUntilMs: campaign.holdUntilMs }),
       forceAtMs: campaign.forceAtMs,
       updatedAtMs: now,
     });
@@ -246,10 +256,14 @@ export class UpdateCampaignController {
       return;
     }
     const now = this.dependencies.now();
+    const holdBoundaryMs =
+      campaign.holdUntilMs !== undefined && campaign.holdUntilMs > now
+        ? campaign.holdUntilMs
+        : Number.POSITIVE_INFINITY;
     const nextBoundaryMs = Math.min(
       campaign.forceAtMs,
       campaign.applyAtMs ?? Number.POSITIVE_INFINITY,
-      campaign.holdUntilMs ?? Number.POSITIVE_INFINITY,
+      holdBoundaryMs,
     );
     const delayMs = Math.max(0, Math.min(CAMPAIGN_POLL_MS, nextBoundaryMs - now));
     this.timer = this.dependencies.setTimer(() => this.reconcile(), delayMs);

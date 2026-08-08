@@ -567,6 +567,7 @@ export function createApplicationOverlays(
         busy ||
         !campaign ||
         campaign.state === "applying" ||
+        snapshot.heldUpdateCampaignId === campaign.id ||
         !readGatewayOperatorAccess(gateway.snapshot).canAdmin
       ) {
         return false;

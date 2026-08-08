@@ -1266,6 +1266,7 @@ describe("update-startup", () => {
       timeoutMs: 45 * 60 * 1000,
       restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
+      packageTargetVersion: "2.0.0",
     });
   });
 
@@ -1283,6 +1284,7 @@ describe("update-startup", () => {
       timeoutMs: 45 * 60 * 1000,
       restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
+      packageTargetVersion: "2.0.0-beta.1",
     });
   });
 
@@ -1383,6 +1385,8 @@ describe("update-startup", () => {
       "--yes",
       "--channel",
       "beta",
+      "--tag",
+      "2.0.0-beta.1",
       "--json",
     ]);
     expect(typeof options).toBe("object");
@@ -1397,6 +1401,12 @@ describe("update-startup", () => {
     mockPackageInstallStatus();
     mockNpmChannelTag("beta", "2.0.0-beta.1");
     detectRespawnSupervisorMock.mockReturnValue("launchd");
+    startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
+      status: "started",
+      pid: 12345,
+      command: "openclaw update --yes --channel beta --tag 2.0.0-beta.1 --timeout 2700",
+      logPath: "/tmp/openclaw-handoff.log",
+    });
     const log = { info: vi.fn() };
 
     await runGatewayUpdateCheck({
@@ -1415,6 +1425,7 @@ describe("update-startup", () => {
         timeoutMs: 45 * 60 * 1000,
         restartDrainTimeoutMs: 300_000,
         channel: "beta",
+        tag: "2.0.0-beta.1",
         restartDelayMs: 0,
         supervisor: "launchd",
         handoffId: expect.any(String),
@@ -1444,7 +1455,7 @@ describe("update-startup", () => {
       channel: "beta",
       version: "2.0.0-beta.1",
       tag: "beta",
-      command: "openclaw update --yes --channel beta --timeout 2700",
+      command: "openclaw update --yes --channel beta --tag 2.0.0-beta.1 --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("applying");
@@ -1515,6 +1526,7 @@ describe("update-startup", () => {
         root: "/opt/openclaw",
         timeoutMs: 45 * 60 * 1000,
         channel: "beta",
+        tag: "2.0.0-beta.1",
         restartDelayMs: 2000,
         supervisor: "systemd",
       }),
