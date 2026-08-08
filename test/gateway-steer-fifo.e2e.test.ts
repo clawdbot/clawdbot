@@ -182,7 +182,7 @@ function writeToolResponse(res: ServerResponse): void {
 
 async function startMockModelServer(): Promise<MockModelServer> {
   const requests: ModelRequest[] = [];
-  const firstResponse = createDeferred<void>();
+  const firstResponse = createDeferred();
   let firstResponseKind: FirstResponseKind = "final";
   const server = createServer((req, res) => {
     void (async () => {
@@ -277,6 +277,9 @@ function createConfig(params: {
       providers: {
         [provider.providerId]: {
           ...provider.config,
+          models: provider.config.models.map((model) =>
+            Object.assign({}, model, { input: Array.from(model.input) }),
+          ),
           request: { allowPrivateNetwork: true },
         },
       },
@@ -579,7 +582,9 @@ describe("Gateway steer FIFO", () => {
           ),
         ).toBe(true);
       }, WAIT_OPTS);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       const currentA = currentUserInput(fixture.modelServer.requests[1]);
       const currentB = currentUserInput(fixture.modelServer.requests[2]);
@@ -625,7 +630,9 @@ describe("Gateway steer FIFO", () => {
           ),
         ).toBe(true);
       }, WAIT_OPTS);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(fixture.modelServer.requests).toHaveLength(2);
     },
     TEST_TIMEOUT_MS,

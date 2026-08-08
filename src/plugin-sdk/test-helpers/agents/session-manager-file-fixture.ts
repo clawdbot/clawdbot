@@ -110,8 +110,8 @@ export function openFileBackedSessionManagerForTest(
     sessionDir: resolvedSessionDir,
     target: () => activeTarget,
     initialize: !exists,
-    rotateTarget: (sessionId) => {
-      activeTarget = path.join(resolvedSessionDir, `${sessionId}.jsonl`);
+    rotateTarget: (nextSessionId) => {
+      activeTarget = path.join(resolvedSessionDir, `${nextSessionId}.jsonl`);
     },
   });
 }
