@@ -109,7 +109,7 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 }
 
 function pluginToolScopeKey(entry: PluginToolRegistration): string {
-  return JSON.stringify([entry.pluginId, entry.source]);
+  return JSON.stringify([entry.pluginId, entry.source, entry.origin]);
 }
 
 function runWithPluginToolScope<T>(entry: PluginToolRegistration, run: () => T): T {

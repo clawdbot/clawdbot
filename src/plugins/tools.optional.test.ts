@@ -645,6 +645,34 @@ describe("resolvePluginTools optional tools", () => {
     ]);
   });
 
+  it("does not reuse a scoped callback wrapper across loader-owned origin changes", async () => {
+    const observedOrigins: Array<string | undefined> = [];
+    const rawTool = {
+      ...makeTool("origin_sensitive_tool"),
+      async execute() {
+        observedOrigins.push(getPluginRuntimeGatewayRequestScope()?.pluginOrigin);
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    };
+    const registration = {
+      pluginId: "multi",
+      optional: false,
+      source: "/tmp/origin-sensitive.js",
+      names: ["origin_sensitive_tool"],
+      factory: () => rawTool,
+    };
+
+    setRegistry([{ ...registration, origin: "workspace" }]);
+    const [workspaceTool] = resolvePluginTools(createResolveToolsParams());
+    await workspaceTool?.execute("workspace-call", {}, undefined);
+
+    setRegistry([{ ...registration, origin: "bundled" }]);
+    const [bundledTool] = resolvePluginTools(createResolveToolsParams());
+    await bundledTool?.execute("bundled-call", {}, undefined);
+
+    expect(observedOrigins).toEqual(["workspace", "bundled"]);
+  });
+
   it("wraps every array tool callback and restores caller scope after errors", async () => {
     const context = createContext();
     const observed: Array<{ name: string; pluginId?: string; pluginSource?: string }> = [];
