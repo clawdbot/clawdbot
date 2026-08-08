@@ -451,8 +451,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
       }
 
-      const result = await callSessionPatch(patch);
-      return jsonResult(result);
+      await callSessionPatch(patch);
+      return jsonResult({
+        status: "updated",
+        sessionKey: key,
+        updated: Object.keys(patch).filter((field) => field !== "key"),
+      });
     },
   };
 }

@@ -560,6 +560,42 @@ describe("sessions tool", () => {
     ]);
   });
 
+  it("returns a bounded acknowledgement instead of the patched session entry", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true,
+      entry: {
+        skillsSnapshot: "s".repeat(47_469),
+        sessionDiffBaseline: "b".repeat(3_665),
+      },
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-sidebar", {
+      action: "patch",
+      label: "Movies",
+      icon: "name:film",
+    });
+
+    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      label: "Movies",
+      icon: "name:film",
+    });
+    expect(result.details).toEqual({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["label", "icon"],
+    });
+    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
+    expect(text).not.toContain("skillsSnapshot");
+    expect(text).not.toContain("sessionDiffBaseline");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(512);
+  });
+
   it("patches and clears title, status, attention, and archive state", async () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
