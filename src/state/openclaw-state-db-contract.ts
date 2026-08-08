@@ -14,6 +14,7 @@ export const FIRST_USE_STATE_INDEXES = ["execution_identity_contexts_run_created
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "model_catalog_remote",
+  "sessions_send_deferred_completions",
   "sidebar_sections",
   "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",

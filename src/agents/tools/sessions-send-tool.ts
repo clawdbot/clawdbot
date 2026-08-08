@@ -37,6 +37,7 @@ import {
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
@@ -56,6 +57,10 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
+import {
+  armSessionsSendDeferredCompletion,
+  disarmSessionsSendDeferredCompletion,
+} from "../sessions-send-deferred.js";
 import { loadSessionEntryByKey } from "../subagent-announce-delivery.js";
 import {
   describeSessionsSendTool,
@@ -86,17 +91,28 @@ const SessionsSendToolSchema = Type.Object({
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   watch: Type.Optional(Type.Boolean()),
+  wakeOnReply: Type.Optional(Type.Boolean()),
 });
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-const SessionsSendDeliverySchema = Type.Object(
-  {
-    status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
-    mode: Type.Literal("announce"),
-  },
-  { additionalProperties: false },
-);
+const SessionsSendDeliverySchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
+      mode: Type.Literal("announce"),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Literal("armed"),
+      mode: Type.Literal("wake_on_reply"),
+      expiresAt: Type.Integer(),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 const SessionsSendOutputSchema = Type.Union([
   Type.Object(
@@ -439,7 +455,9 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
+  agentSessionId?: string;
   agentChannel?: GatewayMessageChannel;
+  deliveryContext?: DeliveryContext;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -456,7 +474,23 @@ export function createSessionsSendTool(opts?: {
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
-      const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
+      const requestedTimeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds");
+      const wakeOnReply = params.wakeOnReply === true;
+      if (wakeOnReply && requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== 0) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "wakeOnReply cannot be combined with a non-zero timeoutSeconds",
+        });
+      }
+      if (wakeOnReply && params.watch === true) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "wakeOnReply cannot be combined with watch",
+        });
+      }
+      const timeoutSeconds = wakeOnReply ? 0 : (requestedTimeoutSeconds ?? 30);
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
 
@@ -711,7 +745,7 @@ export function createSessionsSendTool(opts?: {
       let runId: string = idempotencyKey;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
-      if (timeoutSeconds !== 0 && requesterSessionKey === resolvedKey) {
+      if ((timeoutSeconds !== 0 || wakeOnReply) && requesterSessionKey === resolvedKey) {
         return jsonResult({
           runId,
           status: "error",
@@ -792,6 +826,80 @@ export function createSessionsSendTool(opts?: {
               ? resolveCronRunScopedFallbackSessionKey(displayKey)
               : undefined;
 
+          const agentMessageContext = buildAgentToAgentMessageContext({
+            requesterSessionKey: replyRequesterSessionKey,
+            requesterChannel,
+            targetSessionKey: displayKey,
+          });
+          const inputProvenance = {
+            kind: "inter_session" as const,
+            sourceSessionKey: replyRequesterSessionKey,
+            sourceChannel: requesterChannel,
+            sourceTool: "sessions_send",
+          };
+          const sendParams = {
+            message: annotateInterSessionPromptText(message, inputProvenance),
+            sessionKey: resolvedKey,
+            idempotencyKey,
+            deliver: false,
+            sourceReplyDeliveryMode: "message_tool_only" as const,
+            channel: INTERNAL_MESSAGE_CHANNEL,
+            lane: resolveNestedAgentLaneForSession(resolvedKey),
+            extraSystemPrompt: agentMessageContext,
+            inputProvenance,
+          };
+
+          if (wakeOnReply) {
+            if (!requesterSessionKey || !opts?.agentSessionId || !opts.deliveryContext) {
+              return jsonResult({
+                runId,
+                status: "error",
+                error:
+                  "wakeOnReply requires a trusted requester session incarnation and delivery context",
+                sessionKey: displayKey,
+              });
+            }
+            let expiresAt: number;
+            try {
+              ({ expiresAt } = armSessionsSendDeferredCompletion({
+                targetRunId: runId,
+                targetSessionKey: resolvedKey,
+                requesterSessionKey,
+                requesterSessionId: opts.agentSessionId,
+                requesterOrigin: opts.deliveryContext,
+                requestMessage: message,
+              }));
+            } catch (error) {
+              return jsonResult({
+                runId,
+                status: "error",
+                error: formatErrorMessage(error),
+                sessionKey: displayKey,
+              });
+            }
+            const start = await startAgentRun({
+              callGateway: gatewayCall,
+              runId,
+              sendParams,
+              sessionKey: displayKey,
+              deliveryTimeoutMs: announceTimeoutMs,
+            });
+            if (!start.ok) {
+              disarmSessionsSendDeferredCompletion({
+                targetRunId: runId,
+                error: "target run was not accepted",
+              });
+              return start.result;
+            }
+            runId = start.runId;
+            return jsonResult({
+              runId,
+              status: "accepted",
+              sessionKey: displayKey,
+              delivery: { status: "armed", mode: "wake_on_reply", expiresAt },
+            });
+          }
+
           // Capture the pre-run assistant snapshot before starting the nested run.
           // Fast in-process test doubles and short-circuit agent paths can finish
           // before we reach the post-run read, which would otherwise make the new
@@ -824,28 +932,6 @@ export function createSessionsSendTool(opts?: {
                 }).catch(() => undefined)
               : undefined;
 
-          const agentMessageContext = buildAgentToAgentMessageContext({
-            requesterSessionKey: replyRequesterSessionKey,
-            requesterChannel,
-            targetSessionKey: displayKey,
-          });
-          const inputProvenance = {
-            kind: "inter_session" as const,
-            sourceSessionKey: replyRequesterSessionKey,
-            sourceChannel: requesterChannel,
-            sourceTool: "sessions_send",
-          };
-          const sendParams = {
-            message: annotateInterSessionPromptText(message, inputProvenance),
-            sessionKey: resolvedKey,
-            idempotencyKey,
-            deliver: false,
-            sourceReplyDeliveryMode: "message_tool_only" as const,
-            channel: INTERNAL_MESSAGE_CHANNEL,
-            lane: resolveNestedAgentLaneForSession(resolvedKey),
-            extraSystemPrompt: agentMessageContext,
-            inputProvenance,
-          };
           const maxPingPongTurns = resolvePingPongTurns();
 
           // Skip the A2A ping-pong + announce flow when the current caller is the

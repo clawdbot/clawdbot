@@ -1099,6 +1099,24 @@ export interface SessionWatchCursors {
   watcher_session_key: string;
 }
 
+export interface SessionsSendDeferredCompletions {
+  claimed_at: number | null;
+  completed_at: number | null;
+  completion_text: string | null;
+  continuation_run_id: string;
+  created_at: number;
+  expires_at: number;
+  last_error: string | null;
+  request_message: string;
+  requester_origin_json: string;
+  requester_session_id: string;
+  requester_session_key: string;
+  state: string;
+  target_run_id: string;
+  target_session_key: string;
+  terminal_outcome_json: string | null;
+}
+
 export interface SidebarSections {
   position: number;
   section_id: string;
@@ -1641,6 +1659,7 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  sessions_send_deferred_completions: SessionsSendDeferredCompletions;
   sidebar_sections: SidebarSections;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;

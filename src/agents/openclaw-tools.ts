@@ -649,7 +649,9 @@ export function createOpenClawTools(
           // is the gate in ensureConfiguredAgentMainSession).
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
             agentChannel: options?.agentChannel,
+            deliveryContext,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
           }),

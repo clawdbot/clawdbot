@@ -4,12 +4,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { claimSessionsSendDeferredCompletion } from "../../agents/sessions-send-deferred-store.js";
+import {
+  armSessionsSendDeferredCompletion,
+  prepareSessionsSendDeferredCompletion,
+  testing as deferredCompletionTesting,
+} from "../../agents/sessions-send-deferred.js";
 import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
@@ -44,7 +52,11 @@ import type { GatewayRequestContext } from "./types.js";
 const mocks = getAgentTestMocks();
 
 describe("gateway agent handler", () => {
-  afterEach(describe0AfterEach0);
+  afterEach(() => {
+    deferredCompletionTesting.resetPendingRunIds();
+    closeOpenClawStateDatabase();
+    describe0AfterEach0();
+  });
 
   it("passes resolved maintenance config to the gateway admission store write", async () => {
     primeMainAgentRun({
@@ -67,6 +79,71 @@ describe("gateway agent handler", () => {
         mode: "enforce",
         maxEntries: 42,
       },
+    });
+  });
+
+  it("retires a deferred dispatch when the accepted gateway turn becomes durable", async () => {
+    await withTempDir({ prefix: "openclaw-agent-deferred-admission-" }, async (root) => {
+      useTestStateDir(root);
+      closeOpenClawStateDatabase();
+      deferredCompletionTesting.resetPendingRunIds();
+      const targetRunId = "deferred-target-run";
+      const targetSessionKey = "agent:research:main";
+      armSessionsSendDeferredCompletion({
+        targetRunId,
+        targetSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterSessionId: "existing-session-id",
+        requesterOrigin: { channel: "telegram", to: "123", accountId: "primary" },
+        requestMessage: "Research this",
+      });
+      prepareSessionsSendDeferredCompletion({
+        targetRunId,
+        targetSessionKey,
+        terminalOutcome: { status: "ok", reason: "completed" },
+        result: { payloads: [{ text: "Done" }] },
+      });
+      const claimed = claimSessionsSendDeferredCompletion({ targetRunId, targetSessionKey });
+      const continuationRunId = requireValue(
+        claimed?.continuationRunId,
+        "continuation run id missing",
+      );
+
+      primeMainAgentRun();
+      await invokeAgent(
+        {
+          message: "[Deferred sessions_send completion]",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          expectedExistingSessionId: "existing-session-id",
+          channel: "telegram",
+          to: "123",
+          accountId: "primary",
+          deliver: true,
+          idempotencyKey: continuationRunId,
+        },
+        { client: backendGatewayClient() },
+      );
+      const call = await waitForAgentCommandCall<
+        AgentCommandCall & { userTurnTranscriptRecorder?: UserTurnTranscriptRecorder }
+      >();
+      expect(claimSessionsSendDeferredCompletion({ targetRunId, targetSessionKey })).toBeDefined();
+
+      const recorder = requireValue(
+        call.userTurnTranscriptRecorder,
+        "gateway user turn recorder missing",
+      );
+      recorder.markRuntimePersisted({
+        role: "user",
+        content: "[Deferred sessions_send completion]",
+        timestamp: Date.now(),
+      });
+
+      expect(
+        claimSessionsSendDeferredCompletion({ targetRunId, targetSessionKey }),
+      ).toBeUndefined();
+      deferredCompletionTesting.resetPendingRunIds();
+      closeOpenClawStateDatabase();
     });
   });
 

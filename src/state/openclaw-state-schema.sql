@@ -1079,6 +1079,24 @@ CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
 CREATE INDEX IF NOT EXISTS idx_plugin_state_listing
   ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
 
+CREATE TABLE IF NOT EXISTS sessions_send_deferred_completions (
+  target_run_id TEXT NOT NULL PRIMARY KEY,
+  target_session_key TEXT NOT NULL,
+  requester_session_key TEXT NOT NULL,
+  requester_session_id TEXT NOT NULL,
+  requester_origin_json TEXT NOT NULL,
+  request_message TEXT NOT NULL,
+  continuation_run_id TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'dispatching', 'completed', 'cancelled', 'expired')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  claimed_at INTEGER,
+  completed_at INTEGER,
+  terminal_outcome_json TEXT,
+  completion_text TEXT,
+  last_error TEXT
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS channel_ingress_events (
   queue_name TEXT NOT NULL,
   event_id TEXT NOT NULL,

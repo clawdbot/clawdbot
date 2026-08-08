@@ -85,6 +85,9 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
+- **Resume the requester later:** set `wakeOnReply: true` to return after dispatch, then start one continuation in the exact requesting session and ingress route when that target run succeeds or fails.
+
+`wakeOnReply` is a durable, 24-hour, one-shot registration keyed to the target run. OpenClaw captures the requester session incarnation and normalized delivery context from trusted runtime state; the model cannot provide a return channel or target. The captured origin must identify its channel, destination, and account, so continuation delivery never substitutes a provider-default account. OpenClaw persists the terminal payload before settling the target and keeps an accepted dispatch open until the continuation user turn is durable. After restart, a matching restart-recovery claim plus transcript turn transfers ownership to main-session recovery; otherwise OpenClaw replays the dispatch with the same continuation id. The continuation fails closed if its durable ownership cannot be inspected or if the captured origin is missing, expired, replaced, or mismatched. This mode does not expose the target result to the initiating turn and replaces the legacy A2A reply-back and announce flow for that call. It cannot be combined with `watch: true` or a non-zero `timeoutSeconds`. Omitting it preserves existing `sessions_send` behavior.
 
 Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
 
