@@ -1,7 +1,6 @@
 export const pluginSdkEntrypoints: string[];
 export const pluginSdkSubpaths: string[];
 export const privateLocalOnlyPluginSdkEntrypoints: string[];
-export const privateQaPluginSdkEntrypoints: string[];
 export const productionPluginSdkEntrypoints: string[];
 export const packagedPrivatePluginSdkRuntimeEntrypoints: string[];
 export const publicPluginSdkEntrypoints: string[];
