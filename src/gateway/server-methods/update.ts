@@ -182,9 +182,16 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
-    const adoptedCampaignId = gatewayUpdateCampaign.adopt()
-      ? gatewayUpdateCampaign.getState()?.id
-      : undefined;
+    const announcedSchedule = getUpdateSchedule();
+    const announcedDevTargetRef =
+      announcedSchedule?.campaign &&
+      announcedSchedule.channel === "dev" &&
+      announcedSchedule.target?.kind === "git"
+        ? announcedSchedule.target.upstreamSha.trim() || undefined
+        : undefined;
+    const adoptedCampaign = gatewayUpdateCampaign.adopt();
+    const adoptedCampaignId = adoptedCampaign ? gatewayUpdateCampaign.getState()?.id : undefined;
+    const adoptedDevTargetRef = adoptedCampaign ? announcedDevTargetRef : undefined;
     const actor = resolveControlPlaneActor(client);
     const {
       sessionKey,
@@ -307,6 +314,14 @@ export const updateHandlers: GatewayRequestHandlers = {
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
+              ...(adoptedDevTargetRef
+                ? {
+                    env: {
+                      ...process.env,
+                      OPENCLAW_UPDATE_DEV_TARGET_REF: adoptedDevTargetRef,
+                    },
+                  }
+                : {}),
               restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,
               handoffId,
@@ -415,6 +430,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          ...(adoptedDevTargetRef ? { devTargetRef: adoptedDevTargetRef } : {}),
           allowGatewayServiceRepair: false,
           allowGatewayActivation: false,
         });
