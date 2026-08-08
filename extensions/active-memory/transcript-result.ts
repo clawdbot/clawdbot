@@ -274,7 +274,7 @@ function buildSubagentRecallResult(params: {
     params.subagentResult.hasUsableMemoryResult === true ||
     params.fallbackHasUsableMemoryResult === true;
   const summary = normalizeGroundedSummary(rawReply, params.maxSummaryChars, hasUsableMemoryResult);
-  if (summary !== null) {
+  if (resultStatus !== "failed" && summary !== null) {
     return { status: "ok", elapsedMs: params.elapsedMs, rawReply, summary, searchDebug };
   }
   const status =

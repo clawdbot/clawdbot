@@ -4539,6 +4539,61 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=failed");
   });
 
+  it("does not inject retained text from a terminally failed recall", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_search"], logging: true });
+    const sessionKey = "agent:main:harness-tool-failed-retained-payload";
+    seedSession(sessionKey, "s-harness-tool-failed-retained-payload", 0);
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        onAgentToolResult?: (event: {
+          toolName: string;
+          result: unknown;
+          isError: boolean;
+        }) => void;
+      }) => {
+        params.onAgentToolResult?.({
+          toolName: "memory_search",
+          isError: false,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: '{"results":[{"text":"User usually orders ramen."}]}',
+              },
+            ],
+            details: { results: [{ text: "User usually orders ramen." }] },
+          },
+        });
+        return {
+          payloads: [
+            { text: "User usually orders ramen." },
+            {
+              text: "Request timed out before a response was generated.",
+              isError: true,
+            },
+          ],
+          meta: {
+            durationMs: 0,
+            error: {
+              kind: "incomplete_turn",
+              message: "Request timed out before a response was generated.",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await runPromptBuild(
+      { prompt: "what food do i usually order? failed retained payload" },
+      { sessionKey },
+    );
+
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=failed");
+  });
+
   it("rejects completed output after a configured custom tool reports a content-only timeout", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
