@@ -307,6 +307,23 @@ describe("buildInlineProviderModels", () => {
       "X-Static": "tenant-a",
     });
   });
+
+  it("marks shre-router aum/70b inline config as chat-only by default", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      "shre-router": {
+        baseUrl: "http://127.0.0.1:5497/v1",
+        api: "openai-completions",
+        models: [makeModel("aum/70b")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(expectDefined(result[0], "result[0] test invariant").compat).toEqual({
+      supportsTools: false,
+    });
+  });
 });
 
 describe("resolveProviderModelInput", () => {

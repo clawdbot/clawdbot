@@ -106,6 +106,21 @@ function isLegacyFoundryVisionModelCandidate(params: {
   );
 }
 
+function resolveInlineProviderModelCompat(params: {
+  provider: string;
+  model: ModelDefinitionConfig;
+}): ModelDefinitionConfig["compat"] {
+  const configuredCompat = params.model.compat;
+  if (
+    normalizeOptionalLowercaseString(params.provider) === "shre-router" &&
+    normalizeOptionalLowercaseString(params.model.id) === "aum/70b" &&
+    configuredCompat?.supportsTools === undefined
+  ) {
+    return { ...configuredCompat, supportsTools: false };
+  }
+  return configuredCompat;
+}
+
 /** Resolves model input modalities with Foundry legacy vision-model compatibility. */
 export function resolveProviderModelInput(params: {
   provider?: string;
@@ -162,6 +177,7 @@ export function buildInlineProviderModels(
       const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
         stripSecretRefMarkers: true,
       });
+      const compat = resolveInlineProviderModelCompat({ provider: trimmed, model });
       const requestConfig = resolveProviderRequestConfig({
         provider: trimmed,
         api: transport.api ?? model.api,
@@ -190,6 +206,7 @@ export function buildInlineProviderModels(
                 modelName: model.name,
                 input: model.input,
               }),
+              ...(compat ? { compat } : {}),
               provider: trimmed,
               baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
               api: requestConfig.api ?? model.api,
