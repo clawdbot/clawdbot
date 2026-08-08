@@ -31,6 +31,7 @@ async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<vo
 
 async function createLargeResultFixture(): Promise<{
   configPath: string;
+  home: string;
   stateDir: string;
   payload: string;
 }> {
@@ -103,25 +104,32 @@ process.on("SIGINT", () => process.exit(0));
       mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
     }),
   );
-  return { configPath, stateDir, payload };
+  return { configPath, home: root, stateDir, payload };
 }
 
-async function runMcpCallWithHeldStdout(fixture: { configPath: string; stateDir: string }) {
+async function runMcpCallWithHeldStdout(fixture: {
+  configPath: string;
+  home: string;
+  stateDir: string;
+}) {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: fixture.home,
+    USERPROFILE: fixture.home,
+    OPENCLAW_CONFIG_PATH: fixture.configPath,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: fixture.stateDir,
+    OPENCLAW_TEST_FAST: "1",
+  };
+  // The child must take the real one-shot exit path, not the in-worker bail.
+  delete env.NODE_ENV;
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
   const child = spawn(
     process.execPath,
     ["--import", "tsx", "src/entry.ts", "mcp", "call", "docs", "bulk"],
-    {
-      cwd: path.resolve("."),
-      env: {
-        ...process.env,
-        NODE_ENV: undefined,
-        VITEST: undefined,
-        OPENCLAW_CONFIG_PATH: fixture.configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    },
+    { cwd: path.resolve("."), env, stdio: ["pipe", "pipe", "pipe"] },
   );
   activeChildren.add(child);
   child.stdout.setEncoding("utf8");
