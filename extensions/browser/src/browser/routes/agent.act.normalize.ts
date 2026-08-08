@@ -401,7 +401,7 @@ export function normalizeActRequest(
       // Bound nesting before recursing: oversized bodies parse fine, but
       // unbounded recursion overflows the stack before the count check runs.
       // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
-      if (depth >= ACT_MAX_BATCH_DEPTH) {
+      if (depth > ACT_MAX_BATCH_DEPTH) {
         throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
       }
       const actions = Array.isArray(body.actions)

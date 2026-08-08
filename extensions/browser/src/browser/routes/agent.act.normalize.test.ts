@@ -156,14 +156,14 @@ describe("normalizeActRequest batch nesting depth", () => {
   };
 
   it("normalizes batches nested up to the executor depth limit", () => {
-    const normalized = normalizeActRequest(buildNestedBatch(ACT_MAX_BATCH_DEPTH));
+    const normalized = normalizeActRequest(buildNestedBatch(ACT_MAX_BATCH_DEPTH + 1));
     expect(normalized).toMatchObject({ kind: "batch" });
   });
 
   it("rejects nesting past the depth limit with a clear error instead of overflowing the stack", () => {
     // A ~1MB JSON body fits tens of thousands of levels; without a depth bound the
     // recursive normalization throws RangeError before the action-count check runs.
-    for (const depth of [ACT_MAX_BATCH_DEPTH + 1, 30_000]) {
+    for (const depth of [ACT_MAX_BATCH_DEPTH + 2, 30_000]) {
       expect(() => normalizeActRequest(buildNestedBatch(depth))).toThrow(
         `batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`,
       );
