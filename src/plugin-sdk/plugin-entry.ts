@@ -299,6 +299,7 @@ export type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
   PluginHookSkillProposalKind,
+  PluginHookToolCallRejectedEvent,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
