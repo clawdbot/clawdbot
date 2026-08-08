@@ -84,6 +84,7 @@
   "thread-bindings-session-runtime",
   "text-runtime",
   "text-chunking",
+  "agent-scope-runtime",
   "agent-runtime",
   "simple-completion-runtime",
   "speech-core",

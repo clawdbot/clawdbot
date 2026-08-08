@@ -677,6 +677,10 @@
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
     },
+    "./plugin-sdk/agent-scope-runtime": {
+      "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-scope-runtime.js"
+    },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
