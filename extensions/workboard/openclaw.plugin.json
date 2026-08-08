@@ -50,6 +50,7 @@
       "workboard_claim",
       "workboard_heartbeat",
       "workboard_complete",
+      "workboard_closeout",
       "workboard_attachment_add",
       "workboard_attachment_read",
       "workboard_attachment_delete",
@@ -101,6 +102,9 @@
       "optional": true
     },
     "workboard_complete": {
+      "optional": true
+    },
+    "workboard_closeout": {
       "optional": true
     },
     "workboard_attachment_add": {

@@ -2,6 +2,13 @@
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
+import { registerCloseoutGatewayMethod } from "./src/closeout-gateway.js";
+import { createCloseoutTrackerStore } from "./src/closeout-store.js";
+import {
+  createCloseoutTrackerToolFactory,
+  createRuntimeConversationSend,
+} from "./src/closeout-tool.js";
+import { createCloseoutTracker } from "./src/closeout-tracker.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import {
   cleanupWorkboardRunWorktree,
@@ -20,6 +27,10 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
+    const closeoutTracker = createCloseoutTracker({
+      store: createCloseoutTrackerStore(api.runtime),
+      send: createRuntimeConversationSend(api.runtime),
+    });
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "card",
@@ -33,6 +44,7 @@ export default definePluginEntry({
       requiredScopes: ["operator.read"],
     });
     registerWorkboardGatewayMethods({ api, store });
+    registerCloseoutGatewayMethod({ api, tracker: closeoutTracker });
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
     api.on("subagent_ended", async (event) => {
@@ -82,5 +94,9 @@ export default definePluginEntry({
         optional: true,
       },
     );
+    api.registerTool(createCloseoutTrackerToolFactory({ tracker: closeoutTracker }), {
+      name: "workboard_closeout",
+      optional: true,
+    });
   },
 });

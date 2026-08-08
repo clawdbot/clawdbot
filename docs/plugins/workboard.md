@@ -149,6 +149,7 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_heartbeat`                                                                                                                            | Refresh the claim heartbeat during a longer run.                                                                                                                                          |
 | `workboard_release`                                                                                                                              | Release the claim after completion, pause, or handoff; can move the card to a next status.                                                                                                |
 | `workboard_complete` / `workboard_block`                                                                                                         | Structured lifecycle tools for final summaries, proof, artifacts, and created-card manifests (must reference cards linked back to the completed card) or blocker reasons.                 |
+| `workboard_closeout`                                                                                                                             | Record, send, reconcile, and complete one external closeout without blind resend after an uncertain result; manual confirmation uses the operator-admin Gateway action.                   |
 | `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                         |
 | `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                           |
 | `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                            |
@@ -162,6 +163,55 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
+
+### External closeout tracking
+
+`workboard_closeout` is an optional owner-only tool for an unsandboxed agent. Add
+the tool name (or the `workboard` plugin id) to the agent's existing
+`tools.allow` list to expose it:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        tools: { allow: ["workboard_closeout"] },
+      },
+    ],
+  },
+}
+```
+
+The `send` action first persists a `recorded` closeout, then calls the Gateway's
+existing durable `conversations.send` operation with the stable operation id
+`closeout:<closeoutId>`. A returned message id confirms delivery. A queued
+operation remains `queued`; an unknown, suppressed, malformed, or interrupted
+outcome becomes `uncertain`. The `reconcile` action reissues
+`conversations.send` with that same operation id, allowing the Gateway's durable
+operation owner to return or advance the existing operation without a new-id
+blind resend.
+
+Manual confirmation is not exposed to the model tool. An authenticated user or
+paired device with `operator.admin` may call the
+`workboard.closeouts.confirm` Gateway method with `agentId`, `closeoutId`, and
+`evidence`. The tracker stores the host-derived confirmer identity and timestamp
+with the evidence. `complete` accepts only `confirmed` or `manually_confirmed`
+records.
+
+`get` and `list` return metadata-only summaries scoped to the calling agent;
+list results are capped at 100 and never echo the closeout message, source
+session, manual evidence, confirmer identity, or Gateway error text. Closeout
+messages are capped at 16,000 characters and manual evidence at 2,000
+characters. Gateway-derived channel names are capped at 64 characters and
+message/queue ids at 512; invalid responses become a fixed
+`gateway_response_invalid` uncertainty category.
+
+The tracker uses Workboard's existing plugin key-value storage with a 1,000-record
+namespace cap. Completed records expire after 90 days; unresolved records are
+retained, and capacity exhaustion rejects a new record instead of evicting one
+whose delivery may still be uncertain. It does not create another database,
+change a card's status, or project completion to Linear or another service.
 
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded; consumers that need

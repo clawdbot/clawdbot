@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - **Buzz messaging:** preserve Markdown and structured room content, then add room- and thread-scoped typing indicators with reconnect-safe lifecycle handling. (#116096, #116194) Thanks @shakkernerd.
 - **Automations naming:** rename the scheduler-facing `cron` agent tool and visible CLI/UI surfaces to Automations while retaining the compatible CLI alias. (#114841, #114854, #114853) Thanks @omarshahine.
 - **DuckDuckGo search:** move DuckDuckGo search into the plugin boundary so provider ownership, installation, and runtime behavior stay outside core. (#116740) Thanks @vincentkoc.
+- **Workboard closeout tracking:** add an optional owner-only `workboard_closeout` tool that records, sends, reconciles, and completes external closeouts without blind resend after uncertain delivery, with manual confirmation restricted to an authenticated operator-admin Gateway action.
 
 ### Fixes
 
