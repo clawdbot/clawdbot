@@ -14,17 +14,19 @@ const streamMocks = vi.hoisted(() => ({
 
 import type { AgentTool } from "../runtime/index.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
+import {
+  createCompactionHandlers,
+  createResourceLoader,
+} from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 const testModel: Model = {
   id: "test-model",
@@ -112,68 +114,6 @@ function mockInvalidThenTextSummary(recoveredText: string) {
     );
   });
   return () => requests;
-}
-
-function createResourceLoader(
-  handlers: Map<string, Array<(...args: unknown[]) => Promise<unknown>>> = new Map(),
-): ResourceLoader {
-  const extensionsResult: LoadExtensionsResult = {
-    extensions:
-      handlers.size > 0
-        ? [
-            {
-              path: "<test-extension>",
-              resolvedPath: "<test-extension>",
-              sourceInfo: createSyntheticSourceInfo("<test-extension>", {
-                source: "temporary",
-              }),
-              handlers,
-              tools: new Map(),
-              messageRenderers: new Map(),
-              commands: new Map(),
-              flags: new Map(),
-              shortcuts: new Map(),
-            },
-          ]
-        : [],
-    errors: [],
-    runtime: createExtensionRuntime(),
-  };
-  return {
-    getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
-}
-
-function createCompactionHandlers() {
-  return new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    [
-      "session_before_compact",
-      [
-        async (event: unknown) => {
-          const preparation = (
-            event as {
-              preparation: { firstKeptEntryId: string; tokensBefore: number };
-            }
-          ).preparation;
-          return {
-            compaction: {
-              summary: "condensed history",
-              firstKeptEntryId: preparation.firstKeptEntryId,
-              tokensBefore: preparation.tokensBefore,
-            },
-          };
-        },
-      ],
-    ],
-  ]);
 }
 
 async function createTestSession(
