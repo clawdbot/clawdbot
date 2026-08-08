@@ -2898,9 +2898,31 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
     {
-      name: "preserves committed outbound side effects",
+      name: "blocks replay after committed outbound side effects",
       gatewayResult: {
         payloads: [],
+        ...committedSessionSpawnEvidence,
+      },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+        phases: [
+          {
+            phase: "direct-primary",
+            delivered: false,
+            path: "direct",
+            error: "completion agent did not produce a visible reply",
+          },
+        ],
+      },
+    },
+    {
+      name: "accepts visible parent output after committed outbound side effects",
+      gatewayResult: {
+        payloads: [{ text: "The delegated task completed." }],
         ...committedSessionSpawnEvidence,
       },
       expected: { delivered: true, path: "direct" },
@@ -2982,7 +3004,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "dm:U123",
     },
   ] as const)(
-    "accepts required no-output $route completions with committed outbound side effects",
+    "blocks replay for required no-output $route completions with committed outbound side effects",
     async ({ route, channel, accountId, to }) => {
       const callGateway = createGatewayMock({
         result: {
@@ -3019,7 +3041,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
               internalEvents,
             });
 
-      expectDeliveryPath(result, "direct");
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      });
       expectGatewayAgentParams(callGateway, {
         deliver: false,
         channel,
@@ -3176,14 +3204,26 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
     {
-      name: "accepts an accepted session spawn despite off-target messaging",
+      name: "blocks replay after an accepted session spawn with off-target messaging",
       sideEffects: committedSessionSpawnEvidence,
-      expected: { delivered: true, path: "direct" },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      },
     },
     {
-      name: "accepts a successful cron add despite off-target messaging",
+      name: "blocks replay after a successful cron add with off-target messaging",
       sideEffects: { successfulCronAdds: 1 },
-      expected: { delivered: true, path: "direct" },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      },
     },
   ])("$name for required no-output completion", async ({ sideEffects, expected }) => {
     const childSessionKey = "agent:worker:subagent:off-target-no-output";

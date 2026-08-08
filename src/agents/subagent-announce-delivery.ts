@@ -1204,12 +1204,15 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
+    const hasCommittedNonMessagingCompletionSideEffect = Boolean(
+      directAnnounceResult &&
+      hasCommittedNonMessagingOutboundDeliveryEvidence(directAnnounceResult),
+    );
     const hasCompletionSideEffect =
+      hasMessagingToolDelivery || hasCommittedNonMessagingCompletionSideEffect;
+    const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
-      Boolean(
-        directAnnounceResult &&
-        hasCommittedNonMessagingOutboundDeliveryEvidence(directAnnounceResult),
-      );
+      (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
@@ -1230,10 +1233,17 @@ async function sendSubagentAnnounceDirectly(params: {
         };
       }
     }
-    if (hasRequiredSubagentNoOutputCompletion && hasCompletionSideEffect) {
+    if (
+      hasRequiredSubagentNoOutputCompletion &&
+      !hasVisibleRequiredCompletionReply &&
+      hasCommittedNonMessagingCompletionSideEffect
+    ) {
       return {
-        delivered: true,
+        delivered: false,
         path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
       };
     }
     if (
