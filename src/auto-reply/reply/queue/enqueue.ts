@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { createDeferred } from "../../../shared/deferred.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -158,10 +159,7 @@ export function enqueueFollowupRun(
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
-    let settle = (_accepted: boolean) => {};
-    const acceptance = new Promise<boolean>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: acceptance, resolve: settle } = createDeferred<boolean>();
     run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
     appendQueueItem({
@@ -364,10 +362,10 @@ function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
 }
 
 type ParkedSteerReservation = {
-  admit(): Promise<"steer" | "fallback" | "cancelled">;
+  admit: () => Promise<"steer" | "fallback" | "cancelled">;
   accepted: (accepted: boolean) => void;
-  fallback(): void;
-  consume(): void;
+  fallback: () => void;
+  consume: () => void;
 };
 
 export function parkSteerCandidate(

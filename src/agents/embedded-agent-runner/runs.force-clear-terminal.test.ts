@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createReplyOperation,
   isReplyRunActiveForSessionId,
@@ -9,6 +8,10 @@ import {
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -34,19 +37,28 @@ function createRunHandle(
 }
 
 describe("force-clear terminal state persistence", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let testState: OpenClawTestState | undefined;
   let storePath: string;
 
-  beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-forceclear-");
-    storePath = path.join(tempDir, "sessions.json");
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-forceclear-",
+    });
+    storePath = path.join(testState.sessionsDir(), "sessions.json");
     setRuntimeConfigSnapshot({ session: { store: storePath } });
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    testing.resetActiveEmbeddedRuns();
-    replyRunTesting.resetReplyRunRegistry();
+  afterEach(async () => {
+    const state = testState;
+    testState = undefined;
+    try {
+      clearRuntimeConfigSnapshot();
+      testing.resetActiveEmbeddedRuns();
+      replyRunTesting.resetReplyRunRegistry();
+    } finally {
+      await state?.cleanup();
+    }
   });
 
   it("delays stale-owner followups until the old reply owner settles", async () => {
