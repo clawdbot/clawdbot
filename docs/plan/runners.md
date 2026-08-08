@@ -53,8 +53,8 @@ popover from a flat list mixing three ontologies (gateway, exec nodes, cloud
 profiles), then becomes invisible and immutable. Placement config is spread
 across `tools.exec.*`, `agents.entries.*.tools.exec.node`,
 `agents.defaults.sandbox.*`, `gateway.nodes.*`, and `cloudWorkers.profiles`.
-Vocabulary drifted: the Control UI says "thread" (July 2026 copy rename,
-#110933/#110973) while the CLI, protocol, stores, and docs say "session";
+Vocabulary drifted: the Control UI says "thread" (July 2026 copy rename, PRs
+110933/110973) while the CLI, protocol, stores, and docs say "session";
 paired hardware is "nodes" in routes/i18n and "devices" in paths/labels.
 
 ## Model and vocabulary
