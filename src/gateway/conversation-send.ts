@@ -28,6 +28,18 @@ const defaultDeps: ConversationSendDeps = {
   resolveConversation,
 };
 
+function projectMessageId(
+  operation: ConversationDeliveryRecord,
+): { messageId: string; messageIdSource: "platform" | "prepared" } | Record<string, never> {
+  if (operation.platformMessageId) {
+    return { messageId: operation.platformMessageId, messageIdSource: "platform" };
+  }
+  if (operation.preparedMessageId) {
+    return { messageId: operation.preparedMessageId, messageIdSource: "prepared" };
+  }
+  return {};
+}
+
 function resultForCompletedOperation(
   operation: ConversationDeliveryRecord,
 ): ConversationSendResult | undefined {
@@ -42,15 +54,13 @@ function resultForCompletedOperation(
       return {
         ...base,
         status: "sent",
-        ...(operation.platformMessageId || operation.preparedMessageId
-          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
-          : {}),
+        ...projectMessageId(operation),
       };
     case "queued":
       return {
         ...base,
         status: "queued",
-        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
+        ...projectMessageId(operation),
       };
     case "suppressed":
       return { ...base, status: "suppressed" };
@@ -123,7 +133,7 @@ export async function runGatewayConversationSend(
       status: sent.deliveryStatus,
       conversationRef: conversation.conversationRef,
       channel: conversation.channel,
-      ...(sent.messageId ? { messageId: sent.messageId } : {}),
+      ...projectMessageId(sent.operation),
       ...(sent.operation.queueId ? { queueId: sent.operation.queueId } : {}),
     };
   } catch (error) {

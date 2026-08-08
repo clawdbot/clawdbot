@@ -47,6 +47,7 @@ describe("closeout tracker", () => {
       conversationRef: input.conversationRef,
       channel: "telegram",
       messageId: "telegram-123",
+      messageIdSource: "platform",
       queueId: "closeout:NAC-78",
     }));
     const tracker = createCloseoutTracker({ store, send, now: () => 1_000 });
@@ -95,6 +96,7 @@ describe("closeout tracker", () => {
         conversationRef: input.conversationRef,
         channel: "telegram",
         messageId: "telegram-456",
+        messageIdSource: "platform",
         queueId: "queue-1",
       });
     const tracker = createCloseoutTracker({ store, send, now: () => 2_000 });
@@ -185,7 +187,28 @@ describe("closeout tracker", () => {
 
     await expect(tracker.send(input)).resolves.toMatchObject({
       status: "uncertain",
-      lastError: "delivery reported sent without a platform message id",
+      lastError: "delivery reported sent without a platform receipt",
+    });
+    await expect(tracker.complete("main", "NAC-78")).rejects.toThrow(
+      "closeout NAC-78 cannot complete from uncertain",
+    );
+  });
+
+  it("keeps a prepared local id uncertain because it is not a platform receipt", async () => {
+    const store = createMemoryStore();
+    const send = vi.fn<ConversationSend>(async () => ({
+      status: "sent",
+      conversationRef: input.conversationRef,
+      channel: "telegram",
+      messageId: "prepared-local-1",
+      messageIdSource: "prepared" as const,
+    }));
+    const tracker = createCloseoutTracker({ store, send, now: () => 5_100 });
+
+    await expect(tracker.send(input)).resolves.toMatchObject({
+      status: "uncertain",
+      messageId: "prepared-local-1",
+      lastError: "delivery reported sent without a platform receipt",
     });
     await expect(tracker.complete("main", "NAC-78")).rejects.toThrow(
       "closeout NAC-78 cannot complete from uncertain",
@@ -255,6 +278,7 @@ describe("closeout tracker", () => {
       conversationRef,
       channel: "telegram",
       messageId: "telegram-isolated",
+      messageIdSource: "platform",
     }));
     const tracker = createCloseoutTracker({ store, send, now: () => 6_000 });
     const scoped = tracker as unknown as {

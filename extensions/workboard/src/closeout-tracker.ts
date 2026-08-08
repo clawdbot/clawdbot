@@ -17,6 +17,7 @@ export type CloseoutRecord = {
   attemptCount: number;
   channel?: string;
   messageId?: string;
+  messageIdSource?: "platform" | "prepared";
   queueId?: string;
   lastError?: string;
   manualEvidence?: string;
@@ -38,6 +39,7 @@ export type ConversationSendResult = {
   conversationRef: string;
   channel: string;
   messageId?: string;
+  messageIdSource?: "platform" | "prepared";
   queueId?: string;
 };
 
@@ -163,12 +165,24 @@ function normalizeGatewayResult(
     "messageId",
     MAX_GATEWAY_ID_LENGTH,
   );
+  const rawMessageIdSource = result.messageIdSource;
+  if (
+    rawMessageIdSource !== undefined &&
+    rawMessageIdSource !== "platform" &&
+    rawMessageIdSource !== "prepared"
+  ) {
+    throw new InvalidGatewayResponseError();
+  }
+  if (rawMessageIdSource && !messageId) {
+    throw new InvalidGatewayResponseError();
+  }
   const queueId = normalizeOptionalGatewayText(result.queueId, "queueId", MAX_GATEWAY_ID_LENGTH);
   return {
     status,
     conversationRef,
     channel,
     ...(messageId ? { messageId } : {}),
+    ...(rawMessageIdSource ? { messageIdSource: rawMessageIdSource } : {}),
     ...(queueId ? { queueId } : {}),
   };
 }
@@ -194,6 +208,7 @@ export function summarizeCloseoutRecord(record: CloseoutRecord) {
     attemptCount: record.attemptCount,
     ...(record.channel ? { channel: record.channel } : {}),
     ...(record.messageId ? { messageId: record.messageId } : {}),
+    ...(record.messageIdSource ? { messageIdSource: record.messageIdSource } : {}),
     ...(record.queueId ? { queueId: record.queueId } : {}),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -269,13 +284,18 @@ export function createCloseoutTracker(params: {
         }),
         record.conversationRef,
       );
-      if (result.status === "sent" && result.messageId?.trim()) {
+      if (
+        result.status === "sent" &&
+        result.messageId?.trim() &&
+        result.messageIdSource === "platform"
+      ) {
         return await persist({
           ...record,
           status: "confirmed",
           attemptCount,
           channel: result.channel,
           messageId: result.messageId,
+          messageIdSource: result.messageIdSource,
           ...(result.queueId ? { queueId: result.queueId } : {}),
           lastError: undefined,
           updatedAt,
@@ -287,6 +307,8 @@ export function createCloseoutTracker(params: {
           status: "queued",
           attemptCount,
           channel: result.channel,
+          ...(result.messageId ? { messageId: result.messageId } : {}),
+          ...(result.messageIdSource ? { messageIdSource: result.messageIdSource } : {}),
           ...(result.queueId ? { queueId: result.queueId } : {}),
           lastError: undefined,
           updatedAt,
@@ -294,13 +316,15 @@ export function createCloseoutTracker(params: {
       }
       const lastError =
         result.status === "sent"
-          ? "delivery reported sent without a platform message id"
+          ? "delivery reported sent without a platform receipt"
           : `delivery status is ${result.status}`;
       return await persist({
         ...record,
         status: "uncertain",
         attemptCount,
         channel: result.channel,
+        ...(result.messageId ? { messageId: result.messageId } : {}),
+        ...(result.messageIdSource ? { messageIdSource: result.messageIdSource } : {}),
         ...(result.queueId ? { queueId: result.queueId } : {}),
         lastError,
         updatedAt,

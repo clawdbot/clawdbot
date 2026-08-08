@@ -172,6 +172,7 @@ describe("runGatewayConversationSend", () => {
       conversationRef: conversation.conversationRef,
       channel: "reef",
       messageId: "reef-outbound-1",
+      messageIdSource: "platform",
       queueId: "queue-1",
     });
   });
@@ -207,6 +208,40 @@ describe("runGatewayConversationSend", () => {
     ).resolves.toMatchObject({ status: "sent", messageId: "reef-existing" });
     expect(deps.resolveConversation).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes a locally prepared id from a platform receipt", async () => {
+    const deps = createDeps();
+    deps.operations.set("send-prepared", {
+      operationId: "send-prepared",
+      operationKind: "send",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello",
+      status: "sent",
+      preparedMessageId: "prepared-local-1",
+      queueId: "queue-existing",
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    await expect(
+      runGatewayConversationSend(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          operationId: "send-prepared",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+        },
+        deps,
+      ),
+    ).resolves.toMatchObject({
+      status: "sent",
+      messageId: "prepared-local-1",
+      messageIdSource: "prepared",
+    });
   });
 
   it("namespaces stable queue intents across agents", async () => {

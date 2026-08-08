@@ -184,12 +184,13 @@ the tool name (or the `workboard` plugin id) to the agent's existing
 
 The `send` action first persists a `recorded` closeout, then calls the Gateway's
 existing durable `conversations.send` operation with the stable operation id
-`closeout:<closeoutId>`. A returned message id confirms delivery. A queued
-operation remains `queued`; an unknown, suppressed, malformed, or interrupted
-outcome becomes `uncertain`. The `reconcile` action reissues
-`conversations.send` with that same operation id, allowing the Gateway's durable
-operation owner to return or advance the existing operation without a new-id
-blind resend.
+`closeout:<closeoutId>`. Only a message id explicitly marked by the Gateway as a
+`platform` receipt confirms delivery; a locally `prepared` id remains
+`uncertain`. A queued operation remains `queued`; an unknown, suppressed,
+malformed, or interrupted outcome also becomes `uncertain`. The `reconcile`
+action reissues `conversations.send` with that same operation id, allowing the
+Gateway's durable operation owner to return or advance the existing operation
+without a new-id blind resend.
 
 Manual confirmation is not exposed to the model tool. An authenticated user or
 paired device with `operator.admin` may call the
