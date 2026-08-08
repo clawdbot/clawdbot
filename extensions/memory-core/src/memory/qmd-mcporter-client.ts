@@ -17,7 +17,6 @@ import {
 import { asRecord } from "../dreaming-shared.js";
 import {
   extractMcporterSourcePath,
-  hasMcporterRemoteAuthMaterial,
   hasMcporterStdioLifecycleOrLogging,
   hasMcporterStdioUserOwnedMaterial,
   isGeneratedMcporterQmdStdioServer,
@@ -124,11 +123,11 @@ export class QmdMcporterClient {
   }
 
   private async resolveMcporterConfigMode(): Promise<McporterConfigMode> {
-    await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
     const configured = await this.resolveConfiguredMcporterServer();
     if (configured?.mode === "external") {
       return "external";
     }
+    await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
     const server = configured?.server ?? this.buildDefaultMcporterQmdServer();
     const config = {
       imports: [],
@@ -243,6 +242,19 @@ export class QmdMcporterClient {
       server[key] = value;
     }
 
+    const hasRemoteEndpoint =
+      server.transport === "http" ||
+      typeof server.baseUrl === "string" ||
+      typeof server.base_url === "string" ||
+      typeof server.url === "string" ||
+      typeof server.serverUrl === "string" ||
+      typeof server.server_url === "string";
+    if (hasRemoteEndpoint) {
+      // Remote transport is always operator-owned, even without recognizable auth.
+      // Keep its endpoint and policy in the original config instead of agent state.
+      return { mode: "external" };
+    }
+
     if (server.command !== undefined && server.command !== null) {
       // mcporter accepts stdio commands as strings, arrays, or executable
       // objects. We can only regenerate the string form, so preserve anything
@@ -258,25 +270,6 @@ export class QmdMcporterClient {
         return { mode: "external" };
       }
       return { mode: "generated", server: this.toGeneratedMcporterStdioServer(server) };
-    }
-
-    const hasRemoteEndpoint =
-      typeof server.baseUrl === "string" ||
-      typeof server.base_url === "string" ||
-      typeof server.url === "string" ||
-      typeof server.serverUrl === "string" ||
-      typeof server.server_url === "string";
-    if (hasRemoteEndpoint) {
-      // The generated per-agent config is persisted under OpenClaw state. Do not
-      // copy remote auth material from a user's mcporter config into that file;
-      // keep using the original mcporter config for authenticated remotes.
-      if (
-        hasMcporterRemoteAuthMaterial(server) ||
-        (rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry))
-      ) {
-        return { mode: "external" };
-      }
-      return { mode: "generated", server };
     }
 
     return null;

@@ -6662,6 +6662,115 @@ describe("QmdMemoryManager", () => {
 
   it.each([
     {
+      name: "bare baseUrl",
+      remoteDefinition: { baseUrl: "https://bare.example/mcp" },
+    },
+    {
+      name: "opaque URL path and non-auth query data",
+      remoteDefinition: { baseUrl: "https://opaque.example/private/workspace?tenant=internal" },
+    },
+    {
+      name: "canonical unauthenticated HTTP transport with policy",
+      remoteDefinition: {
+        baseUrl: "https://policy.example/mcp",
+        transport: "http",
+        description: "operator-selected endpoint",
+        headers: { Accept: "application/json, text/event-stream" },
+        httpFetch: "node-http1",
+        allowedTools: ["query"],
+      },
+    },
+    {
+      name: "mixed command and remote endpoint",
+      remoteDefinition: {
+        command: "qmd",
+        args: ["mcp"],
+        baseUrl: "https://mixed.example/private?tenant=internal",
+      },
+    },
+    {
+      name: "base_url alias",
+      remoteDefinition: { base_url: "https://base-snake.example/mcp" },
+    },
+    {
+      name: "url alias",
+      remoteDefinition: { url: "https://url.example/mcp" },
+    },
+    {
+      name: "serverUrl alias",
+      remoteDefinition: { serverUrl: "https://server-camel.example/mcp" },
+    },
+    {
+      name: "server_url alias",
+      remoteDefinition: { server_url: "https://server-snake.example/mcp" },
+    },
+  ])(
+    "keeps an unauthenticated remote MCPorter server using $name external config",
+    async ({ remoteDefinition }) => {
+      const userMcporterConfig = path.join(tmpRoot, "remote-mcporter.json");
+      await fs.writeFile(
+        userMcporterConfig,
+        JSON.stringify({ mcpServers: { qmd: remoteDefinition } }),
+        "utf8",
+      );
+      process.env.MCPORTER_CONFIG = userMcporterConfig;
+
+      cfg = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+
+      spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        const child = createMockChild({ autoClose: false });
+        if (isMcporterCommand(cmd) && args[0] === "config") {
+          emitAndClose(
+            child,
+            "stdout",
+            JSON.stringify({
+              name: "qmd",
+              source: { kind: "local", path: userMcporterConfig },
+              ...remoteDefinition,
+            }),
+          );
+          return child;
+        }
+        if (isMcporterCommand(cmd) && args[0] === "call") {
+          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+          return child;
+        }
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      });
+
+      const { manager } = await createManager();
+      await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+      const mcporterCall = spawnMock.mock.calls.find(
+        (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+      );
+      const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ??
+        []) as string[];
+      const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      expect(args).not.toContain("--config");
+      expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+      await expect(
+        fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      await manager.close();
+    },
+  );
+
+  it.each([
+    {
       name: "command failure",
       configValue: "path",
       emitConfigResult: (child: ReturnType<typeof createMockChild>) =>

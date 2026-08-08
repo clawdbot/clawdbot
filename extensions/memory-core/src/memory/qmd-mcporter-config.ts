@@ -18,7 +18,7 @@ export type RawMcporterEntry = {
   path?: unknown;
 };
 
-const MCPORTER_REMOTE_AUTH_KEYS = new Set(
+const MCPORTER_AUTH_KEYS = new Set(
   [
     "auth",
     "authProvider",
@@ -45,7 +45,7 @@ function normalizeMcporterConfigKey(key: string): string {
 function isMcporterAuthLikeKey(key: string): boolean {
   const normalized = normalizeMcporterConfigKey(key);
   return (
-    MCPORTER_REMOTE_AUTH_KEYS.has(normalized) ||
+    MCPORTER_AUTH_KEYS.has(normalized) ||
     normalized.includes("apikey") ||
     normalized.includes("auth") ||
     normalized.includes("bearer") ||
@@ -61,45 +61,6 @@ function isMcporterAuthLikeKey(key: string): boolean {
     normalized === "pwd" ||
     normalized === "sig"
   );
-}
-
-function hasMcporterHeaderAuthMaterial(value: unknown): boolean {
-  const headers = asRecord(value);
-  if (!headers) {
-    return true;
-  }
-  for (const [key, headerValue] of Object.entries(headers)) {
-    const normalized = normalizeMcporterConfigKey(key);
-    if (
-      normalized === "accept" &&
-      typeof headerValue === "string" &&
-      hasRequiredMcporterAcceptTokens(headerValue)
-    ) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-function hasRequiredMcporterAcceptTokens(value: string): boolean {
-  const lower = value.toLowerCase();
-  return lower.includes("application/json") && lower.includes("text/event-stream");
-}
-
-export function hasMcporterRemoteAuthMaterial(server: Record<string, unknown>): boolean {
-  if (hasMcporterRemoteUrlCredentials(server)) {
-    return true;
-  }
-  return Object.entries(server).some(([key, value]) => {
-    if (normalizeMcporterConfigKey(key) === "env") {
-      return true;
-    }
-    if (normalizeMcporterConfigKey(key) === "headers") {
-      return hasMcporterHeaderAuthMaterial(value);
-    }
-    return isMcporterAuthLikeKey(key);
-  });
 }
 
 export function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boolean {
@@ -141,31 +102,6 @@ function hasMcporterAuthLikeArgs(value: unknown): boolean {
 
 function hasMcporterAuthLikeText(value: unknown): boolean {
   return typeof value === "string" && isMcporterAuthLikeKey(value);
-}
-
-function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
-  for (const key of ["baseUrl", "base_url", "url", "serverUrl", "server_url"]) {
-    const value = server[key];
-    if (typeof value !== "string" || value.length === 0) {
-      continue;
-    }
-    try {
-      const parsed = new URL(value);
-      if (parsed.username.length > 0 || parsed.password.length > 0) {
-        return true;
-      }
-      for (const queryKey of parsed.searchParams.keys()) {
-        if (isMcporterAuthLikeKey(queryKey)) {
-          return true;
-        }
-      }
-    } catch {
-      if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#@]+@/i.test(value)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 export function parseMcporterResponseJson(stdout: string): unknown {
