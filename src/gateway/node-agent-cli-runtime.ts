@@ -5,75 +5,14 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_V2_COMMAND,
 } from "../infra/node-commands.js";
-import { AI_AGENT_ENV_VALUE, canonicalizeAiAgentEnvOverrides } from "../infra/openclaw-exec-env.js";
+import { type AiAgentEnvPlan, resolveAiAgentEnvPlan } from "../infra/openclaw-exec-env.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeInvokeResult } from "./node-registry.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 
-export type NodeClaudeAiAgentEnv = {
-  baseEnv: Record<string, string>;
-  configuredEnv: Record<string, string>;
-  preparedEnv: Record<string, string>;
-  captureEnv: Record<string, string>;
-  clearEnv: string[];
-  preserveEnv: string[];
-  selectedAuth: boolean;
-};
-
-type ResolvedAiAgentEnv = { present: false } | { present: true; value: string };
-
 function resolveNodePlatform(platform?: string): NodeJS.Platform {
   const normalized = platform?.trim().toLowerCase();
   return normalized === "win32" || normalized === "windows" ? "win32" : "linux";
-}
-
-function hasAiAgentEnvKey(keys: readonly string[], platform: NodeJS.Platform): boolean {
-  return keys.some((key) =>
-    platform === "win32" ? key.toUpperCase() === "AI_AGENT" : key === "AI_AGENT",
-  );
-}
-
-function resolveAiAgentEnv(
-  env: Record<string, string>,
-  platform: NodeJS.Platform,
-): ResolvedAiAgentEnv {
-  const canonical = canonicalizeAiAgentEnvOverrides(env, platform);
-  const value = canonical.AI_AGENT;
-  return Object.hasOwn(canonical, "AI_AGENT") && value !== undefined
-    ? { present: true, value }
-    : { present: false };
-}
-
-function resolveNodeAiAgentTransport(params: {
-  input: NodeClaudeAiAgentEnv;
-  platform: NodeJS.Platform;
-}): { env?: string; clear: boolean } {
-  const clearRequested = hasAiAgentEnvKey(params.input.clearEnv, params.platform);
-  const clearPreserved = hasAiAgentEnvKey(params.input.preserveEnv, params.platform);
-  const clear = clearRequested && (!clearPreserved || params.input.selectedAuth);
-  const base = resolveAiAgentEnv(params.input.baseEnv, params.platform);
-  const configured: ResolvedAiAgentEnv =
-    clearRequested && params.input.selectedAuth
-      ? { present: false }
-      : resolveAiAgentEnv(params.input.configuredEnv, params.platform);
-  const prepared = resolveAiAgentEnv(params.input.preparedEnv, params.platform);
-  const capture = resolveAiAgentEnv(params.input.captureEnv, params.platform);
-  const override: ResolvedAiAgentEnv = capture.present
-    ? capture
-    : prepared.present
-      ? prepared
-      : configured;
-  const marker: ResolvedAiAgentEnv = override.present
-    ? override
-    : clear
-      ? { present: false }
-      : base;
-  return {
-    ...(marker.present && (marker.value !== AI_AGENT_ENV_VALUE || override.present)
-      ? { env: marker.value }
-      : {}),
-    clear,
-  };
 }
 
 export async function invokeNodeClaudeCliRun(params: {
@@ -83,7 +22,7 @@ export async function invokeNodeClaudeCliRun(params: {
   cwd?: string;
   env?: Record<string, string>;
   clearEnv?: string[];
-  aiAgentEnv?: NodeClaudeAiAgentEnv;
+  aiAgentEnv?: AiAgentEnvPlan;
   systemPrompt?: string;
   agentId?: string;
   sessionKey?: string;
@@ -137,14 +76,11 @@ export async function invokeNodeClaudeCliRun(params: {
   }
   const nodeAiAgent =
     params.aiAgentEnv && supportsAiAgentEnv
-      ? resolveNodeAiAgentTransport({
-          input: params.aiAgentEnv,
-          platform: resolveNodePlatform(node.platform),
-        })
+      ? resolveAiAgentEnvPlan(params.aiAgentEnv, resolveNodePlatform(node.platform))
       : undefined;
   const nodeEnv = {
     ...params.env,
-    ...(nodeAiAgent?.env !== undefined ? { AI_AGENT: nodeAiAgent.env } : {}),
+    ...(nodeAiAgent?.value !== undefined ? { AI_AGENT: nodeAiAgent.value } : {}),
   };
   const nodeClearEnv = new Set(params.clearEnv);
   if (nodeAiAgent?.clear) {

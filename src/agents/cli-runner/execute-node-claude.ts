@@ -1,10 +1,8 @@
 import crypto from "node:crypto";
-import type {
-  invokeNodeClaudeCliRun,
-  NodeClaudeAiAgentEnv,
-} from "../../gateway/node-agent-cli-runtime.js";
+import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
+import type { AiAgentEnvPlan } from "../../infra/openclaw-exec-env.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type {
   registerExecApprovalRequestForHostOrThrow,
@@ -175,7 +173,7 @@ export async function executeNodeClaudeRun(params: {
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
-  nodeAiAgentEnv?: NodeClaudeAiAgentEnv;
+  nodeAiAgentEnv?: AiAgentEnvPlan;
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   consumeStderr: (chunk: string) => void;

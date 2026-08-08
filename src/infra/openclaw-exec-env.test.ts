@@ -6,6 +6,8 @@ import {
   ensureOpenClawExecMarkerOnProcess,
   markOpenClawExecEnv,
   OPENCLAW_CLI_ENV_VAR,
+  resolveAiAgentEnvPlan,
+  type AiAgentEnvPlan,
 } from "./openclaw-exec-env.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
@@ -75,6 +77,60 @@ describe("canonicalizeAiAgentEnvOverrides", () => {
   );
 });
 
+describe("resolveAiAgentEnvPlan", () => {
+  const plan = (overrides: Partial<AiAgentEnvPlan>): AiAgentEnvPlan => ({
+    baseEnv: {},
+    configuredEnv: {},
+    overrideEnv: {},
+    clearEnv: [],
+    preserveEnv: [],
+    forceClear: false,
+    ...overrides,
+  });
+
+  it.each([
+    ["omits the inherited default", "linux", plan({ baseEnv: { AI_AGENT: "openclaw" } }), {}],
+    [
+      "forwards a POSIX wrapper",
+      "linux",
+      plan({ configuredEnv: { AI_AGENT: "wrapper" } }),
+      { value: "wrapper" },
+    ],
+    [
+      "forwards an explicit reset",
+      "linux",
+      plan({ configuredEnv: { AI_AGENT: "   " } }),
+      { value: "openclaw" },
+    ],
+    [
+      "ignores a lowercase POSIX alias",
+      "linux",
+      plan({ configuredEnv: { ai_agent: "wrapper" } }),
+      {},
+    ],
+    [
+      "canonicalizes a Windows alias",
+      "win32",
+      plan({ configuredEnv: { ai_agent: "wrapper" } }),
+      { value: "wrapper" },
+    ],
+    [
+      "canonicalizes a Windows clear",
+      "win32",
+      plan({ baseEnv: { AI_AGENT: "wrapper" }, clearEnv: ["ai_agent"] }),
+      { clear: true },
+    ],
+    [
+      "keeps an explicit wrapper over a clear",
+      "win32",
+      plan({ configuredEnv: { ai_agent: "wrapper" }, clearEnv: ["ai_agent"] }),
+      { value: "wrapper", clear: true },
+    ],
+  ] as const)("%s", (_name, platform, input, expected) => {
+    expect(resolveAiAgentEnvPlan(input, platform)).toEqual({ clear: false, ...expected });
+  });
+});
+
 describe("ensureOpenClawExecMarkerOnProcess", () => {
   it.each([
     {
@@ -98,7 +154,7 @@ describe("ensureOpenClawExecMarkerOnProcess", () => {
   });
 
   it("canonicalizes a mixed-case Windows marker", () => {
-    const env = { ai_agent: " wrapper " } as NodeJS.ProcessEnv;
+    const env = { ai_agent: " wrapper ", openclaw_cli: "0" } as NodeJS.ProcessEnv;
 
     ensureOpenClawExecMarkerOnProcess(env, "win32");
 

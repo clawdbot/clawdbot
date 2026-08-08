@@ -8,7 +8,11 @@ import {
   sanitizeHostExecEnv,
   sanitizeHostExecEnvOverrides,
 } from "../../infra/host-env-security.js";
-import { canonicalizeAiAgentEnvOverrides } from "../../infra/openclaw-exec-env.js";
+import {
+  canonicalizeAiAgentEnvOverrides,
+  ensureOpenClawCliExecMarker,
+  pickAiAgentEnvAliases,
+} from "../../infra/openclaw-exec-env.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -78,15 +82,6 @@ function normalizeCliBackendThinkingLevel(
 
 function normalizeCliEnvKey(key: string): string {
   return process.platform === "win32" ? key.toUpperCase() : key;
-}
-
-function pickAiAgentEnvAliases(env: Record<string, string | undefined>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(env).filter(
-      (entry): entry is [string, string] =>
-        entry[0].toUpperCase() === "AI_AGENT" && entry[1] !== undefined,
-    ),
-  );
 }
 
 function exactToolAvailabilityError(params: {
@@ -452,6 +447,7 @@ export async function executePreparedCliRun(
       }
       const captureEnv = mcpCaptureAttempt.env ?? {};
       Object.assign(env, canonicalizeAiAgentEnvOverrides(captureEnv));
+      ensureOpenClawCliExecMarker(env);
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
@@ -475,11 +471,13 @@ export async function executePreparedCliRun(
         ? {
             baseEnv: pickAiAgentEnvAliases(process.env),
             configuredEnv: pickAiAgentEnvAliases(backend.env ?? {}),
-            preparedEnv: pickAiAgentEnvAliases(preparedBackendEnv),
-            captureEnv: pickAiAgentEnvAliases(captureEnv),
+            overrideEnv: {
+              ...pickAiAgentEnvAliases(preparedBackendEnv),
+              ...pickAiAgentEnvAliases(captureEnv),
+            },
             clearEnv: [...(backend.clearEnv ?? [])],
             preserveEnv: preservedEnvKeys,
-            selectedAuth: hasSelectedClaudeAuth,
+            forceClear: hasSelectedClaudeAuth,
           }
         : undefined;
 

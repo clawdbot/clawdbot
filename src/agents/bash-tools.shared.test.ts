@@ -25,25 +25,6 @@ describe("buildSandboxEnv", () => {
       PATH: "/usr/bin",
     });
   });
-
-  it("preserves configured markers and request override precedence", () => {
-    expect(
-      buildSandboxEnv({
-        defaultPath: "/usr/bin",
-        containerWorkdir: "/workspace",
-        sandboxEnv: { AI_AGENT: "configured" },
-      }).AI_AGENT,
-    ).toBe("configured");
-
-    expect(
-      buildSandboxEnv({
-        defaultPath: "/usr/bin",
-        containerWorkdir: "/workspace",
-        sandboxEnv: { AI_AGENT: "configured" },
-        paramsEnv: { AI_AGENT: "request" },
-      }).AI_AGENT,
-    ).toBe("request");
-  });
 });
 
 describe("buildDockerExecArgs", () => {

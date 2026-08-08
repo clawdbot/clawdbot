@@ -20,17 +20,17 @@ vi.mock("./node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
 }));
 
-import { invokeNodeClaudeCliRun, type NodeClaudeAiAgentEnv } from "./node-agent-cli-runtime.js";
+import type { AiAgentEnvPlan } from "../infra/openclaw-exec-env.js";
+import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 
-function buildAiAgentEnv(overrides: Partial<NodeClaudeAiAgentEnv> = {}): NodeClaudeAiAgentEnv {
+function buildAiAgentEnv(overrides: Partial<AiAgentEnvPlan> = {}): AiAgentEnvPlan {
   return {
     baseEnv: {},
     configuredEnv: {},
-    preparedEnv: {},
-    captureEnv: {},
+    overrideEnv: {},
     clearEnv: [],
     preserveEnv: [],
-    selectedAuth: false,
+    forceClear: false,
     ...overrides,
   };
 }
@@ -105,62 +105,11 @@ describe("invokeNodeClaudeCliRun", () => {
   });
   it.each([
     {
-      name: "omits the default marker on Linux",
-      platform: "linux",
-      aiAgentEnv: buildAiAgentEnv({ baseEnv: { AI_AGENT: "openclaw" } }),
-      expectedEnv: undefined,
-      expectedClearEnv: undefined,
-    },
-    {
       name: "forwards a canonical wrapper on Linux",
       platform: "linux",
       aiAgentEnv: buildAiAgentEnv({ configuredEnv: { AI_AGENT: "wrapper" } }),
       expectedEnv: { AI_AGENT: "wrapper" },
       expectedClearEnv: undefined,
-    },
-    {
-      name: "forwards an explicit reset over the node ambient marker",
-      platform: "linux",
-      aiAgentEnv: buildAiAgentEnv({
-        baseEnv: { AI_AGENT: "wrapper" },
-        configuredEnv: { AI_AGENT: "   " },
-      }),
-      expectedEnv: { AI_AGENT: "openclaw" },
-      expectedClearEnv: undefined,
-    },
-    {
-      name: "ignores a lowercase marker on Linux",
-      platform: "linux",
-      aiAgentEnv: buildAiAgentEnv({ configuredEnv: { ai_agent: "wrapper" } }),
-      expectedEnv: undefined,
-      expectedClearEnv: undefined,
-    },
-    {
-      name: "canonicalizes a lowercase wrapper for a Windows node",
-      platform: "windows",
-      aiAgentEnv: buildAiAgentEnv({ configuredEnv: { ai_agent: "wrapper" } }),
-      expectedEnv: { AI_AGENT: "wrapper" },
-      expectedClearEnv: undefined,
-    },
-    {
-      name: "canonicalizes a lowercase clear for a Windows node",
-      platform: "windows",
-      aiAgentEnv: buildAiAgentEnv({
-        baseEnv: { AI_AGENT: "wrapper" },
-        clearEnv: ["ai_agent"],
-      }),
-      expectedEnv: undefined,
-      expectedClearEnv: ["AI_AGENT"],
-    },
-    {
-      name: "lets an explicit Windows wrapper override a configured clear",
-      platform: "windows",
-      aiAgentEnv: buildAiAgentEnv({
-        configuredEnv: { ai_agent: "wrapper" },
-        clearEnv: ["ai_agent"],
-      }),
-      expectedEnv: { AI_AGENT: "wrapper" },
-      expectedClearEnv: ["AI_AGENT"],
     },
     {
       name: "keeps the legacy payload for a v1-only node",

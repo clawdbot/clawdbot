@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import type { NodeClaudeAiAgentEnv } from "../../gateway/node-agent-cli-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import type { AiAgentEnvPlan } from "../../infra/openclaw-exec-env.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import {
@@ -74,7 +74,7 @@ export async function executeCliProcess(params: {
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
-  nodeAiAgentEnv?: NodeClaudeAiAgentEnv;
+  nodeAiAgentEnv?: AiAgentEnvPlan;
   useManagedClaudeLiveSession: boolean;
   useResume: boolean;
   cliSessionIdToUse?: string;
