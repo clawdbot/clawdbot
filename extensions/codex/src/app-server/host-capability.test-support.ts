@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 /** Minimal host authority for tests that do not exercise host policy or approvals. */
 export function createCodexTestHostCapabilities(): EmbeddedRunAttemptParams["hostCapabilities"] {

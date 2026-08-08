@@ -1,7 +1,7 @@
 import {
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
   type NormalizedUsage,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";

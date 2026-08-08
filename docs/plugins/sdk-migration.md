@@ -873,6 +873,22 @@ timeline for current status.
 
   </Accordion>
 
+  <Accordion title="Agent harness attempt params -> V2 host-capability contract">
+    New or updated harness plugins should implement `AgentHarnessV2` and use
+    `AgentHarnessAttemptParamsV2` or `EmbeddedRunAttemptParamsV2`. The V2
+    parameter types require `hostCapabilities`, matching what core supplies at
+    the selected-harness boundary.
+
+    Existing plugins may continue implementing `AgentHarness` and constructing
+    the legacy `AgentHarnessAttemptParams` or `EmbeddedRunAttemptParams` types
+    without that field through 2026-10-12. Those names are deprecated and keep
+    the capability optional only for source compatibility; they do not create
+    a capability-free runtime path. Migrate by changing the imported type name
+    and binding tool or native-action surfaces through
+    `params.hostCapabilities`.
+
+  </Accordion>
+
   <Accordion title="runtime.tasks.flow -> runtime.tasks.managedFlows">
     **Old**: `runtime.tasks.flow` (singular) returned a live task-flow
     accessor.

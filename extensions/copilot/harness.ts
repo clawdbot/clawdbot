@@ -9,7 +9,8 @@ import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type AgentHarness,
-  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessV2,
   type AgentHarnessAttemptResult,
   type AgentHarnessCompactParams,
   type AgentHarnessCompactResult,
@@ -338,7 +339,7 @@ async function compactTrackedSdkSession(params: {
 // the token (see `tokenFingerprint` in `src/auth-bridge.ts`), so
 // rotating the token under the same profile id still invalidates
 // the compat key without ever serializing the raw credential.
-type CopilotSessionCompatParams = AgentHarnessAttemptParams | AgentHarnessCompactParams;
+type CopilotSessionCompatParams = AgentHarnessAttemptParamsV2 | AgentHarnessCompactParams;
 
 function readAgentIdFromSessionKey(sessionKey: unknown): string | undefined {
   if (typeof sessionKey !== "string") {
@@ -578,7 +579,7 @@ function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
 
 export function createCopilotAgentHarness(
   options?: CreateCopilotAgentHarnessOptions,
-): AgentHarness {
+): AgentHarnessV2 {
   let poolPromise: Promise<CopilotClientPool> | undefined;
   let createdPool: CopilotClientPool | undefined;
   let disposed = false;
@@ -667,7 +668,7 @@ export function createCopilotAgentHarness(
   }
 
   async function runHarnessAttempt(
-    params: AgentHarnessAttemptParams,
+    params: AgentHarnessAttemptParamsV2,
     operation: "attempt" | "settled-tool-finalization",
   ): Promise<AgentHarnessAttemptResult> {
     const attemptPromise = (async () => {
@@ -727,7 +728,7 @@ export function createCopilotAgentHarness(
           "[copilot] cannot safely finalize a settled tool turn without its compatible SDK session",
         );
       }
-      const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
+      const effectiveParams: AgentHarnessAttemptParamsV2 = resumableSessionId
         ? ({
             ...params,
             ...(operation === "settled-tool-finalization"
@@ -760,7 +761,7 @@ export function createCopilotAgentHarness(
                     ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
                     sdkSessionId: resumableSessionId,
                   },
-          } as AgentHarnessAttemptParams)
+          } as AgentHarnessAttemptParamsV2)
         : params;
 
       const result = await runCopilotAttempt(effectiveParams, {

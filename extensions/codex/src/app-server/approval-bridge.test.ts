@@ -9,7 +9,7 @@ import {
   invokeNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
   runBeforeToolCallHook,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 // Codex tests cover approval bridge plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";

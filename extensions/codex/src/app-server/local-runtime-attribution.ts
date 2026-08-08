@@ -2,7 +2,7 @@
  * Resolves the provider/api attribution used when a local Codex runtime is
  * backed by OpenAI auth but should still report Codex Responses semantics.
  */
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_RESPONSES_API = "openai-responses";

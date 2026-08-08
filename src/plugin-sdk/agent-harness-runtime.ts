@@ -71,8 +71,10 @@ export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessV2,
   AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
@@ -109,13 +111,22 @@ export type {
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
-export type EmbeddedRunAttemptParams = Omit<
+type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
-> & {
+>;
+/**
+ * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
+ * existing harness source compatible through 2026-10-12.
+ */
+export type EmbeddedRunAttemptParams = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities?: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
+/** Current host-prepared attempt contract for agent harnesses. */
+export type EmbeddedRunAttemptParamsV2 = EmbeddedRunAttemptParamsBase & {
   hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
 };
 export type { EmbeddedRunAttemptResult };

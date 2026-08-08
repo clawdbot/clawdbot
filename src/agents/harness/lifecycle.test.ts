@@ -24,11 +24,11 @@ import {
 } from "./lifecycle.js";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
 } from "./types.js";
 
-function createAttemptParams(): AgentHarnessAttemptParams {
+function createAttemptParams(): AgentHarnessAttemptParamsV2 {
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -46,7 +46,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     thinkLevel: "low",
     messageChannel: "qa",
     trigger: "manual",
-  } as unknown as AgentHarnessAttemptParams;
+  } as unknown as AgentHarnessAttemptParamsV2;
 }
 
 function createDiagnosticTrace() {

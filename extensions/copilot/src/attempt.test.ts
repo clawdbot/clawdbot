@@ -8,7 +8,7 @@ import {
   abortAgentHarnessRun,
   attachModelProviderRequestTransport,
   queueAgentHarnessMessage,
-  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

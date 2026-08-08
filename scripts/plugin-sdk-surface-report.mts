@@ -143,7 +143,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
-  "agent-harness-runtime": 8,
+  // +3: legacy AgentHarness, AgentHarnessAttemptParams, and EmbeddedRunAttemptParams
+  // remain deprecated while external harnesses migrate to the required-capability V2 contracts.
+  "agent-harness": 2,
+  "agent-harness-runtime": 11,
   "agent-config-primitives": 2,
   "command-auth": 78,
   discord: 47,
@@ -258,7 +261,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
       // -7: retire unused and duplicate inbound-dispatch compatibility exports.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
-      4857,
+      // +5: required-capability V2 harness contracts through the focused and runtime barrels.
+      4862,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -332,6 +336,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shipped channel setup state-migration declaration during its migration window.
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
+      // +5: source-compatible harness contracts retained during the V2 migration window.
       1715,
       env,
     ),

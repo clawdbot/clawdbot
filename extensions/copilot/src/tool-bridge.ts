@@ -7,7 +7,7 @@ import {
 } from "@github/copilot-sdk";
 import type {
   AnyAgentTool,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -48,12 +48,12 @@ interface CopilotSessionHolder {
 }
 
 /**
- * Structural subset of `EmbeddedRunAttemptParams` carried into the tool
+ * Structural subset of `EmbeddedRunAttemptParamsV2` carried into the tool
  * bridge for PI-parity tool context (see
  * `src/agents/pi-embedded-runner/run/attempt.ts:1029-1117` — the
  * authoritative `createOpenClawCodingTools({...})` call shape).
  *
- * Declared as `Partial<EmbeddedRunAttemptParams>` (imported from the
+ * Declared from `EmbeddedRunAttemptParamsV2` (imported from the
  * `openclaw/plugin-sdk/agent-harness-runtime` boundary, *not* from
  * `attempt.ts` in this extension) to avoid an `attempt.ts` ↔
  * `tool-bridge.ts` import cycle while keeping the field shapes
@@ -61,7 +61,8 @@ interface CopilotSessionHolder {
  * fixtures may omit this field entirely and fall back to the flat
  * fields below for minimal-config wiring.
  */
-type CopilotToolAttemptParams = Partial<EmbeddedRunAttemptParams>;
+type CopilotToolAttemptParams = Partial<Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities">> &
+  Pick<EmbeddedRunAttemptParamsV2, "hostCapabilities">;
 type CopilotToolTerminalObserver = CopilotToolAttemptParams["observeToolTerminal"];
 
 type CopilotToolCompletion = {

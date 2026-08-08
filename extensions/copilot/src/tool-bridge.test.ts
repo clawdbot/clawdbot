@@ -21,6 +21,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
 
 type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridgeImpl>[0];
+type CopilotToolBridgeAttemptParams = NonNullable<CopilotToolBridgeInput["attemptParams"]>;
+type CopilotToolBridgeTestInput = Omit<CopilotToolBridgeInput, "attemptParams"> & {
+  attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
+    Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
+};
 const testHostCapabilities = {
   kind: "agent-harness-host-capability" as const,
   version: 1 as const,
@@ -33,14 +38,17 @@ const testHostCapabilities = {
   waitForApproval: async () => undefined,
 } as NonNullable<NonNullable<CopilotToolBridgeInput["attemptParams"]>["hostCapabilities"]>;
 
-function createCopilotToolBridge(input: CopilotToolBridgeInput) {
-  const preparedInput =
-    input.attemptParams && !input.attemptParams.hostCapabilities
-      ? {
-          ...input,
-          attemptParams: { ...input.attemptParams, hostCapabilities: testHostCapabilities },
-        }
-      : input;
+function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
+  const { attemptParams, ...baseInput } = input;
+  const preparedInput: CopilotToolBridgeInput = attemptParams
+    ? {
+        ...baseInput,
+        attemptParams: {
+          ...attemptParams,
+          hostCapabilities: attemptParams.hostCapabilities ?? testHostCapabilities,
+        },
+      }
+    : baseInput;
   return createCopilotToolBridgeImpl(preparedInput);
 }
 type ConvertToolOptions = Pick<

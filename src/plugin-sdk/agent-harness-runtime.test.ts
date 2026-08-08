@@ -9,8 +9,14 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  type AgentHarness,
+  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
+  type AgentHarnessV2,
+  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2,
 } from "./agent-harness-runtime.js";
 import type {
   ProviderModelRouteRuntimePolicy,
@@ -141,6 +147,36 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
+    const legacyHarness = {
+      id: "legacy-test",
+      label: "Legacy test harness",
+      supports: () => ({ supported: true as const, priority: 1 }),
+      runAttempt: async (_params: AgentHarnessAttemptParams) => {
+        throw new Error("type-only legacy harness");
+      },
+    } satisfies AgentHarness;
+
+    expectTypeOf(legacyHarness).toMatchTypeOf<AgentHarness>();
+    expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParams, "hostCapabilities">
+    >().toMatchTypeOf<AgentHarnessAttemptParams>();
+    expectTypeOf<
+      Omit<EmbeddedRunAttemptParams, "hostCapabilities">
+    >().toMatchTypeOf<EmbeddedRunAttemptParams>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> extends AgentHarnessAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities"> extends EmbeddedRunAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+  });
+
   it("exposes attached model request transport metadata helpers", () => {
     const model = attachModelProviderRequestTransport(
       { id: "gpt-test", provider: "custom-openai" },

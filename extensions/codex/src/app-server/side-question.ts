@@ -13,7 +13,7 @@ import {
   type AnyAgentTool,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionResult,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

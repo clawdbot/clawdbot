@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import {
   registerNativeHookRelay,
   type BeforeToolCallFailureDisposition,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

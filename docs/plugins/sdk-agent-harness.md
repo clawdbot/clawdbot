@@ -131,10 +131,10 @@ own the full set; an explicit or persisted plugin selection fails closed.
 **Import:** `openclaw/plugin-sdk/agent-harness`
 
 ```typescript
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-const myHarness: AgentHarness = {
+const myHarness: AgentHarnessV2 = {
   id: "my-harness",
   label: "My native agent harness",
 
@@ -350,6 +350,16 @@ bounded action fact while keeping identity and policy authority closure-bound. T
 binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
+
+New harnesses should implement `AgentHarnessV2` and type prepared attempts as
+`AgentHarnessAttemptParamsV2` or `EmbeddedRunAttemptParamsV2`; those contracts
+require `hostCapabilities`. The older `AgentHarness`,
+`AgentHarnessAttemptParams`, and `EmbeddedRunAttemptParams` names remain
+source-compatible for existing plugins, so the capability field is optional
+in those deprecated parameter types through 2026-10-12. Core still supplies
+the capability on every selected attempt. Compatibility is type-level only:
+current harness code must not add a runtime path that operates without the
+host capability.
 
 Native harnesses that need PI-like compact tool routing should use
 `createAgentHarnessToolSurfaceRuntime(...)` from

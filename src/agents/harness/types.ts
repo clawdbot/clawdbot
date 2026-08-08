@@ -89,19 +89,32 @@ type AgentHarnessLegacyAttemptResult = Omit<
       | null;
   };
 
-export type AgentHarnessAttemptParams = Omit<
+type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
-> & { hostCapabilities: AgentHarnessHostCapabilities };
+>;
+/**
+ * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
+ * existing harness source compatible through 2026-10-12.
+ */
+export type AgentHarnessAttemptParams = AgentHarnessAttemptParamsBase & {
+  hostCapabilities?: AgentHarnessHostCapabilities;
+};
+/** Current host-prepared attempt contract for agent harnesses. */
+export type AgentHarnessAttemptParamsV2 = AgentHarnessAttemptParamsBase & {
+  hostCapabilities: AgentHarnessHostCapabilities;
+};
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
-type AgentHarnessSettledTurnFinalizationParams = {
+type AgentHarnessSettledTurnFinalizationParams<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = {
   /** Fully prepared attempt context for the isolated finalization operation. */
-  attempt: AgentHarnessAttemptParams;
+  attempt: TAttemptParams;
   /** Settled result whose completed tool transcript needs a final visible answer. */
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
@@ -275,7 +288,9 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
-type AgentHarnessRunCapability = {
+type AgentHarnessRunCapability<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = {
   id: string;
   label: string;
   pluginId?: string;
@@ -301,13 +316,13 @@ type AgentHarnessRunCapability = {
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
-  runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing
    * capabilities that can repeat or extend the completed work.
    */
   finalizeSettledTurn?(
-    params: AgentHarnessSettledTurnFinalizationParams,
+    params: AgentHarnessSettledTurnFinalizationParams<TAttemptParams>,
   ): Promise<AgentHarnessSettledTurnFinalizationResult>;
   /**
    * Runs one fresh prompt-only completion with a literal zero-tool model surface.
@@ -322,10 +337,12 @@ type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 };
 
-type AgentHarnessClassificationCapability = {
+type AgentHarnessClassificationCapability<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = {
   classify?(
     result: AgentHarnessAttemptResult,
-    ctx: AgentHarnessAttemptParams,
+    ctx: TAttemptParams,
   ): AgentHarnessResultClassification | undefined;
 };
 
@@ -391,9 +408,25 @@ type AgentHarnessMcpCatalogCapability = {
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
 };
 
+/**
+ * @deprecated Implement AgentHarnessV2. This registration contract remains
+ * source-compatible for existing plugins through 2026-10-12.
+ */
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
+  AgentHarnessCompactionCapability &
+  AgentHarnessRuntimeArtifactCapability &
+  AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
+  AgentHarnessMcpCatalogCapability &
+  AgentHarnessSessionForkCapability &
+  AgentHarnessSessionLifecycleCapability;
+
+/** Current harness contract for hosts that always supply versioned capabilities. */
+export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
+  AgentHarnessSideQuestionCapability &
+  AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &

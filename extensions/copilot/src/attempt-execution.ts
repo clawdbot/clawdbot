@@ -1,6 +1,6 @@
 import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentMessage,
   AnyAgentTool,
   SandboxContext,
@@ -47,7 +47,7 @@ import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
-  params: AgentHarnessAttemptParams;
+  params: AgentHarnessAttemptParamsV2;
   deps: CopilotAttemptDeps;
   now: () => number;
   attemptStartedAt: number;

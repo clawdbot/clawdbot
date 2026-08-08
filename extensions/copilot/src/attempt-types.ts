@@ -1,6 +1,6 @@
 import type { SessionConfig } from "@github/copilot-sdk";
 import type {
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -81,7 +81,7 @@ export type CopilotSessionConfig = Pick<
   | "tools"
   | "workingDirectory"
 >;
-export type AttemptParamsLike = AgentHarnessAttemptParams & {
+export type AttemptParamsLike = AgentHarnessAttemptParamsV2 & {
   auth?: {
     gitHubToken?: string;
     profileId?: string;
@@ -93,7 +93,7 @@ export type AttemptParamsLike = AgentHarnessAttemptParams & {
   enableSessionTelemetry?: boolean;
   hooksConfig?: CopilotHooksConfig;
   infiniteSessionConfig?: SessionConfig["infiniteSessions"];
-  initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & {
+  initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
     journalValidated?: boolean;
     sdkSessionId?: string;
   };

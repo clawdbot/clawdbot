@@ -1,4 +1,4 @@
-import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import {
   createPromptError,
@@ -14,7 +14,7 @@ import { resolveCopilotProvider } from "./provider-bridge.js";
 export type { CopilotSessionConfig } from "./attempt-types.js";
 export { resolvePoolAcquire };
 export async function runCopilotAttempt(
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
   deps: CopilotAttemptDeps,
 ): Promise<AgentHarnessAttemptResult> {
   const now = deps.now ?? Date.now;

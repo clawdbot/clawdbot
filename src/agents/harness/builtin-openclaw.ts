@@ -9,12 +9,12 @@ import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
-import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
+import type { AgentHarnessAttemptParamsV2, AgentHarnessV2 } from "./types.js";
 
 function buildRestrictedFinalizationAttempt(
-  attempt: AgentHarnessAttemptParams,
+  attempt: AgentHarnessAttemptParamsV2,
 ): EmbeddedRunAttemptParams {
-  const internalAttempt = attempt as AgentHarnessAttemptParams &
+  const internalAttempt = attempt as AgentHarnessAttemptParamsV2 &
     Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
   return {
     admittedRunContext: internalAttempt.admittedRunContext,
@@ -70,7 +70,7 @@ function buildRestrictedFinalizationAttempt(
 }
 
 /** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
-export function createOpenClawAgentHarness(): AgentHarness {
+export function createOpenClawAgentHarness(): AgentHarnessV2 {
   return {
     id: "openclaw",
     label: "OpenClaw embedded agent",
