@@ -11,15 +11,17 @@ import {
   createAssistant,
   createAssistantResultStream,
   createAutoCompactionSettings,
-  createCompactionHandlers,
   createOverflowAssistant,
-  createResourceLoader,
   createTestSession,
   mockInvalidThenTextSummary,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
+import {
+  createCompactionHandlers,
+  createResourceLoader,
+} from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";

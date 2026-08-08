@@ -11,12 +11,12 @@ import type { AgentTool } from "../runtime/index.js";
 import {
   createAssistant,
   createAssistantResultStream,
-  createResourceLoader,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";

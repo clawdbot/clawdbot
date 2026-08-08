@@ -4,20 +4,15 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import type { ToolDefinition } from "./extensions/types.js";
-import {
-  createCompactionHandlers,
-  createResourceLoader,
-} from "./agent-session-loop-resource-loader.test-support.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-
-export { createCompactionHandlers, createResourceLoader };
 
 const hoistedStreamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
