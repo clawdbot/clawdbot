@@ -263,7 +263,7 @@ describe("sessionsCommand", () => {
     expect(child).not.toHaveProperty("sessionFile");
   });
 
-  it("shows preserved stale totals in JSON output", async () => {
+  it("omits preserved stale totals from JSON output", async () => {
     const store = await writeStore({
       "agent:main:main": {
         sessionId: "abc123",
@@ -282,7 +282,7 @@ describe("sessionsCommand", () => {
       }>;
     }>(sessionsCommand, store);
     const main = payload.sessions?.find((row) => row.key === "agent:main:main");
-    expect(main?.totalTokens).toBe(2000);
+    expect(main?.totalTokens).toBeNull();
     expect(main?.totalTokensFresh).toBe(false);
   });
 
