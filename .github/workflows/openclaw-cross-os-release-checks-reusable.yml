@@ -545,11 +545,11 @@ jobs:
       - name: Verify provided prerelease plugin registry upload
         if: steps.provided_registry.outputs.json != ''
         env:
-          ARTIFACT_DIGEST: ${{ fromJSON(steps.provided_registry.outputs.json).prepublishPluginRegistryArtifactDigest }}
-          ARTIFACT_ID: ${{ fromJSON(steps.provided_registry.outputs.json).prepublishPluginRegistryArtifactId }}
-          ARTIFACT_NAME: ${{ fromJSON(steps.provided_registry.outputs.json).prepublishPluginRegistryArtifactName }}
-          ARTIFACT_RUN_ATTEMPT: ${{ fromJSON(steps.provided_registry.outputs.json).prepublishPluginRegistryArtifactRunAttempt }}
-          ARTIFACT_RUN_ID: ${{ fromJSON(steps.provided_registry.outputs.json).prepublishPluginRegistryArtifactRunId }}
+          ARTIFACT_DIGEST: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+          ARTIFACT_ID: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          ARTIFACT_NAME: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactName || '' }}
+          ARTIFACT_RUN_ATTEMPT: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+          ARTIFACT_RUN_ID: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           bash workflow/scripts/docker/shared-image-artifact.sh \
@@ -953,18 +953,18 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).prepublishPluginRegistryArtifactId }}
+          artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
-          run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).prepublishPluginRegistryArtifactRunId }}
+          run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           github-token: ${{ github.token }}
 
       - name: Retry prerelease plugin registry artifact download
         if: needs.prepare.outputs.prepublish_plugin_registry_json != '' && steps.download_prepublish_plugin_registry.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).prepublishPluginRegistryArtifactId }}
+          artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
-          run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).prepublishPluginRegistryArtifactRunId }}
+          run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           github-token: ${{ github.token }}
 
       - name: Verify release-check inputs

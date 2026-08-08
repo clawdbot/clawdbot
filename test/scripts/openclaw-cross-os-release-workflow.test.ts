@@ -450,9 +450,9 @@ describe("cross-OS release checks workflow", () => {
     const download = step(consumer, "Download prerelease plugin registry artifact");
     expect(download.with).toMatchObject({
       "artifact-ids":
-        "${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).prepublishPluginRegistryArtifactId }}",
+        "${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
       "run-id":
-        "${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).prepublishPluginRegistryArtifactRunId }}",
+        "${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
     });
 
     const run = step(consumer, "Run cross-OS release checks");
@@ -491,6 +491,14 @@ describe("cross-OS release checks workflow", () => {
     );
     expect(step(prepare, "Verify provided prerelease plugin registry upload").run).toContain(
       'verify-upload "Prerelease plugin registry"',
+    );
+    const workflowSource = readFileSync(WORKFLOW_PATH, "utf8");
+    const optionalJsonParses =
+      workflowSource.match(/fromJSON\([^)]+ \|\| '\{\}'\)\.[A-Za-z]+ \|\| ''/gu) ?? [];
+    expect(optionalJsonParses).toHaveLength(9);
+    expect(workflowSource).not.toContain("fromJSON(steps.provided_registry.outputs.json).");
+    expect(workflowSource).not.toContain(
+      "fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json).",
     );
   });
 
