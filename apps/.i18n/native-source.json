@@ -3459,7 +3459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 93,
+      "line": 94,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs.",
       "surface": "android",
@@ -3467,7 +3467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 98,
+      "line": 99,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
       "surface": "android",
@@ -3475,7 +3475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 253,
+      "line": 254,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "${if (tls) \"https\" else \"http\"}://$displayHost",
       "surface": "android",
@@ -3483,7 +3483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 255,
+      "line": 256,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "${if (tls) \"https\" else \"http\"}://$displayHost:$port",
       "surface": "android",
@@ -3491,7 +3491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 322,
+      "line": 324,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -3499,7 +3499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 328,
+      "line": 330,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -3507,7 +3507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 334,
+      "line": 336,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -3515,7 +3515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 343,
+      "line": 345,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -3523,7 +3523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 345,
+      "line": 347,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -3531,7 +3531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 347,
+      "line": 349,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -3539,7 +3539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 351,
+      "line": 353,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code has invalid gateway URL.",
       "surface": "android",
@@ -3547,7 +3547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 352,
+      "line": 354,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code did not contain a valid setup code.",
       "surface": "android",
@@ -3555,7 +3555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 353,
+      "line": 355,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Enter a valid manual endpoint to connect.",
       "surface": "android",
@@ -3563,7 +3563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 493,
+      "line": 495,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Secure connection is required for this host.",
       "surface": "android",
@@ -3571,7 +3571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 495,
+      "line": 497,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Use only on a trusted private network.",
       "surface": "android",

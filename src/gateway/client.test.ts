@@ -2401,6 +2401,37 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("prefers a paired bootstrap token once, then reconnects with stored device auth", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stale-device-token" });
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "bootstrap-token",
+      preferBootstrapToken: true,
+      onHelloOk,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expect(connectFrameFrom(ws)).toMatchObject({ bootstrapToken: "bootstrap-token" });
+    expect(connectFrameFrom(ws).token).toBeUndefined();
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "issued-device-token" });
+    emitHelloOk(ws, connect.id);
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
+    ws.emitClose(1006, "socket lost");
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    const reconnect = getLatestWs();
+    reconnect.emitOpen();
+    emitConnectChallenge(reconnect, "nonce-reconnect");
+    expect(connectFrameFrom(reconnect)).toMatchObject({
+      token: "issued-device-token",
+      deviceToken: "issued-device-token",
+    });
+    expect(connectFrameFrom(reconnect).bootstrapToken).toBeUndefined();
+    client.stop();
+  });
+
   it("prefers explicit deviceToken over stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",

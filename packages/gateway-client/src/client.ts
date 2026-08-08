@@ -337,6 +337,8 @@ export type GatewayClientOptions = {
   requestTimeoutMs?: number;
   token?: string;
   bootstrapToken?: string;
+  /** Prefer one setup credential for the first successful device-auth exchange. */
+  preferBootstrapToken?: boolean;
   deviceToken?: string;
   password?: string;
   approvalRuntimeToken?: string;
@@ -1037,6 +1039,11 @@ export class GatewayClient {
         env: this.opts.env,
       });
     }
+    if (this.opts.preferBootstrapToken) {
+      // The setup credential is single-use; reconnects must use the stored device token.
+      this.opts.bootstrapToken = undefined;
+      this.opts.preferBootstrapToken = false;
+    }
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
     if (reconnectWithCurrentNodeProtocol) {
@@ -1336,6 +1343,7 @@ export class GatewayClient {
     return selectGatewayConnectAuth({
       token: this.opts.token,
       bootstrapToken: this.opts.bootstrapToken,
+      preferBootstrapToken: this.opts.preferBootstrapToken,
       deviceToken: this.opts.deviceToken,
       password: this.opts.password,
       approvalRuntimeToken: this.approvalRuntimeTokenCompatibilityDisabled

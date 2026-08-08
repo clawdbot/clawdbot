@@ -421,6 +421,17 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun decodeGatewaySetupCodeAcceptsPairingUrlWrapper() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"Bootstrap-AbC123"}""")
+
+    val decoded = decodeGatewaySetupCode("oc-pair://$setupCode")
+
+    assertEquals("wss://gateway.example:18789", decoded?.url)
+    assertEquals("Bootstrap-AbC123", decoded?.bootstrapToken)
+  }
+
+  @Test
   fun manualTokenDetectsSetupCodePayloads() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")

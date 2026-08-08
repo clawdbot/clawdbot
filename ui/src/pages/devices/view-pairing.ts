@@ -6,8 +6,13 @@ import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { DevicePairSetup, DevicePairSetupAccess } from "../../lib/device-pair-setup.ts";
 
-const PAIRING_DOCS_URL =
-  "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
+const PAIRING_DOCS_URL = "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing";
+
+function formatPairingSetupCountdown(expiresAtMs: number, nowMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
 
 type DevicePairSetupProps = {
   open: boolean;
@@ -15,6 +20,7 @@ type DevicePairSetupProps = {
   error: string | null;
   setup: DevicePairSetup | null;
   access: DevicePairSetupAccess;
+  nowMs: number;
   pendingCount: number;
   onRefresh: () => void;
   onAccessChange: (access: DevicePairSetupAccess) => void;
@@ -33,21 +39,29 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const setup = props.setup;
   const pendingCount = props.pendingCount;
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
+  const isNodeSetup = props.access === "node";
+  const pairUrl = setup ? `oc-pair://${setup.setupCode}` : "";
+  const nodeCommand = pairUrl ? `openclaw node run --pair "${pairUrl}"` : "";
+  const setupExpired = typeof setup?.expiresAtMs === "number" && setup.expiresAtMs <= props.nowMs;
 
   return html`
     <openclaw-modal-dialog label=${title} description=${description} @modal-cancel=${props.onClose}>
       <section class="device-pair-setup">
         <header class="device-pair-setup__header">
-          <div class="device-pair-setup__phone" aria-hidden="true">${icons.smartphone}</div>
+          <div class="device-pair-setup__phone" aria-hidden="true">
+            ${isNodeSetup ? icons.server : icons.smartphone}
+          </div>
           <div>
             <h2>${title}</h2>
             <p>${description}</p>
-            <p class="device-pair-setup__get-apps">
-              ${t("devices.pairing.noApp")}
-              <button type="button" @click=${props.onGetApps}>
-                ${t("devices.pairing.getApps")}
-              </button>
-            </p>
+            ${isNodeSetup
+              ? nothing
+              : html`<p class="device-pair-setup__get-apps">
+                  ${t("devices.pairing.noApp")}
+                  <button type="button" @click=${props.onGetApps}>
+                    ${t("devices.pairing.getApps")}
+                  </button>
+                </p>`}
           </div>
           <button
             class="btn btn--icon btn--ghost device-pair-setup__close"
@@ -86,6 +100,18 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 <small>${t("devices.pairing.limitedAccessHint")}</small>
               </span>
             </label>
+            <label>
+              <input
+                type="radio"
+                name="device-pair-access"
+                .checked=${props.access === "node"}
+                @change=${() => props.onAccessChange("node")}
+              />
+              <span>
+                <strong>${t("devices.pairing.nodeAccess")}</strong>
+                <small>${t("devices.pairing.nodeAccessHint")}</small>
+              </span>
+            </label>
           </fieldset>
           ${!setup && !props.loading && !props.error
             ? html`
@@ -120,18 +146,31 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
             : nothing}
           ${setup
             ? html`
-                <div class="device-pair-setup__qr-frame">
-                  ${setup.qrDataUrl
-                    ? html`<img
-                        class="device-pair-setup__qr"
-                        src=${setup.qrDataUrl}
-                        alt=${t("devices.pairing.qrAlt")}
-                        draggable="false"
-                      />`
-                    : html`<div class="device-pair-setup__qr-unavailable">
-                        ${t("devices.pairing.qrUnavailable")}
-                      </div>`}
-                </div>
+                ${isNodeSetup
+                  ? html`<div class="device-pair-setup__command">
+                      <code>${nodeCommand}</code>
+                      ${setup.expiresAtMs
+                        ? html`<p role="timer" aria-live="off">
+                            ${setupExpired
+                              ? t("devices.pairing.nodeExpired")
+                              : t("devices.pairing.nodeExpiresIn", {
+                                  time: formatPairingSetupCountdown(setup.expiresAtMs, props.nowMs),
+                                })}
+                          </p>`
+                        : nothing}
+                    </div>`
+                  : html`<div class="device-pair-setup__qr-frame">
+                      ${setup.qrDataUrl
+                        ? html`<img
+                            class="device-pair-setup__qr"
+                            src=${setup.qrDataUrl}
+                            alt=${t("devices.pairing.qrAlt")}
+                            draggable="false"
+                          />`
+                        : html`<div class="device-pair-setup__qr-unavailable">
+                            ${t("devices.pairing.qrUnavailable")}
+                          </div>`}
+                    </div>`}
 
                 <div class="device-pair-setup__meta">
                   <span class="settings-status settings-status--accent">
@@ -163,9 +202,17 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                     class="btn primary"
                     type="button"
                     @click=${(event: Event) =>
-                      void handleCopyButton(event, setup.setupCode, copyLabel)}
+                      void handleCopyButton(
+                        event,
+                        isNodeSetup ? nodeCommand : setup.setupCode,
+                        isNodeSetup ? t("devices.pairing.copyNodeCommand") : copyLabel,
+                      )}
+                    ?disabled=${setupExpired}
                   >
-                    ${icons.copy} <span data-copy-label>${copyLabel}</span>
+                    ${icons.copy}
+                    <span data-copy-label
+                      >${isNodeSetup ? t("devices.pairing.copyNodeCommand") : copyLabel}</span
+                    >
                   </button>
                   <button
                     class="btn"
@@ -194,7 +241,9 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                         </button>
                       </div>
                     `
-                  : html`<p class="device-pair-setup__waiting">${t("devices.pairing.waiting")}</p>`}
+                  : html`<p class="device-pair-setup__waiting">
+                      ${t(isNodeSetup ? "devices.pairing.nodeWaiting" : "devices.pairing.waiting")}
+                    </p>`}
               `
             : nothing}
         </div>

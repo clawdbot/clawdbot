@@ -106,6 +106,15 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
                 password: nil))
     }
 
+    @Test func setupCodeAcceptsPairingURLWrapperWithoutLowercasingPayload() {
+        let payload = #"{"url":"wss://gateway.example:8443","bootstrapToken":"Bootstrap-AbC123"}"#
+        let code = setupCode(from: payload)
+
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode("oc-pair://\(code)") ==
+                GatewayConnectDeepLink.fromSetupCode(code))
+    }
+
     @Test func setupCodeAllowsPrivateLanWs() {
         let payload = #"{"url":"ws://192.168.1.20:18789","bootstrapToken":"tok"}"#
         #expect(

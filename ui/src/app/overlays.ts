@@ -13,6 +13,7 @@ import {
   readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
   setDevicePairSetupAccess as setPairAccess,
+  syncDevicePairSetupCountdown,
   type DevicePairSetup,
   type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
@@ -192,6 +193,7 @@ export function createApplicationOverlays(
     publish();
     await operation;
     if (!disposed) {
+      syncDevicePairSetupCountdown(devicePairSetupState, publish);
       publish();
     }
   };

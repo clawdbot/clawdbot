@@ -1,6 +1,7 @@
 // Node CLI register tests cover node command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { encodePairingSetupCode } from "../../pairing/setup-code.js";
 import { registerNodeCli } from "./register.js";
 
 type LoadNodeHostConfig = typeof import("../../node-host/config.js").loadNodeHostConfig;
@@ -103,6 +104,75 @@ describe("registerNodeCli", () => {
 
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayHost: "10.0.0.2", gatewayPort: 19001 }),
+    );
+  });
+
+  it("derives the node endpoint, TLS pin, and bootstrap credential from --pair", async () => {
+    const setupCode = encodePairingSetupCode({
+      url: "wss://gateway.example:8443",
+      bootstrapToken: "bootstrap-123",
+      tlsFingerprint: "sha256:pair-leaf",
+    });
+
+    await createProgram().parseAsync(["node", "run", "--pair", `oc-pair://${setupCode}`], {
+      from: "user",
+    });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayHost: "gateway.example",
+        gatewayPort: 8443,
+        gatewayTls: true,
+        gatewayTlsFingerprint: "sha256:pair-leaf",
+        gatewayBootstrapToken: "bootstrap-123",
+        preferGatewayBootstrapToken: true,
+      }),
+    );
+  });
+
+  it("lets explicit gateway flags override --pair values", async () => {
+    const setupCode = encodePairingSetupCode({
+      url: "wss://paired.example:8443",
+      bootstrapToken: "bootstrap-123",
+      tlsFingerprint: "sha256:pair-leaf",
+    });
+
+    await createProgram().parseAsync(
+      [
+        "node",
+        "run",
+        "--pair",
+        setupCode,
+        "--host",
+        "explicit.example",
+        "--port",
+        "19000",
+        "--tls-fingerprint",
+        "sha256:explicit-leaf",
+      ],
+      { from: "user" },
+    );
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayHost: "explicit.example",
+        gatewayPort: 19000,
+        gatewayTls: true,
+        gatewayTlsFingerprint: "sha256:explicit-leaf",
+        gatewayBootstrapToken: "bootstrap-123",
+      }),
+    );
+  });
+
+  it("rejects an invalid --pair value before loading node state", async () => {
+    await createProgram().parseAsync(["node", "run", "--pair", "not-a-setup-code"], {
+      from: "user",
+    });
+
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.loadNodeHostConfig).not.toHaveBeenCalled();
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid pairing setup"),
     );
   });
 

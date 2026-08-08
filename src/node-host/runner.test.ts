@@ -246,6 +246,25 @@ describe("runNodeHost", () => {
     },
   );
 
+  it("passes a paired bootstrap credential with first-connect preference", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "gateway.example",
+        gatewayPort: 443,
+        gatewayTls: true,
+        gatewayBootstrapToken: "bootstrap-123",
+        preferGatewayBootstrapToken: true,
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(lastCapturedOptions()).toMatchObject({
+      bootstrapToken: "bootstrap-123",
+      preferBootstrapToken: true,
+    });
+    expect(lastCapturedOptions()?.token).toBeUndefined();
+    expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+  });
+
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {
     mocks.useFakeRuntime = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(

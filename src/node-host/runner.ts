@@ -30,6 +30,8 @@ type NodeHostRunOptions = {
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayBootstrapToken?: string;
+  preferGatewayBootstrapToken?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -228,10 +230,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     enableAgentRuns: true,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = await resolveNodeHostGatewayCredentials({
-    config: cfg,
-    env: process.env,
-  });
+  const { token, password } = opts.preferGatewayBootstrapToken
+    ? {}
+    : await resolveNodeHostGatewayCredentials({
+        config: cfg,
+        env: process.env,
+      });
 
   const host = gateway.host ?? "127.0.0.1";
   const urlHost =
@@ -454,6 +458,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const client = new GatewayClient({
     url,
     token: token || undefined,
+    bootstrapToken: opts.gatewayBootstrapToken,
+    preferBootstrapToken: opts.preferGatewayBootstrapToken,
     password: password || undefined,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,

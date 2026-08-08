@@ -94,7 +94,21 @@ On the node machine:
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
-`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
+For one-paste setup, create a **Node host** setup link from the Control UI
+Devices page, then run its copyable command on the node machine:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
+```
+
+The link is single-use and expires after 10 minutes. It supplies the endpoint,
+bootstrap token, TLS mode, and certificate pin when available. Explicit
+gateway flags override the corresponding `--pair` values. Pairing does not
+pre-approve command execution; the first `system.run` request still follows
+the normal pending-approval or SSH-verification path. See
+[Node pairing](/gateway/pairing#one-paste-node-pairing).
+
+`node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
 ### Remote gateway via SSH tunnel (loopback bind)
 

@@ -68,7 +68,7 @@ suite.define(() => {
         await gateway.deferNext("device.pair.list");
         await sidebarPairingButton.click();
 
-        const dialog = page.getByRole("dialog", { name: "OpenClaw mobile" });
+        const dialog = page.getByRole("dialog", { name: "Pair a device" });
         const qr = page.getByAltText("OpenClaw mobile pairing QR code");
         await dialog.waitFor();
         expect(await dialog.isVisible()).toBe(true);
@@ -84,7 +84,7 @@ suite.define(() => {
 
         // modal-dialog renders its content in light DOM outside the native dialog element.
         const accessRadios = page.locator('input[name="device-pair-access"]');
-        await expect.poll(async () => accessRadios.count()).toBe(2);
+        await expect.poll(async () => accessRadios.count()).toBe(3);
         const fullAccess = accessRadios.nth(0);
         const limitedAccess = accessRadios.nth(1);
         expect(await fullAccess.isChecked()).toBe(true);

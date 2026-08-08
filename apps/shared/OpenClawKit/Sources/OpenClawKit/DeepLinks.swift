@@ -12,6 +12,7 @@ public enum DeepLinkRoute: Sendable, Equatable {
 
 public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     private static let maximumSetupEndpoints = 8
+    private static let pairingSetupURLPrefix = "oc-pair://"
 
     private enum CodingKeys: String, CodingKey {
         case host
@@ -144,8 +145,14 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     /// and `tls`. In both cases, the optional `bootstrapToken`, `token`, and `password` fields
     /// are also supported.
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        if trimmed.range(
+            of: self.pairingSetupURLPrefix,
+            options: [.anchored, .caseInsensitive]) != nil
+        {
+            trimmed = String(trimmed.dropFirst(self.pairingSetupURLPrefix.count))
+        }
         if let link = decodeSetupPayload(from: Data(trimmed.utf8)) {
             return link
         }

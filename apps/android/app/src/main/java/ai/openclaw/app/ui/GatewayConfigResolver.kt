@@ -88,6 +88,7 @@ internal data class GatewayScannedSetupCodeResult(
 )
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
+private const val PAIRING_SETUP_URL_PREFIX = "oc-pair://"
 
 private fun remoteGatewaySecurityRuleText(): NativeText =
   nativeText(
@@ -262,7 +263,8 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
 
 /** Decodes base64url setup-code payloads produced by gateway onboarding. */
 internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
-  val trimmed = rawInput.trim()
+  val raw = rawInput.trim()
+  val trimmed = if (raw.startsWith(PAIRING_SETUP_URL_PREFIX, ignoreCase = true)) raw.substring(PAIRING_SETUP_URL_PREFIX.length) else raw
   if (trimmed.isEmpty()) return null
 
   val padded =
