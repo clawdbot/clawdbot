@@ -591,9 +591,9 @@ export async function runSetupInferenceTest(params: {
         error: "The model started but did not send a reply. Try again or pick another option.",
       };
     }
-    const winnerError = extractRunWinnerError(plan, result);
+    const winnerError = await extractRunWinnerError(plan, result);
     if (winnerError) {
-      return { ok: false, status: "format", error: winnerError };
+      return { ok: false, status: "unknown", error: winnerError };
     }
     if (requireExecutionOwner && !successfulAuth) {
       return {
