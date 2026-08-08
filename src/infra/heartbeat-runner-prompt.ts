@@ -122,7 +122,7 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
 };
 
 export function shouldPreflightExecEventWake(
-  source: HeartbeatWakeSource,
+  source: HeartbeatWakeSource | undefined,
   scheduledEveryMs: number | undefined,
   runScope: HeartbeatRunScope,
   scheduledTaskCount: number,
