@@ -1,5 +1,6 @@
 export * from "./agent.ts";
 export * from "./config.ts";
+export * from "./companions.ts";
 export * from "./install.ts";
 export * from "./installed.ts";
 export * from "./lanes.ts";

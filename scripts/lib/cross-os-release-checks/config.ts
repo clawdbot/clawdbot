@@ -64,6 +64,7 @@ export type CommandInvocation = {
 };
 export type Cleanup = () => Promise<void> | void;
 export type LaneBaseParams = {
+  companions: readonly import("./companions.ts").CrossOsCompanionPackage[];
   logsDir: string;
   providerConfig: ProviderConfig;
   providerSecretValue: string;

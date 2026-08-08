@@ -25,6 +25,7 @@ import {
   buildCrossOsReleaseAgentSessionId,
   buildCrossOsReleaseSmokePluginAllowlist,
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
+  buildCrossOsCompanionInstallArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -790,6 +791,46 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(freshLaneSource).toContain('runTimedLanePhase(lane, "install-candidate"');
     expect(freshLaneSource).toContain('runTimedLanePhase(lane, "agent-turn"');
     expect(freshLaneSource).toContain("phaseTimings: lane.phaseTimings");
+  });
+
+  it("builds managed installs for validated companion tarballs", () => {
+    const companions = [
+      {
+        name: "@openclaw/codex",
+        tarballPath: "/tmp/openclaw-codex-2026.8.1-beta.1.tgz",
+      },
+      {
+        name: "@openclaw/discord",
+        tarballPath: "/tmp/openclaw-discord-2026.8.1-beta.1.tgz",
+      },
+    ];
+
+    expect(companions.map(buildCrossOsCompanionInstallArgs)).toEqual(
+      companions.map((companion) => [
+        "plugins",
+        "install",
+        `npm-pack:${companion.tarballPath}`,
+        "--force",
+      ]),
+    );
+  });
+
+  it.each([
+    ["Linux packaged fresh", "runFreshLane", "runUpgradeLane", false],
+    ["macOS packaged upgrade", "runUpgradeLane", "runInstallerFreshSuite", false],
+    ["Windows installer fresh", "runInstallerFreshSuite", "runDevUpdateSuite", true],
+  ])("installs companions before onboarding for %s", (_label, start, end, usesCliPath) => {
+    const source = readFileSync("scripts/lib/cross-os-release-checks/lanes.ts", "utf8");
+    const laneSource = source.slice(
+      source.indexOf(`function ${start}`),
+      source.indexOf(`function ${end}`),
+    );
+    const installIndex = laneSource.indexOf("installLaneCompanions(");
+    const onboardIndex = laneSource.indexOf('"onboard"');
+
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(onboardIndex).toBeGreaterThan(installIndex);
+    expect(laneSource.includes("cliPath: freshShell.cliPath")).toBe(usesCliPath);
   });
 
   it("accepts OK agent output from the captured log when stdout is empty", () => {

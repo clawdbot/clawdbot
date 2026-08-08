@@ -610,6 +610,12 @@ jobs:
       package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}
       package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}
       package_version: ${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}
+      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
@@ -814,7 +820,13 @@ jobs:
       candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
-      candidate_artifact_json: ${{ inputs.candidate_artifact_json }}
+      prepublish_plugin_registry_artifact_digest: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_digest }}
+      prepublish_plugin_registry_artifact_id: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_id }}
+      prepublish_plugin_registry_artifact_name: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_name }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_attempt }}
+      prepublish_plugin_registry_artifact_run_id: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_id }}
+      prepublish_plugin_registry_manifest_sha256: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_manifest_sha256 }}
+      required_companion_packages_json: ${{ needs.resolve_target.outputs.provider == 'openai' && '["@openclaw/codex"]' || '[]' }}
       openai_model: openai/gpt-5.6-luna
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025
@@ -932,12 +944,12 @@ jobs:
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       enable_prepublish_plugin_registry: ${{ needs.resolve_target.outputs.release_package_spec == '' }}
-      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
-      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
-      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
-      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
-      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
-      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
+      prepublish_plugin_registry_artifact_name: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_name }}
+      prepublish_plugin_registry_artifact_id: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_id }}
+      prepublish_plugin_registry_artifact_digest: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_digest }}
+      prepublish_plugin_registry_artifact_run_id: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_id }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_attempt }}
+      prepublish_plugin_registry_manifest_sha256: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_manifest_sha256 }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
       shared_image_artifact_namespace: release-docker
       shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}

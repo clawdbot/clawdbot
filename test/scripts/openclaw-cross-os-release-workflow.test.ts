@@ -124,6 +124,18 @@ describe("cross-OS release checks workflow", () => {
         "${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}",
       package_version:
         "${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}",
+      prepublish_plugin_registry_artifact_digest:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
+      prepublish_plugin_registry_artifact_name:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
       source_sha:
         "${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}",
     });
@@ -175,7 +187,20 @@ describe("cross-OS release checks workflow", () => {
       candidate_sha256: "${{ needs.prepare_release_package.outputs.package_sha256 }}",
       candidate_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       candidate_version: "${{ needs.prepare_release_package.outputs.package_version }}",
-      candidate_artifact_json: "${{ inputs.candidate_artifact_json }}",
+      prepublish_plugin_registry_artifact_digest:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_digest }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_id }}",
+      prepublish_plugin_registry_artifact_name:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_name }}",
+      prepublish_plugin_registry_artifact_run_attempt:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_attempt }}",
+      prepublish_plugin_registry_artifact_run_id:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_run_id }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_manifest_sha256 }}",
+      required_companion_packages_json:
+        "${{ needs.resolve_target.outputs.provider == 'openai' && '[\"@openclaw/codex\"]' || '[]' }}",
     });
 
     expect(job(release, "docker_e2e_release_checks").with).toMatchObject({
@@ -189,6 +214,10 @@ describe("cross-OS release checks workflow", () => {
       package_sha256: "${{ needs.prepare_release_package.outputs.package_sha256 }}",
       package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
+      prepublish_plugin_registry_artifact_id:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_artifact_id }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_manifest_sha256 }}",
     });
     expect(job(release, "package_acceptance_release_checks").with).toMatchObject({
       artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
@@ -215,7 +244,6 @@ describe("cross-OS release checks workflow", () => {
       "candidate_sha256",
       "candidate_source_sha",
       "candidate_version",
-      "candidate_artifact_json",
     ]) {
       expect(workflow.on?.workflow_dispatch?.inputs?.[inputName], inputName).toMatchObject({
         default: "",
@@ -226,6 +254,28 @@ describe("cross-OS release checks workflow", () => {
         type: "string",
       });
     }
+    expect(workflow.on?.workflow_dispatch?.inputs?.prepublish_plugin_registry_json).toMatchObject({
+      default: "",
+      type: "string",
+    });
+    for (const inputName of [
+      "prepublish_plugin_registry_artifact_digest",
+      "prepublish_plugin_registry_artifact_id",
+      "prepublish_plugin_registry_artifact_name",
+      "prepublish_plugin_registry_artifact_run_attempt",
+      "prepublish_plugin_registry_artifact_run_id",
+      "prepublish_plugin_registry_manifest_sha256",
+    ]) {
+      expect(workflow.on?.workflow_dispatch?.inputs?.[inputName], inputName).toBeUndefined();
+      expect(workflow.on?.workflow_call?.inputs?.[inputName], inputName).toMatchObject({
+        default: "",
+        type: "string",
+      });
+    }
+    expect(workflow.on?.workflow_call?.inputs?.required_companion_packages_json).toMatchObject({
+      default: "[]",
+      type: "string",
+    });
 
     const prepare = job(workflow, "prepare");
     expect(prepare.outputs).toMatchObject({
@@ -240,14 +290,12 @@ describe("cross-OS release checks workflow", () => {
       candidate_artifact_run_id: "${{ github.run_id }}",
       candidate_sha256: "${{ steps.candidate_metadata.outputs.sha256 }}",
       candidate_version: "${{ steps.candidate_metadata.outputs.version }}",
-      codex_plugin_file_name: "${{ steps.codex_plugin_metadata.outputs.file_name }}",
-      codex_plugin_sha256: "${{ steps.codex_plugin_metadata.outputs.sha256 }}",
       prepublish_plugin_registry_artifact_id:
-        "${{ steps.upload_generated_plugin_registry.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
-      prepublish_plugin_registry_artifact_run_attempt:
-        "${{ steps.upload_generated_plugin_registry.outputs.artifact-id && github.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}",
-      prepublish_plugin_registry_artifact_run_id:
-        "${{ steps.upload_generated_plugin_registry.outputs.artifact-id && github.run_id || fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
+        "${{ inputs.prepublish_plugin_registry_artifact_id || fromJSON(inputs.prepublish_plugin_registry_json || '{}').artifactId || '' }}",
+      prepublish_plugin_registry_manifest_sha256:
+        "${{ inputs.prepublish_plugin_registry_manifest_sha256 || fromJSON(inputs.prepublish_plugin_registry_json || '{}').manifestSha256 || '' }}",
+      required_companion_packages_json:
+        "${{ inputs.required_companion_packages_json || toJSON(fromJSON(inputs.prepublish_plugin_registry_json || '{}').requiredPackages || fromJSON('[]')) }}",
       source_sha: "${{ steps.candidate_metadata.outputs.source_sha }}",
     });
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
@@ -381,63 +429,66 @@ describe("cross-OS release checks workflow", () => {
     expect(verify.run).toContain('"$actual_baseline_sha256" != "$EXPECTED_BASELINE_SHA256"');
   });
 
-  it("binds OpenAI onboarding to the exact prerelease Codex companion", () => {
+  it("passes and consumes the immutable prerelease companion registry generically", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const prepare = job(workflow, "prepare");
-    const binding = step(prepare, "Validate prerelease plugin registry artifact binding");
-    expect(binding.run).toContain('verify-upload "Prerelease plugin registry"');
-    expect(binding.env).toMatchObject({
-      ARTIFACT_ID:
-        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
-      ARTIFACT_RUN_ID:
-        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}",
-      MANIFEST_SHA256:
-        "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
-    });
-
     const sourceCheckout = step(prepare, "Checkout public source ref");
-    expect(sourceCheckout.if).toContain("inputs.provider == 'openai'");
-    expect(sourceCheckout.with?.ref).toBe(
-      "${{ inputs.candidate_artifact_name != '' && inputs.candidate_source_sha || inputs.ref }}",
+    expect(sourceCheckout.if).toBe("inputs.candidate_artifact_name == ''");
+    expect(sourceCheckout.with?.ref).toBe("${{ inputs.ref }}");
+    expect(prepare.steps?.map((candidate) => candidate.name)).not.toEqual(
+      expect.arrayContaining([
+        "Install companion plugin build dependencies",
+        "Pack exact Codex companion plugin",
+        "Resolve exact Codex companion plugin",
+        "Upload generated prerelease plugin registry artifact",
+      ]),
     );
-    expect(step(prepare, "Install companion plugin build dependencies").run).toBe(
-      "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    );
-    const pack = step(prepare, "Pack exact Codex companion plugin");
-    expect(pack.run).toContain("prepublish-plugin-registry-artifact.mjs create");
-    expect(pack.run).toContain("--repo-root source");
-    expect(pack.run).toContain(`--required-packages-json '["@openclaw/codex"]'`);
-
-    const metadata = step(prepare, "Resolve exact Codex companion plugin");
-    expect(metadata.run).toContain('any(.name == "@openclaw/codex")');
-    expect(metadata.run).toContain("prepublish-plugin-registry-artifact.mjs verify");
-    expect(metadata.run).toContain('--source-sha "$SOURCE_SHA"');
-    expect(metadata.run).toContain('--candidate-version "$CANDIDATE_VERSION"');
-    expect(metadata.run).toContain("entry.tarball !== path.win32.basename(entry.tarball)");
-    expect(
-      step(prepare, "Upload generated prerelease plugin registry artifact").with,
-    ).toMatchObject({
-      name: "openclaw-cross-os-release-checks-plugins-${{ github.run_id }}-${{ github.run_attempt }}",
-      "if-no-files-found": "error",
-    });
 
     const consumer = job(workflow, "cross_os_release_checks");
+    const binding = step(consumer, "Validate prepared candidate artifact binding");
+    expect(binding.env).toMatchObject({
+      PLUGIN_ARTIFACT_DIGEST:
+        "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_digest }}",
+      PLUGIN_ARTIFACT_ID: "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}",
+      PLUGIN_ARTIFACT_NAME: "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_name }}",
+      PLUGIN_ARTIFACT_RUN_ATTEMPT:
+        "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_attempt }}",
+      PLUGIN_ARTIFACT_RUN_ID:
+        "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_id }}",
+      PLUGIN_MANIFEST_SHA256:
+        "${{ needs.prepare.outputs.prepublish_plugin_registry_manifest_sha256 }}",
+      REQUIRED_COMPANION_PACKAGES_JSON:
+        "${{ needs.prepare.outputs.required_companion_packages_json }}",
+    });
+    expect(binding.run).toContain("Prepared prerelease plugin registry binding is incomplete.");
+    expect(binding.run).toContain(
+      "Required companion packages need the immutable plugin registry tuple.",
+    );
+    expect(binding.run).toContain("actions/artifacts/${tuple.id}");
     const download = step(consumer, "Download prerelease plugin registry artifact");
     expect(download.with).toMatchObject({
       "artifact-ids": "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}",
       "run-id": "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_run_id }}",
     });
-    const verify = step(consumer, "Verify release-check inputs");
-    expect(verify.run).toContain('"$actual_codex_sha256" != "$EXPECTED_CODEX_PLUGIN_SHA256"');
 
     const run = step(consumer, "Run cross-OS release checks");
-    expect(run.env?.CODEX_PLUGIN_FILE_NAME).toBe(
-      "${{ needs.prepare.outputs.codex_plugin_file_name }}",
-    );
-    expect(run.run).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
+    expect(run.env).toMatchObject({
+      PLUGIN_REGISTRY_ARTIFACT_ID:
+        "${{ needs.prepare.outputs.prepublish_plugin_registry_artifact_id }}",
+      PLUGIN_REGISTRY_MANIFEST_SHA256:
+        "${{ needs.prepare.outputs.prepublish_plugin_registry_manifest_sha256 }}",
+      REQUIRED_COMPANION_PACKAGES_JSON:
+        "${{ needs.prepare.outputs.required_companion_packages_json }}",
+    });
+    expect(run.run).toContain('--plugin-registry-dir "$PLUGIN_REGISTRY_DIR"');
     expect(run.run).toContain(
-      "JSON.stringify({ codex: `npm-pack:${process.env.CODEX_PLUGIN_TGZ}` })",
+      '--plugin-registry-manifest-sha256 "$PLUGIN_REGISTRY_MANIFEST_SHA256"',
     );
+    expect(run.run).toContain(
+      '--required-companion-packages-json "$REQUIRED_COMPANION_PACKAGES_JSON"',
+    );
+    expect(run.run).not.toContain("OPENCLAW_PLUGIN_INSTALL_OVERRIDES");
+    expect(JSON.stringify(workflow)).not.toContain("@openclaw/codex");
   });
 
   it("executes the release harness directly with Node", () => {
