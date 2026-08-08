@@ -32,6 +32,7 @@ import {
   canonicalizeCronToolObject,
   hasCronCreateSignal,
   isEmptyRecoveredCronPatch,
+  mergeRecoveredCronObject,
   recoverCronObjectFromFlatParams,
 } from "./cron-tool-canonicalize.js";
 import {
@@ -427,7 +428,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             // a synthetic job object from any recognised top-level job fields.
             // See: https://github.com/openclaw/openclaw/issues/11310
             if (isMissingOrEmptyObject(params.job)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
+              const synthetic = recoverCronObjectFromFlatParams(params, "job");
               // Only use the synthetic job if at least one meaningful field is present
               // (schedule, payload, message, or text are the minimum signals that the
               // LLM intended to create a job).
@@ -569,14 +570,19 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               throw new Error("jobId required (id accepted for backward compatibility)");
             }
 
-            // Flat-params recovery for patch
+            // Recover flat/dotted patch fields even when the model also emitted a partial
+            // structured patch. Explicit structured values remain authoritative.
             let recoveredFlatPatch = false;
-            if (isMissingOrEmptyObject(params.patch)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              if (synthetic.found) {
-                params.patch = synthetic.value;
-                recoveredFlatPatch = true;
-              }
+            const explicitPatch = isRecord(params.patch)
+              ? canonicalizeCronToolObject(params.patch)
+              : undefined;
+            const hasExplicitPatch = explicitPatch !== undefined;
+            const synthetic = recoverCronObjectFromFlatParams(params, "patch", !hasExplicitPatch);
+            if (synthetic.found) {
+              params.patch = explicitPatch
+                ? mergeRecoveredCronObject(synthetic.value, explicitPatch)
+                : synthetic.value;
+              recoveredFlatPatch = true;
             }
 
             if (!params.patch || typeof params.patch !== "object") {

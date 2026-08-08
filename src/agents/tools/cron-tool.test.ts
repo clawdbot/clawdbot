@@ -2721,6 +2721,231 @@ describe("cron tool", () => {
     });
   });
 
+  it("recovers dotted cron update keys from model tool-call parsers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-dotted", {
+      action: "update",
+      jobId: "job-dotted",
+      "args.patch.payload.kind": "agentTurn",
+      "args.patch.payload.message": "Updated prompt.",
+      "args.patch.payload.timeoutSeconds": 300,
+      "args.patch.enabled": false,
+      "patch.deleteAfterRun": true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: { kind?: string; message?: string; timeoutSeconds?: number };
+            enabled?: boolean;
+            deleteAfterRun?: boolean;
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-dotted");
+    expect(params?.patch).toEqual({
+      payload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 300 },
+      enabled: false,
+      deleteAfterRun: true,
+    });
+  });
+
+  it("merges dotted cron update keys under explicit structured patch values", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-dotted-mixed", {
+      action: "update",
+      jobId: "job-dotted-mixed",
+      patch: { enabled: true, payload: { kind: "agentTurn" } },
+      agentId: "unrelated-agent-filter",
+      sessionKey: "unrelated-wake-target",
+      text: "unrelated wake text",
+      "patch.enabled": false,
+      "patch.payload.kind": "script",
+      "patch.payload.message": "Updated prompt.",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: { enabled?: boolean; payload?: { kind?: string; message?: string } };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-dotted-mixed");
+    expect(params?.patch).toEqual({
+      enabled: true,
+      payload: { kind: "agentTurn", message: "Updated prompt." },
+    });
+  });
+
+  it("keeps empty explicit patches isolated from unrelated action fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-dotted-empty-explicit", {
+      action: "update",
+      jobId: "job-dotted-empty-explicit",
+      patch: {},
+      agentId: "unrelated-agent-filter",
+      sessionKey: "unrelated-wake-target",
+      text: "unrelated wake text",
+      "patch.payload.kind": "agentTurn",
+      "patch.payload.message": "Updated prompt.",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          patch?: {
+            agentId?: string;
+            payload?: { kind?: string; message?: string; text?: string };
+          };
+        }
+      | undefined;
+    expect(params?.patch).toEqual({
+      payload: { kind: "agentTurn", message: "Updated prompt." },
+    });
+  });
+
+  it.each([
+    {
+      name: "cron",
+      explicit: { kind: "cron", cron: "0 9 * * *" },
+      dotted: { "patch.schedule.expr": "0 8 * * *" },
+      expected: { kind: "cron", expr: "0 9 * * *" },
+    },
+    {
+      name: "every",
+      explicit: { kind: "every", every: 300_000 },
+      dotted: { "patch.schedule.everyMs": 60_000 },
+      expected: { kind: "every", everyMs: 300_000 },
+    },
+    {
+      name: "stagger",
+      explicit: { kind: "cron", cron: "0 9 * * *", stagger: 30_000 },
+      dotted: { "patch.schedule.staggerMs": 1_000 },
+      expected: { kind: "cron", expr: "0 9 * * *", staggerMs: 30_000 },
+    },
+  ])("prefers explicit $name schedule alias over recovered canonical fields", async (testCase) => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-dotted-explicit-aliases", {
+      action: "update",
+      jobId: "job-dotted-explicit-aliases",
+      patch: { schedule: testCase.explicit },
+      ...testCase.dotted,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          patch?: { schedule?: Record<string, unknown> };
+        }
+      | undefined;
+    expect(params?.patch?.schedule).toEqual(testCase.expected);
+  });
+
+  it("recovers job wrappers but not patch wrappers when adding cron jobs", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-add-dotted-wrapper", {
+      action: "add",
+      "args.job.name": "wrapped job",
+      "job.schedule.kind": "every",
+      "job.schedule.everyMs": 60_000,
+      "job.payload.kind": "agentTurn",
+      "job.payload.message": "run wrapped job",
+      "patch.enabled": false,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { name?: string; enabled?: boolean; payload?: { message?: string } }
+      | undefined;
+    expect(params).toMatchObject({
+      name: "wrapped job",
+      payload: { message: "run wrapped job" },
+    });
+    expect(params?.enabled).toBe(true);
+  });
+
+  it("recovers quoted dotted cron keys emitted by Gemini", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-dotted-quoted", {
+      action: "update",
+      jobId: "job-dotted-quoted",
+      '"patch.payload.kind"': "agentTurn",
+      '"patch.payload.message"': "Updated prompt.",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { id?: string; patch?: { payload?: { kind?: string; message?: string } } }
+      | undefined;
+    expect(params).toMatchObject({
+      id: "job-dotted-quoted",
+      patch: { payload: { kind: "agentTurn", message: "Updated prompt." } },
+    });
+  });
+
+  it.each([
+    ["parent-first", ["patch.payload", "patch.payload.message"]],
+    ["child-first", ["patch.payload.message", "patch.payload"]],
+  ])("resolves dotted parent-child conflicts consistently (%s)", async (_name, keys) => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    const dottedValues: Record<string, unknown> = {
+      "patch.payload": { kind: "agentTurn", message: "parent" },
+      "patch.payload.message": "child",
+    };
+    const dottedParams = Object.fromEntries(keys.map((key) => [key, dottedValues[key]]));
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-dotted-conflict", {
+      action: "update",
+      jobId: "job-dotted-conflict",
+      ...dottedParams,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { patch?: { payload?: { kind?: string; message?: string } } }
+      | undefined;
+    expect(params?.patch?.payload).toEqual({ kind: "agentTurn", message: "parent" });
+  });
+
+  it("does not recover job wrappers or unsafe dotted paths into cron updates", async () => {
+    const tool = createTestCronTool();
+    await expect(
+      tool.execute("call-update-dotted-unsafe", {
+        action: "update",
+        jobId: "job-dotted-unsafe",
+        "job.payload.message": "wrong action wrapper",
+        "patch.payload.__proto__.polluted": true,
+      }),
+    ).rejects.toThrow("patch required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("does not mutate prototypes while merging explicit cron patch JSON", async () => {
+    const tool = createTestCronTool();
+    const patch = JSON.parse('{"payload":{"kind":"agentTurn"},"__proto__":{"polluted":true}}');
+    await tool.execute("call-update-explicit-unsafe", {
+      action: "update",
+      jobId: "job-explicit-unsafe",
+      patch,
+      "patch.payload.message": "Updated prompt.",
+    });
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { patch?: Record<string, unknown> }
+      | undefined;
+    expect(Object.hasOwn(params?.patch ?? {}, "__proto__")).toBe(true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("uses flat string scheduleKind without leaking it to cron update", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 

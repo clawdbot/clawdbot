@@ -66,6 +66,8 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   ...CRON_FLAT_PAYLOAD_KEYS,
   ...CRON_FLAT_SCHEDULE_KEYS,
 ]);
+const UNSAFE_NESTED_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+type CronDottedWrapper = "job" | "patch";
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
   return isStringOption(value, CRON_SCHEDULE_KINDS);
@@ -122,6 +124,71 @@ function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
   delete value.namePayload;
   delete value.scheduleKind;
   delete value.sessionTargetName;
+}
+
+function recoverDottedCronField(
+  value: Record<string, unknown>,
+  rawKey: string,
+  rawValue: unknown,
+  wrapper: CronDottedWrapper,
+  requireWrapper: boolean,
+): boolean {
+  const key =
+    rawKey.length >= 2 &&
+    ((rawKey.startsWith('"') && rawKey.endsWith('"')) ||
+      (rawKey.startsWith("'") && rawKey.endsWith("'")))
+      ? rawKey.slice(1, -1)
+      : rawKey;
+  const path = key.split(".");
+  if (path[0] === "args") {
+    path.shift();
+  }
+  let foundWrapper = false;
+  if (path[0] === "job" || path[0] === "patch") {
+    if (path[0] !== wrapper) {
+      return false;
+    }
+    path.shift();
+    foundWrapper = true;
+  }
+  if (requireWrapper && !foundWrapper) {
+    return false;
+  }
+  const root = path[0];
+  if (
+    !root ||
+    !CRON_RECOVERABLE_OBJECT_KEYS.has(root) ||
+    path.some((segment) => !segment || UNSAFE_NESTED_KEYS.has(segment))
+  ) {
+    return false;
+  }
+
+  let target = value;
+  for (const segment of path.slice(0, -1)) {
+    const existing = target[segment];
+    if (existing !== undefined && !isRecord(existing)) {
+      return false;
+    }
+    const nested = isRecord(existing) ? existing : {};
+    target[segment] = nested;
+    target = nested;
+  }
+  const leaf = path.at(-1);
+  if (!leaf || target[leaf] !== undefined) {
+    return false;
+  }
+  target[leaf] = rawValue;
+  return true;
+}
+
+function cronRecoveryPathDepth(rawKey: string): number {
+  const key =
+    rawKey.length >= 2 &&
+    ((rawKey.startsWith('"') && rawKey.endsWith('"')) ||
+      (rawKey.startsWith("'") && rawKey.endsWith("'")))
+      ? rawKey.slice(1, -1)
+      : rawKey;
+  return key.split(".").length;
 }
 
 function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): void {
@@ -335,16 +402,61 @@ export function isEmptyRecoveredCronPatch(value: unknown): boolean {
 export function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
   found: boolean;
   value: Record<string, unknown>;
+};
+export function recoverCronObjectFromFlatParams(
+  params: Record<string, unknown>,
+  wrapper: CronDottedWrapper,
+  includeUnwrapped?: boolean,
+): {
+  found: boolean;
+  value: Record<string, unknown>;
+};
+export function recoverCronObjectFromFlatParams(
+  params: Record<string, unknown>,
+  wrapper: CronDottedWrapper = "job",
+  includeUnwrapped = true,
+): {
+  found: boolean;
+  value: Record<string, unknown>;
 } {
   const value: Record<string, unknown> = {};
   let found = false;
-  for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+  const keys = Object.keys(params).toSorted(
+    (left, right) => cronRecoveryPathDepth(left) - cronRecoveryPathDepth(right),
+  );
+  for (const key of keys) {
+    if (includeUnwrapped && CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
       value[key] = params[key];
+      found = true;
+    } else if (
+      params[key] !== undefined &&
+      recoverDottedCronField(value, key, params[key], wrapper, !includeUnwrapped)
+    ) {
       found = true;
     }
   }
   return { found, value: canonicalizeCronToolObject(value) };
+}
+
+/** Merges recovered model fields under explicit structured input, which remains authoritative. */
+export function mergeRecoveredCronObject(
+  recovered: Record<string, unknown>,
+  explicit: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...recovered };
+  for (const [key, explicitValue] of Object.entries(explicit)) {
+    const recoveredValue = merged[key];
+    const value =
+      isRecord(recoveredValue) && isRecord(explicitValue)
+        ? mergeRecoveredCronObject(recoveredValue, explicitValue)
+        : explicitValue;
+    if (UNSAFE_NESTED_KEYS.has(key)) {
+      Object.defineProperty(merged, key, { configurable: true, enumerable: true, value });
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */
