@@ -31,38 +31,24 @@ function getProviderModelId(model: ProviderModelConfig): string | undefined {
   return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
 }
 
-/**
- * Fill missing cost fields with 0 so the generated catalog always passes
- * {@link ModelsConfigSchema} validation, which requires `input`, `output`,
- * `cacheRead`, and `cacheWrite` when `cost` is present.
- *
- * Config validation (zod) accepts partial cost because all fields are optional,
- * but the catalog schema (TypeBox) requires every field. Normalizing here at
- * catalog-publication time preserves the accepted config shape while preventing
- * a persistent `model catalog load issue` warning.
- *
- * This must run after duplicate model IDs have been merged, so that a later
- * row's explicit `cacheRead`/`cacheWrite` values are not overwritten by the
- * synthetic zeroes filled in for an earlier partial row.
- */
 function normalizeModelCostForCatalog(model: ProviderModelConfig): ProviderModelConfig {
-  if (!model.cost) {
-    return model;
-  }
   const cost = model.cost as unknown as Record<string, number | undefined>;
-  const input = cost.input ?? 0;
-  const output = cost.output ?? 0;
-  const cacheRead = cost.cacheRead ?? 0;
-  const cacheWrite = cost.cacheWrite ?? 0;
   if (
-    cost.input === input &&
-    cost.output === output &&
-    cost.cacheRead === cacheRead &&
-    cost.cacheWrite === cacheWrite
+    !cost ||
+    ["input", "output", "cacheRead", "cacheWrite"].every((key) => cost[key] !== undefined)
   ) {
     return model;
   }
-  return { ...model, cost: { ...model.cost, input, output, cacheRead, cacheWrite } };
+  return {
+    ...model,
+    cost: {
+      ...model.cost,
+      input: cost.input ?? 0,
+      output: cost.output ?? 0,
+      cacheRead: cost.cacheRead ?? 0,
+      cacheWrite: cost.cacheWrite ?? 0,
+    },
+  };
 }
 
 function mergeNormalizedProviderModel(
@@ -87,6 +73,7 @@ function normalizeProviderModelsForConfig(
   providerKey: string,
   provider: ProviderConfig,
   options: ProviderModelNormalizationOptions = {},
+  completeCatalogCosts = false,
 ): { provider: ProviderConfig; mutated: boolean } {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return { provider, mutated: false };
@@ -123,16 +110,18 @@ function normalizeProviderModelsForConfig(
     nextModels.push(normalizedModel);
   }
 
-  const finalModels = nextModels.map((model) => {
-    const costNormalizedModel = normalizeModelCostForCatalog(model);
-    if (costNormalizedModel !== model) {
-      mutated = true;
+  if (completeCatalogCosts) {
+    for (const [index, model] of nextModels.entries()) {
+      const normalized = normalizeModelCostForCatalog(model);
+      if (normalized !== model) {
+        nextModels[index] = normalized;
+        mutated = true;
+      }
     }
-    return costNormalizedModel;
-  });
+  }
 
   return mutated
-    ? { provider: { ...provider, models: finalModels }, mutated }
+    ? { provider: { ...provider, models: nextModels }, mutated }
     : { provider, mutated };
 }
 
@@ -147,7 +136,9 @@ export function normalizeProviderCatalogModelsForConfig(
   let mutated = false;
   const next: Record<string, ProviderConfig> = {};
   for (const [providerKey, provider] of Object.entries(providers)) {
-    const normalized = normalizeProviderModelsForConfig(providerKey, provider, options);
+    // Complete the publication schema after duplicate rows merge, or synthetic
+    // zeroes can mask explicit cache prices supplied by a later row.
+    const normalized = normalizeProviderModelsForConfig(providerKey, provider, options, true);
     if (normalized.mutated) {
       mutated = true;
     }

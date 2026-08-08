@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { ModelsConfigSchema } from "../config/zod-schema.core.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { normalizeProviders } from "./models-config.providers.normalize.js";
+import {
+  normalizeProviderCatalogModelsForConfig,
+  normalizeProviders,
+} from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
@@ -383,155 +387,45 @@ describe("normalizeProviders", () => {
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
   });
 
-  it("fills missing cost.cacheRead and cost.cacheWrite with 0", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      type ConfigModel = NonNullable<
-        NonNullable<OpenClawConfig["models"]>["providers"]
-      >[string]["models"][number];
-      // Config accepts partial cost objects before catalog normalization; cast
-      // so the test can exercise the partial-cost-to-complete-cost path.
-      const partialCostModel = {
-        ...createModel({ id: "claude-sonnet-5" }),
-        cost: { input: 10, output: 50 },
-      } as ConfigModel;
-      const providers = {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          models: [partialCostModel],
-        },
-      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-
-      const normalized = normalizeProviders({ providers, agentDir });
-      const models = normalized?.anthropic?.models;
-      expect(models).toHaveLength(1);
-      expect(models?.[0]?.cost).toEqual({ input: 10, output: 50, cacheRead: 0, cacheWrite: 0 });
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not touch a cost object that already has all fields", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      const providers = {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          models: [
-            createModel({
-              id: "claude-sonnet-5",
-              cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-            }),
-          ],
-        },
-      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-
-      const normalized = normalizeProviders({ providers, agentDir });
-      const models = normalized?.anthropic?.models;
-      expect(models).toHaveLength(1);
-      expect(models?.[0]?.cost).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not add cost when the model has no cost", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      const providers = {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          models: [
-            createModel({
-              id: "claude-sonnet-5",
-              cost: undefined,
-            }),
-          ],
-        },
-      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-
-      const normalized = normalizeProviders({ providers, agentDir });
-      const models = normalized?.anthropic?.models;
-      expect(models).toHaveLength(1);
-      expect(models?.[0]?.cost).toBeUndefined();
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves tieredPricing while defaulting missing flat cost fields", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      type ConfigModel = NonNullable<
-        NonNullable<OpenClawConfig["models"]>["providers"]
-      >[string]["models"][number];
-      const tieredCostModel = {
-        ...createModel({ id: "claude-sonnet-5" }),
-        cost: {
-          input: 10,
-          output: 50,
-          tieredPricing: [
-            { input: 8, output: 40, cacheRead: 0.1, cacheWrite: 1, range: [0, 1_000_000] },
-          ],
-        },
-      } as ConfigModel;
-      const providers = {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          models: [tieredCostModel],
-        },
-      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-
-      const normalized = normalizeProviders({ providers, agentDir });
-      const models = normalized?.anthropic?.models;
-      expect(models).toHaveLength(1);
-      expect(models?.[0]?.cost).toEqual({
-        input: 10,
-        output: 50,
-        cacheRead: 0,
-        cacheWrite: 0,
-        tieredPricing: [
-          { input: 8, output: 40, cacheRead: 0.1, cacheWrite: 1, range: [0, 1_000_000] },
+  it("publishes schema-complete costs after duplicate model rows merge", () => {
+    type ConfigModel = NonNullable<
+      NonNullable<OpenClawConfig["models"]>["providers"]
+    >[string]["models"][number];
+    const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
+      ({ ...createModel({ id }), cost }) as ConfigModel;
+    const tieredPricing = [
+      {
+        input: 8,
+        output: 40,
+        cacheRead: 0.1,
+        cacheWrite: 1,
+        range: [0, 1_000_000] as [number, number],
+      },
+    ];
+    const providers = {
+      custom: {
+        baseUrl: "https://models.example/v1",
+        models: [
+          modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing }),
+          createModel({ id: "unknown", cost: undefined }),
+          modelWithPartialCost("duplicate", { input: 3, output: 15 }),
+          modelWithPartialCost("duplicate", { cacheRead: 0.3, cacheWrite: 3.75 }),
         ],
-      });
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  });
+      },
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
-  it("preserves later explicit cacheRead/cacheWrite when an earlier duplicate row has partial cost", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      type ConfigModel = NonNullable<
-        NonNullable<OpenClawConfig["models"]>["providers"]
-      >[string]["models"][number];
-      const partialCostModel = {
-        ...createModel({ id: "claude-sonnet-5" }),
-        cost: { input: 10, output: 50 },
-      } as ConfigModel;
-      const explicitCostModel = {
-        ...createModel({ id: "claude-sonnet-5" }),
-        cost: { input: 10, output: 50, cacheRead: 0.3, cacheWrite: 3.75 },
-      } as ConfigModel;
-      const providers = {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com",
-          models: [partialCostModel, explicitCostModel],
-        },
-      } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-
-      const normalized = normalizeProviders({ providers, agentDir });
-      const models = normalized?.anthropic?.models;
-      expect(models).toHaveLength(1);
-      expect(models?.[0]?.cost).toEqual({
-        input: 10,
-        output: 50,
-        cacheRead: 0.3,
-        cacheWrite: 3.75,
-      });
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
+    expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
+    expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
+      createModel({
+        id: "partial",
+        cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
+      }),
+      createModel({ id: "unknown", cost: undefined }),
+      createModel({
+        id: "duplicate",
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      }),
+    ]);
   });
 
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
