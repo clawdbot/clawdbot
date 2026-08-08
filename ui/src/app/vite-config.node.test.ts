@@ -13,6 +13,14 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 
+const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  childProcessMocks.execFileSync.mockImplementation(actual.execFileSync);
+  return { ...actual, execFileSync: childProcessMocks.execFileSync };
+});
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 type ResolveIdHandler = (
   this: never,
@@ -93,6 +101,49 @@ describe("Control UI Vite config", () => {
     });
   });
 
+  it("hard-kills every advisory Git read after its deadline", async () => {
+    await childProcessMocks.execFileSync.withImplementation(
+      ((_file: string, args?: readonly string[]) => {
+        const commandArgs = args ?? [];
+        if (commandArgs.includes("--format=%ct")) {
+          return "0\n";
+        }
+        if (commandArgs.includes("--abbrev-ref")) {
+          return "main\n";
+        }
+        if (commandArgs.includes("--porcelain")) {
+          return "";
+        }
+        return `${"a".repeat(40)}\n`;
+      }) as typeof import("node:child_process").execFileSync,
+      async () => {
+        childProcessMocks.execFileSync.mockClear();
+
+        expect(
+          resolveControlUiBuildInfo({
+            env: {},
+            readPackageVersion: () => null,
+          }),
+        ).toMatchObject({
+          commit: "a".repeat(40),
+          commitAt: "1970-01-01T00:00:00.000Z",
+          branch: "main",
+          dirty: false,
+        });
+        expect(childProcessMocks.execFileSync).toHaveBeenCalledTimes(4);
+        for (const call of childProcessMocks.execFileSync.mock.calls) {
+          const args = call[1];
+          const options = call[2];
+          expect(args).toContain("--no-optional-locks");
+          expect(options).toMatchObject({
+            killSignal: "SIGKILL",
+            timeout: 2_000,
+          });
+        }
+      },
+    );
+  });
+
   it("records release packaging as an explicit artifact fact", () => {
     expect(
       resolveControlUiBuildInfo({
@@ -134,8 +185,8 @@ describe("Control UI Vite config", () => {
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit,
         readPackageVersion: () => null,
-      }).commit,
-    ).toBe("c".repeat(40));
+      }),
+    ).toMatchObject({ commit: "c".repeat(40), commitAt: null });
     expect(readGitCommit).toHaveBeenCalledOnce();
     expect(
       resolveControlUiBuildInfo({

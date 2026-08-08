@@ -200,8 +200,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     const isDefault =
       defaultSelectable && option.value.trim().toLowerCase() === normalizedDefaultModel;
     const catalogEntry = resolveChatModelCatalogEntry(option.value, props.modelCatalog);
+    const agentRuntimeId = catalogEntry?.agentRuntime?.id.trim();
     return {
       commitValue: isDefault ? "" : option.value,
+      ...(agentRuntimeId ? { agentRuntimeId } : {}),
       ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
       ...(typeof catalogEntry?.supportsTools === "boolean"
         ? { supportsTools: catalogEntry.supportsTools }

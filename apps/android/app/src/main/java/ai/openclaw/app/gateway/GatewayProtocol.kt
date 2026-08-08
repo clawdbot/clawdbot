@@ -508,6 +508,7 @@ enum class GatewayMethod(
   TasksRetry("tasks.retry"),
   TasksDismiss("tasks.dismiss"),
   AuditRunInspect("audit.run.inspect"),
+  SessionsArchiveMany("sessions.archiveMany"),
 }
 
 enum class GatewayEvent(

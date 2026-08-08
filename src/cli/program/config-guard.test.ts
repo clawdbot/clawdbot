@@ -180,6 +180,16 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for config set",
+      commandPath: ["config", "set"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config patch",
+      commandPath: ["config", "patch"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for agent without legacy state",
       commandPath: ["agent"],
       expectedDoctorCalls: 0,

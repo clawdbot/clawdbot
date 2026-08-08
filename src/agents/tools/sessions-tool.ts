@@ -1,6 +1,7 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -10,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -47,7 +49,38 @@ const ACTIONS = [
 const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
+const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
+const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 const log = createSubsystemLogger("agents/sessions");
+
+type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
+
+function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
+  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  if (!compactSize.complete || compactSize.bytes > SESSIONS_TOOL_RESULT_MAX_BYTES) {
+    return false;
+  }
+  return (
+    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
+  );
+}
+
+function withBoundedSessionsResolved(
+  acknowledgement: Record<string, unknown>,
+  resolved: SessionsResolved | undefined,
+): Record<string, unknown> {
+  if (!resolved) {
+    return acknowledgement;
+  }
+  const completeResult = { ...acknowledgement, resolved };
+  if (sessionsToolResultFitsBudget(completeResult)) {
+    return completeResult;
+  }
+  return {
+    ...acknowledgement,
+    resolvedOmitted: { reason: RESOLVED_OMITTED_REASON },
+  };
+}
 
 const SessionsToolSchema = Type.Object(
   {
@@ -327,12 +360,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           error: "Model patch needs in-process gateway.",
         });
       }
-      const callSessionPatch = async (sessionPatch: typeof patch) =>
+      const callSessionPatch = async (sessionPatch: typeof patch): Promise<SessionsPatchResult> =>
         sessionPatch.model === undefined
-          ? await gatewayCall("sessions.patch", sessionPatch)
+          ? await gatewayCall<SessionsPatchResult>("sessions.patch", sessionPatch)
           : await withAgentSessionModelPatchOrigin(
-              async () => await gatewayCall("sessions.patch", sessionPatch),
+              async () => await gatewayCall<SessionsPatchResult>("sessions.patch", sessionPatch),
             );
+      const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
 
       if (patch.archived === true && key === requesterKey && key !== "global") {
         const agentId = resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(cfg));
@@ -352,8 +386,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 : {}),
             };
             const { archived: _archived, ...immediatePatch } = patch;
+            let immediateResult: SessionsPatchResult | undefined;
             if (Object.keys(immediatePatch).length > 1) {
-              await callSessionPatch({ ...immediatePatch, ...expectedSessionIdentity });
+              immediateResult = await callSessionPatch({
+                ...immediatePatch,
+                ...expectedSessionIdentity,
+              });
             }
 
             // Archive only after the final tool result, transcript, and every
@@ -442,17 +480,31 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
               });
 
-            return jsonResult({
-              status: "scheduled",
-              sessionKey: key,
-              message: "Session will be archived after the current agent run finishes.",
-            });
+            return jsonResult(
+              withBoundedSessionsResolved(
+                {
+                  status: "scheduled",
+                  sessionKey: key,
+                  message: "Session will be archived after the current agent run finishes.",
+                },
+                includeResolved ? immediateResult?.resolved : undefined,
+              ),
+            );
           }
         }
       }
 
       const result = await callSessionPatch(patch);
-      return jsonResult(result);
+      return jsonResult(
+        withBoundedSessionsResolved(
+          {
+            status: "updated",
+            sessionKey: key,
+            updated: Object.keys(patch).filter((field) => field !== "key"),
+          },
+          includeResolved ? result.resolved : undefined,
+        ),
+      );
     },
   };
 }

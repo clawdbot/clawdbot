@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -124,7 +124,7 @@ async function installedFixture(
       ? {
           packageBootstrap: {
             sourcePath: "BOOTSTRAP.md",
-            realPath: packageBootstrapPath,
+            realPath: await realpath(packageBootstrapPath),
             byteLength: packageBootstrapContent.byteLength,
             digest: `sha256:${createHash("sha256").update(packageBootstrapContent).digest("hex")}`,
           },

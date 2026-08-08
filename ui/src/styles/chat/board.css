@@ -178,7 +178,7 @@ openclaw-workboard-card-chip {
   z-index: 2;
 }
 
-@media (max-width: 560px) {
+@container (max-width: 560px) {
   .chat-pane__face-switch .settings-segmented__btn {
     padding-inline: 7px;
   }

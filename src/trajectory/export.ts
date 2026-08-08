@@ -844,10 +844,7 @@ function maybeRedactPathString(value: string, redaction: TrajectoryExportRedacti
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
-  const latestContext = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((event) => event.type === "context.compiled");
+  const latestContext = runtimeEvents.findLast((event) => event.type === "context.compiled");
   const runtimeData = latestContext?.data;
   const toolsValue = Array.isArray(runtimeData?.tools)
     ? (runtimeData.tools as TrajectoryToolDefinition[])
@@ -863,10 +860,7 @@ function resolveLatestRuntimeEventData(
   runtimeEvents: TrajectoryEvent[],
   type: string,
 ): JsonRecord | undefined {
-  const event = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((candidate) => candidate.type === type);
+  const event = runtimeEvents.findLast((candidate) => candidate.type === type);
   return event?.data;
 }
 
@@ -966,10 +960,9 @@ function buildMetadataCapture(params: {
     return undefined;
   }
   const modelFallback = (() => {
-    const latest = params.runtimeEvents
-      .slice()
-      .toReversed()
-      .find((event) => event.provider || event.modelId || event.modelApi);
+    const latest = params.runtimeEvents.findLast(
+      (event) => event.provider || event.modelId || event.modelApi,
+    );
     if (!latest?.provider && !latest?.modelId && !latest?.modelApi) {
       return undefined;
     }

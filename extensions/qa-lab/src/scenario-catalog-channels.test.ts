@@ -175,7 +175,11 @@ describe("qa scenario catalog channel contracts", () => {
         marker: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
         expectedSendCount: 1,
       },
-      { name: "silent", marker: "NO_REPLY", expectedSendCount: 0 },
+      {
+        name: "silent",
+        marker: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+        expectedSendCount: 1,
+      },
       {
         name: "fallback",
         marker: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",

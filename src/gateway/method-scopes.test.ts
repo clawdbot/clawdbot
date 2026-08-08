@@ -61,6 +61,7 @@ describe("method scope resolution", () => {
     ["sessions.reclaim", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["sessions.archiveMany", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
     ["tasks.retry", ["operator.write"]],
     ["tasks.dismiss", ["operator.write"]],

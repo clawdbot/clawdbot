@@ -625,7 +625,7 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "update" && secondary === "status") {
     return false;
   }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+  if (primary === "config") {
     return false;
   }
   return true;

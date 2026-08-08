@@ -139,23 +139,47 @@ describe("nodes camera helpers", () => {
     );
   });
 
-  it("collapses Linux facing requests into one unknown-position capture", () => {
-    expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
-      { artifactFacing: "unknown" },
-    ]);
-    expect(resolveCameraSnapTargets({ facing: "back", platform: "linux" })).toEqual([
-      { artifactFacing: "unknown" },
-    ]);
+  it.each([undefined, "front", "back", "both"] as const)(
+    "collapses Linux facing=%s into one unknown-position capture",
+    (facing) => {
+      expect(resolveCameraSnapTargets({ facing, platform: "linux" })).toEqual([
+        { artifactFacing: "unknown" },
+      ]);
+    },
+  );
+
+  it("keeps Linux device selection facing-less", () => {
     expect(
       resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
     ).toEqual([{ artifactFacing: "unknown" }]);
+    expect(
+      resolveCameraSnapTargets({ facing: "both", platform: "linux", deviceId: "/dev/video2" }),
+    ).toEqual([{ artifactFacing: "unknown" }]);
   });
 
-  it("keeps front and back requests for positioned camera platforms", () => {
+  it("uses one unknown target when facing is omitted on a positioned camera platform", () => {
+    expect(resolveCameraSnapTargets({ platform: "macos" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(resolveCameraSnapTargets({ platform: "macos", deviceId: "camera-device" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+  });
+
+  it("keeps explicit facing requests for positioned camera platforms", () => {
+    expect(resolveCameraSnapTargets({ facing: "front", platform: "macos" })).toEqual([
+      { requestFacing: "front", artifactFacing: "front" },
+    ]);
+    expect(resolveCameraSnapTargets({ facing: "back", platform: "macos" })).toEqual([
+      { requestFacing: "back", artifactFacing: "back" },
+    ]);
     expect(resolveCameraSnapTargets({ facing: "both", platform: "macos" })).toEqual([
       { requestFacing: "front", artifactFacing: "front" },
       { requestFacing: "back", artifactFacing: "back" },
     ]);
+    expect(() =>
+      resolveCameraSnapTargets({ facing: "both", platform: "macos", deviceId: "camera-device" }),
+    ).toThrow("facing=both is not allowed when deviceId is set");
   });
 
   it("labels Linux clips as unknown without sending unsupported facing", () => {

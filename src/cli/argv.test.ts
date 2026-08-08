@@ -766,6 +766,8 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "--log-level=debug", "models", "list"], expected: true },
     { argv: ["node", "openclaw", "config", "get", "update"], expected: false },
     { argv: ["node", "openclaw", "config", "unset", "update"], expected: false },
+    { argv: ["node", "openclaw", "config", "set", "update.channel", "beta"], expected: false },
+    { argv: ["node", "openclaw", "config", "patch", "update", "{}"], expected: false },
     { argv: ["node", "openclaw", "models", "list"], expected: true },
     { argv: ["node", "openclaw", "models", "status"], expected: true },
     { argv: ["node", "openclaw", "update", "status", "--json"], expected: false },

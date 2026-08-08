@@ -5,14 +5,13 @@ import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
-import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardObserverContext,
   BoardViewSnapshot,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
-import type { VisibleBoardDock } from "./chat-pane-shared.ts";
 
 export type BoardChatDockSize = {
   height: number;
@@ -61,7 +60,7 @@ export async function ensureBoardViewElement(): Promise<boolean> {
 
 type BoardViewMode = "chat" | "split" | "dashboard";
 
-function dockLabel(dock: VisibleBoardDock): string {
+function dockLabel(dock: BoardVisibleChatDock): string {
   if (dock === "left") {
     return t("chat.board.dockLeft");
   }
@@ -77,7 +76,7 @@ export function renderBoardViewSwitch(props: {
   dock: BoardTab["chatDock"];
   canChangeDock: boolean;
   onSelectMode: (mode: BoardViewMode) => void;
-  onDockSideChange: (dock: VisibleBoardDock) => void;
+  onDockSideChange: (dock: BoardVisibleChatDock) => void;
 }) {
   if (!props.hasBoard) {
     return nothing;

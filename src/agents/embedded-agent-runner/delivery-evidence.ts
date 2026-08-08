@@ -519,13 +519,22 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
   );
 }
 
+/** Returns whether committed non-messaging resource effects make replay unsafe. */
+function hasCommittedNonMessagingOutboundDeliveryEvidence(
+  result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
+): boolean {
+  return (
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
 /** Returns whether committed outbound evidence makes replay unsafe. */
 export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    hasCommittedNonMessagingOutboundDeliveryEvidence(result)
   );
 }
 

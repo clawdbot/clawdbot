@@ -41,7 +41,8 @@ function normalizeRequiredPackages(value) {
 function readTarballPackageJson(tarball) {
   try {
     return JSON.parse(
-      execFileSync("tar", ["-xOf", tarball, "package/package.json"], {
+      execFileSync("tar", ["-xOf", path.basename(tarball), "package/package.json"], {
+        cwd: path.dirname(tarball),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
