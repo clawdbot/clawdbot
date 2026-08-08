@@ -15,6 +15,7 @@ import { createPageShareRelay } from "./modules/page-share-relay.js";
 import {
   OPENCLAW_TAB_GROUP_TITLE,
   buildRelayWsProtocols,
+  createPairingConfigStore,
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
@@ -50,6 +51,7 @@ let copilot = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let relayOpeningDeadlineAt = 0;
+let reconciledPairingInvalidationRevision = 0;
 /** Tab ids with an active chrome.debugger attachment. */
 const attachedTabs = new Set();
 /** Tabs denied to every relay attach while copilot run cleanup is pending. */
@@ -64,16 +66,29 @@ const copilotRevocations = new Map();
 let tabsSyncTimer = null;
 let pageShareBadgeTimer = null;
 const pageShareRelay = createPageShareRelay();
+const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
 
 function closeRelaySocket() {
   const socket = relayWs;
   if (!socket) {
     return;
   }
+  relayWs = null;
   // Chrome completes close asynchronously; fail pending requests before the
   // handshake so pairing and unpairing never leave a popup stuck on Sending.
   pageShareRelay.rejectSocket(socket);
   socket.close();
+}
+
+async function reconcilePairingInvalidation() {
+  if (reconciledPairingInvalidationRevision === pairingConfigStore.invalidationRevision) {
+    return;
+  }
+  reconciledPairingInvalidationRevision = pairingConfigStore.invalidationRevision;
+  clearRelayOpeningDeadline();
+  closeRelaySocket();
+  setBadge("off");
+  await copilot?.refreshConfig();
 }
 
 function setBadge(kind) {
@@ -103,21 +118,7 @@ function flashPageShareBadge(ok) {
 }
 
 async function getConfig() {
-  const stored = await chrome.storage.local.get(["relayUrl", "token", "groupColor"]);
-  return {
-    relayUrl: typeof stored.relayUrl === "string" ? stored.relayUrl : "",
-    token: typeof stored.token === "string" ? stored.token : "",
-    groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
-  };
-}
-
-async function getCopilotConfig() {
-  const config = await getConfig();
-  const stored = await chrome.storage.local.get(["gatewayUrl"]);
-  return {
-    ...config,
-    gatewayUrl: typeof stored.gatewayUrl === "string" ? stored.gatewayUrl : "",
-  };
+  return await pairingConfigStore.read();
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +427,7 @@ async function sendHello() {
 
 async function connectRelay() {
   const { relayUrl, token } = await getConfig();
+  await reconcilePairingInvalidation();
   if (!relayUrl || !token) {
     clearRelayOpeningDeadline();
     setBadge("off");
@@ -493,6 +495,7 @@ async function sendPageShareRequest(payload) {
 
 async function ensureRelayReady() {
   const config = await getConfig();
+  await reconcilePairingInvalidation();
   if (!config.relayUrl || !config.token) {
     throw new Error("Pair the extension first.");
   }
@@ -551,7 +554,7 @@ async function installPageShareContextMenu() {
 }
 
 copilot = createCopilotController({
-  getConfig: getCopilotConfig,
+  getConfig,
   isTabShared,
   addTabToOpenClawGroup,
   attachDebugger,
@@ -628,6 +631,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     switch (msg?.type) {
       case "getStatus": {
         const { relayUrl } = await getConfig();
+        await reconcilePairingInvalidation();
         const shared = await listSharedTabs();
         sendResponse({
           paired: Boolean(relayUrl),
@@ -643,26 +647,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
           sendResponse({ ok: false, error: "Invalid pairing string." });
           return;
         }
-        await chrome.storage.local.set({
-          relayUrl: parsed.relayUrl,
-          token: parsed.token,
-          groupColor: nearestGroupColor(msg.groupColor),
-        });
+        await pairingConfigStore.save(parsed, nearestGroupColor(msg.groupColor));
         reconnectAttempt = 0;
         clearRelayOpeningDeadline();
         closeRelaySocket();
-        relayWs = null;
-        await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
         await connectRelay();
         await copilot.refreshConfig();
         sendResponse({ ok: true });
         return;
       }
       case "unpair": {
-        await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
+        await pairingConfigStore.clear();
         clearRelayOpeningDeadline();
         closeRelaySocket();
-        relayWs = null;
         setBadge("off");
         await copilot.refreshConfig();
         sendResponse({ ok: true });

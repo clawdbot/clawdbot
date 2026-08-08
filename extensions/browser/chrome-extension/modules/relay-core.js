@@ -7,6 +7,7 @@ export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
 const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 const RELAY_SECRET_PATTERN = /^[0-9a-f]{64}$/;
+const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token"];
 
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
@@ -45,6 +46,9 @@ function isAllowedWebSocketUrl(url) {
 }
 
 function parseGatewayHint(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
   const value = raw.trim();
   if (!value) {
     return null;
@@ -61,6 +65,57 @@ function parseGatewayHint(raw) {
   return value;
 }
 
+function directGatewayUrlFromRelay(relay) {
+  const suffix = "/browser/extension";
+  if (!relay.pathname.endsWith(suffix)) {
+    return null;
+  }
+  const gateway = new URL(relay.toString());
+  gateway.pathname = gateway.pathname.slice(0, -suffix.length) || "/";
+  return gateway.toString();
+}
+
+function validatePairingFields(relayUrl, token, gatewayUrl) {
+  if (typeof relayUrl !== "string" || typeof token !== "string") {
+    return null;
+  }
+  if (!RELAY_SECRET_PATTERN.test(token)) {
+    return null;
+  }
+  let relay;
+  try {
+    relay = new URL(relayUrl);
+  } catch {
+    return null;
+  }
+  if (
+    !isAllowedWebSocketUrl(relay) ||
+    !relay.pathname.endsWith("/extension") ||
+    relay.search ||
+    relay.hash
+  ) {
+    return null;
+  }
+  const hasGateway = gatewayUrl !== undefined && gatewayUrl !== "";
+  const parsedGateway = hasGateway ? parseGatewayHint(gatewayUrl) : undefined;
+  if (hasGateway && !parsedGateway) {
+    return null;
+  }
+  const directGateway = directGatewayUrlFromRelay(relay);
+  if (directGateway && parsedGateway) {
+    const normalizedGateway = new URL(parsedGateway);
+    normalizedGateway.pathname = normalizedGateway.pathname.replace(/\/+$/, "") || "/";
+    if (normalizedGateway.toString() !== directGateway) {
+      return null;
+    }
+  }
+  return {
+    relayUrl: relay.toString(),
+    token,
+    ...(parsedGateway ? { gatewayUrl: parsedGateway } : {}),
+  };
+}
+
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
  * Shape: ws://127.0.0.1:<port>/extension?gateway=<url>#<token>
@@ -75,34 +130,86 @@ export function parsePairingString(raw) {
   }
   const relayUrl = trimmed.slice(0, hashIndex);
   const token = trimmed.slice(hashIndex + 1);
-  if (!RELAY_SECRET_PATTERN.test(token)) {
-    return null;
-  }
   let parsed;
   try {
     parsed = new URL(relayUrl);
   } catch {
     return null;
   }
-  if (!isAllowedWebSocketUrl(parsed)) {
-    return null;
-  }
-  if (!parsed.pathname.endsWith("/extension")) {
-    return null;
-  }
   const query = [...parsed.searchParams];
   if (query.length > 1 || (query.length === 1 && query[0]?.[0] !== "gateway")) {
     return null;
   }
-  const gatewayUrl = query.length === 1 ? parseGatewayHint(query[0]?.[1] ?? "") : undefined;
-  if (query.length === 1 && !gatewayUrl) {
+  const gatewayUrl = query.length === 1 ? query[0]?.[1] : undefined;
+  if (query.length === 1 && !gatewayUrl?.trim()) {
     return null;
   }
   parsed.search = "";
+  return validatePairingFields(parsed.toString(), token, gatewayUrl);
+}
+
+/** Validate the canonical tuple persisted in chrome.storage.local. */
+function parseStoredPairing(stored) {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+    return null;
+  }
+  const parsed = validatePairingFields(stored.relayUrl, stored.token, stored.gatewayUrl);
+  if (
+    !parsed ||
+    parsed.relayUrl !== stored.relayUrl ||
+    parsed.token !== stored.token ||
+    (parsed.gatewayUrl ?? "") !== (stored.gatewayUrl ?? "")
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+/** Own serialized validation and mutation at the extension pairing storage boundary. */
+export function createPairingConfigStore(storage) {
+  let chain = Promise.resolve();
+  let invalidObserved = false;
+  let invalidationRevision = 0;
+  const run = (task) => {
+    const pending = chain.then(task, task);
+    chain = pending.catch(() => undefined);
+    return pending;
+  };
   return {
-    relayUrl: parsed.toString(),
-    token,
-    ...(gatewayUrl ? { gatewayUrl } : {}),
+    get invalidationRevision() {
+      return invalidationRevision;
+    },
+    read: () =>
+      run(async () => {
+        const stored = await storage.get([...PAIRING_STORAGE_KEYS, "groupColor"]);
+        const hasPairing = PAIRING_STORAGE_KEYS.some((key) => Object.hasOwn(stored, key));
+        const pairing = hasPairing ? parseStoredPairing(stored) : null;
+        if (hasPairing && !pairing) {
+          if (!invalidObserved) {
+            invalidationRevision += 1;
+          }
+          invalidObserved = true;
+          await storage.remove(PAIRING_STORAGE_KEYS).catch(() => undefined);
+        } else {
+          invalidObserved = false;
+        }
+        return {
+          relayUrl: pairing?.relayUrl ?? "",
+          token: pairing?.token ?? "",
+          gatewayUrl: pairing?.gatewayUrl ?? "",
+          groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
+        };
+      }),
+    save: (pairing, groupColor) =>
+      run(() =>
+        storage.set({
+          relayUrl: pairing.relayUrl,
+          token: pairing.token,
+          gatewayUrl: pairing.gatewayUrl ?? "",
+          groupColor,
+        }),
+      ),
+    clear: () => run(() => storage.remove(PAIRING_STORAGE_KEYS)),
   };
 }
 

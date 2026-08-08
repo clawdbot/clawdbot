@@ -5,6 +5,7 @@ const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
 const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
 const RELAY_SECRET = "a".repeat(64);
 const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
+const PAIRING_CONFIG_KEYS = ["relayUrl", "gatewayUrl", "token", "groupColor"];
 
 type SocketEvent = { data?: unknown };
 type SocketListener = (event: SocketEvent) => void;
@@ -23,15 +24,27 @@ type PageCaptureResult = {
 async function loadBackground({
   deferSocketClose = false,
   onConsentChanged,
+  rejectStorageRemove = false,
+  storedConfig,
 }: {
   deferSocketClose?: boolean;
   onConsentChanged?: () => Promise<void>;
+  rejectStorageRemove?: boolean;
+  storedConfig?: Record<string, unknown>;
 } = {}) {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
   let messageListener: RuntimeMessageListener | undefined;
   let tabsUpdatedListener: ((tabId: number, changeInfo: { groupId?: number }) => void) | undefined;
+  let nextStorageRemove: Promise<void> | null = null;
   const sharedTabIds = new Set<number>([1]);
+  const storageValues: Record<string, unknown> = {
+    ...(storedConfig ?? {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: RELAY_SECRET,
+      groupColor: "orange",
+    }),
+  };
 
   class FakeWebSocket {
     static readonly CONNECTING = 0;
@@ -53,7 +66,7 @@ async function loadBackground({
 
     constructor(
       readonly url: string,
-      readonly protocols: string[],
+      readonly protocols: string[] = [],
     ) {
       sockets.push(this);
     }
@@ -85,6 +98,27 @@ async function loadBackground({
   const clearAlarm = vi.fn(async () => true);
   const setBadgeText = vi.fn(async () => undefined);
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
+  const storageGet = vi.fn(async (keys: string[]) =>
+    Object.fromEntries(
+      keys
+        .filter((key) => Object.hasOwn(storageValues, key))
+        .map((key) => [key, storageValues[key]]),
+    ),
+  );
+  const storageSet = vi.fn(async (values: Record<string, unknown>) => {
+    Object.assign(storageValues, values);
+  });
+  const storageRemove = vi.fn(async (keys: string[]) => {
+    const pending = nextStorageRemove;
+    nextStorageRemove = null;
+    await pending;
+    if (rejectStorageRemove) {
+      throw new Error("Could not clear invalid browser pairing.");
+    }
+    for (const key of keys) {
+      delete storageValues[key];
+    }
+  });
   const chromeMock = {
     action: { setBadgeText, setBadgeBackgroundColor },
     commands: { onCommand: { addListener } },
@@ -123,13 +157,9 @@ async function loadBackground({
     },
     storage: {
       local: {
-        get: vi.fn(async () => ({
-          relayUrl: "ws://127.0.0.1:18797/extension",
-          token: RELAY_SECRET,
-          groupColor: "orange",
-        })),
-        set: vi.fn(async () => undefined),
-        remove: vi.fn(async () => undefined),
+        get: storageGet,
+        set: storageSet,
+        remove: storageRemove,
       },
       session: {
         get: vi.fn(async () => ({})),
@@ -199,8 +229,14 @@ async function loadBackground({
   // The shipped MV3 worker is plain JS, so keep this a runtime-resolved import.
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
-  await Promise.resolve();
-  await Promise.resolve();
+  await vi.waitFor(() => {
+    const pairingReads = storageGet.mock.calls.filter(
+      ([keys]) =>
+        keys.length === PAIRING_CONFIG_KEYS.length &&
+        PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
+    );
+    expect(pairingReads.length).toBeGreaterThanOrEqual(2);
+  });
 
   if (!alarmListener) {
     throw new Error("expected background worker to register an alarm listener");
@@ -219,11 +255,25 @@ async function loadBackground({
     debuggerAttach: chromeMock.debugger.attach,
     debuggerDetach: chromeMock.debugger.detach,
     debuggerSendCommand: chromeMock.debugger.sendCommand,
+    deferNextStorageRemove: () => {
+      let release = () => {};
+      nextStorageRemove = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
+    get gatewaySockets() {
+      return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay"));
+    },
     messageListener,
+    get relaySockets() {
+      return sockets.filter((socket) => socket.protocols.includes("openclaw-extension-relay"));
+    },
     setBadgeText,
     sockets,
-    storageRemove: chromeMock.storage.local.remove,
-    storageSet: chromeMock.storage.local.set,
+    storageRemove,
+    storageSet,
+    storageValues,
     shareTab: (tabId: number) => sharedTabIds.add(tabId),
     unshareTab: (tabId: number) => sharedTabIds.delete(tabId),
     tabGroupsQuery: chromeMock.tabGroups.query,
@@ -238,6 +288,208 @@ async function loadBackground({
     windowsUpdate: chromeMock.windows.update,
   };
 }
+
+describe("persisted relay pairing validation", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the canonical persisted pairing on startup", async () => {
+    const harness = await loadBackground({
+      storedConfig: {
+        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com/base",
+        groupColor: "blue",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.relaySockets).toHaveLength(1);
+      expect(harness.gatewaySockets).toHaveLength(1);
+    });
+    expect(harness.relaySockets[0]).toMatchObject({
+      url: "wss://gateway.example.com/base/browser/extension",
+      protocols: ["openclaw-extension-relay", `openclaw-extension-token.${RELAY_SECRET}`],
+    });
+    expect(harness.storageRemove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an invalid token", { relayUrl: "ws://127.0.0.1:18797/extension", token: "short" }],
+    [
+      "an unsafe remote relay URL",
+      { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
+    ],
+    [
+      "URL credentials",
+      { relayUrl: "wss://user:pass@gateway.example.com/extension", token: RELAY_SECRET },
+    ],
+    [
+      "an unsafe remote Gateway URL",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "ws://gateway.example.com",
+      },
+    ],
+    [
+      "Gateway URL credentials",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://user:pass@gateway.example.com",
+      },
+    ],
+    [
+      "a Gateway URL query",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com?token=nope",
+      },
+    ],
+    [
+      "a Gateway URL fragment",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com#fragment",
+      },
+    ],
+    ["a malformed URL", { relayUrl: "not a URL", token: RELAY_SECRET }],
+    [
+      "an unknown query",
+      { relayUrl: "ws://127.0.0.1:18797/extension?unknown=1", token: RELAY_SECRET },
+    ],
+    ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension", groupColor: "orange" }],
+    [
+      "mismatched direct state",
+      {
+        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://other.example.com/base",
+      },
+    ],
+  ])("clears %s before startup can open a socket", async (_label, storedConfig) => {
+    const harness = await loadBackground({ storedConfig });
+
+    expect(harness.relaySockets).toHaveLength(0);
+    expect(harness.gatewaySockets).toHaveLength(0);
+    expect(harness.storageRemove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token"]);
+    const response = vi.fn();
+    harness.messageListener({ type: "getStatus" }, {}, response);
+    await vi.waitFor(() => {
+      expect(response).toHaveBeenCalledWith({
+        paired: false,
+        state: "off",
+        sharedTabCount: 0,
+        relayUrl: "",
+      });
+    });
+  });
+
+  it("stays unpaired when clearing invalid persisted state fails", async () => {
+    const harness = await loadBackground({
+      rejectStorageRemove: true,
+      storedConfig: { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
+    });
+
+    const response = vi.fn();
+    harness.messageListener({ type: "getStatus" }, {}, response);
+
+    await vi.waitFor(() => {
+      expect(response).toHaveBeenCalledWith({
+        paired: false,
+        state: "off",
+        sharedTabCount: 0,
+        relayUrl: "",
+      });
+    });
+    expect(harness.relaySockets).toHaveLength(0);
+    expect(harness.gatewaySockets).toHaveLength(0);
+    expect(harness.storageRemove).toHaveBeenCalled();
+    expect(harness.storageValues).toMatchObject({ token: RELAY_SECRET });
+  });
+
+  it("revalidates persisted state before a reconnect", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    if (!socket) {
+      throw new Error("expected initial relay socket");
+    }
+    harness.storageValues.token = "invalid-after-startup";
+
+    socket.close();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(harness.sockets).toHaveLength(1);
+    expect(harness.storageRemove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token"]);
+    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "" });
+  });
+
+  it("disconnects both live consumers when the watchdog observes invalid state", async () => {
+    const harness = await loadBackground({
+      storedConfig: {
+        relayUrl: "wss://gateway.example.com/browser/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com",
+      },
+    });
+    await vi.waitFor(() => {
+      expect(harness.relaySockets).toHaveLength(1);
+      expect(harness.gatewaySockets).toHaveLength(1);
+    });
+    harness.storageValues.token = "invalid-after-startup";
+
+    harness.alarmListener({ name: RELAY_WATCHDOG_ALARM });
+
+    await vi.waitFor(() => {
+      expect(harness.relaySockets[0]?.close).toHaveBeenCalled();
+      expect(harness.gatewaySockets[0]?.close).toHaveBeenCalled();
+      expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "" });
+    });
+    expect(harness.sockets).toHaveLength(2);
+  });
+
+  it("does not let stale invalid cleanup erase a concurrently saved pairing", async () => {
+    const harness = await loadBackground();
+    harness.storageValues.token = "invalid-after-startup";
+    const releaseRemove = harness.deferNextStorageRemove();
+    const statusResponse = vi.fn();
+    harness.messageListener({ type: "getStatus" }, {}, statusResponse);
+    await vi.waitFor(() => expect(harness.storageRemove).toHaveBeenCalled());
+    const pairResponse = vi.fn();
+    harness.messageListener(
+      {
+        type: "pair",
+        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
+      },
+      {},
+      pairResponse,
+    );
+
+    releaseRemove();
+
+    await vi.waitFor(() => expect(pairResponse).toHaveBeenCalledWith({ ok: true }));
+    expect(harness.storageValues).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18798/extension",
+      token: REPLACEMENT_RELAY_SECRET,
+      gatewayUrl: "",
+    });
+    const replacement = harness.relaySockets.find(
+      (socket) => socket.url === "ws://127.0.0.1:18798/extension",
+    );
+    expect(replacement).toBeDefined();
+    expect(replacement?.close).not.toHaveBeenCalled();
+  });
+});
 
 async function startPendingPageShare(
   harness: Awaited<ReturnType<typeof loadBackground>>,

@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRelayWsProtocols,
+  createPairingConfigStore,
   nearestGroupColor,
   parsePairingString,
   reconnectDelayMs,
@@ -79,6 +80,119 @@ describe("parsePairingString", () => {
     ],
   ])("rejects %s", (_label, pairing) => {
     expect(parsePairingString(pairing)).toBeNull();
+  });
+});
+
+async function readStoredPairing(stored: Record<string, unknown>) {
+  const config = await createPairingConfigStore({
+    get: async () => stored,
+    set: async () => undefined,
+    remove: async () => undefined,
+  }).read();
+  if (!config.relayUrl) {
+    return null;
+  }
+  return {
+    relayUrl: config.relayUrl,
+    token: config.token,
+    ...(config.gatewayUrl ? { gatewayUrl: config.gatewayUrl } : {}),
+  };
+}
+
+describe("persisted pairing storage", () => {
+  it.each([
+    {
+      label: "a loopback relay without a Gateway hint",
+      stored: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+      },
+    },
+    {
+      label: "a loopback relay with an independent Gateway hint",
+      stored: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com/base",
+      },
+    },
+    {
+      label: "a direct relay with its matching trailing-slash Gateway hint",
+      stored: {
+        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com/base/",
+      },
+    },
+  ])("accepts $label", async ({ stored }) => {
+    expect(await readStoredPairing(stored)).toEqual(stored);
+  });
+
+  it.each([
+    ["an invalid token", { relayUrl: "ws://127.0.0.1:18797/extension", token: "short" }],
+    [
+      "an unsafe remote relay",
+      { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
+    ],
+    [
+      "relay URL credentials",
+      { relayUrl: "wss://user:pass@gateway.example.com/extension", token: RELAY_SECRET },
+    ],
+    [
+      "an unsafe remote Gateway hint",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "ws://gateway.example.com",
+      },
+    ],
+    [
+      "Gateway URL credentials",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://user:pass@gateway.example.com",
+      },
+    ],
+    [
+      "a Gateway URL query",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com?token=nope",
+      },
+    ],
+    [
+      "a Gateway URL fragment",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://gateway.example.com#fragment",
+      },
+    ],
+    ["a malformed relay URL", { relayUrl: "not a URL", token: RELAY_SECRET }],
+    [
+      "an unknown relay query",
+      { relayUrl: "ws://127.0.0.1:18797/extension?token=nope", token: RELAY_SECRET },
+    ],
+    [
+      "duplicate relay queries",
+      {
+        relayUrl: "ws://127.0.0.1:18797/extension?gateway=one&gateway=two",
+        token: RELAY_SECRET,
+      },
+    ],
+    ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension" }],
+    [
+      "a mismatched direct Gateway hint",
+      {
+        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "wss://other.example.com/base",
+      },
+    ],
+  ])("rejects %s", async (_label, stored) => {
+    expect(await readStoredPairing(stored)).toBeNull();
   });
 });
 

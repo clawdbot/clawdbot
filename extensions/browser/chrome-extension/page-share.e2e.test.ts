@@ -20,6 +20,12 @@ declare const chrome: {
       error?: string;
     }>;
   };
+  storage: {
+    local: {
+      get(keys: string[]): Promise<Record<string, unknown>>;
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+  };
   tabGroups: {
     get(groupId: number): Promise<{ title?: string }>;
   };
@@ -119,6 +125,63 @@ async function evaluateToolbarPopup<T>(
 }
 
 describe.runIf(runE2E)("Chrome extension relay authorization", () => {
+  it("clears an invalid persisted pairing before reconnecting after restart", async () => {
+    const relay = await createRelayHarness();
+    cleanups.push(relay.close);
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-extension-persisted-auth-profile-");
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      channel: "chromium",
+      headless: true,
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    };
+    const initialContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await initialContext.close());
+    const initialExtensionId = await waitForContextExtensionId(initialContext, unpackedExtension);
+    const initialLauncher = initialContext.pages()[0] ?? (await initialContext.newPage());
+    await initialLauncher.goto(`chrome-extension://${initialExtensionId}/e2e-launcher.html`);
+    await initialLauncher.evaluate(
+      async ({ relayPort }) =>
+        await chrome.storage.local.set({
+          relayUrl: `ws://127.0.0.1:${relayPort}/extension`,
+          token: "legacy-unsafe-token",
+          gatewayUrl: "",
+          groupColor: "orange",
+        }),
+      { relayPort: relay.port },
+    );
+    await initialContext.close();
+
+    const reloadedContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await reloadedContext.close());
+    const extensionId = await waitForContextExtensionId(reloadedContext, unpackedExtension);
+    expect(extensionId).toBe(initialExtensionId);
+    const launcher = reloadedContext.pages()[0] ?? (await reloadedContext.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+
+    await expect
+      .poll(
+        async () =>
+          await launcher.evaluate(
+            async () => await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token"]),
+          ),
+        { timeout: 10_000 },
+      )
+      .toEqual({});
+    expect(
+      await launcher.evaluate(async () => await chrome.runtime.sendMessage({ type: "getStatus" })),
+    ).toMatchObject({ paired: false, relayUrl: "", state: "off" });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    expect(relay.connectionCount).toBe(0);
+  }, 60_000);
+
   it("enforces pairing and current tab-group consent at the extension edge", async () => {
     const relay = await createRelayHarness();
     cleanups.push(relay.close);
