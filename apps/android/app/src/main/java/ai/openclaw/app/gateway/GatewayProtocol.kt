@@ -510,7 +510,7 @@ enum class GatewayMethod(
   AuditRunInspect("audit.run.inspect"),
   SessionsPatchMany("sessions.patchMany"),
   UpdateHold("update.hold"),
-  SessionsCatalogStartTerminal("sessions.catalog.startTerminal"),
+  WorkerDesktopObserve("worker.desktop.observe"),
 }
 
 enum class GatewayEvent(
