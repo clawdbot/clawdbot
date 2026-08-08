@@ -872,11 +872,19 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               <button class="chat-pane__workspace-chip" type="button">
                 ${iconSvg()}<span>openclaw-workspace</span>
               </button>
-              <div class="chat-pane__face-switch">
+              <div class="chat-pane__face-switch chat-pane__face-switch--split">
                 <div class="settings-segmented">
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Chat</button>
-                  <button class="settings-segmented__btn" type="button">Board</button>
+                  <button class="settings-segmented__btn" type="button">Chat</button>
+                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
+                  <button class="settings-segmented__btn" type="button">Dashboard</button>
                 </div>
+                <wa-dropdown class="chat-pane__dock-caret">
+                  <button
+                    slot="trigger"
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__dock-caret-trigger"
+                    type="button"
+                  >B</button>
+                </wa-dropdown>
               </div>
               <wa-dropdown class="chat-pane__sharing-menu">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
@@ -896,7 +904,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle" type="button">W</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn" data-catalog-terminal type="button">E</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle" type="button">C</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" data-board-dock-menu type="button">B</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right" type="button">H</button>
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
@@ -913,7 +920,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ".chat-tasks-toggle",
         ".chat-workspace-toggle",
         ".chat-session-discussion-toggle",
-        "[data-board-dock-menu]",
+        ".chat-pane__dock-caret",
         ".chat-pane__sharing-menu",
         ".chat-pane__branches-menu",
         ".chat-pane__gateway-menu",
@@ -975,7 +982,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         headerElement.style.removeProperty("container-type");
         return width;
       });
-      await setHeaderContentWidth(721);
+      await setHeaderContentWidth(801);
       await waitForLayoutSettled(page);
       const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
         clientWidth: element.clientWidth,
