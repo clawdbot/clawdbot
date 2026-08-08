@@ -4796,8 +4796,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not persist fallback state for an equivalent CLI runtime alias", async () => {
+  it("does not persist cumulative CLI usage as a fresh context snapshot", async () => {
     const sessionEntry = makeSessionEntry({
+      totalTokens: 42_000,
+      totalTokensFresh: true,
       fallbackNotice: {
         kind: "active",
         selectedModel: "anthropic/claude-opus-4-7",
@@ -4816,7 +4818,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         agentMeta: {
           provider: "claude-cli",
           model: "claude-opus-4-7",
-          usage: { input: 36_000, output: 19_000 },
+          usage: { input: 205_000, output: 19_000 },
         },
       },
     });
@@ -4839,8 +4841,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
-    expect(stored.totalTokens).toBe(36_000);
-    expect(stored.totalTokensFresh).toBe(true);
+    expect(stored.totalTokens).toBeUndefined();
+    expect(stored.totalTokensFresh).toBe(false);
   });
 
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {

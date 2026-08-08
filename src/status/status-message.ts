@@ -670,9 +670,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
-  // Undefined freshness is legacy, not stale: keep persisted totals for /status,
-  // but let a fresh transcript prompt snapshot replace them when available.
-  const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  const allowTranscriptContextUsage =
+    entry?.totalTokensFresh !== false && freshTotalTokens === undefined;
   let totalTokens = freshTotalTokens;
 
   // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
@@ -693,10 +692,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         allowTranscriptContextUsage &&
         candidate !== undefined &&
         candidate > 0 &&
-        (entry?.totalTokensFresh !== true ||
-          !totalTokens ||
-          totalTokens === 0 ||
-          candidate > totalTokens)
+        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }

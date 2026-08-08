@@ -101,6 +101,7 @@ import {
 } from "../subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import type { ContextUsage } from "../usage.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -158,6 +159,35 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
+const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+  contextUsage: { state: "unavailable" },
+} as const;
+
+function resolveCliTranscriptUsage(usage: TranscriptUsage | undefined): TranscriptUsage {
+  if (!usage) {
+    return CLI_TRANSCRIPT_UNAVAILABLE_USAGE;
+  }
+  if (usage.contextUsage) {
+    return usage;
+  }
+  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  return {
+    ...usage,
+    contextUsage:
+      promptTokens > 0
+        ? {
+            state: "available",
+            promptTokens,
+            totalTokens: promptTokens + (usage.output ?? 0),
+          }
+        : { state: "unavailable" },
+  };
+}
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -168,6 +198,7 @@ type TranscriptUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   total?: number;
+  contextUsage?: ContextUsage;
 };
 
 type PersistTextTurnTranscriptParams = {
@@ -292,13 +323,14 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
   }
-  return buildUsageWithNoCost({
+  const resolved = buildUsageWithNoCost({
     input: usage.input,
     output: usage.output,
     cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite,
     totalTokens: usage.total,
   });
+  return usage.contextUsage ? { ...resolved, contextUsage: usage.contextUsage } : resolved;
 }
 
 async function persistTextTurnTranscript(
@@ -478,7 +510,9 @@ export async function persistCliTurnTranscript(params: {
         api: "cli",
         provider,
         model,
-        usage: params.result.meta.agentMeta?.usage,
+        // The marker is terminal for fallback scans: without it, readers could
+        // skip this turn and revive an older cumulative usage record as fresh.
+        usage: resolveCliTranscriptUsage(params.result.meta.agentMeta?.lastCallUsage),
       },
       skipAssistantTurn: params.skipAssistantTurn,
     });

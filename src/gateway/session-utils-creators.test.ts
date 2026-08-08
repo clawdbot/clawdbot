@@ -338,6 +338,7 @@ it("keeps the serialized list response deterministic for the current filter path
         subject: "needle global",
         totalTokens: 1,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         updatedAt: 999_999,
       },
     },
