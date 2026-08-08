@@ -593,8 +593,8 @@ export async function waitForQaTransportOutboundSequence(params: {
       if (!candidate) {
         return undefined;
       }
-      const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
-      const latest = sequenceEvents.at(-1);
+      const finalLineage = events.filter(({ message }) => message.id === candidate.message.id);
+      const latest = finalLineage.at(-1);
       if (
         !latest ||
         latest.kind === "deleted" ||
@@ -604,7 +604,7 @@ export async function waitForQaTransportOutboundSequence(params: {
         stableCursor = null;
         return undefined;
       }
-      const previewEvents = sequenceEvents.filter(
+      const previewEvents = events.filter(
         ({ cursor, kind, message }) =>
           cursor < candidate.cursor &&
           kind !== "deleted" &&
@@ -613,6 +613,10 @@ export async function waitForQaTransportOutboundSequence(params: {
       if (previewEvents.length < minimumPreviewEvents) {
         return undefined;
       }
+      const sequenceCursors = new Set(
+        [...previewEvents, ...finalLineage].map(({ cursor }) => cursor),
+      );
+      const sequenceEvents = events.filter(({ cursor }) => sequenceCursors.has(cursor));
       if (stableCursor !== latest.cursor) {
         stableCursor = latest.cursor;
         stableSince = Date.now();

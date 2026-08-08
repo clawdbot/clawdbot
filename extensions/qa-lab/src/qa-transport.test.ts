@@ -185,6 +185,38 @@ describe("waitForQaTransportOutboundSequence", () => {
     });
   });
 
+  it("returns preview and final sends across distinct messages", async () => {
+    const state = createQaBusState();
+    const preview = state.addOutboundMessage({
+      accountId: "default",
+      text: "preview",
+      to: "dm:alice",
+    });
+    const final = state.addOutboundMessage({
+      accountId: "default",
+      text: "final marker",
+      to: "dm:alice",
+    });
+
+    const sequence = await waitForQaTransportOutboundSequence({
+      accountId: "default",
+      input: {
+        conversationId: "alice",
+        finalSettleMs: 0,
+        finalTextIncludes: "final marker",
+        minimumPreviewEvents: 1,
+        timeoutMs: 100,
+      },
+      readEvents: () => state.getSnapshot().events,
+    });
+
+    expect(sequence.events.map(({ kind, message }) => [kind, message.id])).toEqual([
+      ["sent", preview.id],
+      ["sent", final.id],
+    ]);
+    expect(sequence.final).toMatchObject({ id: final.id, text: "final marker" });
+  });
+
   it.each([
     { description: "before the final marker", failureBeforeFinal: true },
     { description: "after the final marker", failureBeforeFinal: false },
@@ -318,6 +350,13 @@ describe("waitForQaTransportOutboundSequence", () => {
 
   it("does not count an already-final send as a preview", async () => {
     const state = createQaBusState();
+    state.addOutboundMessage({
+      accountId: "default",
+      senderId: "openclaw",
+      text: "stale preview",
+      to: "dm:alice",
+    });
+    const sinceCursor = state.getSnapshot().cursor;
     const final = state.addOutboundMessage({
       accountId: "default",
       senderId: "openclaw",
@@ -338,6 +377,7 @@ describe("waitForQaTransportOutboundSequence", () => {
           finalSettleMs: 0,
           finalTextIncludes: "final marker",
           minimumPreviewEvents: 1,
+          sinceCursor,
           timeoutMs: 20,
         },
         readEvents: () => state.getSnapshot().events,
