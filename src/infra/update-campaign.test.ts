@@ -128,7 +128,70 @@ describe("UpdateCampaignController", () => {
     });
     expect(controller.adopt()).toBe(true);
     expect(controller.getState()?.state).toBe("applying");
+    expect(controller.hold()).toBe(false);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("holds a waiting campaign once and shifts its hard deadline", async () => {
+    const controller = createController();
+    const apply = vi.fn(async () => undefined);
+
+    controller.announce({
+      target: { kind: "package", version: "2.0.0" },
+      inspect: createInspectors(() => 1),
+      apply,
+      onChange: vi.fn(),
+    });
+
+    expect(controller.hold()).toBe(true);
+    expect(controller.getState()).toMatchObject({
+      state: "waiting-for-idle",
+      holdUntilMs: 4_600_000,
+      forceAtMs: 5_500_000,
+      updatedAtMs: 1_000_000,
+    });
+    expect(controller.getState()?.applyAtMs).toBeUndefined();
+    expect(controller.hold()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    expect(apply).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(controller.getState()?.state).toBe("applying");
+    expect(apply).toHaveBeenCalledWith({ forced: true });
+  });
+
+  it("holds a countdown, drops its apply deadline, and allows adoption", async () => {
+    const controller = createController();
+    const apply = vi.fn(async () => undefined);
+
+    controller.announce({
+      target: { kind: "package", version: "2.0.0" },
+      inspect: createInspectors(() => 0),
+      apply,
+      onChange: vi.fn(),
+    });
+    expect(controller.getState()?.state).toBe("countdown");
+
+    expect(controller.hold(10_000)).toBe(true);
+    expect(controller.getState()).toMatchObject({
+      state: "waiting-for-idle",
+      holdUntilMs: 1_010_000,
+      forceAtMs: 1_910_000,
+    });
+    expect(controller.getState()?.applyAtMs).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(controller.getState()?.state).toBe("waiting-for-idle");
+    expect(apply).not.toHaveBeenCalled();
+
+    expect(controller.adopt()).toBe(true);
+    expect(controller.getState()?.state).toBe("applying");
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("returns false when holding without a campaign", () => {
+    expect(createController().hold()).toBe(false);
   });
 });

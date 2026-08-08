@@ -14,11 +14,14 @@ const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
+  heldUpdateCampaignId: string | null;
   updateRunning: boolean;
   canUpdate: boolean;
+  canHoldUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => void;
+  onHoldUpdate: () => Promise<boolean>;
   updateComplete: Promise<boolean>;
 };
 
@@ -29,6 +32,7 @@ async function mount(
   update: UpdateAvailable | null,
   schedule: UpdateScheduleState | null = null,
   canUpdate = true,
+  canHoldUpdate = true,
 ) {
   const element = document.createElement(
     "openclaw-sidebar-update-card",
@@ -36,6 +40,7 @@ async function mount(
   element.updateAvailable = update;
   element.updateSchedule = schedule;
   element.canUpdate = canUpdate;
+  element.canHoldUpdate = canHoldUpdate;
   document.body.append(element);
   await element.updateComplete;
   return element;
@@ -368,6 +373,16 @@ describe("SidebarUpdateCard", () => {
     expect(timer?.getAttribute("aria-live")).toBe("off");
     expect(timer?.textContent).toContain("Updating in 0:54 · v2.0.0");
     expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
+    expect(element.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe(
+      "Hold 1 h",
+    );
+
+    element.updateRunning = true;
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
+    element.updateRunning = false;
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
     await element.updateComplete;
@@ -375,6 +390,94 @@ describe("SidebarUpdateCard", () => {
 
     element.remove();
     expect(clearInterval).toHaveBeenCalled();
+  });
+
+  it("keeps a consumed hold hidden across shared-state rerenders after expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const element = await mount(
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "stable",
+      },
+      {
+        channel: "stable",
+        autoEnabled: true,
+        target: { kind: "package", version: "2.0.0" },
+        campaign: {
+          id: "campaign-1",
+          state: "waiting-for-idle",
+          announcedAtMs: 0,
+          forceAtMs: 900_000,
+          updatedAtMs: 0,
+        },
+      },
+    );
+    const onHoldUpdate = vi.fn(async () => true);
+    element.onHoldUpdate = onHoldUpdate;
+
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__hold")?.click();
+    await Promise.resolve();
+    await element.updateComplete;
+
+    expect(onHoldUpdate).toHaveBeenCalledOnce();
+    element.heldUpdateCampaignId = "campaign-1";
+    element.updateSchedule = {
+      ...element.updateSchedule!,
+      campaign: {
+        ...element.updateSchedule!.campaign!,
+        holdUntilMs: 61_000,
+      },
+    };
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
+
+    element.updateSchedule = {
+      ...element.updateSchedule!,
+      campaign: {
+        ...element.updateSchedule!.campaign!,
+        holdUntilMs: 500,
+      },
+    };
+    await element.updateComplete;
+    expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
+  });
+
+  it("renders held timing and gates hold for active or unauthorized campaigns", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const schedule: UpdateScheduleState = {
+      channel: "dev",
+      autoEnabled: true,
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "a".repeat(40),
+        commitsBehind: 2,
+      },
+      campaign: {
+        id: "campaign-1",
+        state: "waiting-for-idle",
+        announcedAtMs: 0,
+        holdUntilMs: 61_000,
+        forceAtMs: 961_000,
+        updatedAtMs: 1_000,
+      },
+    };
+    const held = await mount(null, schedule);
+    expect(held.textContent).toContain("Update held · resumes in 1:00");
+    expect(held.querySelector(".sidebar-update-card__hold")).toBeNull();
+
+    const unheldSchedule: UpdateScheduleState = {
+      ...schedule,
+      campaign: { ...schedule.campaign!, holdUntilMs: undefined },
+    };
+    const unauthorized = await mount(null, unheldSchedule, false);
+    expect(unauthorized.querySelector(".sidebar-update-card__hold")).toBeNull();
+
+    const unsupported = await mount(null, unheldSchedule, true, false);
+    expect(unsupported.querySelector(".sidebar-update-card__hold")).toBeNull();
   });
 
   it("disables the update action when the operator cannot administer updates", async () => {

@@ -17,11 +17,14 @@ export function renderFloatingUpdateCard(params: {
   onboarding: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
+  heldUpdateCampaignId?: string | null;
   updateRunning: boolean;
   canUpdate?: boolean;
+  canHoldUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => void;
+  onHoldUpdate?: () => Promise<boolean>;
 }) {
   // A stale client must always have a visible refresh action, including during
   // onboarding, even though update-available actions stay hidden there.
@@ -32,10 +35,13 @@ export function renderFloatingUpdateCard(params: {
     class="sidebar-update-card--floating"
     .updateAvailable=${params.updateAvailable}
     .updateSchedule=${params.updateSchedule ?? null}
+    .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
     .updateRunning=${params.updateRunning}
     .canUpdate=${params.canUpdate ?? false}
+    .canHoldUpdate=${params.canHoldUpdate ?? false}
     .onUpdate=${params.onUpdate}
     .refreshRequired=${params.refreshRequired}
     .onRefresh=${params.onRefresh}
+    .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
   ></openclaw-sidebar-update-card>`;
 }

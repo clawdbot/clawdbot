@@ -367,8 +367,10 @@ export const en: TranslationMap = {
     campaign: {
       countdown: "Updating in {time}",
       waitingForIdle: "Waiting for active work · forced update in {time}",
+      held: "Update held · resumes in {time}",
       applying: "Applying update…",
     },
+    holdOneHour: "Hold 1 h",
     target: {
       version: "v{version}",
       commitBehind: "{count} commit behind",
@@ -404,6 +406,7 @@ export const en: TranslationMap = {
         "Extended stable reports available releases but never installs them automatically.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
+      commits: "Commits",
       available: "Update available {target}",
       upToDate: "Up to date",
       statusUnavailable: "Update status unavailable",

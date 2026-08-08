@@ -66,6 +66,8 @@ export const PluginLifecycleProtocolSchemas = {
   UpdateStatusResult: config.UpdateStatusResultSchema,
   UpdateAvailable: config.UpdateAvailableSchema,
   UpdateScheduleState: config.UpdateScheduleStateSchema,
+  UpdateHoldParams: config.UpdateHoldParamsSchema,
+  UpdateHoldResult: config.UpdateHoldResultSchema,
   UpdateRunParams: config.UpdateRunParamsSchema,
   TickEvent: frames.TickEventSchema,
   ShutdownEvent: frames.ShutdownEventSchema,

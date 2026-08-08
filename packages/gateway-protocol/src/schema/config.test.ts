@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   ConfigSchemaLookupResultSchema,
   ConfigSchemaResponseSchema,
+  UpdateAvailableSchema,
+  UpdateHoldParamsSchema,
+  UpdateHoldResultSchema,
   UpdateScheduleStateSchema,
   UpdateStatusResultSchema,
 } from "./config.js";
@@ -96,6 +99,10 @@ describe("update protocol schemas", () => {
           upstreamRef: "origin/main",
           upstreamSha: "abcdef1234",
           commitsBehind: 3,
+          commits: [
+            { sha: "abc1234", subject: "First change" },
+            { sha: "def5678", subject: "Second change" },
+          ],
         },
         schedule: {
           channel: "dev",
@@ -120,5 +127,54 @@ describe("update protocol schemas", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("accepts optional bounded dev commit summaries", () => {
+    const availability = {
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.1",
+      channel: "dev",
+      currentSha: "1234567890",
+      upstreamRef: "origin/main",
+      upstreamSha: "abcdef1234",
+      commitsBehind: 6,
+    };
+    expect(Value.Check(UpdateAvailableSchema, availability)).toBe(true);
+    expect(
+      Value.Check(UpdateAvailableSchema, {
+        ...availability,
+        commits: [{ sha: "abc1234", subject: "First change" }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(UpdateAvailableSchema, {
+        ...availability,
+        commits: Array.from({ length: 6 }, (_, index) => ({
+          sha: `abc123${index}`,
+          subject: `Change ${index}`,
+        })),
+      }),
+    ).toBe(false);
+  });
+
+  it("validates update.hold params and result", () => {
+    expect(Value.Check(UpdateHoldParamsSchema, {})).toBe(true);
+    expect(
+      Value.Check(UpdateHoldResultSchema, {
+        ok: true,
+        schedule: {
+          channel: "beta",
+          autoEnabled: true,
+          campaign: {
+            id: "campaign-1",
+            state: "waiting-for-idle",
+            announcedAtMs: 1,
+            holdUntilMs: 3_600_001,
+            forceAtMs: 4_500_001,
+            updatedAtMs: 1,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

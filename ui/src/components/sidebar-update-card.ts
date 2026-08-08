@@ -60,12 +60,16 @@ function dismiss(update: UpdateAvailable): void {
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
+  @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) canUpdate = false;
+  @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) refreshRequired = false;
   @property({ attribute: false }) onRefresh: () => void = () => undefined;
+  @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @state() private dismissedUpdateKey: string | null = null;
+  @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
   private nativeUpdateDeclined = false;
   private readonly countdownPolling = new PollController(
@@ -176,36 +180,64 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const busy = this.updateRunning || campaign?.state === "applying";
     const countdownActive =
       campaign?.state === "countdown" || campaign?.state === "waiting-for-idle";
+    const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
+    const showHold = Boolean(
+      campaign &&
+      campaign.state !== "applying" &&
+      this.canUpdate &&
+      this.canHoldUpdate &&
+      !busy &&
+      !holdActive &&
+      this.heldUpdateCampaignId !== campaign.id,
+    );
     return html`
       <div
         class="sidebar-update-card"
         role=${campaign ? nothing : "status"}
         aria-live=${campaign ? nothing : "polite"}
       >
-        <button
-          class="sidebar-update-card__action ${campaign
-            ? "sidebar-update-card__action--undismissable"
-            : ""} ${busy ? "sidebar-update-card__action--busy" : ""}"
-          type="button"
-          title=${this.canUpdate ? nothing : t("updates.adminRequired")}
-          ?disabled=${busy || !this.canUpdate}
-          @click=${() => {
-            if (busy || !this.canUpdate) {
-              return;
-            }
-            if (this.nativeUpdateDeclined || !postNativeUpdate()) {
-              this.onUpdate();
-            }
-          }}
-        >
-          <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
-          <span
-            class="sidebar-update-card__text"
-            role=${countdownActive ? "timer" : nothing}
-            aria-live=${countdownActive ? "off" : nothing}
-            >${text}</span
+        <div class="sidebar-update-card__actions">
+          <button
+            class="sidebar-update-card__action ${campaign
+              ? "sidebar-update-card__action--undismissable"
+              : ""} ${busy ? "sidebar-update-card__action--busy" : ""}"
+            type="button"
+            title=${this.canUpdate ? nothing : t("updates.adminRequired")}
+            ?disabled=${busy || !this.canUpdate}
+            @click=${() => {
+              if (busy || !this.canUpdate) {
+                return;
+              }
+              if (this.nativeUpdateDeclined || !postNativeUpdate()) {
+                this.onUpdate();
+              }
+            }}
           >
-        </button>
+            <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
+            <span
+              class="sidebar-update-card__text"
+              role=${countdownActive ? "timer" : nothing}
+              aria-live=${countdownActive ? "off" : nothing}
+              >${text}</span
+            >
+          </button>
+          ${showHold && campaign
+            ? html`
+                <button
+                  class="sidebar-update-card__hold"
+                  type="button"
+                  ?disabled=${this.holdingCampaignId === campaign.id}
+                  @click=${async () => {
+                    this.holdingCampaignId = campaign.id;
+                    await this.onHoldUpdate();
+                    this.holdingCampaignId = null;
+                  }}
+                >
+                  ${t("updates.holdOneHour")}
+                </button>
+              `
+            : nothing}
+        </div>
         ${campaign || !update
           ? nothing
           : html`

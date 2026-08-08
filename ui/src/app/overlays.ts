@@ -3,7 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { UpdateAvailable, UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
 import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -58,6 +58,7 @@ import {
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
+  heldUpdateCampaignId: string | null;
   updateRunning: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
@@ -79,6 +80,7 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   runUpdate: () => Promise<void>;
+  holdUpdate: () => Promise<boolean>;
   decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
@@ -103,6 +105,7 @@ export function createApplicationOverlays(
   let snapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateSchedule: null,
+    heldUpdateCampaignId: null,
     updateRunning: false,
     updateReconciliationPending: false,
     updateStatusBanner: null,
@@ -130,6 +133,7 @@ export function createApplicationOverlays(
   let approvalGrantGeneration = 0;
   let pendingUpdate: PendingUpdateReconciliation | null = null;
   let updateRunGeneration = 0;
+  let updateHoldInFlight = false;
   let approvalDecision: {
     client: NonNullable<typeof activeClient>;
     epoch: number;
@@ -214,6 +218,10 @@ export function createApplicationOverlays(
     snapshot = { ...snapshot, updateStatusBanner };
     publish();
   };
+  const heldCampaignId = (schedule: UpdateScheduleState | null) =>
+    schedule?.campaign?.holdUntilMs !== undefined
+      ? schedule.campaign.id
+      : snapshot.heldUpdateCampaignId;
   const updateVerification = createUpdateVerificationController({
     getPending: () => pendingUpdate,
     clearPending: () => {
@@ -232,6 +240,9 @@ export function createApplicationOverlays(
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
     onStatus: (response) => {
       const sentinel = response.sentinel;
+      const updateSchedule = Object.hasOwn(response, "schedule")
+        ? readUpdateScheduleValue(response.schedule)
+        : undefined;
       snapshot = {
         ...snapshot,
         updateStatusBanner:
@@ -246,8 +257,11 @@ export function createApplicationOverlays(
         ...(Object.hasOwn(response, "updateAvailable")
           ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
           : {}),
-        ...(Object.hasOwn(response, "schedule")
-          ? { updateSchedule: readUpdateScheduleValue(response.schedule) }
+        ...(updateSchedule !== undefined
+          ? {
+              updateSchedule,
+              heldUpdateCampaignId: heldCampaignId(updateSchedule),
+            }
           : {}),
       };
       publish();
@@ -336,12 +350,15 @@ export function createApplicationOverlays(
       publish();
       return;
     }
+    const updateSchedule =
+      connectedSourceChanged || helloChanged ? readUpdateSchedule(next.hello) : undefined;
     snapshot = {
       ...snapshot,
       ...(connectedSourceChanged || helloChanged
         ? {
             updateAvailable: readUpdateAvailable(next.hello),
-            updateSchedule: readUpdateSchedule(next.hello),
+            updateSchedule: updateSchedule ?? null,
+            heldUpdateCampaignId: heldCampaignId(updateSchedule ?? null),
           }
         : {}),
       controlUiRefreshRequired: connectedSourceChanged
@@ -383,11 +400,18 @@ export function createApplicationOverlays(
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
       const payload = event.payload as GatewayUpdateAvailableEventPayload | undefined;
+      const updateSchedule =
+        payload && Object.hasOwn(payload, "schedule")
+          ? readUpdateScheduleValue(payload.schedule)
+          : undefined;
       snapshot = {
         ...snapshot,
         updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
-        ...(payload && Object.hasOwn(payload, "schedule")
-          ? { updateSchedule: readUpdateScheduleValue(payload.schedule) }
+        ...(updateSchedule !== undefined
+          ? {
+              updateSchedule,
+              heldUpdateCampaignId: heldCampaignId(updateSchedule),
+            }
           : {}),
       };
       publish();
@@ -530,6 +554,49 @@ export function createApplicationOverlays(
           snapshot = { ...snapshot, updateRunning: false };
           publish();
         }
+      }
+    },
+    async holdUpdate() {
+      const client = gateway.snapshot.client;
+      const campaign = snapshot.updateSchedule?.campaign;
+      const busy = updateHoldInFlight || snapshot.updateRunning || pendingUpdate !== null;
+      if (
+        !client ||
+        gateway.snapshot.phase !== "connected" ||
+        disposed ||
+        busy ||
+        !campaign ||
+        campaign.state === "applying" ||
+        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
+      ) {
+        return false;
+      }
+      updateHoldInFlight = true;
+      try {
+        const response = await client.request<UpdateHoldResult>("update.hold", {});
+        if (disposed || gateway.snapshot.client !== client) {
+          return false;
+        }
+        const updateSchedule = response.schedule && readUpdateScheduleValue(response.schedule);
+        if (updateSchedule !== undefined || response.ok) {
+          snapshot = {
+            ...snapshot,
+            ...(updateSchedule !== undefined ? { updateSchedule } : {}),
+            heldUpdateCampaignId: response.ok
+              ? campaign.id
+              : heldCampaignId(updateSchedule ?? null),
+          };
+          publish();
+        }
+        return response.ok;
+      } catch (error) {
+        if (!disposed && gateway.snapshot.client === client) {
+          const message = error instanceof Error ? error.message : String(error);
+          publishUpdateBanner({ tone: "danger", text: t("updates.error", { error: message }) });
+        }
+        return false;
+      } finally {
+        updateHoldInFlight = false;
       }
     },
     async decideApproval(decision, approvalId) {

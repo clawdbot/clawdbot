@@ -123,6 +123,9 @@ const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
+const DEV_COMMIT_LIMIT = 5;
+const DEV_COMMIT_SUBJECT_MAX_LENGTH = 120;
+const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
 
 type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
@@ -246,7 +249,8 @@ function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | nul
     a.currentSha === b.currentSha &&
     a.upstreamRef === b.upstreamRef &&
     a.upstreamSha === b.upstreamSha &&
-    a.commitsBehind === b.commitsBehind
+    a.commitsBehind === b.commitsBehind &&
+    JSON.stringify(a.commits) === JSON.stringify(b.commits)
   );
 }
 
@@ -568,6 +572,50 @@ async function resolveStartupInstallStatus(fetchGit: boolean) {
   return { root, status };
 }
 
+async function resolveDevGitCommits(params: {
+  root: string;
+  currentSha: string;
+  upstreamSha: string;
+}): Promise<Array<{ sha: string; subject: string }>> {
+  const result = await runCommandWithTimeout(
+    [
+      "git",
+      "-C",
+      params.root,
+      "log",
+      "--format=%h%x09%s",
+      `--max-count=${DEV_COMMIT_LIMIT}`,
+      `${params.currentSha}..${params.upstreamSha}`,
+    ],
+    {
+      timeoutMs: 2500,
+      maxOutputBytes: { stdout: DEV_COMMIT_LOG_MAX_OUTPUT_BYTES, stderr: 1024 },
+    },
+  ).catch(() => null);
+  if (!result || result.code !== 0 || result.termination !== "exit") {
+    return [];
+  }
+  return result.stdout
+    .split("\n")
+    .flatMap((line) => {
+      const separator = line.indexOf("\t");
+      const sha = separator < 0 ? "" : line.slice(0, separator).trim();
+      if (!sha) {
+        return [];
+      }
+      return [
+        {
+          sha,
+          subject: line
+            .slice(separator + 1)
+            .trim()
+            .slice(0, DEV_COMMIT_SUBJECT_MAX_LENGTH),
+        },
+      ];
+    })
+    .slice(0, DEV_COMMIT_LIMIT);
+}
+
 async function runCampaignUpdate(params: {
   identity: string;
   channel: "stable" | "beta" | "dev";
@@ -828,6 +876,11 @@ export async function runGatewayUpdateCheck(params: {
     const upstreamRef = git.upstream;
     const upstreamSha = git.upstreamSha;
     const commitsBehind = git.behind;
+    const commits = await resolveDevGitCommits({
+      root: git.root,
+      currentSha,
+      upstreamSha,
+    });
 
     const target: NonNullable<UpdateScheduleState["target"]> = {
       kind: "git",
@@ -843,6 +896,7 @@ export async function runGatewayUpdateCheck(params: {
       upstreamRef,
       upstreamSha,
       commitsBehind,
+      commits,
     };
     setUpdateAvailableCache({
       next: shouldRunUpdateHints ? nextAvailable : null,

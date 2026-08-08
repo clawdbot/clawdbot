@@ -93,6 +93,8 @@ export function renderApplicationShell(host: ShellViewHost) {
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
   const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
+  const canHoldUpdate =
+    canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
   const storedOutboxes = outboxStoreRuntime
@@ -213,11 +215,14 @@ export function renderApplicationShell(host: ShellViewHost) {
       devGitBranch: context.config.current.devGitBranch,
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
       updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
+      heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
       updateRunning: overlaySnapshot.updateRunning,
       canUpdate,
+      canHoldUpdate,
       onUpdate: () => void context.overlays.runUpdate(),
       refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
       onRefresh: () => host.refreshControlUi(),
+      onHoldUpdate: () => context.overlays.holdUpdate(),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -245,11 +250,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
+        heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateRunning: overlaySnapshot.updateRunning,
         canUpdate,
+        canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
         refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
         onRefresh: () => host.refreshControlUi(),
+        onHoldUpdate: () => context.overlays.holdUpdate(),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -436,11 +444,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           onboarding,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
+          heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateRunning: overlaySnapshot.updateRunning,
           canUpdate,
+          canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
           refreshRequired: overlaySnapshot.controlUiRefreshRequired,
           onRefresh: () => host.refreshControlUi(),
+          onHoldUpdate: () => context.overlays.holdUpdate(),
         })}
         <openclaw-router-outlet
           .router=${runtime.router}

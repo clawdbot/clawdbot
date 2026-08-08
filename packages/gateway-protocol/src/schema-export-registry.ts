@@ -312,6 +312,8 @@ export {
   UpdateStatusResultSchema,
   UpdateAvailableSchema,
   UpdateScheduleStateSchema,
+  UpdateHoldParamsSchema,
+  UpdateHoldResultSchema,
   SystemAgentChatParamsSchema,
   SystemAgentChatQuestionSchema,
   SystemAgentChatResultSchema,

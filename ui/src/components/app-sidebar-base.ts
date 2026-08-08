@@ -48,11 +48,14 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
+  @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) canUpdate = false;
+  @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) refreshRequired = false;
   @property({ attribute: false }) onRefresh: () => void = () => undefined;
+  @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (

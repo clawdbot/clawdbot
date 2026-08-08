@@ -970,16 +970,19 @@ export class ConfigPage extends OpenClawLightDomElement {
           null,
         controlUiCommit: CONTROL_UI_BUILD_INFO.commit,
         schedule: overlaySnapshot.updateSchedule,
+        heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
+        canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
         onAutomaticUpdatesChange: (enabled) =>
           runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
         onUpdateNow: () => void this.context.overlays.runUpdate(),
+        onHoldUpdate: () => this.context.overlays.holdUpdate(),
       });
     }
     const includeSections = this.includeSections();

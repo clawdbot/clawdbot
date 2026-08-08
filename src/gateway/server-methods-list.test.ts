@@ -99,6 +99,7 @@ describe("listGatewayMethods", () => {
       "tasks.dismiss",
       "audit.run.inspect",
       "sessions.archiveMany",
+      "update.hold",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -138,6 +139,11 @@ describe("listGatewayMethods", () => {
     expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
     expect(listGatewayMethods()).toContain("audit.run.inspect");
     expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
+  });
+
+  it("advertises the update campaign hold method", () => {
+    expect(listGatewayMethods()).toContain("update.hold");
+    expect(coreGatewayHandlers["update.hold"]).toBeTypeOf("function");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -206,11 +212,14 @@ describe("listGatewayMethods", () => {
       "tasks.dismiss",
       "audit.run.inspect",
       "sessions.archiveMany",
+      "update.hold",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
     expect(methods.indexOf("sessions.archiveMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
+    expect(methods.indexOf("sessions.archiveMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
+    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.archiveMany") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

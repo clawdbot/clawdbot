@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  validateUpdateHoldParams,
+  validateUpdateHoldResult,
   validateUpdateRunParams,
   validateUpdateStatusParams,
   validateUpdateStatusResult,
@@ -152,6 +154,25 @@ export const updateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, {
         code: "UNAVAILABLE",
         message: "update status is temporarily unavailable",
+      });
+      return;
+    }
+    respond(true, result);
+  },
+  "update.hold": ({ params, respond }) => {
+    if (!assertValidParams(params, validateUpdateHoldParams, "update.hold", respond)) {
+      return;
+    }
+    const ok = gatewayUpdateCampaign.hold();
+    const schedule = getUpdateSchedule();
+    const result = {
+      ok,
+      ...(schedule ? { schedule } : {}),
+    };
+    if (!validateUpdateHoldResult(result)) {
+      respond(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "update hold status is temporarily unavailable",
       });
       return;
     }

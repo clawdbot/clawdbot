@@ -1,5 +1,6 @@
 export type {
   UpdateAvailable,
+  UpdateHoldResult,
   UpdateScheduleState,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";

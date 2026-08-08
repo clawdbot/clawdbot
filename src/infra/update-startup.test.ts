@@ -266,7 +266,15 @@ describe("update-startup", () => {
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
-    vi.mocked(runCommandWithTimeout).mockClear();
+    vi.mocked(runCommandWithTimeout).mockReset();
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     refreshRemoteModelCatalogMock.mockClear();
@@ -972,6 +980,22 @@ describe("update-startup", () => {
 
   it("announces and applies a dev git campaign without consulting npm", async () => {
     mockDevGitStatus();
+    const longSubject = "x".repeat(140);
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce({
+      stdout: [
+        `aaaaaaa\t${longSubject}`,
+        "bbbbbbb\tSecond commit",
+        "ccccccc\tThird commit",
+        "ddddddd\tFourth commit",
+        "eeeeeee\tFifth commit",
+        "fffffff\tUnexpected sixth commit",
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "dev",
       version: "99.0.0-dev.1",
@@ -1002,7 +1026,29 @@ describe("update-startup", () => {
       upstreamRef: "origin/main",
       upstreamSha: "upstream-sha",
       commitsBehind: 2,
+      commits: [
+        { sha: "aaaaaaa", subject: "x".repeat(120) },
+        { sha: "bbbbbbb", subject: "Second commit" },
+        { sha: "ccccccc", subject: "Third commit" },
+        { sha: "ddddddd", subject: "Fourth commit" },
+        { sha: "eeeeeee", subject: "Fifth commit" },
+      ],
     });
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        "git",
+        "-C",
+        "/opt/openclaw",
+        "log",
+        "--format=%h%x09%s",
+        "--max-count=5",
+        "current-sha..upstream-sha",
+      ],
+      {
+        timeoutMs: 2500,
+        maxOutputBytes: { stdout: 8 * 1024, stderr: 1024 },
+      },
+    );
     expect(getUpdateSchedule()).toMatchObject({
       channel: "dev",
       autoEnabled: true,
@@ -1024,6 +1070,20 @@ describe("update-startup", () => {
       restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
     });
+  });
+
+  it("does not probe dev commits when the checkout is up to date", async () => {
+    mockDevGitStatus({ behind: 0 });
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
   });
 
   it("resets a busy dev campaign and forces it at the deadline", async () => {
