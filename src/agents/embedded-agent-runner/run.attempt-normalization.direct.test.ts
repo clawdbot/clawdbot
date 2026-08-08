@@ -178,7 +178,9 @@ describe("normalizeEmbeddedRunAttempt", () => {
     });
     attempt.toolMetas = [{ toolName: "read", isError: false }];
 
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+    const input = makeNormalizationInput(attempt, state);
+    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+    const result = await normalizeEmbeddedRunAttempt(input);
 
     expect(result.action).toBe("retry");
     if (result.action !== "retry") {
@@ -237,5 +239,61 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected clean attempt to proceed, got ${clean.action}`);
     }
     expect(clean.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
+  });
+
+  it("does not promote historical CLI usage without context provenance", async () => {
+    const state = makePromptState();
+    const legacyAssistant = {
+      role: "assistant",
+      api: "cli",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      content: [{ type: "text", text: "legacy reply" }],
+      usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      stopReason: "error",
+      timestamp: 1,
+    };
+    const attempt = makeAttempt();
+    attempt.messagesSnapshot = [legacyAssistant] as never;
+    attempt.lastAssistant = legacyAssistant as never;
+
+    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+
+    expect(result.action).toBe("proceed");
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
+  });
+
+  it("keeps the unavailable sentinel across a retry instead of reviving prior usage", async () => {
+    const state = makePromptState();
+    const legacyAssistant = {
+      role: "assistant",
+      api: "cli",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      content: [{ type: "text", text: "legacy reply" }],
+      usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    const attempt = makeAttempt({
+      route: "compact_only",
+      handled: true,
+      truncatedCount: 0,
+    });
+    attempt.messagesSnapshot = [legacyAssistant] as never;
+    attempt.lastAssistant = legacyAssistant as never;
+    const input = makeNormalizationInput(attempt, state);
+    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+
+    const result = await normalizeEmbeddedRunAttempt(input);
+
+    expect(result.action).toBe("retry");
+    if (result.action !== "retry") {
+      throw new Error(`expected retry, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
   });
 });

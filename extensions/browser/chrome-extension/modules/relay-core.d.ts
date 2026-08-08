@@ -7,6 +7,24 @@ export function parsePairingString(raw: unknown): {
   token: string;
   gatewayUrl?: string;
 } | null;
+export function createPairingConfigStore(storage: {
+  get(keys: string[]): Promise<Record<string, unknown>>;
+  set(values: Record<string, unknown>): Promise<void>;
+  remove(keys: string[]): Promise<void>;
+}): {
+  readonly invalidationRevision: number;
+  read(): Promise<{
+    relayUrl: string;
+    token: string;
+    gatewayUrl: string;
+    groupColor: string;
+  }>;
+  save(
+    pairing: { relayUrl: string; token: string; gatewayUrl?: string },
+    groupColor: string,
+  ): Promise<void>;
+  clear(): Promise<void>;
+};
 
 export function buildRelayWsProtocols(token: string): string[];
 

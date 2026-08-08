@@ -3,7 +3,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import {
-  resolveControlUiRefreshRequiredBanner,
   resolvePendingUpdateHandoffTimeoutBanner,
   resolvePostRestartUpdateBanner,
   resolveUpdateStatusBanner,
@@ -11,7 +10,6 @@ import {
 } from "./update-overlay-helpers.ts";
 
 const translations: Record<string, string> = {
-  "updates.refreshRequired": "Server updated — refresh for full capabilities",
   "updates.status": "Update {status}: {reason}. {guidance}",
   "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
   "updates.failureReasons.default":
@@ -39,13 +37,9 @@ afterEach(() => {
 });
 
 describe("update status localization", () => {
-  it("localizes refresh and known update failure guidance", () => {
+  it("localizes known update failure guidance", () => {
     const translate = installTranslations();
 
-    expect(resolveControlUiRefreshRequiredBanner()).toEqual({
-      tone: "info",
-      text: "Server updated — refresh for full capabilities",
-    });
     expect(resolveUpdateStatusBanner({ status: "skipped", reason: "dirty" })).toEqual({
       tone: "warn",
       text: "Update skipped: dirty. Commit or stash changes, then retry.",

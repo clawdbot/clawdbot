@@ -5,30 +5,17 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
-import { queueEmbeddedAgentMessageWithOutcome, setActiveEmbeddedRun } from "./runs.js";
-import { testing } from "./runs.test-support.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import {
+  formatEmbeddedAgentQueueFailureSummary,
+  queueEmbeddedAgentMessageWithOutcome,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  setActiveEmbeddedRun,
+} from "./runs.js";
+import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 
-type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
-
-function createSteeringRunHandle(
-  overrides: {
-    isStreaming?: boolean;
-    isStopped?: () => boolean;
-    queueMessage?: RunHandle["queueMessage"];
-    supportsQueueMessageImages?: boolean;
-  } = {},
-): RunHandle {
-  return {
-    queueMessage: overrides.queueMessage ?? (async () => {}),
-    isStreaming: () => overrides.isStreaming ?? true,
-    ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
-    isCompacting: () => false,
-    supportsQueueMessageImages: overrides.supportsQueueMessageImages,
-    abort: () => {},
-  };
-}
-
-describe("embedded-agent runner steering admission", () => {
+describe("embedded-agent active-run steering", () => {
   afterEach(() => {
     testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
@@ -40,7 +27,7 @@ describe("embedded-agent runner steering admission", () => {
   it("passes steering options to active embedded runs", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-steer", {
-      ...createSteeringRunHandle(),
+      ...createEmbeddedRunHandle(),
       sourceReplyDeliveryMode: "message_tool_only",
       queueMessage,
     });
@@ -61,7 +48,7 @@ describe("embedded-agent runner steering admission", () => {
   it("rejects images when the active run cannot preserve them", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-images", {
-      ...createSteeringRunHandle(),
+      ...createEmbeddedRunHandle(),
       queueMessage,
     });
 
@@ -79,7 +66,7 @@ describe("embedded-agent runner steering admission", () => {
 
     setActiveEmbeddedRun(
       "session-images",
-      createSteeringRunHandle({ queueMessage, supportsQueueMessageImages: true }),
+      createEmbeddedRunHandle({ queueMessage, supportsQueueMessageImages: true }),
     );
 
     expect(
@@ -95,7 +82,7 @@ describe("embedded-agent runner steering admission", () => {
   it("rejects message-tool-only steering for active runs created without that mode", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-automatic-source-reply", {
-      ...createSteeringRunHandle(),
+      ...createEmbeddedRunHandle(),
       queueMessage,
     });
 
@@ -131,7 +118,7 @@ describe("embedded-agent runner steering admission", () => {
   ])("rejects $label", ({ handleMode, requestMode }) => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-task-suggestions", {
-      ...createSteeringRunHandle(),
+      ...createEmbeddedRunHandle(),
       taskSuggestionDeliveryMode: handleMode,
       queueMessage,
     });
@@ -153,7 +140,7 @@ describe("embedded-agent runner steering admission", () => {
   it("defaults active embedded steering to all pending messages", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-default-steer", {
-      ...createSteeringRunHandle(),
+      ...createEmbeddedRunHandle(),
       queueMessage,
     });
 
@@ -168,7 +155,7 @@ describe("embedded-agent runner steering admission", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-active-non-streaming",
-      createSteeringRunHandle({
+      createEmbeddedRunHandle({
         isStreaming: false,
         isStopped: () => false,
         queueMessage,
@@ -185,7 +172,7 @@ describe("embedded-agent runner steering admission", () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
-      setActiveEmbeddedRun("session-stale-steer", createSteeringRunHandle({ queueMessage }));
+      setActiveEmbeddedRun("session-stale-steer", createEmbeddedRunHandle({ queueMessage }));
 
       vi.advanceTimersByTime(10 * 60_000 + 1);
 
@@ -207,7 +194,7 @@ describe("embedded-agent runner steering admission", () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
-      setActiveEmbeddedRun("session-quiet-tool-steer", createSteeringRunHandle({ queueMessage }));
+      setActiveEmbeddedRun("session-quiet-tool-steer", createEmbeddedRunHandle({ queueMessage }));
       markDiagnosticToolStartedForTest({
         sessionId: "session-quiet-tool-steer",
         toolName: "exec",
@@ -261,7 +248,7 @@ describe("embedded-agent runner steering admission", () => {
     const freshQueueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-fresh-steer",
-      createSteeringRunHandle({ queueMessage: freshQueueMessage }),
+      createEmbeddedRunHandle({ queueMessage: freshQueueMessage }),
     );
 
     expect(queueEmbeddedAgentMessageWithOutcome("session-fresh-steer", "continue").queued).toBe(
@@ -272,7 +259,7 @@ describe("embedded-agent runner steering admission", () => {
     const missingSnapshotQueueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-no-diagnostic-snapshot",
-      createSteeringRunHandle({ queueMessage: missingSnapshotQueueMessage }),
+      createEmbeddedRunHandle({ queueMessage: missingSnapshotQueueMessage }),
     );
     resetDiagnosticRunActivityForTest();
 
@@ -286,7 +273,7 @@ describe("embedded-agent runner steering admission", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-stopped",
-      createSteeringRunHandle({
+      createEmbeddedRunHandle({
         isStreaming: true,
         isStopped: () => true,
         queueMessage,
@@ -308,7 +295,7 @@ describe("embedded-agent runner steering admission", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-bad-state",
-      createSteeringRunHandle({
+      createEmbeddedRunHandle({
         isStopped: () => {
           throw new Error("bad stopped state");
         },
@@ -322,6 +309,153 @@ describe("embedded-agent runner steering admission", () => {
       queued: false,
       sessionId: "session-bad-state",
       reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured no-active-run queue failure", () => {
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-missing", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-missing",
+      reason: "no_active_run",
+      gatewayHealth: "live",
+    });
+    expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
+      "queue_message_failed reason=no_active_run sessionId=session-missing gatewayHealth=live",
+    );
+  });
+
+  it("returns structured queue failures for legacy, unavailable, or compacting runs", () => {
+    const legacyQueue = vi.fn(async () => {});
+    const unavailableQueue = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-not-streaming",
+      createEmbeddedRunHandle({ isStreaming: false, queueMessage: legacyQueue }),
+    );
+    setActiveEmbeddedRun(
+      "session-unavailable",
+      createEmbeddedRunHandle({
+        messageInjection: { isAvailable: () => false, queueMessage: unavailableQueue },
+      }),
+    );
+    setActiveEmbeddedRun("session-compacting", createEmbeddedRunHandle({ isCompacting: true }));
+
+    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
+      { queued: false, reason: "not_streaming" },
+    );
+    expect(legacyQueue).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome("session-unavailable", "continue")).toMatchObject({
+      queued: false,
+      reason: "not_streaming",
+    });
+    expect(unavailableQueue).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toMatchObject({
+      queued: false,
+      reason: "compacting",
+    });
+  });
+
+  it("returns runtime rejection details when async queue delivery fails", async () => {
+    setActiveEmbeddedRun("session-rejected", {
+      ...createEmbeddedRunHandle(),
+      queueMessage: async () => {
+        throw new Error("cannot steer a compact turn");
+      },
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync("session-rejected", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-rejected",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+      errorMessage: "cannot steer a compact turn",
+    });
+    expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
+      "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
+    );
+  });
+
+  it("reports accepted steering without transcript confirmation as non-replayable", async () => {
+    setActiveEmbeddedRun("session-unconfirmed", {
+      ...createEmbeddedRunHandle(),
+      queueMessage: async () => ({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      }),
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-unconfirmed",
+      "continue",
+    );
+
+    expect(outcome).toEqual({
+      queued: true,
+      sessionId: "session-unconfirmed",
+      target: "embedded_run",
+      gatewayHealth: "live",
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt unavailable",
+      enqueuedAtMs: expect.any(Number),
+    });
+  });
+
+  it("rejects transcript-commit waits for active handles without support", async () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-no-transcript-wait", {
+      ...createEmbeddedRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-no-transcript-wait",
+      "continue",
+      { waitForTranscriptCommit: true },
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-no-transcript-wait",
+      reason: "transcript_commit_wait_unsupported",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects transcript-commit waits before reply-run fallback without an active handle", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-reply-run",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "visible group prompt", sender: { id: "user-42" } },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-reply-run",
+      "completion from child",
+      { waitForTranscriptCommit: true, userTurnTranscriptRecorder: recorder },
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-reply-run",
+      reason: "transcript_commit_wait_unsupported",
       gatewayHealth: "live",
     });
     expect(queueMessage).not.toHaveBeenCalled();

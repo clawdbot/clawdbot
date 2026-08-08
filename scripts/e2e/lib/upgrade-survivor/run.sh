@@ -406,8 +406,8 @@ for (const entry of manifest.packages) {
 }
 NODE
     )"
-    while IFS=$'\t' read -r package_name package_version package_tarball; do
-      registry_args+=("$package_name" "$package_version" "$package_tarball")
+    while IFS=$'\t' read -r plugin_package_name plugin_package_version plugin_package_tarball; do
+      registry_args+=("$plugin_package_name" "$plugin_package_version" "$plugin_package_tarball")
     done <<<"$registry_rows"
   fi
 
@@ -472,6 +472,7 @@ NODE
   fi
 
   mkdir -p "$fixture_root"
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version" \
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \

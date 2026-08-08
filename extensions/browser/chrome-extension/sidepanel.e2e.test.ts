@@ -15,6 +15,7 @@ import {
   assertCopilotStaleRunIsolation,
   countCopilotHistoryRequests,
   copyCopilotSidepanelExtension,
+  createRelayHarness,
   openTabPanel,
   rawDataText,
   resolveChromiumExecutableOverride,
@@ -49,12 +50,24 @@ declare const chrome: {
     setOptions(options: { tabId: number; enabled: boolean }): Promise<void>;
   };
   tabs: {
+    get(tabId: number): Promise<{
+      active?: boolean;
+      groupId?: number;
+      id?: number;
+      url?: string;
+      windowId?: number;
+    }>;
     getCurrent(): Promise<{ id?: number }>;
+    remove(tabId: number): Promise<void>;
     ungroup(tabIds: number[]): Promise<void>;
+  };
+  tabGroups: {
+    get(groupId: number): Promise<{ title?: string }>;
   };
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
+const RELAY_SECRET = "a".repeat(64);
 
 type RequestFrame = {
   id: string;
@@ -76,14 +89,6 @@ type GatewayHarness = {
   emitEvent: (event: string, payload: Record<string, unknown>) => void;
   failNextAbort: () => void;
   holdNextSubscription: () => () => void;
-};
-
-type RelayHarness = {
-  readonly connectionCount: number;
-  hellos: Array<Record<string, unknown>>;
-  port: number;
-  close: () => Promise<void>;
-  setAvailable: (available: boolean) => void;
 };
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -125,63 +130,6 @@ function sendError(
       error: { code, message, retryable },
     }),
   );
-}
-
-async function createRelayHarness(): Promise<RelayHarness> {
-  const server = createServer();
-  const port = await listen(server);
-  const wss = new WebSocketServer({
-    noServer: true,
-    maxPayload: 1_000_000,
-    handleProtocols: (protocols) => protocols.values().next().value ?? false,
-  });
-  const hellos: Array<Record<string, unknown>> = [];
-  let available = true;
-  let connectionCount = 0;
-  server.on("upgrade", (request, socket, head) => {
-    if (!available) {
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(request, socket, head, (client) => {
-      wss.emit("connection", client, request);
-    });
-  });
-  wss.on("connection", (socket) => {
-    connectionCount += 1;
-    socket.on("message", (data) => {
-      const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
-      if (message.type === "hello") {
-        hellos.push(message);
-      }
-    });
-  });
-  return {
-    get connectionCount() {
-      return connectionCount;
-    },
-    hellos,
-    port,
-    setAvailable: (nextAvailable) => {
-      available = nextAvailable;
-      if (!available) {
-        for (const client of wss.clients) {
-          client.terminate();
-        }
-      }
-    },
-    close: async () => {
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
-  };
 }
 
 async function createGatewayHarness(): Promise<GatewayHarness> {
@@ -454,13 +402,13 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const launcher = initialContext.pages()[0] ?? (await initialContext.newPage());
     await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
     await launcher.evaluate(
-      async ({ gatewayPort, relayPort }) =>
+      async ({ gatewayPort, relayPort, relaySecret }) =>
         await chrome.runtime.sendMessage({
           type: "pair",
-          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#relay-e2e-token`,
+          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#${relaySecret}`,
           groupColor: "#ff7020",
         }),
-      { gatewayPort: gateway.port, relayPort: relay.port },
+      { gatewayPort: gateway.port, relayPort: relay.port, relaySecret: RELAY_SECRET },
     );
     await expect.poll(() => gateway.connectParams.length, { timeout: 10_000 }).toBe(1);
 
@@ -639,13 +587,13 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
     const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     await alphaTab.evaluate(
-      async ({ gatewayPort, relayPort }) =>
+      async ({ gatewayPort, relayPort, relaySecret }) =>
         await chrome.runtime.sendMessage({
           type: "pair",
-          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#relay-e2e-token`,
+          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#${relaySecret}`,
           groupColor: "#ff7020",
         }),
-      { gatewayPort: gateway.port, relayPort: relay.port },
+      { gatewayPort: gateway.port, relayPort: relay.port, relaySecret: RELAY_SECRET },
     );
     await expect.poll(() => gateway.connectParams.length, { timeout: 10_000 }).toBe(1);
     await expect.poll(() => relay.connectionCount, { timeout: 10_000 }).toBe(1);

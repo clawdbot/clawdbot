@@ -555,6 +555,28 @@ describe("getStatusSummary", () => {
     ).toBe(false);
   });
 
+  it("keeps stale totals visible without deriving context utilization", async () => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "stale-total",
+          updatedAt: Date.now(),
+          totalTokens: 50_000,
+          totalTokensFresh: false,
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]).toMatchObject({
+      totalTokens: 50_000,
+      totalTokensFresh: false,
+      remainingTokens: null,
+      percentUsed: null,
+    });
+  });
+
   it("uses bundled provider static catalogs for cold status context", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "google",

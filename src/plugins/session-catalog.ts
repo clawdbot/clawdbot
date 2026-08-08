@@ -7,6 +7,7 @@ import type {
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -57,9 +58,10 @@ export type SessionCatalogCreateTarget = {
   agentRuntime: string;
 };
 
-export type SessionCatalogEntrySummary = ReturnType<
-  PluginRuntime["agent"]["session"]["listSessionEntries"]
->[number];
+export interface SessionCatalogEntrySummary {
+  sessionKey: string;
+  entry: SessionEntry;
+}
 
 /** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
