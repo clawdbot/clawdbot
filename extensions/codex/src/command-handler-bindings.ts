@@ -18,6 +18,7 @@ import {
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";
 import {
+  isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,
   retainCodexAppServerBindingSubscription,
   retireCodexConversationThreadBinding,
@@ -355,14 +356,18 @@ export async function resumeThread(
             "committing a different resumed thread",
           );
           const clientId = client?.getInstanceId();
+          const sameOwner = client
+            ? isSameCodexAppServerThreadOwner(bindingBeforeCommit, {
+                threadId: effectiveThreadId,
+                clientId,
+              })
+            : bindingBeforeCommit?.threadId === effectiveThreadId;
           let retained = false;
           try {
             if (client) {
-              const knownOwnership =
-                bindingBeforeCommit?.threadId === effectiveThreadId &&
-                bindingBeforeCommit.clientId === clientId
-                  ? await consumeCodexAppServerLiveThread(client, effectiveThreadId)
-                  : undefined;
+              const knownOwnership = sameOwner
+                ? await consumeCodexAppServerLiveThread(client, effectiveThreadId)
+                : undefined;
               retained = await retainCodexAppServerBindingSubscription(
                 client,
                 effectiveThreadId,
@@ -372,7 +377,7 @@ export async function resumeThread(
                 throw new Error("Codex resumed thread lost its native subscription owner.");
               }
             }
-            if (bindingBeforeCommit && bindingBeforeCommit.threadId !== effectiveThreadId) {
+            if (bindingBeforeCommit && !sameOwner) {
               // The old row must remain authoritative until its subscription
               // is gone; otherwise another session can claim and lose it.
               await releaseCodexAppServerBindingSubscription(bindingBeforeCommit);
@@ -394,7 +399,7 @@ export async function resumeThread(
               throw new Error("Codex thread binding changed while attaching the resumed thread.");
             }
           } catch (error) {
-            if (client && bindingBeforeCommit?.threadId !== effectiveThreadId) {
+            if (client && !sameOwner) {
               await rollbackCodexAppServerBindingSubscription(client, effectiveThreadId, retained);
             }
             throw error;

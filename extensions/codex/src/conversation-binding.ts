@@ -89,6 +89,7 @@ import {
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
 import {
+  isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,
   retainCodexAppServerBindingSubscription,
   retireCodexConversationThreadBinding,
@@ -629,6 +630,10 @@ async function writeThreadBindingFromResponse(
       : undefined;
   const trackSubscription =
     !isIncognitoSessionKey(params.sessionKey) && isCodexAppServerClientRuntimeLive(resolved.client);
+  const sameOwner = isSameCodexAppServerThreadOwner(current, {
+    threadId: response.thread.id,
+    clientId: resolved.client.getInstanceId(),
+  });
   let retained = false;
   try {
     if (trackSubscription) {
@@ -637,7 +642,7 @@ async function writeThreadBindingFromResponse(
         throw new Error("Codex conversation thread lost its native subscription owner.");
       }
     }
-    if (current && current.threadId !== response.thread.id) {
+    if (current && !sameOwner) {
       // Keep the old identity visible until its sole native subscription is
       // released; a concurrent owner must not adopt it between clear and cleanup.
       await releaseCodexAppServerBindingSubscription(current);
@@ -672,7 +677,7 @@ async function writeThreadBindingFromResponse(
   } catch (error) {
     // A newly started/resumed Codex thread is already subscribed before its
     // response arrives; failed ownership commits must release that exact thread.
-    if (trackSubscription && current?.threadId !== response.thread.id) {
+    if (trackSubscription && !sameOwner) {
       await rollbackCodexAppServerBindingSubscription(
         resolved.client,
         response.thread.id,
@@ -995,6 +1000,17 @@ async function runBoundTurn(params: {
         },
       });
       threadId = response.thread.id;
+      ownsNativeSubscription = true;
+      if (
+        !isSameCodexAppServerThreadOwner(binding, {
+          threadId,
+          clientId: client.getInstanceId(),
+        })
+      ) {
+        // Keep the old physical owner authoritative until unsubscribe succeeds;
+        // failed migration then rolls back only the newly resumed connection.
+        await releaseCodexAppServerBindingSubscription(binding);
+      }
       const committed = await params.bindingStore.mutate(identity, {
         kind: "patch",
         threadId: binding.threadId,
@@ -1012,10 +1028,6 @@ async function runBoundTurn(params: {
       });
       if (!committed) {
         throw new Error("Codex conversation binding changed while resuming on a new client.");
-      }
-      ownsNativeSubscription = true;
-      if (binding.clientId !== client.getInstanceId()) {
-        await releaseCodexAppServerBindingSubscription(binding);
       }
     }
     const turnCollector = createCodexConversationTurnCollector(threadId);

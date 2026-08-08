@@ -609,6 +609,99 @@ describe("codex command", () => {
     }
   });
 
+  it.each([false, true])(
+    "migrates manual resume ownership across physical clients (old release fails: %s)",
+    async (rejectOldRelease) => {
+      const previous = createClientHarness();
+      const replacement = createClientHarness();
+      ensureCodexAppServerClientRuntime(previous.client, { agentDir: tempDir });
+      ensureCodexAppServerClientRuntime(replacement.client, { agentDir: tempDir });
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-1",
+      };
+      await writeTestBinding(identity, {
+        threadId: "thread-manual-migration",
+        clientId: previous.client.getInstanceId(),
+        cwd: "/repo",
+      });
+      const operations: string[] = [];
+      const ownerDuringRelease: Array<string | undefined> = [];
+      vi.spyOn(previous.client, "request").mockImplementation(async (method) => {
+        operations.push(`previous:${method}`);
+        ownerDuringRelease.push((await testCodexAppServerBindingStore.read(identity))?.clientId);
+        if (rejectOldRelease) {
+          throw new Error("previous manual owner unsubscribe failed");
+        }
+        return {} as never;
+      });
+      vi.spyOn(replacement.client, "request").mockImplementation(async (method) => {
+        operations.push(`replacement:${method}`);
+        return {} as never;
+      });
+      await expect(
+        retainCodexAppServerLiveThread(previous.client, "thread-manual-migration"),
+      ).resolves.toBe(true);
+      const sharedClientRuntime = await import("./app-server/shared-client.js");
+      const retainPreviousClient = vi
+        .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
+        .mockImplementation((clientId) =>
+          clientId === previous.client.getInstanceId()
+            ? { client: previous.client, release: vi.fn() }
+            : undefined,
+        );
+      const response = createThreadResumeResponse({ threadId: "thread-manual-migration" });
+      const codexControlRequest = vi.fn(
+        async (
+          _pluginConfig: unknown,
+          _method: string,
+          _params: unknown,
+          options?: {
+            onResponse?: (value: unknown, client: CodexAppServerClient) => Promise<void>;
+          },
+        ) => {
+          await options?.onResponse?.(response, replacement.client);
+          return response;
+        },
+      );
+
+      try {
+        const result = await runCommand("resume thread-manual-migration", { codexControlRequest });
+
+        expect(result.text).toContain(
+          rejectOldRelease
+            ? "previous manual owner unsubscribe failed"
+            : "Attached this OpenClaw session",
+        );
+        expect(operations).toEqual(
+          rejectOldRelease
+            ? ["previous:thread/unsubscribe", "replacement:thread/unsubscribe"]
+            : ["previous:thread/unsubscribe"],
+        );
+        expect(ownerDuringRelease).toEqual([previous.client.getInstanceId()]);
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+          threadId: "thread-manual-migration",
+          clientId: rejectOldRelease
+            ? previous.client.getInstanceId()
+            : replacement.client.getInstanceId(),
+        });
+        const survivingClient = rejectOldRelease ? previous.client : replacement.client;
+        const obsoleteClient = rejectOldRelease ? replacement.client : previous.client;
+        await expect(
+          consumeCodexAppServerLiveThread(survivingClient, "thread-manual-migration"),
+        ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+        await expect(
+          consumeCodexAppServerLiveThread(obsoleteClient, "thread-manual-migration"),
+        ).resolves.toBeUndefined();
+      } finally {
+        retainPreviousClient.mockRestore();
+        previous.client.close();
+        replacement.client.close();
+      }
+    },
+  );
+
   it("preserves known native config ownership when manually resuming the same thread", async () => {
     const harness = createClientHarness();
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });

@@ -204,6 +204,83 @@ function boundConversationClaim(sessionFile: string, sessionKey?: string) {
   };
 }
 
+async function createSameThreadClientMigrationFixture(
+  sessionFile: string,
+  options: { rejectOldRelease: boolean },
+) {
+  await writeTestConversationBinding(sessionFile, {
+    threadId: "thread-migrated",
+    clientId: "client-before-migration",
+    cwd: tempDir,
+  });
+  const operations: string[] = [];
+  const ownerDuringRelease: Array<string | undefined> = [];
+  const notificationHandlers = new Set<(notification: unknown) => void>();
+  const previousClient = {
+    getInstanceId: () => "client-before-migration",
+    request: vi.fn(async (method: string) => {
+      operations.push(`previous:${method}`);
+      ownerDuringRelease.push((await readTestConversationBinding(sessionFile))?.clientId);
+      if (options.rejectOldRelease) {
+        throw new Error("previous physical client unsubscribe failed");
+      }
+      return {};
+    }),
+    addNotificationHandler: vi.fn(() => () => undefined),
+    addRequestHandler: vi.fn(() => () => undefined),
+    addCloseHandler: vi.fn(() => () => undefined),
+  } as unknown as CodexAppServerClient;
+  const replacementClient = {
+    getInstanceId: () => "client-after-migration",
+    request: vi.fn(async (method: string) => {
+      operations.push(`replacement:${method}`);
+      if (method === "thread/resume") {
+        return conversationThreadStartResult("thread-migrated");
+      }
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          for (const handler of notificationHandlers) {
+            handler({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-migrated",
+                turn: {
+                  id: "turn-migrated",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "answer", text: "Migrated reply" }],
+                },
+              },
+            });
+          }
+        });
+        return { turn: { id: "turn-migrated" } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    }),
+    addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
+    }),
+    addRequestHandler: vi.fn(() => () => undefined),
+    addCloseHandler: vi.fn(() => () => undefined),
+  } as unknown as CodexAppServerClient;
+  ensureCodexAppServerClientRuntime(previousClient, { agentDir: tempDir });
+  ensureCodexAppServerClientRuntime(replacementClient, { agentDir: tempDir });
+  await expect(retainCodexAppServerLiveThread(previousClient, "thread-migrated")).resolves.toBe(
+    true,
+  );
+  sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(replacementClient);
+  sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockImplementation((clientId) =>
+    clientId === previousClient.getInstanceId()
+      ? { client: previousClient, release: vi.fn() }
+      : undefined,
+  );
+  return { previousClient, replacementClient, operations, ownerDuringRelease };
+}
+
 function handleCodexConversationInboundClaim(
   event: Parameters<typeof handleCodexConversationInboundClaimImpl>[0],
   ctx: Parameters<typeof handleCodexConversationInboundClaimImpl>[1],
@@ -815,6 +892,60 @@ describe("codex conversation binding", () => {
       expect.objectContaining({ release: expect.any(Function) }),
     );
   });
+
+  it.each([
+    { path: "binding" as const, rejectOldRelease: false },
+    { path: "binding" as const, rejectOldRelease: true },
+    { path: "bound turn" as const, rejectOldRelease: false },
+    { path: "bound turn" as const, rejectOldRelease: true },
+  ])(
+    "transfers exact physical ownership during $path migration (old release fails: $rejectOldRelease)",
+    async ({ path: migrationPath, rejectOldRelease }) => {
+      const sessionFile = path.join(tempDir, "same-thread-client-migration.jsonl");
+      const { previousClient, replacementClient, operations, ownerDuringRelease } =
+        await createSameThreadClientMigrationFixture(sessionFile, { rejectOldRelease });
+
+      if (migrationPath === "binding") {
+        const binding = startCodexConversationThread({
+          sessionFile,
+          threadId: "thread-migrated",
+          workspaceDir: tempDir,
+        });
+        if (rejectOldRelease) {
+          await expect(binding).rejects.toThrow("previous physical client unsubscribe failed");
+        } else {
+          await expect(binding).resolves.toBeUndefined();
+        }
+      } else {
+        const { event, ctx } = boundConversationClaim(sessionFile);
+        const result = await handleCodexConversationInboundClaim(event, ctx, { timeoutMs: 500 });
+        expect(result?.reply?.text).toContain(
+          rejectOldRelease ? "previous physical client unsubscribe failed" : "Migrated reply",
+        );
+      }
+
+      const expectedOperations = ["replacement:thread/resume", "previous:thread/unsubscribe"];
+      if (rejectOldRelease) {
+        expectedOperations.push("replacement:thread/unsubscribe");
+      } else if (migrationPath === "bound turn") {
+        expectedOperations.push("replacement:turn/start");
+      }
+      expect(operations).toEqual(expectedOperations);
+      expect(ownerDuringRelease).toEqual(["client-before-migration"]);
+      await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+        threadId: "thread-migrated",
+        clientId: rejectOldRelease ? "client-before-migration" : "client-after-migration",
+      });
+      const survivingClient = rejectOldRelease ? previousClient : replacementClient;
+      const obsoleteClient = rejectOldRelease ? replacementClient : previousClient;
+      await expect(
+        consumeCodexAppServerLiveThread(survivingClient, "thread-migrated"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+      await expect(
+        consumeCodexAppServerLiveThread(obsoleteClient, "thread-migrated"),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("starts a new bind thread when no model override is provided", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

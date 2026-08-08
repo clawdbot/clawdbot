@@ -21,6 +21,19 @@ import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js
 
 const nativeThreadOwners = new KeyedAsyncQueue();
 
+/** Codex subscriptions belong to a physical connection, not the native thread ID alone. */
+export function isSameCodexAppServerThreadOwner(
+  current: Pick<CodexAppServerThreadBinding, "threadId" | "clientId"> | undefined,
+  expected: Pick<CodexAppServerThreadBinding, "threadId" | "clientId"> | undefined,
+): boolean {
+  return (
+    current !== undefined &&
+    expected !== undefined &&
+    current.threadId === expected.threadId &&
+    current.clientId === expected.clientId
+  );
+}
+
 /** Fences native subscription and commit together; Codex subscriptions are not reference-counted. */
 export async function withExclusiveCodexAppServerThread<T>(params: {
   bindingStore: CodexAppServerBindingStore;

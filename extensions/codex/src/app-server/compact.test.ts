@@ -265,6 +265,37 @@ describe("maybeCompactCodexAppServerSession", () => {
     ).resolves.toEqual(expect.objectContaining({ configFingerprint: "config-thread-2" }));
   });
 
+  it("releases an obsolete physical owner when compaction migrates the same native thread", async () => {
+    const fake = createFakeCodexClient({ autoCompleteCompaction: false });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({ clientId: "client-before-compaction" });
+    const pending = startCompaction(sessionFile);
+    await vi.waitFor(() => {
+      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    });
+
+    seedCodexTestBinding(sessionFile, {
+      threadId: "thread-1",
+      clientId: "client-after-compaction",
+      cwd: tempDir,
+    });
+    fake.completeCompaction();
+
+    await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(fake.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual([
+      [
+        "thread/unsubscribe",
+        { threadId: "thread-1" },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      ],
+    ]);
+    await expect(consumeCodexAppServerLiveThread(fake.client, "thread-1")).resolves.toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      clientId: "client-after-compaction",
+    });
+  });
+
   it("preserves an incognito thread's separately owned live subscription", async () => {
     const fake = createFakeCodexClient({
       retainedThreadId: null,

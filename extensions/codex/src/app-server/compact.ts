@@ -46,6 +46,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 
 // ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
@@ -779,10 +780,10 @@ async function compactCodexNativeThread(
               // Reset uses this same generation lease; without it compaction
               // could return an obsolete subscription after its owner ended.
               const retained =
-                currentBinding?.threadId === binding.threadId &&
+                isSameCodexAppServerThreadOwner(currentBinding, binding) &&
                 (await options.bindingStore.withLease(bindingIdentity, async () => {
                   const leasedBinding = await options.bindingStore.read(bindingIdentity);
-                  if (leasedBinding?.threadId !== binding.threadId) {
+                  if (!isSameCodexAppServerThreadOwner(leasedBinding, binding)) {
                     return false;
                   }
                   return await retainCodexAppServerLiveThread(
@@ -943,7 +944,7 @@ function isSameNativeCompactionBinding(
   expected: CodexAppServerThreadBinding,
 ): boolean {
   return (
-    current.threadId === expected.threadId &&
+    isSameCodexAppServerThreadOwner(current, expected) &&
     current.authProfileId === expected.authProfileId &&
     current.contextEngine?.engineId === expected.contextEngine?.engineId &&
     current.contextEngine?.policyFingerprint === expected.contextEngine?.policyFingerprint &&
