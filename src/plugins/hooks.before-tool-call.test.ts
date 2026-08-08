@@ -579,7 +579,7 @@ describe("tool_call_rejected observation", () => {
       registry,
       pluginId: "failure-observer",
       hookName: "tool_call_rejected",
-      matcher: ["edit"],
+      matcher: ["apply_patch"],
       handler: handler as never,
     });
     const runner = createHookRunner(registry);
@@ -589,7 +589,7 @@ describe("tool_call_rejected observation", () => {
       reason: "schema_validation_failed" as const,
       correlation: {
         turnId: "turn-1",
-        intendedTool: "edit",
+        intendedTool: "apply_patch",
         providerToolCallId: "call-1",
         providerToolCallIdOrigin: "provider" as const,
         provider: "openai",
@@ -610,7 +610,7 @@ describe("tool_call_rejected observation", () => {
       },
     };
 
-    await runner.runToolCallRejected(event, { ...stubCtx, toolName: "edit" });
+    await runner.runToolCallRejected(event, { ...stubCtx, toolName: "apply_patch" });
     await runner.runToolCallRejected(
       {
         ...event,
@@ -641,7 +641,7 @@ describe("tool_call_rejected observation", () => {
           reason: "schema_validation_failed",
           correlation: {
             turnId: "turn-1",
-            intendedTool: "edit",
+            intendedTool: "apply_patch",
             providerToolCallId: "call-1",
             providerToolCallIdOrigin: "provider",
             provider: "openai",
@@ -661,7 +661,7 @@ describe("tool_call_rejected observation", () => {
             truncated: false,
           },
         },
-        { ...stubCtx, toolName: "edit" },
+        { ...stubCtx, toolName: "apply_patch" },
       );
 
       await vi.advanceTimersByTimeAsync(5_000);

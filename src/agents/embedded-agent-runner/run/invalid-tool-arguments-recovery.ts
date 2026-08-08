@@ -269,6 +269,17 @@ export async function createInvalidToolArgumentsRecovery(params: {
       params.sessionManager.appendCustomEntry(CUSTOM_TYPE, entry);
     });
   };
+  const appendIfActive = async (
+    entry: RecoveryEntry,
+    signal: AbortSignal | undefined,
+  ): Promise<boolean> =>
+    await params.sessionLockController.withSessionWriteLock(() => {
+      if (signal?.aborted) {
+        return false;
+      }
+      params.sessionManager.appendCustomEntry(CUSTOM_TYPE, entry);
+      return true;
+    });
 
   const correlation = (entry: RecoveryEntry, message: MessageIdentity) => ({
     runId: bounded(params.attempt.runId),
@@ -314,6 +325,7 @@ export async function createInvalidToolArgumentsRecovery(params: {
 
   let pending: RecoveryEntry | undefined;
   let claimed: RecoveryEntry | undefined;
+  let claimedToolCallId: string | undefined;
   let pendingReceipt: RecoveryEntry | undefined;
   let replayIndeterminate: RecoveryEntry | undefined;
   const latest = latestRecoveryEntry(params.sessionManager);
@@ -433,6 +445,7 @@ export async function createInvalidToolArgumentsRecovery(params: {
         attempt: 2,
         toolCallId: bounded(candidate.toolCall.id),
       };
+      claimedToolCallId = candidate.toolCall.id;
       await append(claimed);
       pending = undefined;
     } else if (batchRejections.length > 0 && all.length > 1) {
@@ -483,6 +496,9 @@ export async function createInvalidToolArgumentsRecovery(params: {
 
     agent.afterToolOutcome = async (context, signal) => {
       if (context.errorKind === "argument-validation" && !context.executionStarted) {
+        if (signal?.aborted) {
+          return await previousAfterToolOutcome?.(context, signal);
+        }
         if (isTerminalRecoveryRejection(context)) {
           // This result closes an existing chain. Do not expose it to another
           // repair owner or reinterpret it as a fresh first rejection.
@@ -512,8 +528,11 @@ export async function createInvalidToolArgumentsRecovery(params: {
           validation,
         };
         const event = rejection(opened, context.assistantMessage, "schema_validation_failed");
-        pending = { ...opened, rejection: event };
-        await append(pending);
+        const offered = { ...opened, rejection: event };
+        if (!(await appendIfActive(offered, signal))) {
+          return await previousAfterToolOutcome?.(context, signal);
+        }
+        pending = offered;
         return {
           content: [{ type: "text", text: correctionText(context.toolCall.name) }],
           details: event,
@@ -523,13 +542,14 @@ export async function createInvalidToolArgumentsRecovery(params: {
       }
       const prior = await previousAfterToolOutcome?.(context, signal);
       const effective = mergeOutcome(context, prior);
-      if (claimed && context.toolCall.id === claimed.toolCallId) {
+      if (claimed && context.toolCall.id === claimedToolCallId) {
         pendingReceipt = {
           ...claimed,
           state: terminalState(effective),
           attempt: 2,
         };
         claimed = undefined;
+        claimedToolCallId = undefined;
         return prior;
       }
       return prior;

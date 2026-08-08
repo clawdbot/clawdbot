@@ -1024,6 +1024,16 @@ async function getValidatedToolCallOutcome(
   if (cached) {
     return cached;
   }
+  if (signal?.aborted) {
+    return {
+      kind: "immediate",
+      outcome: {
+        kind: "immediate",
+        result: createErrorToolResult("Operation aborted"),
+        isError: true,
+      },
+    };
+  }
   const validation = await validateToolCallForBatchAdmission(
     currentContext,
     assistantMessage,
@@ -1245,18 +1255,23 @@ async function validateToolCallForBatchAdmission(
     };
   }
 
-  let preparedToolCall: AgentToolCall;
-  try {
-    preparedToolCall = prepareToolCallArguments(tool, toolCall);
-  } catch (error) {
-    return {
-      kind: "immediate",
-      outcome: {
+  let preparedToolCall = toolCall;
+  // Provider adapters use undefined only when argument bytes were malformed
+  // or missing. Validate that shape before tool-specific preparation can
+  // normalize it into a valid empty object.
+  if (toolCall.arguments !== undefined) {
+    try {
+      preparedToolCall = prepareToolCallArguments(tool, toolCall);
+    } catch (error) {
+      return {
         kind: "immediate",
-        result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
-        isError: true,
-      },
-    };
+        outcome: {
+          kind: "immediate",
+          result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+          isError: true,
+        },
+      };
+    }
   }
 
   let validatedArgs: unknown;

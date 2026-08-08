@@ -125,9 +125,8 @@ describe("invalid tool argument recovery", () => {
       recovery: { state: "retry_available", remainingAttempts: 1 },
     });
 
-    const correction = assistant("turn-correction", [
-      { id: "provider-correction-different", name: "EDIT" },
-    ]);
+    const correctionId = `provider-correction-different-${"x".repeat(160)}`;
+    const correction = assistant("turn-correction", [{ id: correctionId, name: "EDIT" }]);
     const correctionCall = correction.content.find((item) => item.type === "toolCall")!;
     await expect(
       controller.beforeToolBatch({
@@ -384,6 +383,22 @@ describe("invalid tool argument recovery", () => {
     expect(fixture.notifyRejected).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "retry_not_matched" }),
     );
+  });
+
+  it("does not open durable recovery after cancellation", async () => {
+    const fixture = harness();
+    const controller = await createController(fixture);
+    const agent = fakeAgent();
+    controller.install(agent);
+    const original = assistant("turn-original", [{ id: "original", name: "edit" }]);
+    const abortController = new AbortController();
+    abortController.abort(new Error("cancelled"));
+
+    await expect(
+      agent.afterToolOutcome?.(invalidOutcome(original, "original"), abortController.signal),
+    ).resolves.toBeUndefined();
+    expect(fixture.entries).toEqual([]);
+    expect(fixture.notifyRejected).not.toHaveBeenCalled();
   });
 
   it("closes retry_available on an ambiguous multi-call recovery batch", async () => {

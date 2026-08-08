@@ -37,7 +37,7 @@ describe("validateToolArguments", () => {
         name: "decimal-tool",
         arguments: { amount: "0x10", count: "0b10" },
       }),
-    ).toThrow(/Tool arguments failed schema validation for "decimal-tool"/);
+    ).toThrow(/Validation failed for tool "decimal-tool"/);
   });
 
   it("preserves null in anyOf [{type: string}, {type: null}] without coercing to empty string (#96716)", () => {
@@ -151,7 +151,7 @@ describe("validateToolArguments — stringified JSON coercion", () => {
         name: "array-tool",
         arguments: { tags: "not-json" },
       }),
-    ).toThrow(/Tool arguments failed schema validation for "array-tool"/);
+    ).toThrow(/Validation failed for tool "array-tool"/);
   });
 
   it("rejects JSON string that is wrong type for array param", () => {
@@ -162,7 +162,7 @@ describe("validateToolArguments — stringified JSON coercion", () => {
         name: "array-tool",
         arguments: { tags: '{"not":"array"}' },
       }),
-    ).toThrow(/Tool arguments failed schema validation for "array-tool"/);
+    ).toThrow(/Validation failed for tool "array-tool"/);
   });
 
   it("skips JSON coercion for oversized array string", () => {
@@ -175,7 +175,7 @@ describe("validateToolArguments — stringified JSON coercion", () => {
         name: "array-tool",
         arguments: { tags: hugeArray },
       }),
-    ).toThrow(/Tool arguments failed schema validation for "array-tool"/);
+    ).toThrow(/Validation failed for tool "array-tool"/);
   });
 
   it("skips JSON coercion for oversized object string", () => {
@@ -188,7 +188,7 @@ describe("validateToolArguments — stringified JSON coercion", () => {
         name: "object-tool",
         arguments: { config: hugeObj },
       }),
-    ).toThrow(/Tool arguments failed schema validation for "object-tool"/);
+    ).toThrow(/Validation failed for tool "object-tool"/);
   });
 });
 
