@@ -814,6 +814,74 @@ describe("MCP OAuth provider", () => {
     );
   });
 
+  it("keeps a captured verifier bound to its login when another login overlaps", async () => {
+    await withTempHome(
+      async () => {
+        let firstSession: { codeVerifier: string; redirectUrl: string } | undefined;
+        authMock.mockReset();
+        authMock.mockImplementationOnce(async (provider) => {
+          await provider.saveCodeVerifier?.("verifier-first");
+          return "REDIRECT";
+        });
+
+        await runMcpOAuthLogin({
+          serverName: "Calendly",
+          serverUrl: "https://mcp.calendly.com/",
+          onAuthorizationUrl: () => {},
+          onAuthorizationSession: (session) => {
+            firstSession = session;
+          },
+        });
+        expect(firstSession).toEqual({
+          codeVerifier: "verifier-first",
+          redirectUrl: "http://127.0.0.1:8989/oauth/callback",
+        });
+
+        authMock.mockImplementationOnce(async (provider) => {
+          await provider.saveCodeVerifier?.("verifier-second");
+          return "REDIRECT";
+        });
+        await runMcpOAuthLogin({
+          serverName: "Calendly",
+          serverUrl: "https://mcp.calendly.com/",
+          onAuthorizationUrl: () => {},
+        });
+        expect(
+          readMcpOAuthStore(resolveMcpOAuthStoreKey("Calendly", "https://mcp.calendly.com/"))
+            .codeVerifier,
+        ).toBe("verifier-second");
+
+        const captured = firstSession;
+        if (!captured) {
+          throw new Error("first login did not capture its authorization session");
+        }
+        authMock.mockImplementationOnce(async (provider, options) => {
+          expect(options.authorizationCode).toBe("code-first");
+          expect(await provider.codeVerifier()).toBe("verifier-first");
+          expect(provider.redirectUrl).toBe("http://127.0.0.1:8989/oauth/callback");
+          return "AUTHORIZED";
+        });
+        await expect(
+          runMcpOAuthLogin({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+            config: { redirectUrl: captured.redirectUrl },
+            authorizationCode: "code-first",
+            codeVerifier: captured.codeVerifier,
+          }),
+        ).resolves.toBe("authorized");
+      },
+      {
+        prefix: "openclaw-mcp-oauth-overlap-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
   it("does not start hidden authorization flows without an authorization callback", async () => {
     // Normal agent/tool execution must not open browser auth flows implicitly;
     // operators use the explicit mcp login command instead.

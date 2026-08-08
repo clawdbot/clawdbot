@@ -88,6 +88,7 @@ export function createMcpOAuthClientProvider(params: {
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
+  codeVerifier?: string;
   lease?: OpenClawStateLeaseContext;
 }): OAuthClientProvider {
   const config = params.config ?? {};
@@ -153,7 +154,7 @@ export function createMcpOAuthClientProvider(params: {
       updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), codeVerifier }));
     },
     codeVerifier() {
-      const codeVerifier = readMcpOAuthStore(storeKey).codeVerifier;
+      const codeVerifier = params.codeVerifier ?? readMcpOAuthStore(storeKey).codeVerifier;
       if (!codeVerifier) {
         throw new Error("Missing MCP OAuth code verifier. Run the login flow again.");
       }

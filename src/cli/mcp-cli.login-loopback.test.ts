@@ -78,6 +78,7 @@ function mockRedirectFlow(redirectUrl: string): void {
     async (params: {
       authorizationCode?: string;
       onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+      onAuthorizationSession?: (session: { codeVerifier: string; redirectUrl: string }) => void;
     }) => {
       if (params.authorizationCode) {
         return "authorized";
@@ -86,6 +87,7 @@ function mockRedirectFlow(redirectUrl: string): void {
       authorizationUrl.searchParams.set("redirect_uri", redirectUrl);
       authorizationUrl.searchParams.set("state", "state-1234567890");
       await params.onAuthorizationUrl?.(authorizationUrl);
+      params.onAuthorizationSession?.({ codeVerifier: "verifier-123", redirectUrl });
       return "redirect";
     },
   );

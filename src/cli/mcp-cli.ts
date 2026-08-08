@@ -21,6 +21,7 @@ import {
   clearMcpOAuthCredentials,
   readMcpOAuthCredentialsStatus,
   runMcpOAuthLogin,
+  type McpOAuthAuthorizationSession,
   type McpOAuthCredentialsStatus,
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
@@ -1366,10 +1367,14 @@ export function registerMcpCli(program: Command) {
       }
 
       let callbackServer: OAuthLoopbackCallbackServer | undefined;
+      let authorizationSession: McpOAuthAuthorizationSession | undefined;
       const manualCommand = formatCliCommand(`openclaw mcp login ${name} --code <code>`);
       try {
         const result = await runMcpOAuthLogin({
           ...loginParams,
+          onAuthorizationSession: (session) => {
+            authorizationSession = session;
+          },
           onAuthorizationUrl: async (url) => {
             const redirectValue = url.searchParams.get("redirect_uri");
             const expectedState = url.searchParams.get("state");
@@ -1415,9 +1420,15 @@ export function registerMcpCli(program: Command) {
         if (callback.type === "oauth_error") {
           fail(`OAuth authorization did not complete. Retry login or use ${manualCommand}.`);
         }
+        const session = authorizationSession;
+        if (!session) {
+          fail(`OAuth login state was not preserved. Retry login or use ${manualCommand}.`);
+        }
         const exchangeResult = await runMcpOAuthLogin({
           ...loginParams,
+          config: { ...loginParams.config, redirectUrl: session.redirectUrl },
           authorizationCode: callback.code,
+          codeVerifier: session.codeVerifier,
         });
         if (exchangeResult !== "authorized") {
           fail(`OAuth login did not complete. Retry login or use ${manualCommand}.`);
