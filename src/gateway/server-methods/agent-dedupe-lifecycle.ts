@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -104,27 +103,6 @@ export function createAgentDedupeLifecycle(params: {
     reserved = false;
   };
 
-  const failBeforeDispatch = (summary: string) => {
-    const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
-    const payload = {
-      runId: params.runId,
-      status: "error" as const,
-      summary,
-    };
-    // A reserved request owns its idempotency keys even when admission fails.
-    // Persist the terminal failure so retries replay it instead of re-entering admission.
-    accepted = true;
-    setGatewayDedupeEntries({
-      dedupe: params.context.dedupe,
-      keys: params.agentDedupeKeys,
-      entry: { ts: Date.now(), ok: false, payload, error },
-    });
-    params.respond(false, payload, error, {
-      runId: params.runId,
-      error: summary,
-    });
-  };
-
   const abortForLifecycleRotation = (target?: { sessionKey?: string; agentId?: string }) => {
     if (params.lifecycleGeneration === getAgentEventLifecycleGeneration()) {
       return false;
@@ -186,7 +164,6 @@ export function createAgentDedupeLifecycle(params: {
     reservationId,
     reserve,
     clearUnaccepted,
-    failBeforeDispatch,
     abortForLifecycleRotation,
     isReserved: () => reserved,
     isAccepted: () => accepted,

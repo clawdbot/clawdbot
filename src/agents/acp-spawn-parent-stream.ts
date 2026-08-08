@@ -120,31 +120,6 @@ function mergeStreamingEntry(
   };
 }
 
-function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
-  return asObjectRecord(entry.streaming)?.mode !== undefined;
-}
-
-function applyParentPreviewStreamModeDefault(
-  entry: StreamingCompatEntry,
-  channelId: string,
-): StreamingCompatEntry {
-  if (channelId !== "discord" || hasConfiguredPreviewStreamMode(entry)) {
-    return entry;
-  }
-  const streaming = asObjectRecord(entry.streaming);
-  return {
-    ...entry,
-    streaming: streaming
-      ? {
-          ...streaming,
-          mode: "progress",
-        }
-      : {
-          mode: "progress",
-        },
-  };
-}
-
 function resolveParentProgressStreamingEntry(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
@@ -165,10 +140,7 @@ function resolveParentProgressStreamingEntry(params: {
     normalizeAccountId(params.deliveryContext?.accountId),
     normalizeAccountId,
   );
-  return applyParentPreviewStreamModeDefault(
-    mergeStreamingEntry(channelCfg, accountCfg),
-    channelId,
-  );
+  return mergeStreamingEntry(channelCfg, accountCfg);
 }
 
 function resolveParentProgressCommentary(params: {
@@ -764,4 +736,3 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

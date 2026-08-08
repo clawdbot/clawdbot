@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
@@ -28,8 +29,6 @@ import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
-export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
-
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
 export type QueueSettings = {
@@ -54,6 +53,7 @@ type QueueInsertPosition = "tail" | "front";
 
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
+  steerCandidate?: boolean;
 };
 
 export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
@@ -98,6 +98,14 @@ export type FollowupRun = {
   summaryLine?: string;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
+  /** The current-turn hook already ran before this steer became a fallback. */
+  /** Pending same-turn acceptance while this item remains parked in FIFO order. */
+  steerPending?: {
+    predecessor: Promise<boolean>;
+    settle: (accepted: boolean) => void;
+  };
+  /** Preserves this candidate's position ahead of overflow summaries. */
+  steerAnchor?: true;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
@@ -230,7 +238,7 @@ const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecy
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
 
-type FollowupLifecycleRun = Pick<FollowupRun, "turnAdoptionLifecycle">;
+type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -282,6 +290,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 }
 
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+  run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
 
   const finish = () => {

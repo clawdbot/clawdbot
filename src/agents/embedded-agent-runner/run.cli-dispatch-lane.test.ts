@@ -6,17 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getAgentEventLifecycleGeneration,
-  resetAgentEventsForTest,
-} from "../../infra/agent-events.js";
-import {
-  claimAgentRunContext,
-  getAgentRunContext,
-  resetAgentRunRegistryForTest,
-} from "../../infra/agent-run-registry.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
-import { createAgentExecutionAttribution } from "../agent-execution-attribution.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const runEmbeddedAgentViaCliBackendIfEligible = vi.hoisted(() => vi.fn());
@@ -66,8 +56,6 @@ function laneRunParams() {
 describe("runEmbeddedAgent CLI dispatch lane admission", () => {
   beforeEach(() => {
     runEmbeddedAgentViaCliBackendIfEligible.mockReset();
-    resetAgentEventsForTest();
-    resetAgentRunRegistryForTest();
   });
 
   it("resolves and executes CLI dispatch inside the global-lane task", async () => {
@@ -98,52 +86,5 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       "global-lane-exit",
     ]);
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
-  });
-
-  it("strips host-owned attribution fields at the public runner boundary", async () => {
-    runEmbeddedAgentViaCliBackendIfEligible.mockResolvedValue(dispatchResult);
-    const forgedAttribution = {
-      runId: "forged",
-      lifecycleGeneration: "forged-generation",
-    };
-    const forgedAttributionObserver = vi.fn();
-
-    await runEmbeddedAgent({
-      ...laneRunParams(),
-      attribution: forgedAttribution,
-      onExecutionAttributionChanged: forgedAttributionObserver,
-    } as never);
-
-    const admittedParams = runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0];
-    expect(admittedParams).not.toHaveProperty("attribution");
-    expect(admittedParams).not.toHaveProperty("onExecutionAttributionChanged");
-    expect(forgedAttributionObserver).not.toHaveBeenCalled();
-  });
-
-  it("does not recover private attribution from a caller-selected run ID", async () => {
-    runEmbeddedAgentViaCliBackendIfEligible.mockResolvedValue(dispatchResult);
-    const params = laneRunParams();
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const attribution = createAgentExecutionAttribution({
-      runId: params.runId,
-      lifecycleGeneration,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-    });
-    claimAgentRunContext(params.runId, {
-      attribution,
-      lifecycleGeneration,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-    });
-
-    await expect(runEmbeddedAgent(params)).rejects.toThrow(
-      "Agent run ID is already bound to host-owned execution attribution.",
-    );
-
-    expect(runEmbeddedAgentViaCliBackendIfEligible).not.toHaveBeenCalled();
-    expect(getAgentRunContext(params.runId)?.attribution).toBe(attribution);
   });
 });

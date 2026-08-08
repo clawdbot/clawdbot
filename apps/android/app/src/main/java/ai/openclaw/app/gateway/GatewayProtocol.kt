@@ -72,7 +72,6 @@ data class GatewayNodeInvokeRequest(
   val paramsJson: String? = null,
   val timeoutMs: Long? = null,
   val idempotencyKey: String? = null,
-  val sessionKey: JsonElement? = null,
 )
 
 @Serializable
@@ -379,7 +378,6 @@ enum class GatewayMethod(
   NodeDescribe("node.describe"),
   NodePluginSurfaceRefresh("node.pluginSurface.refresh"),
   NodePluginToolsUpdate("node.pluginTools.update"),
-  NodeProtocolFeaturesUpdate("node.protocolFeatures.update"),
   NodeSkillsUpdate("node.skills.update"),
   NodePendingDrain("node.pending.drain"),
   NodePendingEnqueue("node.pending.enqueue"),

@@ -1,7 +1,7 @@
 import Foundation
 import OpenClawProtocol
 import Testing
-@_spi(AgentExecutionAttribution) @testable import OpenClawKit
+@testable import OpenClawKit
 
 extension NSLock {
     fileprivate func withLock<T>(_ body: () -> T) -> T {
@@ -33,18 +33,6 @@ private actor StringCapture {
 
     func get() -> String? {
         self.value
-    }
-}
-
-private actor SessionKeyEnvelopeCapture {
-    private var values: [GatewayNodeInvokeSessionKeyEnvelope] = []
-
-    func append(_ value: GatewayNodeInvokeSessionKeyEnvelope) {
-        self.values.append(value)
-    }
-
-    func all() -> [GatewayNodeInvokeSessionKeyEnvelope] {
-        self.values
     }
 }
 
@@ -204,10 +192,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
-    private let protocolFeaturesError: [String: Any]?
-    private let protocolFeaturesAutoResponse: Bool
-    private let protocolFeaturesResponseDelay: Duration
-    private let protocolFeaturesPostResponseInvoke: Bool
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
     private var connectRequestId: String?
@@ -225,10 +209,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
-        protocolFeaturesError: [String: Any]? = nil,
-        protocolFeaturesAutoResponse: Bool = true,
-        protocolFeaturesResponseDelay: Duration = .zero,
-        protocolFeaturesPostResponseInvoke: Bool = false,
         cancelGate: FirstCancelGate? = nil)
     {
         self.helloAuth = helloAuth
@@ -236,10 +216,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
-        self.protocolFeaturesError = protocolFeaturesError
-        self.protocolFeaturesAutoResponse = protocolFeaturesAutoResponse
-        self.protocolFeaturesResponseDelay = protocolFeaturesResponseDelay
-        self.protocolFeaturesPostResponseInvoke = protocolFeaturesPostResponseInvoke
         self.cancelGate = cancelGate
     }
 
@@ -280,25 +256,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             self.lock.withLock {
                 self.sentRequestMethods.append(method)
                 self.sentRequestPayloads.append(obj)
-            }
-            if method == "node.protocolFeatures.update",
-               self.protocolFeaturesAutoResponse,
-               let id = obj["id"] as? String
-            {
-                Task { [weak self] in
-                    guard let self else { return }
-                    try? await Task.sleep(for: self.protocolFeaturesResponseDelay)
-                    if let protocolFeaturesError = self.protocolFeaturesError {
-                        self.emitError(id: id, error: protocolFeaturesError)
-                    } else {
-                        self.emitResponse(id: id, payload: ["ok": true])
-                    }
-                    if self.protocolFeaturesPostResponseInvoke {
-                        self.emitInvokeRequest(
-                            id: "post-negotiation",
-                            command: "mcp.tools.call.v1")
-                    }
-                }
             }
             guard method == "connect", let id = obj["id"] as? String else { return }
             let params = obj["params"] as? [String: Any]
@@ -394,23 +351,25 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.emitInbound(.failure(URLError(.networkConnectionLost)))
     }
 
+    func emitInvokeRequest(id: String, command: String, idempotencyKey: String? = nil) {
+        self.emitInvokeRequest(
+            id: id,
+            command: command,
+            paramsJSON: "{}",
+            idempotencyKey: idempotencyKey)
+    }
+
     func emitInvokeRequest(
         id: String,
         command: String,
-        paramsJSON: String? = "{}",
-        idempotencyKey: String? = nil,
-        includeSessionKey: Bool = false,
-        sessionKey: String? = nil,
-        timeoutMs: Int? = nil)
+        paramsJSON: String?,
+        idempotencyKey: String? = nil)
     {
         self.emitInbound(.success(.data(Self.invokeRequestData(
             id: id,
             command: command,
             paramsJSON: paramsJSON,
-            idempotencyKey: idempotencyKey,
-            includeSessionKey: includeSessionKey,
-            sessionKey: sessionKey,
-            timeoutMs: timeoutMs))))
+            idempotencyKey: idempotencyKey))))
     }
 
     func emitResponse(id: String, payload: [String: Any]) {
@@ -419,17 +378,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             "id": id,
             "ok": true,
             "payload": payload,
-        ]
-        let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
-        self.emitInbound(.success(.data(data)))
-    }
-
-    func emitError(id: String, error: [String: Any]) {
-        let frame: [String: Any] = [
-            "type": "res",
-            "id": id,
-            "ok": false,
-            "error": error,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
         self.emitInbound(.success(.data(data)))
@@ -529,10 +477,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         id: String,
         command: String,
         paramsJSON: String?,
-        idempotencyKey: String?,
-        includeSessionKey: Bool,
-        sessionKey: String?,
-        timeoutMs: Int?) -> Data
+        idempotencyKey: String?) -> Data
     {
         var payload: [String: Any] = [
             "id": id,
@@ -542,12 +487,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         ]
         if let idempotencyKey {
             payload["idempotencyKey"] = idempotencyKey
-        }
-        if includeSessionKey {
-            payload["sessionKey"] = sessionKey ?? NSNull()
-        }
-        if let timeoutMs {
-            payload["timeoutMs"] = timeoutMs
         }
         let frame: [String: Any] = [
             "type": "event",
@@ -567,10 +506,6 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
     private let helloSessionDefaults: [String: Any]?
     private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
-    private let protocolFeaturesError: [String: Any]?
-    private let protocolFeaturesAutoResponse: Bool
-    private let protocolFeaturesResponseDelay: Duration
-    private let protocolFeaturesPostResponseInvoke: Bool
     private let cancelGate: FirstCancelGate?
     let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
@@ -583,10 +518,6 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
-        protocolFeaturesError: [String: Any]? = nil,
-        protocolFeaturesAutoResponse: Bool = true,
-        protocolFeaturesResponseDelay: Duration = .zero,
-        protocolFeaturesPostResponseInvoke: Bool = false,
         cancelGate: FirstCancelGate? = nil,
         effectiveTLSFingerprintSHA256: String? = nil)
     {
@@ -595,10 +526,6 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.helloSessionDefaults = helloSessionDefaults
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
-        self.protocolFeaturesError = protocolFeaturesError
-        self.protocolFeaturesAutoResponse = protocolFeaturesAutoResponse
-        self.protocolFeaturesResponseDelay = protocolFeaturesResponseDelay
-        self.protocolFeaturesPostResponseInvoke = protocolFeaturesPostResponseInvoke
         self.cancelGate = cancelGate
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
     }
@@ -629,10 +556,6 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
                 helloSessionDefaults: self.helloSessionDefaults,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 connectError: self.connectError,
-                protocolFeaturesError: self.protocolFeaturesError,
-                protocolFeaturesAutoResponse: self.protocolFeaturesAutoResponse,
-                protocolFeaturesResponseDelay: self.protocolFeaturesResponseDelay,
-                protocolFeaturesPostResponseInvoke: self.protocolFeaturesPostResponseInvoke,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
             return WebSocketTaskBox(task: task)
@@ -859,29 +782,6 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
         stateversion: nil))
 }
 
-private func nodeInvokeInputPush(id: String, seq: Int, payloadJSON: String) -> GatewayPush {
-    .event(EventFrame(
-        type: "event",
-        event: "node.invoke.input",
-        payload: AnyCodable([
-            "id": AnyCodable(id),
-            "nodeId": AnyCodable("test-node"),
-            "seq": AnyCodable(seq),
-            "payloadJSON": AnyCodable(payloadJSON),
-        ]),
-        seq: nil,
-        stateversion: nil))
-}
-
-private func nodeInvokeCancelPush(id: String) -> GatewayPush {
-    .event(EventFrame(
-        type: "event",
-        event: "node.invoke.cancel",
-        payload: AnyCodable(["invokeId": AnyCodable(id)]),
-        seq: nil,
-        stateversion: nil))
-}
-
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test func `operator canvas refresh uses the operator surface method`() async throws {
@@ -915,9 +815,7 @@ struct GatewayNodeSessionTests {
 
     @Test func `canvas surface refresh is shared across callers with different timeouts`() async throws {
         let expectedFingerprint = String(repeating: "ab", count: 32)
-        let session = FakeGatewayWebSocketSession(
-            protocolFeaturesAutoResponse: false,
-            effectiveTLSFingerprintSHA256: expectedFingerprint)
+        let session = FakeGatewayWebSocketSession(effectiveTLSFingerprintSHA256: expectedFingerprint)
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(caps: ["canvas"], clientId: "openclaw-macos", clientDisplayName: "macOS Test")
 
@@ -926,20 +824,14 @@ struct GatewayNodeSessionTests {
         async let first = gateway.refreshCanvasHostUrl(replacing: nil)
         async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 2)
-        try await waitUntil("protocol feature and surface refresh sent") {
-            guard let task = session.latestTask() else { return false }
-            return task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                task.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        try await waitUntil("single surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
         let task = try #require(session.latestTask())
-        let featureRequest = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
-        let surfaceRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
-
-        try task.emitResponse(
-            id: #require(featureRequest["id"] as? String),
-            payload: ["ok": true])
-        try task.emitResponse(
-            id: #require(surfaceRequest["id"] as? String),
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+        let requestID = try #require(request["id"] as? String)
+        task.emitResponse(
+            id: requestID,
             payload: [
                 "surface": "canvas",
                 "pluginSurfaceUrls": [
@@ -1139,8 +1031,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test func `node invoke input and cancellation reach route callbacks`() async throws {
-        let session = FakeGatewayWebSocketSession(
-            protocolFeaturesResponseDelay: .seconds(1))
+        let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let probe = NodeInvokeControlProbe()
         let options = nodeConnectOptions(
@@ -1157,36 +1048,30 @@ struct GatewayNodeSessionTests {
             onInvokeCancel: { invokeId in await probe.recordCancellation(invokeId) })
 
         await gateway._test_handlePush(
-            nodeInvokePush(id: "blocked", command: "codex.terminal.resume.v1"),
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.input",
+                payload: AnyCodable([
+                    "id": AnyCodable("terminal-1"),
+                    "nodeId": AnyCodable("test-node"),
+                    "seq": AnyCodable(3),
+                    "payloadJSON": AnyCodable(#"{"data":"hello"}"#),
+                ]),
+                seq: nil,
+                stateversion: nil)),
             socketGeneration: 1)
         await gateway._test_handlePush(
-            nodeInvokeInputPush(
-                id: "terminal-1",
-                seq: 3,
-                payloadJSON: #"{"data":"hello"}"#),
-            socketGeneration: 1)
-        await gateway._test_handlePush(
-            nodeInvokeCancelPush(id: "terminal-1"),
-            socketGeneration: 1)
-        await gateway._test_handlePush(
-            nodeInvokeInputPush(
-                id: "blocked",
-                seq: 4,
-                payloadJSON: #"{"data":"queued"}"#),
-            socketGeneration: 1)
-        await gateway._test_handlePush(
-            nodeInvokeCancelPush(id: "blocked"),
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.cancel",
+                payload: AnyCodable(["invokeId": AnyCodable("terminal-1")]),
+                seq: nil,
+                stateversion: nil)),
             socketGeneration: 1)
 
-        try await waitUntil("invoke controls bypass protocol negotiation", timeoutSeconds: 0.2) {
-            let values = await probe.values()
-            return values.0.count == 2 && values.1.count == 2
-        }
         let values = await probe.values()
-        #expect(values.0.contains(#"terminal-1:3:{"data":"hello"}"#))
-        #expect(values.0.contains(#"blocked:4:{"data":"queued"}"#))
-        #expect(values.1.contains("terminal-1"))
-        #expect(values.1.contains("blocked"))
+        #expect(values.0 == [#"terminal-1:3:{"data":"hello"}"#])
+        #expect(values.1 == ["terminal-1"])
         await gateway.disconnect()
     }
 
@@ -2387,396 +2272,6 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `node invoke negotiation carries authoritative session envelopes`() async throws {
-        let session = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
-            permissions: [:],
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: "macOS Test",
-            includeDeviceIdentity: false)
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://example.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: session),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in
-                await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-                return BridgeInvokeResponse(id: request.id, ok: true)
-            })
-        let task = try #require(session.latestTask())
-        try await waitUntil("protocol feature publication") {
-            task.sentRequestCount(method: "node.protocolFeatures.update") == 1
-        }
-        let publication = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
-        let publicationParams = try #require(publication["params"] as? [String: Any])
-        #expect(publicationParams["features"] as? [String] == [
-            "node-invoke-session-key-envelope-v1",
-        ])
-
-        try task.emitResponse(
-            id: #require(publication["id"] as? String),
-            payload: ["ok": true])
-        task.emitInvokeRequest(
-            id: "attributed",
-            command: "mcp.tools.call.v1",
-            paramsJSON: "{}",
-            includeSessionKey: true,
-            sessionKey: "agent:main:main")
-        try await waitUntil("attributed envelope delivered") {
-            await capture.all().count == 1
-        }
-
-        try await waitUntil("receive loop ready for explicit clear") {
-            task.hasPendingReceiveHandler()
-        }
-        task.emitInvokeRequest(
-            id: "unattributed",
-            command: "mcp.tools.call.v1",
-            paramsJSON: "{}",
-            includeSessionKey: true,
-            sessionKey: nil)
-        try await waitUntil("explicit clear delivered") {
-            await capture.all().count == 2
-        }
-
-        #expect(await capture.all() == [
-            .authoritative("agent:main:main"),
-            .authoritative(nil),
-        ])
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `node invoke receipt timeout dispatch preserves authoritative session envelopes`() async throws {
-        let session = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = nodeConnectOptions(
-            caps: ["computer"],
-            commands: ["computer.act"],
-            clientId: "openclaw-macos",
-            clientDisplayName: "macOS Test")
-
-        try await gateway.connectForTest(
-            testURL("ws://example.invalid"),
-            options: options,
-            session: session,
-            onInvoke: { request in
-                await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-                return BridgeInvokeResponse(id: request.id, ok: true)
-            })
-        let task = try #require(session.latestTask())
-        try await waitUntil("protocol feature publication") {
-            task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                task.hasPendingReceiveHandler()
-        }
-        let publication = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
-
-        try task.emitResponse(
-            id: #require(publication["id"] as? String),
-            payload: ["ok": true])
-        task.emitInvokeRequest(
-            id: "computer-attributed",
-            command: "computer.act",
-            paramsJSON: #"{"action":"type","text":"one"}"#,
-            idempotencyKey: "computer.act:v1:attributed",
-            includeSessionKey: true,
-            sessionKey: "agent:main:main",
-            timeoutMs: 1000)
-        try await waitUntil("attributed computer invoke completed") {
-            task.sentRequestCount(method: "node.invoke.result") == 1
-        }
-        try await waitUntil("receive loop ready for cleared computer invoke") {
-            task.hasPendingReceiveHandler()
-        }
-        task.emitInvokeRequest(
-            id: "computer-cleared",
-            command: "computer.act",
-            paramsJSON: #"{"action":"type","text":"two"}"#,
-            idempotencyKey: "computer.act:v1:cleared",
-            includeSessionKey: true,
-            sessionKey: nil,
-            timeoutMs: 1000)
-        try await waitUntil("cleared computer invoke completed") {
-            task.sentRequestCount(method: "node.invoke.result") == 2
-        }
-
-        #expect(await capture.all() == [
-            .authoritative("agent:main:main"),
-            .authoritative(nil),
-        ])
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `node invoke negotiation resets legacy fallback after reconnect`() async throws {
-        let legacySession = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
-        let currentSession = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
-            permissions: [:],
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: "macOS Test",
-            includeDeviceIdentity: false)
-        let onInvoke: @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse = { request in
-            await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-            return BridgeInvokeResponse(id: request.id, ok: true)
-        }
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://legacy.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: legacySession),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: onInvoke)
-        let legacyTask = try #require(legacySession.latestTask())
-        try await waitUntil("legacy negotiation completed") {
-            legacyTask.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                legacyTask.hasPendingReceiveHandler()
-        }
-        let legacyPublication = try #require(
-            legacyTask.sentRequests(method: "node.protocolFeatures.update").first)
-        try legacyTask.emitError(
-            id: #require(legacyPublication["id"] as? String),
-            error: [
-                "code": "INVALID_REQUEST",
-                "message": "unknown method: node.protocolFeatures.update",
-            ])
-        legacyTask.emitInvokeRequest(id: "legacy", command: "mcp.tools.call.v1")
-        try await waitUntil("legacy envelope delivered") {
-            await capture.all().count == 1
-        }
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://current.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: currentSession),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: onInvoke)
-        let currentTask = try #require(currentSession.latestTask())
-        try await waitUntil("current negotiation completed") {
-            currentTask.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                currentTask.hasPendingReceiveHandler()
-        }
-        let currentPublication = try #require(
-            currentTask.sentRequests(method: "node.protocolFeatures.update").first)
-        try currentTask.emitResponse(
-            id: #require(currentPublication["id"] as? String),
-            payload: ["ok": true])
-        currentTask.emitInvokeRequest(id: "current", command: "mcp.tools.call.v1")
-        try await waitUntil("current envelope delivered") {
-            await capture.all().count == 2
-        }
-
-        #expect(await capture.all() == [
-            .legacy,
-            .authoritative(nil),
-        ])
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `node invoke negotiation fails closed on non compatibility errors`() async throws {
-        let session = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
-            permissions: [:],
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: "macOS Test",
-            includeDeviceIdentity: false)
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://example.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: session),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in
-                await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-                return BridgeInvokeResponse(id: request.id, ok: true)
-            })
-        let task = try #require(session.latestTask())
-        try await waitUntil("failed negotiation completed") {
-            task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                task.hasPendingReceiveHandler()
-        }
-        let publication = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
-        try task.emitError(
-            id: #require(publication["id"] as? String),
-            error: [
-                "code": "UNAVAILABLE",
-                "message": "temporary failure",
-            ])
-        task.emitInvokeRequest(id: "fail-closed", command: "mcp.tools.call.v1")
-        try await waitUntil("fail-closed envelope delivered") {
-            await capture.all().count == 1
-        }
-
-        #expect(await capture.all() == [.authoritative(nil)])
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `node invoke received before negotiation preserves legacy envelope`() async throws {
-        let session = FakeGatewayWebSocketSession(
-            protocolFeaturesResponseDelay: .seconds(2))
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
-            permissions: [:],
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: "macOS Test",
-            includeDeviceIdentity: false)
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://example.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: session),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in
-                await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-                return BridgeInvokeResponse(id: request.id, ok: true)
-            })
-        let task = try #require(session.latestTask())
-        try await waitUntil("protocol feature publication") {
-            task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                task.hasPendingReceiveHandler()
-        }
-        task.emitInvokeRequest(
-            id: "pre-negotiation",
-            command: "mcp.tools.call.v1",
-            paramsJSON: "{}",
-            timeoutMs: 500)
-        try await waitUntil("pre-negotiation invoke result", timeoutSeconds: 1) {
-            task.sentRequestCount(method: "node.invoke.result") == 1
-        }
-
-        #expect(await capture.all() == [.legacy])
-        let result = try #require(task.sentRequests(method: "node.invoke.result").first)
-        let params = try #require(result["params"] as? [String: Any])
-        #expect(params["ok"] as? Bool == true)
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `node invoke immediately after negotiation response is authoritative`() async throws {
-        let session = FakeGatewayWebSocketSession(
-            protocolFeaturesPostResponseInvoke: true)
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
-            permissions: [:],
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: "macOS Test",
-            includeDeviceIdentity: false)
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://example.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: session),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in
-                await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-                return BridgeInvokeResponse(id: request.id, ok: true)
-            })
-        try await waitUntil("post-negotiation invoke delivered") {
-            await capture.all().count == 1
-        }
-
-        #expect(await capture.all() == [.authoritative(nil)])
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `explicit node invoke envelope bypasses protocol negotiation`() async throws {
-        let session = FakeGatewayWebSocketSession(
-            protocolFeaturesResponseDelay: .seconds(1))
-        let gateway = GatewayNodeSession()
-        let capture = SessionKeyEnvelopeCapture()
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: ["mcp"],
-            commands: ["mcp.tools.call.v1"],
-            permissions: [:],
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: "macOS Test",
-            includeDeviceIdentity: false)
-
-        try await gateway.connect(
-            url: #require(URL(string: "ws://example.invalid")),
-            credentials: .init(),
-            connectOptions: options,
-            sessionBox: WebSocketSessionBox(session: session),
-            onConnected: {},
-            onDisconnected: { _ in },
-            onInvoke: { request in
-                await capture.append(GatewayNodeInvokeContext.sessionKeyEnvelope)
-                return BridgeInvokeResponse(id: request.id, ok: true)
-            })
-        let task = try #require(session.latestTask())
-        try await waitUntil("protocol feature publication") {
-            task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
-                task.hasPendingReceiveHandler()
-        }
-        task.emitInvokeRequest(
-            id: "explicit",
-            command: "mcp.tools.call.v1",
-            paramsJSON: "{}",
-            includeSessionKey: true,
-            sessionKey: "agent:main:main",
-            timeoutMs: 100)
-        try await waitUntil("explicit invoke bypass", timeoutSeconds: 0.2) {
-            await capture.all().count == 1
-        }
-
-        #expect(await capture.all() == [.authoritative("agent:main:main")])
-        await gateway.disconnect()
-    }
-
-    @Test
     func `node invoke result preserves structured worker payload`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -2871,9 +2366,7 @@ struct GatewayNodeSessionTests {
             id: "computer-completed-replay",
             command: "computer.act",
             paramsJSON: paramsJSON,
-            idempotencyKey: idempotencyKey,
-            includeSessionKey: true,
-            sessionKey: nil)
+            idempotencyKey: idempotencyKey)
         try await waitUntil("completed computer receipt returned after reconnect") {
             replayTask.sentRequestCount(method: "node.invoke.result") == 1
         }
@@ -2898,73 +2391,6 @@ struct GatewayNodeSessionTests {
         #expect(await probe.count() == 1)
 
         await gateway.disconnect()
-    }
-
-    @Test
-    func `duplicate computer receipt applies its timeout without cancelling the shared invoke`() async throws {
-        let gateway = GatewayNodeSession()
-        let probe = ComputerInvokeProbe()
-        let paramsJSON = #"{"action":"type","text":"hello"}"#
-        let key = "computer.act:v1:duplicate-timeout"
-        let scope = "gateway:duplicate-timeout"
-
-        let original = Task {
-            await gateway.invokeComputerWithReceiptForTesting(
-                requestId: "original",
-                paramsJSON: paramsJSON,
-                idempotencyKey: key,
-                receiptScope: scope,
-                onInvoke: { request in await probe.execute(request) })
-        }
-        try await waitUntil("original computer invoke started") {
-            await probe.count() == 1
-        }
-
-        let duplicate = await gateway.invokeComputerWithReceiptForTesting(
-            requestId: "duplicate",
-            paramsJSON: paramsJSON,
-            idempotencyKey: key,
-            receiptScope: scope,
-            timeoutMs: 10,
-            onInvoke: { request in await probe.execute(request) })
-
-        #expect(!duplicate.ok)
-        #expect(duplicate.id == "duplicate")
-        #expect(duplicate.error?.message == "node invoke timed out")
-        #expect(await probe.count() == 1)
-
-        await probe.release()
-        #expect(await original.value.ok)
-        #expect(await probe.count() == 1)
-    }
-
-    @Test
-    func `computer receipt timeout before dispatch remains retryable`() async {
-        let gateway = GatewayNodeSession()
-        let probe = ComputerInvokeProbe()
-        await probe.release()
-        let paramsJSON = #"{"action":"type","text":"hello"}"#
-        let key = "computer.act:v1:pre-dispatch-timeout"
-        let scope = "gateway:pre-dispatch-timeout"
-
-        let timedOut = await gateway.invokeComputerWithExpiredReceiptForTesting(
-            requestId: "expired",
-            paramsJSON: paramsJSON,
-            idempotencyKey: key,
-            receiptScope: scope,
-            onInvoke: { request in await probe.execute(request) })
-        #expect(!timedOut.ok)
-        #expect(timedOut.error?.message == "node invoke timed out")
-        #expect(await probe.count() == 0)
-
-        let retry = await gateway.invokeComputerWithReceiptForTesting(
-            requestId: "retry",
-            paramsJSON: paramsJSON,
-            idempotencyKey: key,
-            receiptScope: scope,
-            onInvoke: { request in await probe.execute(request) })
-        #expect(retry.ok)
-        #expect(await probe.count() == 1)
     }
 
     @Test
@@ -3053,99 +2479,6 @@ struct GatewayNodeSessionTests {
         #expect(await (firstReplay.value).ok)
         #expect(await (secondReplay.value).ok)
         #expect(await freshProbe.count() == 1)
-    }
-
-    @Test
-    func `stale receipt retry dispatches exactly once without a deadline`() async throws {
-        let gateway = GatewayNodeSession()
-        let staleGate = AsyncGate()
-        let freshProbe = ComputerInvokeProbe()
-        let paramsJSON = #"{"action":"type","text":"hello"}"#
-        let key = "computer.act:v1:stale-no-deadline"
-        let scope = "gateway:stale-no-deadline"
-        let stale = Task {
-            await gateway.invokeComputerWithReceiptForTesting(
-                requestId: "stale",
-                paramsJSON: paramsJSON,
-                idempotencyKey: key,
-                receiptScope: scope,
-                onInvoke: { request in
-                    await staleGate.wait()
-                    return GatewayNodeSession.staleRouteInvokeResponse(requestId: request.id)
-                })
-        }
-        try await waitUntil("stale receipt without deadline is in flight") {
-            await staleGate.hasStarted()
-        }
-
-        let replay = Task {
-            await gateway.invokeComputerWithReceiptForTesting(
-                requestId: "replay",
-                paramsJSON: paramsJSON,
-                idempotencyKey: key,
-                receiptScope: scope,
-                onInvoke: { request in await freshProbe.execute(request) })
-        }
-        try await waitUntil("no-deadline replay joined the stale receipt") {
-            await gateway.computerReceiptJoinCountForTesting(
-                idempotencyKey: key,
-                receiptScope: scope) == 1
-        }
-        await staleGate.release()
-        try await waitUntil("no-deadline retry dispatched once") {
-            await freshProbe.count() == 1
-        }
-        await freshProbe.release()
-
-        #expect(await stale.value.ok == false)
-        #expect(await replay.value.ok)
-        #expect(await freshProbe.count() == 1)
-    }
-
-    @Test
-    func `stale receipt retry preserves the original invoke deadline`() async throws {
-        let gateway = GatewayNodeSession()
-        let staleGate = AsyncGate()
-        let freshProbe = ComputerInvokeProbe()
-        let paramsJSON = #"{"action":"type","text":"hello"}"#
-        let key = "computer.act:v1:stale-deadline"
-        let scope = "gateway:stale-deadline"
-        let stale = Task {
-            await gateway.invokeComputerWithReceiptForTesting(
-                requestId: "stale",
-                paramsJSON: paramsJSON,
-                idempotencyKey: key,
-                receiptScope: scope,
-                onInvoke: { request in
-                    await staleGate.wait()
-                    return GatewayNodeSession.staleRouteInvokeResponse(requestId: request.id)
-                })
-        }
-        try await waitUntil("stale deadline receipt is in flight") {
-            await staleGate.hasStarted()
-        }
-
-        let replay = Task {
-            await gateway.invokeComputerWithReceiptForTesting(
-                requestId: "replay",
-                paramsJSON: paramsJSON,
-                idempotencyKey: key,
-                receiptScope: scope,
-                timeoutMs: 100,
-                onInvoke: { request in await freshProbe.execute(request) })
-        }
-        try await waitUntil("deadline replay joined the stale receipt") {
-            await gateway.computerReceiptJoinCountForTesting(
-                idempotencyKey: key,
-                receiptScope: scope) == 1
-        }
-        await staleGate.release()
-        let response = await replay.value
-        #expect(!response.ok)
-        #expect(response.error?.message == "node invoke timed out")
-        await freshProbe.release()
-        #expect(await stale.value.ok == false)
-        #expect(await freshProbe.count() <= 1)
     }
 
     @Test

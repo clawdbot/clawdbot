@@ -15,30 +15,8 @@ import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
-import kotlin.coroutines.AbstractCoroutineContextElement
-import kotlin.coroutines.CoroutineContext
-
-internal sealed interface NodeInvokeSessionKeyEnvelope {
-  data object Legacy : NodeInvokeSessionKeyEnvelope
-
-  data class Authoritative(
-    val sessionKey: String?,
-  ) : NodeInvokeSessionKeyEnvelope
-}
-
-private class NodeInvokeExecutionContext(
-  val sessionKeyEnvelope: NodeInvokeSessionKeyEnvelope,
-) : AbstractCoroutineContextElement(NodeInvokeExecutionContext) {
-  companion object Key : CoroutineContext.Key<NodeInvokeExecutionContext>
-}
-
-internal suspend fun currentNodeInvokeSessionKeyEnvelope(): NodeInvokeSessionKeyEnvelope =
-  currentCoroutineContext()[NodeInvokeExecutionContext]?.sessionKeyEnvelope
-    ?: NodeInvokeSessionKeyEnvelope.Legacy
 
 /** Runtime state for SMS search, split so permission prompts are not reported as hard unavailability. */
 internal enum class SmsSearchAvailabilityReason {
@@ -122,19 +100,6 @@ class InvokeDispatcher(
   private val canvasCommandMutex = Mutex()
 
   /** Dispatches one gateway node.invoke command after foreground and availability gates pass. */
-  suspend fun handleInvoke(request: GatewaySession.InvokeRequest): GatewaySession.InvokeResult {
-    val sessionKeyEnvelope =
-      if (request.hasSessionKeyEnvelope) {
-        NodeInvokeSessionKeyEnvelope.Authoritative(request.sessionKey)
-      } else {
-        NodeInvokeSessionKeyEnvelope.Legacy
-      }
-    return withContext(NodeInvokeExecutionContext(sessionKeyEnvelope)) {
-      handleInvoke(request.command, request.paramsJson)
-    }
-  }
-
-  /** Dispatches one command for direct native callers that have no gateway attribution envelope. */
   suspend fun handleInvoke(
     command: String,
     paramsJson: String?,

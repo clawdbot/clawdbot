@@ -27,6 +27,7 @@ function createDefaultSessionStoreEntry() {
     cacheWrite: 1_000,
     totalTokens: 5_000,
     totalTokensFresh: true as boolean,
+    totalTokensVersion: 1 as const,
     contextTokens: 10_000,
     model: "test:opus",
     sessionId: "abc123",
@@ -569,12 +570,11 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
     })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
-  resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
-    typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
-  ),
   resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+    (entry?: { totalTokens?: number; totalTokensFresh?: boolean; totalTokensVersion?: number }) =>
+      typeof entry?.totalTokens === "number" &&
+      entry?.totalTokensFresh === true &&
+      entry.totalTokensVersion === 1
         ? entry.totalTokens
         : undefined,
   ),

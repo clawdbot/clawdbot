@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { configureNodeHost } from "./config.js";
-import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { runNodeHost } from "./runner.js";
 
@@ -11,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
   capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
   capturedGatewayClients: [] as Array<{
-    request: ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
+    request: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
@@ -50,7 +49,7 @@ const mocks = vi.hoisted(() => ({
   })),
   resolveGatewayCredentialsWithSecretInputs: vi.fn(async () => ({})),
   activeRuntime: {
-    invoke: vi.fn(async (_payload: NodeInvokeRequestPayload) => {}),
+    invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn(),
@@ -67,17 +66,9 @@ vi.mock("../gateway/client-start-readiness.js", () => ({
 }));
 
 vi.mock("../gateway/client.js", () => ({
-  GatewayClientRequestError: class MockGatewayClientRequestError extends Error {
-    readonly gatewayCode: string;
-
-    constructor(params: { code: string; message: string }) {
-      super(params.message);
-      this.gatewayCode = params.code;
-    }
-  },
   GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
     const client = {
-      request: vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({})),
+      request: vi.fn(async () => ({})),
       stop: vi.fn(),
       updateNodeManifest: vi.fn(),
     };
@@ -256,27 +247,6 @@ describe("runNodeHost", () => {
 
     options?.onEvent?.({
       type: "event",
-      event: "node.invoke.request",
-      payload: {
-        id: "invoke-1",
-        nodeId: "node-1",
-        command: "system.run",
-        sessionKey: "agent:main:main",
-      },
-    });
-    await vi.waitFor(() =>
-      expect(mocks.activeRuntime.invoke).toHaveBeenCalledWith({
-        id: "invoke-1",
-        nodeId: "node-1",
-        command: "system.run",
-        paramsJSON: null,
-        timeoutMs: null,
-        idempotencyKey: null,
-        sessionKey: "agent:main:main",
-      }),
-    );
-    options?.onEvent?.({
-      type: "event",
       event: "node.invoke.input",
       payload: { id: "invoke-1", nodeId: "node-1", seq: 3, payloadJSON: '{"kind":"data"}' },
     });
@@ -285,15 +255,10 @@ describe("runNodeHost", () => {
       event: "node.invoke.cancel",
       payload: { invokeId: "invoke-1", nodeId: "node-1" },
     });
-    await vi.waitFor(() => {
-      expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith(
-        "invoke-1",
-        3,
-        '{"kind":"data"}',
-      );
-      expect(mocks.activeRuntime.cancel).toHaveBeenCalledWith("invoke-1");
-    });
     options?.onClose?.(1000, "connection closed");
+
+    expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith("invoke-1", 3, '{"kind":"data"}');
+    expect(mocks.activeRuntime.cancel).toHaveBeenCalledWith("invoke-1");
     expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
   });
 
@@ -532,9 +497,6 @@ describe("runNodeHost", () => {
       features: { methods: [], events: [] },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 
-    expect(client?.request).toHaveBeenCalledWith("node.protocolFeatures.update", {
-      features: ["node-invoke-session-key-envelope-v1"],
-    });
     expect(client?.request).toHaveBeenCalledWith("node.pluginTools.update", {
       tools: [
         {

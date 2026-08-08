@@ -707,6 +707,147 @@ describe("MCP OAuth provider", () => {
     ]);
   });
 
+  it("exchanges a captured loopback code under the same OAuth lease", async () => {
+    await withTempHome(
+      async () => {
+        const authorizationUrl = new URL("https://auth.example.com/authorize");
+        authorizationUrl.searchParams.set("state", "state-1");
+        authorizationUrl.searchParams.set("redirect_uri", "http://127.0.0.1:43123/oauth/callback");
+        authMock.mockReset();
+        authMock
+          .mockImplementationOnce(async (provider) => {
+            await provider.saveCodeVerifier?.("verifier");
+            await provider.redirectToAuthorization?.(authorizationUrl);
+            return "REDIRECT";
+          })
+          .mockImplementationOnce(async (provider, options) => {
+            expect(options.authorizationCode).toBe("captured-code");
+            expect(provider.redirectUrl).toBe("http://127.0.0.1:43123/oauth/callback");
+            const leaseCount = openOpenClawStateDatabase()
+              .db.prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope = ?")
+              .get("core:mcp-oauth") as { count: number };
+            expect(leaseCount.count).toBe(1);
+            await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
+            return "AUTHORIZED";
+          });
+
+        await expect(
+          runMcpOAuthLogin({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+            config: { redirectUrl: "http://127.0.0.1:43123/oauth/callback" },
+            onAuthorizationUrl: async (url) => {
+              expect(url).toEqual(authorizationUrl);
+              return "captured-code";
+            },
+          }),
+        ).resolves.toBe("authorized");
+        expect(authMock).toHaveBeenCalledTimes(2);
+      },
+      {
+        prefix: "openclaw-mcp-oauth-loopback-code-",
+        skipSessionCleanup: true,
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+      },
+    );
+  });
+
+  it("persists the localhost registration fallback before exchanging a captured code", async () => {
+    await withTempHome(
+      async () => {
+        const serverName = "Calendly";
+        const serverUrl = "https://mcp.calendly.com/";
+        const storeKey = resolveMcpOAuthStoreKey(serverName, serverUrl);
+        const authorizationUrl = new URL("https://auth.example.com/authorize");
+        authorizationUrl.searchParams.set("state", "state-1");
+        authorizationUrl.searchParams.set("redirect_uri", "http://localhost:8989/oauth/callback");
+        authMock.mockReset();
+        authMock
+          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+          .mockImplementationOnce(async (provider) => {
+            expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+            await provider.saveCodeVerifier?.("verifier");
+            await provider.redirectToAuthorization?.(authorizationUrl);
+            return "REDIRECT";
+          })
+          .mockImplementationOnce(async (provider, options) => {
+            expect(options.authorizationCode).toBe("captured-code");
+            expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+            expect(readMcpOAuthStore(storeKey).redirectUrl).toBe(
+              "http://localhost:8989/oauth/callback",
+            );
+            return "AUTHORIZED";
+          });
+
+        await expect(
+          runMcpOAuthLogin({
+            serverName,
+            serverUrl,
+            onAuthorizationUrl: () => "captured-code",
+          }),
+        ).resolves.toBe("authorized");
+        expect(authMock).toHaveBeenCalledTimes(3);
+      },
+      {
+        prefix: "openclaw-mcp-oauth-loopback-fallback-",
+        skipSessionCleanup: true,
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+      },
+    );
+  });
+
+  it.each([
+    ["busy listener", Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" })],
+    ["callback timeout", new Error("OAuth callback timeout")],
+  ])("persists localhost before a failed %s can fall back to --code", async (_label, error) => {
+    await withTempHome(
+      async () => {
+        const serverName = "Calendly";
+        const serverUrl = "https://mcp.calendly.com/";
+        const storeKey = resolveMcpOAuthStoreKey(serverName, serverUrl);
+        const authorizationUrl = new URL("https://auth.example.com/authorize");
+        authorizationUrl.searchParams.set("state", "state-1");
+        authorizationUrl.searchParams.set("redirect_uri", "http://localhost:8989/oauth/callback");
+        authMock.mockReset();
+        authMock
+          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+          .mockImplementationOnce(async (provider) => {
+            await provider.saveCodeVerifier?.("verifier");
+            await provider.redirectToAuthorization?.(authorizationUrl);
+            return "REDIRECT";
+          });
+
+        await expect(
+          runMcpOAuthLogin({
+            serverName,
+            serverUrl,
+            onAuthorizationUrl: () => {
+              throw error;
+            },
+          }),
+        ).rejects.toBe(error);
+        expect(readMcpOAuthStore(storeKey).redirectUrl).toBe(
+          "http://localhost:8989/oauth/callback",
+        );
+
+        authMock.mockReset();
+        authMock.mockImplementationOnce(async (provider, options) => {
+          expect(options.authorizationCode).toBe("manual-code");
+          expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+          return "AUTHORIZED";
+        });
+        await expect(
+          runMcpOAuthLogin({ serverName, serverUrl, authorizationCode: "manual-code" }),
+        ).resolves.toBe("authorized");
+      },
+      {
+        prefix: "openclaw-mcp-oauth-loopback-recovery-",
+        skipSessionCleanup: true,
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+      },
+    );
+  });
+
   it("does not retry a code exchange redirect mismatch", async () => {
     authMock.mockReset();
     authMock.mockRejectedValueOnce(new Error("invalid_grant: redirect_uri mismatch"));

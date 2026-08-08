@@ -32,11 +32,6 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
-import {
-  createOpenClawCodingToolsForAgentHarness,
-  createOpenClawCodingToolsForAgentHarnessSideQuestion,
-} from "./agent-tools-internal.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -48,8 +43,6 @@ import {
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { bindEmbeddedAttemptExecutionAttribution } from "./embedded-agent-runner/run/attempt-execution-attribution.js";
-import { bindAgentHarnessSideQuestionExecutionAttribution } from "./harness/side-question-execution-attribution.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -298,155 +291,6 @@ describe("createOpenClawCodingTools", () => {
         },
       }),
     );
-  });
-
-  it("does not accept host-owned attribution through the public tool builder", async () => {
-    const beforeToolCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
-    const tmpDir = tempDirs.make("openclaw-hook-attribution-");
-    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
-    const forgedAttribution = createAgentExecutionAttribution({
-      runId: "forged-run",
-      lifecycleGeneration: "forged-generation",
-      sessionKey: "forged-session",
-      sessionId: "forged-session-id",
-      agentId: "forged-agent",
-    });
-    const tools = createOpenClawCodingTools({
-      workspaceDir: tmpDir,
-      runId: "public-run",
-      sessionKey: "public-session",
-      sessionId: "public-session-id",
-      agentId: "public-agent",
-      attribution: forgedAttribution,
-    } as never);
-
-    await requireToolExecute(requireTool(tools, "read"))("tool-public-attribution", {
-      path: "note.txt",
-    });
-
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: "public-run",
-      sessionKey: "public-session",
-      sessionId: "public-session-id",
-      agentId: "public-agent",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("lifecycleGeneration");
-  });
-
-  it("binds exact host attribution for a core-admitted harness attempt", async () => {
-    const beforeToolCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
-    const tmpDir = tempDirs.make("openclaw-harness-attribution-");
-    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
-    const attribution = createAgentExecutionAttribution({
-      runId: "admitted-run",
-      lifecycleGeneration: "admitted-generation",
-      sessionKey: "admitted-session",
-      sessionId: "admitted-session-id",
-      agentId: "admitted-agent",
-    });
-    const attempt = {} as Parameters<typeof bindEmbeddedAttemptExecutionAttribution>[0];
-    bindEmbeddedAttemptExecutionAttribution(attempt, attribution);
-
-    const tools = createOpenClawCodingToolsForAgentHarness(attempt, {
-      workspaceDir: tmpDir,
-      runId: "flat-run",
-      sessionKey: "flat-session",
-      sessionId: "flat-session-id",
-      agentId: "flat-agent",
-    });
-    await requireToolExecute(requireTool(tools, "read"))("tool-harness-attribution", {
-      path: "note.txt",
-    });
-
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: attribution.runId,
-      sessionKey: attribution.sessionKey,
-      sessionId: attribution.sessionId,
-      agentId: attribution.agentId,
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("executionId");
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("contextId");
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("attribution");
-
-    beforeToolCall.mockClear();
-    const unboundTools = createOpenClawCodingToolsForAgentHarness(
-      {} as Parameters<typeof bindEmbeddedAttemptExecutionAttribution>[0],
-      {
-        workspaceDir: tmpDir,
-        runId: "unbound-run",
-        sessionKey: "unbound-session",
-        attribution,
-      } as never,
-    );
-    await requireToolExecute(requireTool(unboundTools, "read"))("tool-unbound-attribution", {
-      path: "note.txt",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: "unbound-run",
-      sessionKey: "unbound-session",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("lifecycleGeneration");
-  });
-
-  it("binds exact host attribution for the admitted side-question request only", async () => {
-    const beforeToolCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
-    const tmpDir = tempDirs.make("openclaw-side-question-attribution-");
-    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
-    const attribution = createAgentExecutionAttribution({
-      runId: "side-run",
-      lifecycleGeneration: "side-generation",
-      sessionKey: "side-session",
-      sessionId: "side-session-id",
-      agentId: "side-agent",
-    });
-    const sideQuestion = bindAgentHarnessSideQuestionExecutionAttribution(
-      {} as Parameters<typeof bindAgentHarnessSideQuestionExecutionAttribution>[0],
-      attribution,
-    );
-
-    const tools = createOpenClawCodingToolsForAgentHarnessSideQuestion(sideQuestion, {
-      workspaceDir: tmpDir,
-      runId: "flat-run",
-      sessionKey: "flat-session",
-      sessionId: "flat-session-id",
-      agentId: "flat-agent",
-    });
-    await requireToolExecute(requireTool(tools, "read"))("tool-side-attribution", {
-      path: "note.txt",
-    });
-
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: attribution.runId,
-      sessionKey: attribution.sessionKey,
-      sessionId: attribution.sessionId,
-      agentId: attribution.agentId,
-    });
-    expect(sideQuestion).not.toHaveProperty("attribution");
-
-    beforeToolCall.mockClear();
-    const cloneTools = createOpenClawCodingToolsForAgentHarnessSideQuestion({ ...sideQuestion }, {
-      workspaceDir: tmpDir,
-      runId: "clone-run",
-      sessionKey: "clone-session",
-      attribution,
-    } as never);
-    await requireToolExecute(requireTool(cloneTools, "read"))("tool-side-clone", {
-      path: "note.txt",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: "clone-run",
-      sessionKey: "clone-session",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("lifecycleGeneration");
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {

@@ -11,11 +11,9 @@ type ControlUiAuthPolicy = {
 
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
-  controlUiConfig: unknown;
   deviceRaw: ConnectParams["device"] | null | undefined;
   deviceAuthMigrationPending?: boolean;
 }): ControlUiAuthPolicy {
-  void params.controlUiConfig;
   return {
     isControlUi: params.isControlUi,
     device: params.deviceRaw,

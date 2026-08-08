@@ -26,7 +26,6 @@ import {
 } from "../plugins/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject } from "../utils.js";
-import { resolveToolExecutionCorrelation } from "./agent-tools.before-tool-call.attribution.js";
 import { resolveToolErrorDiagnostic } from "./agent-tools.before-tool-call.diagnostics.js";
 import type {
   DeferredPluginToolApproval,
@@ -189,7 +188,6 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
-  const correlation = resolveToolExecutionCorrelation(params.ctx);
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
@@ -206,8 +204,8 @@ async function requestPluginToolApproval(params: {
           allowedDecisions: approval.allowedDecisions,
           toolName: params.toolName,
           toolCallId: params.toolCallId,
-          agentId: correlation.agentId,
-          sessionKey: correlation.sessionKey,
+          agentId: params.ctx?.agentId,
+          sessionKey: params.ctx?.sessionKey,
           turnSourceChannel: params.ctx?.turnSourceChannel,
           turnSourceTo: params.ctx?.turnSourceTo,
           turnSourceAccountId: params.ctx?.turnSourceAccountId,
@@ -291,8 +289,8 @@ async function requestPluginToolApproval(params: {
         allowedDecisions: approval.allowedDecisions,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
-        agentId: correlation.agentId,
-        sessionKey: correlation.sessionKey,
+        agentId: params.ctx?.agentId,
+        sessionKey: params.ctx?.sessionKey,
         ...(params.ctx?.approvalReviewerDeviceId
           ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
           : {}),

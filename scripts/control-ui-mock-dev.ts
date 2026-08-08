@@ -1464,6 +1464,7 @@ async function createChatPickerScenario(
       "sessions.diff",
       "sessions.files.set",
       "sessions.catalog.list",
+      "sessions.catalog.read",
       "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
@@ -1604,6 +1605,61 @@ async function createChatPickerScenario(
                 ],
               },
             ],
+          },
+        ],
+      },
+      "sessions.catalog.read": {
+        cases: [
+          {
+            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-1" },
+            response: {
+              hostId: "gateway",
+              threadId: "codex-thread-1",
+              items: [
+                {
+                  id: "release-checklist-answer",
+                  type: "agentMessage",
+                  text: "The release checklist is complete and ready for review.",
+                },
+                {
+                  id: "release-checklist-request",
+                  type: "userMessage",
+                  text: "Please sweep the release checklist for anything we missed.",
+                },
+              ],
+            },
+          },
+          {
+            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-2" },
+            response: {
+              hostId: "gateway",
+              threadId: "codex-thread-2",
+              items: [
+                {
+                  id: "sidebar-context-menu-answer",
+                  type: "agentMessage",
+                  text: "The sidebar context menu behaves as expected.",
+                },
+              ],
+            },
+          },
+          {
+            match: {
+              catalogId: "claude-code",
+              hostId: "gateway",
+              threadId: "claude-thread-1",
+            },
+            response: {
+              hostId: "gateway",
+              threadId: "claude-thread-1",
+              items: [
+                {
+                  id: "docs-refresh-answer",
+                  type: "agentMessage",
+                  text: "The documentation refresh is ready for review.",
+                },
+              ],
+            },
           },
         ],
       },

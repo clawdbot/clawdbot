@@ -19,7 +19,7 @@ import {
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveSessionTotalTokens } from "../config/sessions.js";
+import { resolveFreshSessionTotalTokens } from "../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -460,9 +460,8 @@ export async function sessionsCommand(
           const modelRef = row.displayModelRef;
           return {
             ...r,
-            totalTokens: resolveSessionTotalTokens(r) ?? null,
-            totalTokensFresh:
-              typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+            totalTokensFresh: resolveFreshSessionTotalTokens(r) !== undefined,
             // Prefer row-level context tokens, then config/model lookup, so JSON
             // mirrors the terminal percentage calculation.
             contextTokens:
@@ -525,7 +524,7 @@ export async function sessionsCommand(
       configuredContextTokens ??
       (await lookupContextTokensForDisplay(model)) ??
       configContextTokens;
-    const total = resolveSessionTotalTokens(row);
+    const total = resolveFreshSessionTotalTokens(row);
 
     const line = [
       ...(showAgentColumn
