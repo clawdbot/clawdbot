@@ -7,7 +7,7 @@ import {
   supportsModelTools,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { openFileBackedSessionManagerForTest as openFileBackedSessionManagerFixture } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
@@ -37,12 +37,6 @@ import {
 } from "./session-binding.test-helpers.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-
-function openFileBackedSessionManagerForTest(sessionFile: string) {
-  // The production history owner rejects transcripts from another session.
-  // Random fixture ids otherwise make context assertions accidentally empty.
-  return openFileBackedSessionManagerFixture(sessionFile, { sessionId: "session-1" });
-}
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   const params = createSharedParams(sessionFile, workspaceDir);
