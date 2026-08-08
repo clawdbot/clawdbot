@@ -549,13 +549,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                     if (toolName) {
                       await statusReactionController.setTool(toolName);
                     }
+                    return false;
                   },
                   onCompactionStart: async () => {
                     await statusReactionController.setCompacting();
+                    return false;
                   },
                   onCompactionEnd: async () => {
                     statusReactionController.cancelPending();
                     await statusReactionController.setThinking();
+                    return false;
                   },
                 }
               : {}),
@@ -811,6 +814,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const shouldNotify = deps.shouldEmitSignalReactionNotification({
       mode: deps.reactionMode,
       account: deps.account,
+      accountUuid: deps.accountUuid,
       targets,
       sender: params.sender,
       allowlist: deps.reactionAllowlist,
@@ -1101,9 +1105,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           sender: envelope.sourceName ?? senderDisplay,
           body: messageText || visibleQuoteText,
           media: toHistoryMediaEntries(pendingMedia),
-          timestamp: envelope.timestamp ?? undefined,
-          messageId:
-            typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+          timestamp: inboundTimestamp,
+          messageId,
         },
       });
       await registerSignalReplyContext({

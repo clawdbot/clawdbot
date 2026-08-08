@@ -47,6 +47,7 @@ export {
   remapChunkLines,
   requireNodeSqlite,
   resolveMemoryBackendConfig,
+  resolveMemorySearchStaleness,
   runWithConcurrency,
   splitCuratedMarkdownEntries,
   statRegularFile,
@@ -86,4 +87,5 @@ export type {
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
+  MemoryVectorIndexState,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";

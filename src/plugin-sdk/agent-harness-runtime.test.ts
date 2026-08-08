@@ -1,7 +1,7 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
@@ -16,17 +16,6 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "./provider-model-types.js";
-
-const { loadResearchAutocapture } = vi.hoisted(() => ({
-  loadResearchAutocapture: vi.fn(),
-}));
-
-vi.mock("../skills/research/autocapture.js", () => {
-  loadResearchAutocapture();
-  return {
-    runSkillResearchAutoCapture: vi.fn(),
-  };
-});
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
   it("does not classify an in-flight turn", () => {
@@ -152,16 +141,6 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
-  beforeEach(() => {
-    loadResearchAutocapture.mockClear();
-  });
-
-  it("does not load research autocapture when the SDK facade is imported", async () => {
-    await import("./agent-harness-runtime.js");
-
-    expect(loadResearchAutocapture).not.toHaveBeenCalled();
-  });
-
   it("exposes attached model request transport metadata helpers", () => {
     const model = attachModelProviderRequestTransport(
       { id: "gpt-test", provider: "custom-openai" },

@@ -129,6 +129,17 @@ function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefi
   );
 }
 
+function isVeniceGeminiOpenAICompletionsRoute(
+  route: TranscriptAssistantRoute | undefined,
+): boolean {
+  return (
+    isOpenAICompletionsRoute(route) &&
+    route?.provider === "venice" &&
+    typeof route.model === "string" &&
+    /(?:^|\/)gemini-/.test(route.model.trim().toLowerCase())
+  );
+}
+
 function isCustomProviderRoute(route: TranscriptAssistantRoute | undefined): boolean {
   return (
     Boolean(route?.api && route.model && route.provider) &&
@@ -330,7 +341,11 @@ function shouldPreserveOpaqueProviderPayload(
   if (isGoogleReasoningRoute(route) && isGoogleSlot) {
     return isGoogleThoughtSignature(item);
   }
-  if (isGoogleOpenAICompletionsRoute(route) && type === "toolCall" && key === "thoughtSignature") {
+  if (
+    (isGoogleOpenAICompletionsRoute(route) || isVeniceGeminiOpenAICompletionsRoute(route)) &&
+    type === "toolCall" &&
+    key === "thoughtSignature"
+  ) {
     // The OpenAI-compatible transport captures provider-owned opaque signatures
     // such as SIG-OPAQUE-ABC==; native Google routes require standard base64.
     return isStructurallyValidOpaqueReplayToken(item);

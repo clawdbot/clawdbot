@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import {
   createContext,
   createGateway,
@@ -20,100 +18,6 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "./session-pagination.ts";
-
-describe("AppSidebar session indicators", () => {
-  it("keeps one leading slot across neutral, running, open, and merged states", async () => {
-    const keys = [
-      "agent:main:plain",
-      "agent:main:status-running",
-      "agent:main:open-pr",
-      "agent:main:merged-pr",
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
-    for (const row of result.sessions) {
-      if (row.key === keys[1]) {
-        row.status = "running";
-      } else if (row.key === keys[2] || row.key === keys[3]) {
-        row.worktree = {
-          id: `wt-${row.key}`,
-          branch: row.key.endsWith("open-pr") ? "feature/open" : "feature/merged",
-          repoRoot: "/repo",
-        };
-      }
-    }
-    const request = vi.fn(() => Promise.resolve({ subscribed: true }));
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    gatewayHarness.publish({
-      hello: {
-        features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledWith(
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        expect.objectContaining({ sessionKeys: expect.arrayContaining(keys.slice(2)) }),
-      );
-    });
-    gatewayHarness.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-      sessions: Object.fromEntries(
-        keys.slice(2).map((key) => [
-          key,
-          {
-            pullRequests: [
-              {
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                branch: "feature/test",
-                title: "Test",
-                url: "https://example.test/pr/1",
-                state: key.endsWith("open-pr") ? "open" : "merged",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        ]),
-      ),
-    });
-
-    await waitForFast(() => {
-      expect(sidebar.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
-      expect(sidebar.querySelector('[data-session-pr-state="merged"]')).not.toBeNull();
-    });
-    for (const key of keys) {
-      expect(
-        sidebar.querySelector(`[data-session-key="${key}"] .sidebar-session-indicator`),
-      ).not.toBeNull();
-    }
-    expect(
-      sidebar.querySelector(`[data-session-key="${keys[0]}"] .sidebar-session-indicator__dot`),
-    ).not.toBeNull();
-    expect(
-      sidebar.querySelector(`[data-session-key="${keys[1]}"] .session-run-spinner`),
-    ).not.toBeNull();
-
-    const openPullRequestRow = result.sessions.find((row) => row.key === keys[2]);
-    if (!openPullRequestRow) {
-      throw new Error("expected open PR session");
-    }
-    openPullRequestRow.worktree = undefined;
-    sessions.publishList({ result });
-    await waitForFast(() => {
-      expect(sidebar.querySelector('[data-session-pr-state="open"]')).toBeNull();
-      expect(
-        sidebar.querySelector(`[data-session-key="${keys[2]}"] .sidebar-session-indicator__dot`),
-      ).not.toBeNull();
-    });
-  });
-});
 
 describe("AppSidebar session pagination", () => {
   it("does not show pagination controls at the ten-session boundary", async () => {
@@ -392,14 +296,17 @@ describe("AppSidebar session accessibility", () => {
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
-    expect(link?.firstElementChild?.classList.contains("sidebar-session-indicator")).toBe(true);
-    expect(link?.children[1]?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(link?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(link?.firstElementChild?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(row?.querySelector(".session-row-state .session-unread-dot")).not.toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
-    expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now");
-    expect(link?.hasAttribute("aria-describedby")).toBe(false);
-    expect(row?.querySelector(".session-row-trail")?.textContent?.trim()).toBe("");
+    expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now · Unread");
+    expect(link?.getAttribute("aria-describedby")).toBe(
+      `sidebar-session-state-${encodeURIComponent(key)}`,
+    );
+    expect(row?.querySelector(".session-row-trail")).toBeNull();
   });
 
   it("renders no chat rows when only the main session exists", async () => {

@@ -50,7 +50,7 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 | `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
 | `maxEntries`            | `500`                 | cap on session entries                                                                      |
 | `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
-| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false` disables                                            |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
 | `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 
 Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
@@ -108,7 +108,7 @@ artifacts before importing.
 
 Isolated cron runs create their own session entries/transcripts with dedicated retention:
 
-- `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` disables.
+- `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` or a zero duration such as `"0h"` disables.
 - Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain their 24-hour cleanup window.
 
 When cron force-creates a new isolated run session, it sanitizes the previous `cron:<jobId>` session entry before writing the new row: it carries safe preferences (thinking/fast/verbose/reasoning settings, labels, display name) and explicit user-selected model/auth overrides, but drops ambient conversation context (channel/group routing, send/queue policy, elevation, origin, ACP runtime binding) so a fresh isolated run cannot inherit stale delivery or runtime authority from an older run.

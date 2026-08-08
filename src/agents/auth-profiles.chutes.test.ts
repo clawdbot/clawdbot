@@ -10,8 +10,9 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unowned" }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({

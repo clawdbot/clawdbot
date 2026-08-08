@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isValidProfileName } from "../cli/profile-utils.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
@@ -124,32 +126,88 @@ export function isDefaultStateDir(
   );
 }
 
+/** Canonical state directory name for the selected profile, mirroring root `--profile`. */
+function profileStateDirName(env: NodeJS.ProcessEnv): string | null {
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || profile.toLowerCase() === "default") {
+    return NEW_STATE_DIRNAME;
+  }
+  if (!isValidProfileName(profile)) {
+    return null;
+  }
+  return `${NEW_STATE_DIRNAME}-${profile}`;
+}
+
+export function resolveNativeServiceProfileConflict(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform !== "darwin" && platform !== "win32") {
+    return null;
+  }
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || profile.toLowerCase() === "default") {
+    return null;
+  }
+  // Normal macOS and Windows filesystems fold case, so case-distinct profile
+  // names can share state and native-service paths even though the CLI keeps
+  // them distinct. Leave the runtime profile valid, but deny service mutation.
+  if (profile !== profile.toLowerCase()) {
+    return profile;
+  }
+  if (platform !== "darwin") {
+    return null;
+  }
+  // These names map to the shipped default Gateway and node-host LaunchAgent
+  // labels, so authorizing them would let one profile control another service.
+  return profile === "gateway" || profile === "node" ? profile : null;
+}
+
 /** Whether host service management belongs to the active default install identity. */
 export function isDefaultInstallIdentity(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = resolveSystemAccountHomeDir,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   const accountHome = resolveRequiredHomeDir({}, homedir);
-  const accountHomedir = () => accountHome;
+  // Profiles have distinct host-service names; relocated homes do not. Keep
+  // OPENCLAW_HOME isolated so an alternate state tree cannot adopt that service.
+  if (env.OPENCLAW_HOME?.trim()) {
+    return false;
+  }
   if (
-    normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
-    normalizePathForComparison(newStateDir(accountHomedir))
+    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
+    normalizePathForComparison(accountHome)
   ) {
     return false;
   }
-  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (
+    resolveNativeServiceProfileConflict(env, platform) ||
+    resolveGatewayNativeServiceIdentityConflict(env, platform)
+  ) {
+    return false;
+  }
+  const stateDirName = profileStateDirName(env);
+  // Environment profiles can bypass root CLI parsing. Reject them before path
+  // construction so separators or dot segments cannot authorize a host service.
+  if (!stateDirName) {
+    return false;
+  }
+  const canonicalStateDir = path.join(accountHome, stateDirName);
+  if (
+    normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
+    normalizePathForComparison(canonicalStateDir)
+  ) {
+    return false;
+  }
+  // Default installs historically allow implicit legacy config discovery.
+  // Named profiles must resolve their own config so they cannot inherit the default profile.
+  if (stateDirName === NEW_STATE_DIRNAME && !env.OPENCLAW_CONFIG_PATH?.trim()) {
     return true;
   }
-  const defaultConfigEnv = {
-    ...env,
-    HOME: accountHome,
-    OPENCLAW_HOME: undefined,
-    OPENCLAW_STATE_DIR: undefined,
-    OPENCLAW_CONFIG_PATH: undefined,
-  };
   return (
     normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
-    normalizePathForComparison(resolveConfigPathCandidate(defaultConfigEnv, accountHomedir))
+    normalizePathForComparison(path.join(canonicalStateDir, CONFIG_FILENAME))
   );
 }
 
@@ -344,14 +402,15 @@ export function resolveDefaultConfigCandidates(
 export const DEFAULT_GATEWAY_PORT = 18789;
 
 /**
- * Gateway lock directory (ephemeral).
- * Default: os.tmpdir()/openclaw-<uid> (uid suffix when available).
+ * Gateway lock directory inside the selected state tree.
+ * Default: $OPENCLAW_STATE_DIR/tmp/openclaw-<uid> (uid suffix when available).
  */
-export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
-  const base = tmpdir();
+export function resolveGatewayLockDir(stateDir: string = resolveStateDir()): string {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
-  return path.join(base, suffix);
+  // Clean break: older binaries still use process temp and do not exclude a
+  // state-local binary during a mixed-version upgrade.
+  return path.join(normalizePathForComparison(stateDir), "tmp", suffix);
 }
 
 /**

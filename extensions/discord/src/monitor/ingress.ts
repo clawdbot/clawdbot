@@ -7,6 +7,7 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
@@ -82,10 +83,6 @@ function decodeDiscordIngressPayload(
   };
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isDiscordAuthenticationFailure(error: unknown): boolean {
   let current: unknown = error;
   const seen = new Set<unknown>();
@@ -155,14 +152,14 @@ export function createDiscordIngressMonitor(params: {
           return { reason: "invalid-event", message: error.message };
         }
         if (isDiscordAuthenticationFailure(error)) {
-          return { reason: "authentication-failed", message: errorText(error) };
+          return { reason: "authentication-failed", message: formatErrorMessage(error) };
         }
         return null;
       },
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
     },
     onError: (error) =>
-      params.runtime.error?.(danger(`discord ingress drain failed: ${errorText(error)}`)),
+      params.runtime.error?.(danger(`discord ingress drain failed: ${formatErrorMessage(error)}`)),
   });
 
   return {

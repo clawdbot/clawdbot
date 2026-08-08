@@ -9,16 +9,14 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-
-export type ClawHubSearchResult = {
-  score: number;
-  slug: string;
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
-};
+import { formatUiError } from "../format-error.ts";
+import type { ClawHubSearchResult } from "./clawhub-search.ts";
+import {
+  normalizeSkillApiKeyReplacement,
+  runSkillConfigMutation,
+  skillConfigMutationSuccess,
+  type SkillConfigMutationOwner,
+} from "./config-mutations.ts";
 
 export type ClawHubSkillDetail = {
   skill: {
@@ -57,6 +55,7 @@ export type ClawHubSkillSecurityVerdict = {
   decision: string;
   reasons: string[];
   requestedSlug: string;
+  requestedOwnerHandle?: string;
   requestedVersion: string;
   slug?: string | null;
   version?: string | null;
@@ -78,6 +77,7 @@ export type ClawHubSkillSecurityVerdict = {
 type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  runtimeConfig: SkillConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -148,8 +148,6 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
   state.skillMessages = { ...state.skillMessages, [key]: message };
 }
 
-const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 function getClawHubTrustDetailsFromError(err: unknown) {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
@@ -170,9 +168,10 @@ function formatClawHubAcknowledgementMessage(warning?: string): string {
 export function clawhubVerdictKey(target: {
   registry: string;
   slug: string;
+  ownerHandle?: string;
   version: string;
 }): string {
-  return `${target.registry}\0${target.slug}\0${target.version}`;
+  return `${target.registry}\0${target.ownerHandle ?? ""}\0${target.slug}\0${target.version}`;
 }
 
 function isValidClawHubLink(
@@ -335,7 +334,7 @@ export async function loadSkills(
     if (!isCurrent()) {
       return;
     }
-    state.skillsError = getErrorMessage(err);
+    state.skillsError = formatUiError(err);
   } finally {
     // A transient disconnect invalidates the result, not this invocation's
     // loading ownership. Source/scope identity still protects newer loads.
@@ -446,7 +445,10 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     }
   } catch (err) {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
-      state.skillCardErrors = { ...state.skillCardErrors, [skillKey]: getErrorMessage(err) };
+      state.skillCardErrors = {
+        ...state.skillCardErrors,
+        [skillKey]: formatUiError(err),
+      };
     }
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillCardLoadingKey === skillKey) {
@@ -479,6 +481,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
         clawhubVerdictKey({
           registry: item.registry,
           slug: item.requestedSlug,
+          ownerHandle: item.requestedOwnerHandle,
           version: item.requestedVersion,
         }),
         item,
@@ -489,7 +492,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       return;
     }
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsError = getErrorMessage(err);
+    state.clawhubVerdictsError = formatUiError(err);
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.clawhubVerdictsLoading = false;
@@ -542,7 +545,7 @@ async function runSkillMutation(
     ) {
       return;
     }
-    const message = getErrorMessage(err);
+    const message = formatUiError(err);
     state.skillsError = message;
     setSkillMessage(state, skillKey, {
       kind: "error",
@@ -559,25 +562,57 @@ async function runSkillMutation(
   }
 }
 
-export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    await client.request("skills.update", { skillKey, enabled });
-    return {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    };
-  });
+export async function updateSkillEnabled(
+  state: SkillsState,
+  skillKey: string,
+  enabled: boolean,
+  canDispatch: () => boolean = () => true,
+) {
+  await runSkillConfigUpdate(
+    state,
+    skillKey,
+    { enabled },
+    enabled ? "Skill enabled" : "Skill disabled",
+    canDispatch,
+  );
 }
 
-export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
-  await runSkillMutation(state, skillKey, async (client) => {
-    const editValue = state.skillEdits[skillKey] ?? "";
-    await client.request("skills.update", { skillKey, apiKey: editValue });
-    return {
-      kind: "success",
-      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    };
-  });
+async function runSkillConfigUpdate(
+  state: SkillsState,
+  skillKey: string,
+  patch: { enabled: boolean } | { apiKey: string },
+  message: string,
+  canDispatch: () => boolean,
+) {
+  await runSkillMutation(state, skillKey, async (client) =>
+    skillConfigMutationSuccess(
+      message,
+      await runSkillConfigMutation(
+        state.runtimeConfig,
+        client,
+        { skillKey, ...patch },
+        canDispatch,
+      ),
+    ),
+  );
+}
+
+export async function saveSkillApiKey(
+  state: SkillsState,
+  skillKey: string,
+  canDispatch: () => boolean = () => true,
+) {
+  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  if (!apiKey) {
+    return;
+  }
+  await runSkillConfigUpdate(
+    state,
+    skillKey,
+    { apiKey },
+    `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+    canDispatch,
+  );
 }
 
 export async function installSkill(
@@ -602,22 +637,6 @@ export async function installSkill(
   });
 }
 
-export async function searchClawHub(
-  client: GatewayBrowserClient,
-  query: string,
-  signal?: AbortSignal,
-): Promise<ClawHubSearchResult[]> {
-  if (!query.trim()) {
-    return [];
-  }
-  const response = await client.request<{ results: ClawHubSearchResult[] }>(
-    "skills.search",
-    { query, limit: 20 },
-    { signal },
-  );
-  return response?.results ?? [];
-}
-
 export async function loadClawHubDetail(state: SkillsState, slug: string) {
   if (!state.client || !state.connected) {
     return;
@@ -639,7 +658,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
       state.clawhubDetail = res ?? null;
     },
     (err) => {
-      state.clawhubDetailError = getErrorMessage(err);
+      state.clawhubDetailError = formatUiError(err);
     },
     () => {
       state.clawhubDetailLoading = false;
@@ -705,7 +724,7 @@ export async function installFromClawHub(
         kind: "error",
         text: needsAcknowledgement
           ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
-          : formatClawHubInstallMessage(getErrorMessage(err), trustDetails?.warning),
+          : formatClawHubInstallMessage(formatUiError(err), trustDetails?.warning),
         ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }

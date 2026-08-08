@@ -1,12 +1,13 @@
-// Tests inline action skipping when channel config does not define actions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Tests inline action skipping when channel config does not define actions.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -171,12 +172,7 @@ async function runInlineStatusAction(storePath?: string) {
   return { result, typing };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function mockObjectArg(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];
@@ -300,6 +296,43 @@ describe("handleInlineActions", () => {
     expect(onSessionMetadataChanges).toHaveBeenCalledWith([
       { sessionKey: "s:main", agentId: "main", reason: "command-metadata" },
     ]);
+  });
+
+  it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "keep going",
+      CommandBody: "keep going",
+    });
+    const onBlockReply = vi.fn(async () => {});
+    const directiveAck = setReplyPayloadMetadata(
+      { text: "Model set to openai/gpt-5.5 for this session." },
+      { assistantMessageIndex: 7 },
+    );
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "keep going",
+        overrides: {
+          directiveAck,
+          opts: { onBlockReply } as HandleInlineActionsInput["opts"],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const delivered = mockCallArgs(onBlockReply, "onBlockReply")[0];
+    expect(delivered).toEqual({
+      text: "Model set to openai/gpt-5.5 for this session.",
+      isStatusNotice: true,
+    });
+    expect(getReplyPayloadMetadata(delivered as object)).toEqual({
+      assistantMessageIndex: 7,
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it("forwards agentDir into handleCommands", async () => {
@@ -1057,7 +1090,7 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
     const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
-    expect(toolsArgs).not.toHaveProperty("senderIsOwner");
+    expect(toolsArgs.senderIsOwner).toBe(true);
     expect(toolsArgs.nativeChannelId).toBe("oc_native_chat");
     expect(toolsArgs.beforeToolCallHookContext).toMatchObject({
       cwd: "/tmp",
@@ -1347,6 +1380,64 @@ describe("handleInlineActions", () => {
       kind: "reply",
       reply: { text: "❌ Tool not available: message" },
     });
+    expect(toolExecute).not.toHaveBeenCalled();
+  });
+
+  it("does not expose owner-only tools to authorized non-owner skill dispatch", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ content: "sent" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "conversations_send",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/send_conversation hello",
+      CommandBody: "/send_conversation hello",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "send_conversation",
+        skillName: "send-conversation",
+        description: "Send a conversation message",
+        dispatch: {
+          kind: "tool",
+          toolName: "conversations_send",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/send-conversation.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/send_conversation hello",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "allowed-user",
+          senderIsOwner: false,
+          abortKey: "allowed-user",
+          rawBodyNormalized: "/send_conversation hello",
+          commandBodyNormalized: "/send_conversation hello",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool not available: conversations_send" },
+    });
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs.senderIsOwner).toBe(false);
     expect(toolExecute).not.toHaveBeenCalled();
   });
 

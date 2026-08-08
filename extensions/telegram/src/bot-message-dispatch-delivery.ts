@@ -171,6 +171,7 @@ export function createTelegramDeliveryController(params: {
       }
     : undefined;
   const deliveryBaseOptions = {
+    cfg: params.cfg,
     chatId: String(context.chatId),
     accountId: context.route.accountId,
     sessionKeyForInternalHooks: sessionKey,
@@ -564,11 +565,21 @@ export function createTelegramDeliveryController(params: {
         delete payloadForPlan.isReasoning;
       }
       const normalized = projectPayloadForDelivery(payloadForPlan);
-      return normalized
-        ? canonicalizeTelegramPresentationPayload(normalized, {
-            allowWebAppButtons: resolveTelegramTargetChatType(String(context.chatId)) === "direct",
-          })
-        : undefined;
+      if (!normalized) {
+        return undefined;
+      }
+      // Retained finals can still select HTML at send time, and HTML bypasses
+      // rich blocks. Converting a presentation here would strip it while the
+      // final funnel is still undecided, so rich accounts defer canonicalization
+      // to the sender (deliverReplies / the outbound adapter) which knows the
+      // text mode. Plain accounts always flatten, so deciding early is safe.
+      if (params.telegramCfg.richMessages === true && normalized.presentation) {
+        return normalized;
+      }
+      return canonicalizeTelegramPresentationPayload(normalized, {
+        allowWebAppButtons: resolveTelegramTargetChatType(String(context.chatId)) === "direct",
+        richTables: false,
+      });
     },
     sendPayload,
     snapshot: deliveryState.snapshot,

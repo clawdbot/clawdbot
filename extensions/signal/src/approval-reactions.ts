@@ -5,6 +5,7 @@ import {
   addApprovalReactionHintToText,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
+  extractApprovalReactionPromptBinding,
   hasApprovalReactionHintText,
   listApprovalReactionBindings,
   resolveTypedApprovalReactionTarget,
@@ -17,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -81,6 +83,13 @@ type SignalApprovalDeliveryResult = {
 };
 
 const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalSignalRuntime,
+  "signal",
+  "approval-reaction-state",
+  "Signal persistent approval reaction state failed",
+);
 
 const signalApprovalReactionTargets =
   createApprovalReactionTargetStore<SignalApprovalReactionTarget>({
@@ -290,16 +299,6 @@ function buildReactionTargetKey(params: {
   return `${accountId}:${conversationKey}:${messageId}`;
 }
 
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "approval-reaction-state" })
-      .warn("Signal persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break Signal reactions.
-  }
-}
-
 function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | null {
   const value = target as Partial<SignalApprovalReactionTarget> | null | undefined;
   if (
@@ -387,58 +386,15 @@ function isStandaloneApprovalPromptText(text: string): boolean {
   return resolveStandaloneApprovalPromptKind(text) !== null;
 }
 
-function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "always") {
-    return "allow-always";
-  }
-  if (normalized === "allow-once" || normalized === "allow-always" || normalized === "deny") {
-    return normalized;
-  }
-  return null;
-}
-
-const APPROVAL_ID_LINE_RE = /^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i;
-const APPROVE_REPLY_COMMAND_LINE_RE =
-  /^\s*Reply with:\s*\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
-
 function extractSignalApprovalPromptBinding(text: string): {
   approvalId: string;
   approvalKind: ApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
-  // Strip bold markers (**ID:** …) before matching the canonical ID header.
-  const lines = text.split(/\r?\n/).map((line) => line.replace(/\*\*/g, ""));
-  const idHeaderMatch = lines
-    .map((line) => line.match(APPROVAL_ID_LINE_RE))
-    .find((match): match is RegExpMatchArray => Boolean(match));
-  if (!idHeaderMatch) {
-    return null;
-  }
-  const approvalId = idHeaderMatch[1];
-  if (!approvalId) {
-    return null;
-  }
   const approvalKind = resolveStandaloneApprovalPromptKind(text);
-  if (!approvalKind) {
-    return null;
-  }
-  const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  for (const line of lines) {
-    const match = line.match(APPROVE_REPLY_COMMAND_LINE_RE);
-    const commandApprovalId = match?.[1];
-    const decisionList = match?.[2];
-    if (commandApprovalId !== approvalId || !decisionList) {
-      continue;
-    }
-    for (const decisionText of decisionList.split(/[\s|,]+/)) {
-      const decision = normalizeApprovalDecision(decisionText);
-      if (decision && !allowedDecisions.includes(decision)) {
-        allowedDecisions.push(decision);
-      }
-    }
-  }
-  return allowedDecisions.length > 0 ? { approvalId, approvalKind, allowedDecisions } : null;
+  return approvalKind
+    ? extractApprovalReactionPromptBinding({ text, approvalKind, replyInstructionOnly: true })
+    : null;
 }
 
 function buildTargetRoute(params: {

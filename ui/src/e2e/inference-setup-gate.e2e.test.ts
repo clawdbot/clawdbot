@@ -24,6 +24,7 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 suite.define(() => {
   it("blocks empty chat home until a model is connected", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -38,10 +39,10 @@ suite.define(() => {
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await expect
-        .poll(() => page.getByRole("button", { name: "Configure a provider" }).count())
+        .poll(() => page.getByRole("button", { name: "Connect an AI provider" }).count())
         .toBe(1);
       await captureProof(page, "chat-home-desktop.png");
-      await page.getByRole("button", { name: "Configure a provider" }).click();
+      await page.getByRole("button", { name: "Connect an AI provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
       await context.close();
@@ -50,6 +51,7 @@ suite.define(() => {
 
   it("blocks the new-session composer until a model is connected", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -64,7 +66,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".new-session-page__composer").count()).toBe(0);
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await captureProof(page, "new-session-desktop.png");
-      await page.getByRole("button", { name: "Configure a provider" }).click();
+      await page.getByRole("button", { name: "Connect an AI provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
     } finally {
       await context.close();
@@ -73,6 +75,7 @@ suite.define(() => {
 
   it("shows the setup splash before starting custodian chat", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1660 },
@@ -98,7 +101,7 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 520, width: 900 });
       await expect
-        .poll(() => page.getByRole("button", { name: "Configure a provider" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Connect an AI provider" }).isVisible())
         .toBe(true);
       await expect
         .poll(() =>
@@ -110,7 +113,7 @@ suite.define(() => {
       await captureProof(page, "custodian-short-window.png");
 
       await page.setViewportSize({ height: 900, width: 1660 });
-      await page.getByRole("button", { name: "Configure a provider" }).click();
+      await page.getByRole("button", { name: "Connect an AI provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
       const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
       await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
@@ -122,6 +125,7 @@ suite.define(() => {
 
   it("distinguishes a configured provider that fails its live check", async () => {
     const context = await suite.browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1660 },
@@ -156,17 +160,15 @@ suite.define(() => {
         message: "OpenClaw requires working inference: provider authentication failed",
       });
 
-      await page
-        .getByRole("heading", { name: "OpenClaw couldn't use your configured AI" })
-        .waitFor();
+      await page.getByRole("heading", { name: "Configured AI needs attention" }).waitFor();
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
       await expect
-        .poll(() => page.getByRole("button", { name: "Check provider settings" }).count())
+        .poll(() => page.getByRole("button", { name: "Review connection" }).count())
         .toBe(1);
       await expect.poll(() => page.getByRole("button", { name: "Retry" }).count()).toBe(1);
       await captureProof(page, "custodian-provider-unavailable.png");
 
-      await page.getByRole("button", { name: "Check provider settings" }).click();
+      await page.getByRole("button", { name: "Review connection" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
       const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
       await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");

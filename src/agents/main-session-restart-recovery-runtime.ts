@@ -4,6 +4,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../infra/agent-events.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
@@ -28,7 +29,44 @@ import {
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
 
-async function recoverRestartAbortedMainSessionsWithOptions(params: {
+type RecoveryCounts = { recovered: number; failed: number; skipped: number };
+
+async function runRecoveryRetries(params: {
+  initialDelayMs: number;
+  maxRetries: number;
+  retryDelayMs?: number;
+  shouldContinue: () => boolean;
+  signal?: AbortSignal;
+  attempt: (finalAttempt: boolean) => Promise<boolean>;
+  onError: (error: unknown, finalAttempt: boolean) => void | Promise<void>;
+}): Promise<void> {
+  let delayMs = params.initialDelayMs;
+  for (let attempt = 1; attempt <= params.maxRetries && params.shouldContinue(); attempt += 1) {
+    const finalAttempt = attempt === params.maxRetries;
+    try {
+      if (delayMs > 0) {
+        await sleepWithAbort(delayMs, params.signal, { ref: false });
+      }
+      if (!params.shouldContinue() || (await params.attempt(finalAttempt))) {
+        return;
+      }
+    } catch (error) {
+      if (!params.shouldContinue()) {
+        return;
+      }
+      await params.onError(error, finalAttempt);
+      if (finalAttempt) {
+        return;
+      }
+    }
+    delayMs =
+      delayMs > 0
+        ? delayMs * RETRY_BACKOFF_MULTIPLIER
+        : (params.retryDelayMs ?? DEFAULT_RECOVERY_DELAY_MS);
+  }
+}
+
+export async function recoverRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
@@ -38,7 +76,7 @@ async function recoverRestartAbortedMainSessionsWithOptions(params: {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
+}): Promise<RecoveryCounts> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
@@ -70,117 +108,75 @@ async function recoverRestartAbortedMainSessionsWithOptions(params: {
   return result;
 }
 
-export async function recoverRestartAbortedMainSessions(params: {
-  cfg?: OpenClawConfig;
-  stateDir?: string;
-  resumedSessionKeys?: Set<string>;
-  activeSessionIds?: Iterable<string>;
-  activeSessionKeys?: Iterable<string>;
-  gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  return await recoverRestartAbortedMainSessionsWithOptions(params);
-}
-
 /** Retries one exact durable Control UI row from its owning per-agent SQLite store. */
 export async function retryRestartAbortedMainSessionRecovery(params: {
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
-  expectedRecoveryRunId: string;
-  expectedRecoverySourceRunId: string;
+  expectedRecoveryRunId?: string;
+  expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
   sessionKey: string;
   storePath: string;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const expectedClaim: ExpectedRestartRecoveryClaim = {
+}): Promise<RecoveryCounts> {
+  const expected = {
     canonicalSessionKey: params.canonicalSessionKey,
-    recoveryRunId: params.expectedRecoveryRunId,
-    recoverySourceRunId: params.expectedRecoverySourceRunId,
     sessionId: params.expectedSessionId,
     sessionKey: params.sessionKey,
   };
-  if (!loadExpectedRestartRecoveryClaim({ expected: expectedClaim, storePath: params.storePath })) {
-    return { recovered: 0, failed: 0, skipped: 0 };
-  }
-  const assertClaimCurrent = () => {
-    if (
-      !loadExpectedRestartRecoveryClaim({ expected: expectedClaim, storePath: params.storePath })
-    ) {
-      throw new Error("restart recovery session ownership changed before dispatch");
-    }
-  };
-  // Keep lifecycle replacement behind the accepted recovery dispatch. The agent
-  // RPC atomically adopts this lease, so no second admission can deadlock behind
-  // a mutation that already sees the accepted browser turn as active work.
-  const admission = await beginSessionWorkAdmission({
-    scope: params.storePath,
-    identities: [params.sessionKey, params.canonicalSessionKey, params.expectedSessionId],
-    assertAllowed: assertClaimCurrent,
-    revalidateAllowed: assertClaimCurrent,
+  const expectedClaim: ExpectedRestartRecoveryClaim | undefined =
+    params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
+      ? {
+          ...expected,
+          recoveryRunId: params.expectedRecoveryRunId,
+          recoverySourceRunId: params.expectedRecoverySourceRunId,
+        }
+      : undefined;
+  return await recoverExpectedRestartRecovery({
+    ...params,
+    ...(expectedClaim ? { expectedClaim } : { expectedTarget: expected }),
   });
-  const handoffId = admission.createHandoff();
-  try {
-    return await admission.run(
-      async () =>
-        await recoverStore({
-          cfg: params.cfg,
-          storePath: params.storePath,
-          resumedSessionKeys: new Set<string>(),
-          expectedClaim,
-          sessionWorkAdmissionHandoffId: handoffId,
-          gatewayRuntime: params.gatewayRuntime,
-        }),
-    );
-  } finally {
-    cancelSessionWorkAdmissionHandoff(handoffId);
-    admission.release();
-  }
 }
 
-/** Reconciles one interrupted row after its final foreground owner releases. */
-export async function retryRestartAbortedMainSessionRecoveryAfterOwnerRelease(params: {
+async function recoverExpectedRestartRecovery(params: {
   cfg?: OpenClawConfig;
-  expectedSessionId: string;
-  sessionKey: string;
-  storePath: string;
-  gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  return await recoverExpectedRestartRecoveryTarget(params);
-}
-
-async function recoverExpectedRestartRecoveryTarget(params: {
-  canonicalSessionKey?: string;
-  cfg?: OpenClawConfig;
-  expectedSessionId: string;
+  expectedClaim?: ExpectedRestartRecoveryClaim;
+  expectedTarget?: ExpectedRestartRecoveryTarget;
   lifecycleGeneration?: string;
   observationOnly?: boolean;
   sessionKey: string;
   shouldContinue?: () => boolean;
   storePath: string;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const expectedTarget: ExpectedRestartRecoveryTarget = {
-    canonicalSessionKey: params.canonicalSessionKey,
-    sessionId: params.expectedSessionId,
-    sessionKey: params.sessionKey,
-  };
-  const assertTargetCurrent = () => {
-    if (
-      !loadExpectedRestartRecoveryTarget({ expected: expectedTarget, storePath: params.storePath })
-    ) {
-      throw new Error("restart recovery session ownership changed before owner-release retry");
-    }
-  };
-  if (
-    !loadExpectedRestartRecoveryTarget({ expected: expectedTarget, storePath: params.storePath })
-  ) {
+}): Promise<RecoveryCounts> {
+  const loadExpected = () =>
+    params.expectedClaim
+      ? loadExpectedRestartRecoveryClaim({
+          expected: params.expectedClaim,
+          storePath: params.storePath,
+        })
+      : params.expectedTarget
+        ? loadExpectedRestartRecoveryTarget({
+            expected: params.expectedTarget,
+            storePath: params.storePath,
+          })
+        : undefined;
+  if (!loadExpected()) {
     return { recovered: 0, failed: 0, skipped: 0 };
   }
+  const assertExpectedCurrent = () => {
+    if (!loadExpected()) {
+      throw new Error("restart recovery session ownership changed before dispatch");
+    }
+  };
+  const expectedSessionId = (params.expectedClaim ?? params.expectedTarget)!.sessionId;
+  // Keep lifecycle replacement behind accepted recovery dispatch. The RPC
+  // adopts this lease, so another admission cannot deadlock behind its active work.
   const admission = await beginSessionWorkAdmission({
     scope: params.storePath,
-    identities: [params.sessionKey, params.expectedSessionId],
-    assertAllowed: assertTargetCurrent,
-    revalidateAllowed: assertTargetCurrent,
+    identities: [params.sessionKey, params.expectedClaim?.canonicalSessionKey, expectedSessionId],
+    assertAllowed: assertExpectedCurrent,
+    revalidateAllowed: assertExpectedCurrent,
   });
   const handoffId = admission.createHandoff();
   try {
@@ -191,7 +187,8 @@ async function recoverExpectedRestartRecoveryTarget(params: {
           observationOnly: params.observationOnly,
           storePath: params.storePath,
           resumedSessionKeys: new Set<string>(),
-          expectedTarget,
+          expectedClaim: params.expectedClaim,
+          expectedTarget: params.expectedTarget,
           sessionWorkAdmissionHandoffId: handoffId,
           lifecycleGeneration: params.lifecycleGeneration,
           shouldContinue: params.shouldContinue,
@@ -206,274 +203,182 @@ async function recoverExpectedRestartRecoveryTarget(params: {
 
 export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(params: {
   delayMs?: number;
-  expectedSessionId: string;
   getConfig: () => OpenClawConfig;
   getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   maxRetries?: number;
+  expectedSessionId: string;
   sessionKey: string;
   storePath: string;
 }): void {
-  const retryDelayMs = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
-  const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
-  const scheduleAttempt = (attempt: number, delayMs: number) => {
-    const run = () => {
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
-        const gatewayRuntime = params.getGatewayRuntime();
-        if (!gatewayRuntime) {
-          throw new Error("Gateway recovery runtime is unavailable");
-        }
-        return await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
-          cfg: params.getConfig(),
-          expectedSessionId: params.expectedSessionId,
+  const recover = () =>
+    runWithGatewayIndependentRootWorkAdmission(async () => {
+      const gatewayRuntime = params.getGatewayRuntime();
+      if (!gatewayRuntime) {
+        throw new Error("Gateway recovery runtime is unavailable");
+      }
+      return await retryRestartAbortedMainSessionRecovery({
+        cfg: params.getConfig(),
+        expectedSessionId: params.expectedSessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        gatewayRuntime,
+      });
+    });
+  void runRecoveryRetries({
+    initialDelayMs: 0,
+    maxRetries: params.maxRetries ?? MAX_RECOVERY_RETRIES,
+    retryDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,
+    shouldContinue: () => true,
+    attempt: async (finalAttempt) => {
+      const result = await recover();
+      const stillPending = loadExpectedRestartRecoveryTarget({
+        expected: {
+          sessionId: params.expectedSessionId,
           sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          gatewayRuntime,
-        });
-      })
-        .then((result) => {
-          const stillPending = loadExpectedRestartRecoveryTarget({
-            expected: {
-              sessionId: params.expectedSessionId,
-              sessionKey: params.sessionKey,
-            },
-            storePath: params.storePath,
-          });
-          if (
-            (result.failed > 0 || (result.recovered === 0 && stillPending)) &&
-            attempt < maxRetries
-          ) {
-            scheduleAttempt(attempt + 1, retryDelayMs * 2 ** (attempt - 1));
-          } else if (
-            attempt === maxRetries &&
-            stillPending?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
-            !stillPending.mainRestartRecovery.reservation
-          ) {
-            // The last ambiguous dispatch consumed the final durable charge.
-            // One exact observation tombstones exhaustion without dispatching again.
-            scheduleAttempt(attempt + 1, 0);
-          }
-        })
-        .catch((error: unknown) => {
-          if (attempt < maxRetries) {
-            scheduleAttempt(attempt + 1, retryDelayMs * 2 ** (attempt - 1));
-          } else {
-            log.warn(`main-session owner-release recovery failed: ${String(error)}`);
-          }
-        });
-    };
-    if (delayMs <= 0) {
-      run();
-    } else {
-      setTimeout(run, delayMs).unref?.();
-    }
-  };
-  scheduleAttempt(1, 0);
-}
-
-async function recoverStartupOrphanedMainSessionsWithOptions(params: {
-  cfg?: OpenClawConfig;
-  stateDir?: string;
-  activeSessionIds?: Iterable<string>;
-  activeSessionKeys?: Iterable<string>;
-  updatedBeforeMs?: number;
-  resumedSessionKeys?: Set<string>;
-  onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
-  lifecycleGeneration?: string;
-  shouldContinue?: () => boolean;
-  gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
-  if (params.shouldContinue?.() === false) {
-    return { marked: 0, recovered: 0, failed: 0, skipped: 0 };
-  }
-  const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
-  const marked = await markStartupOrphanedMainSessionsForRecovery({
-    cfg: params.cfg,
-    stateDir: params.stateDir,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
-    updatedBeforeMs: startupRecoveryCutoffMs,
+        },
+        storePath: params.storePath,
+      });
+      if (result.failed === 0 && (result.recovered > 0 || !stillPending)) {
+        return true;
+      }
+      if (
+        finalAttempt &&
+        stillPending?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
+        !stillPending.mainRestartRecovery.reservation
+      ) {
+        // The last ambiguous dispatch consumed the final durable charge. One
+        // exact observation tombstones exhaustion without dispatching again.
+        await recover();
+      }
+      return false;
+    },
+    onError: (error, finalAttempt) => {
+      if (finalAttempt) {
+        log.warn(`main-session owner-release recovery failed: ${String(error)}`);
+      }
+    },
   });
-  if (params.shouldContinue?.() === false) {
-    return { marked: marked.marked, recovered: 0, failed: 0, skipped: marked.skipped };
-  }
-  const recovered = await recoverRestartAbortedMainSessionsWithOptions({
-    cfg: params.cfg,
-    onExhaustedTarget: params.onExhaustedTarget,
-    stateDir: params.stateDir,
-    resumedSessionKeys: params.resumedSessionKeys,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
-    lifecycleGeneration: params.lifecycleGeneration,
-    shouldContinue: params.shouldContinue,
-    gatewayRuntime: params.gatewayRuntime,
-  });
-  return {
-    marked: marked.marked,
-    recovered: recovered.recovered,
-    failed: recovered.failed,
-    skipped: marked.skipped + recovered.skipped,
-  };
-}
-
-export async function recoverStartupOrphanedMainSessions(params: {
-  cfg?: OpenClawConfig;
-  stateDir?: string;
-  activeSessionIds?: Iterable<string>;
-  activeSessionKeys?: Iterable<string>;
-  updatedBeforeMs?: number;
-  resumedSessionKeys?: Set<string>;
-  gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
-  return await recoverStartupOrphanedMainSessionsWithOptions(params);
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(params: {
-  cfg?: OpenClawConfig;
   delayMs?: number;
+  getConfig: () => OpenClawConfig;
   maxRetries?: number;
   shouldContinue?: () => boolean;
   stateDir?: string;
+  waitForStart?: () => Promise<void>;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): { stop: () => Promise<void> } {
-  const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
-  const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const abortController = new AbortController();
   let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let queuedAttempt: Promise<void> | undefined;
-  let activeAttempt: Promise<void> | undefined;
   const shouldContinue = () =>
     !stopped &&
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
-  // Only reconcile rows that existed before this startup recovery was scheduled.
-  // Fresh runs started by this gateway are protected again by the active-run check.
   const startupRecoveryCutoffMs = Date.now();
-
-  const runRecoveryAttempt = (attempt: number, delay: number) => {
-    if (!shouldContinue()) {
-      return;
-    }
-    const exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
-    const reconcileExhaustedTargets = async () => {
-      if (!shouldContinue()) {
-        return;
-      }
-      const outcomes = await Promise.allSettled(
-        [...exhaustedTargets.values()].map((target) =>
-          runWithGatewayIndependentRootWorkAdmission(
-            async () =>
-              await recoverExpectedRestartRecoveryTarget({
-                canonicalSessionKey: target.canonicalSessionKey,
-                cfg: params.cfg,
-                expectedSessionId: target.sessionId,
-                lifecycleGeneration,
-                observationOnly: true,
-                sessionKey: target.sessionKey,
-                shouldContinue,
-                storePath: target.storePath,
-                gatewayRuntime: params.gatewayRuntime,
-              }),
-          ),
-        ),
-      );
-      for (const outcome of outcomes) {
-        if (outcome.status === "rejected") {
-          log.warn(`main-session exhaustion reconciliation failed: ${String(outcome.reason)}`);
-        }
-      }
-    };
-    // Delayed retries outlive startup; each attempt must independently block
-    // host suspension while it reads and rewrites recovery session state.
-    const pendingAttempt = runWithGatewayIndependentRootWorkAdmission(
-      async () =>
-        await recoverStartupOrphanedMainSessionsWithOptions({
-          cfg: params.cfg,
-          onExhaustedTarget: (target) => {
-            exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
-          },
+  const markedStorePaths = new Set<string>();
+  const runRecoveryAttempt = async (
+    exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
+  ): Promise<RecoveryCounts> => {
+    return await runWithGatewayIndependentRootWorkAdmission(async () => {
+      const cfg = params.getConfig();
+      const currentStorePaths = await resolveRestartRecoveryStorePaths({
+        cfg,
+        stateDir: params.stateDir,
+      });
+      if (currentStorePaths.some((storePath) => !markedStorePaths.has(storePath))) {
+        await markStartupOrphanedMainSessionsForRecovery({
+          cfg,
           stateDir: params.stateDir,
-          resumedSessionKeys,
           updatedBeforeMs: startupRecoveryCutoffMs,
-          lifecycleGeneration,
-          shouldContinue,
-          gatewayRuntime: params.gatewayRuntime,
-        }),
-    )
-      .then(async (result) => {
-        if (!shouldContinue()) {
-          return;
+        });
+        for (const storePath of currentStorePaths) {
+          markedStorePaths.add(storePath);
         }
-        if (result.failed > 0 && attempt < maxRetries) {
-          const retryDelay =
-            delay > 0 ? delay * RETRY_BACKOFF_MULTIPLIER : DEFAULT_RECOVERY_DELAY_MS;
-          scheduleAttempt(attempt + 1, retryDelay);
-        } else if (result.failed > 0 && attempt === maxRetries && exhaustedTargets.size > 0) {
-          // Reconcile only exact rows whose final dispatch retained its durable charge.
-          await reconcileExhaustedTargets();
-        }
-      })
-      .catch(async (err: unknown) => {
-        if (!shouldContinue()) {
-          return;
-        }
-        if (attempt < maxRetries) {
-          log.warn(`main-session restart recovery failed: ${String(err)}`);
-          const retryDelay =
-            delay > 0 ? delay * RETRY_BACKOFF_MULTIPLIER : DEFAULT_RECOVERY_DELAY_MS;
-          scheduleAttempt(attempt + 1, retryDelay);
-        } else {
-          log.warn(`main-session restart recovery gave up: ${String(err)}`);
-          await reconcileExhaustedTargets();
-        }
-      });
-    const trackedAttempt = pendingAttempt.finally(() => {
-      if (activeAttempt === trackedAttempt) {
-        activeAttempt = undefined;
       }
+      return await recoverRestartAbortedMainSessions({
+        cfg,
+        onExhaustedTarget: (target) => {
+          exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
+        },
+        stateDir: params.stateDir,
+        resumedSessionKeys,
+        lifecycleGeneration,
+        shouldContinue,
+        gatewayRuntime: params.gatewayRuntime,
+      });
     });
-    activeAttempt = trackedAttempt;
   };
-
-  const scheduleAttempt = (attempt: number, delay: number) => {
-    if (!shouldContinue()) {
-      return;
+  const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
+    const outcomes = await Promise.allSettled(
+      [...targets].map((target) =>
+        runWithGatewayIndependentRootWorkAdmission(async () =>
+          recoverExpectedRestartRecovery({
+            cfg: params.getConfig(),
+            expectedTarget: {
+              canonicalSessionKey: target.canonicalSessionKey,
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+            },
+            lifecycleGeneration,
+            observationOnly: true,
+            sessionKey: target.sessionKey,
+            shouldContinue,
+            storePath: target.storePath,
+            gatewayRuntime: params.gatewayRuntime,
+          }),
+        ),
+      ),
+    );
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") {
+        log.warn(`main-session exhaustion reconciliation failed: ${String(outcome.reason)}`);
+      }
     }
-    if (delay <= 0) {
-      // Publish the cancellable handle before immediate startup can claim a session.
-      const pendingStart = Promise.resolve().then(() => {
-        if (shouldContinue()) {
-          runRecoveryAttempt(attempt, delay);
-        }
-      });
-      const trackedStart = pendingStart.finally(() => {
-        if (queuedAttempt === trackedStart) {
-          queuedAttempt = undefined;
-        }
-      });
-      queuedAttempt = trackedStart;
-      return;
-    }
-    timer = setTimeout(() => {
-      timer = undefined;
-      runRecoveryAttempt(attempt, delay);
-    }, delay);
-    timer.unref?.();
   };
-
-  scheduleAttempt(1, initialDelay);
+  const cancelled = new Promise<void>((resolve) => {
+    abortController.signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  let exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
+  const run = Promise.resolve().then(async () => {
+    if (params.waitForStart) {
+      await Promise.race([params.waitForStart(), cancelled]);
+    }
+    await runRecoveryRetries({
+      initialDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,
+      maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
+      shouldContinue,
+      signal: abortController.signal,
+      attempt: async (finalAttempt) => {
+        exhaustedTargets = new Map();
+        const result = await runRecoveryAttempt(exhaustedTargets);
+        if (result.failed === 0) {
+          return true;
+        }
+        if (finalAttempt && exhaustedTargets.size > 0) {
+          await reconcileExhaustedTargets(exhaustedTargets.values());
+        }
+        return false;
+      },
+      onError: async (err, finalAttempt) => {
+        if (finalAttempt) {
+          log.warn(`main-session restart recovery gave up: ${String(err)}`);
+          await reconcileExhaustedTargets(exhaustedTargets.values());
+        } else {
+          log.warn(`main-session restart recovery failed: ${String(err)}`);
+        }
+      },
+    });
+  });
   return {
     stop: async () => {
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.
       stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-      await queuedAttempt;
-      await activeAttempt;
+      abortController.abort();
+      await run;
     },
   };
 }

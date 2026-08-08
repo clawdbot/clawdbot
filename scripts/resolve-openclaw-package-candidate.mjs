@@ -13,10 +13,13 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
-const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolveRepoRoot(import.meta.url);
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
 const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
@@ -97,57 +100,49 @@ export function parseArgs(argv) {
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seen.add(flag);
-    options[key] = value;
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    const readValue = (name, readOptions = {}) => {
-      const value = argv[(index += 1)];
-      if (
-        value === undefined ||
-        (!readOptions.allowEmpty && value === "") ||
-        value.startsWith("-")
-      ) {
-        throw new Error(`${name} requires a value`);
-      }
-      return value;
-    };
-    if (arg === "--artifact-dir") {
-      setOnce(arg, "artifactDir", readValue(arg));
-    } else if (arg === "--github-output") {
-      setOnce(arg, "githubOutput", readValue(arg));
-    } else if (arg === "--metadata") {
-      setOnce(arg, "metadata", readValue(arg));
-    } else if (arg === "--output-dir") {
-      setOnce(arg, "outputDir", readValue(arg));
-    } else if (arg === "--output-name") {
-      setOnce(arg, "outputName", readValue(arg));
-    } else if (arg === "--package-sha256") {
-      setOnce(arg, "packageSha256", readValue(arg, { allowEmpty: true }).toLowerCase());
-    } else if (arg === "--package-ref") {
-      setOnce(arg, "packageRef", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--package-spec") {
-      setOnce(arg, "packageSpec", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--package-url") {
-      setOnce(arg, "packageUrl", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--source") {
-      setOnce(arg, "source", readValue(arg));
-    } else if (arg === "--trusted-source-id") {
-      setOnce(arg, "trustedSourceId", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--trusted-source-policy") {
-      setOnce(arg, "trustedSourcePolicy", readValue(arg));
-    } else if (arg === "--help" || arg === "-h") {
-      options.help = true;
-    } else {
-      throw new Error(`unknown argument: ${arg}`);
-    }
-  }
+  parseFlagArgs(
+    argv,
+    options,
+    [
+      ...[
+        ["--artifact-dir", "artifactDir"],
+        ["--github-output", "githubOutput"],
+        ["--metadata", "metadata"],
+        ["--output-dir", "outputDir"],
+        ["--output-name", "outputName"],
+        ["--source", "source"],
+        ["--trusted-source-policy", "trustedSourcePolicy"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, rejectShortOptions: true }),
+      ),
+      ...[
+        ["--package-ref", "packageRef"],
+        ["--package-spec", "packageSpec"],
+        ["--package-url", "packageUrl"],
+        ["--trusted-source-id", "trustedSourceId"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowEmpty: true,
+          allowInline: false,
+          rejectShortOptions: true,
+        }),
+      ),
+      stringFlag("--package-sha256", "packageSha256", {
+        allowEmpty: true,
+        allowInline: false,
+        rejectShortOptions: true,
+        transform: (value) => value.toLowerCase(),
+      }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`unknown argument: ${arg}`);
+      },
+    },
+  );
   validateOutputName(options.outputName);
   return options;
 }
@@ -660,9 +655,10 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   try {
     parsed = JSON.parse(packOutput);
   } catch {}
-  if (Array.isArray(parsed)) {
+  if (parsed !== undefined) {
     const packedFilename =
-      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+      resolveNpmJsonEntries(parsed).find((entry) => typeof entry?.filename === "string")
+        ?.filename ?? "";
     if (packedFilename) {
       filename = resolvePackedOpenClawTarballFilename(packedFilename);
     }

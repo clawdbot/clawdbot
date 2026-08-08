@@ -168,9 +168,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
   it("keeps streamed final text in place when late media arrives", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const mediaMaxBytes = 50 * 1024 * 1024;
+    let partialAccepted: boolean | void = undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Photo" });
+        partialAccepted = await replyOptions?.onPartialReply?.({ text: "Photo" });
         await dispatcherOptions.deliver(
           { text: "Photo", mediaUrl: "https://example.com/a.png" },
           { kind: "final" },
@@ -186,6 +187,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
+    expect(partialAccepted).toBe(false);
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
     expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
@@ -280,10 +282,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
     await queuedReplyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    await queuedReplyOptions?.onToolResult?.({ text: "📄 Web Fetch: working" });
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec\n📄 Web Fetch: working",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n📄 Web Fetch: working",
+      ),
     );
 
     await queuedReplyOptions?.onQueuedFollowupSettled?.();
@@ -695,6 +701,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
   it("keeps string tool-result progress beneath a Telegram preamble", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
+    let rendered: boolean | void = undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onItemEvent?.({
@@ -702,7 +709,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         itemId: "preamble-1",
         progressText: "Checking recent context",
       });
-      await replyOptions?.onToolResult?.({ text: "Background task still running" });
+      rendered = await replyOptions?.onToolResult?.({ text: "Background task still running" });
       return { queuedFinal: false };
     });
 
@@ -718,7 +725,27 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(preview?.text).toBe("Shelling\nChecking recent context\nBackground task still running");
     expect(JSON.stringify(preview?.richMessage)).toContain("Background task still running");
+    expect(rendered).toBe(true);
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("reports empty tool-result progress as not rendered", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    let rendered: boolean | void = undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      rendered = await replyOptions?.onToolResult?.({ text: "   " });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(rendered).toBe(false);
+    expect(draftStream.updatePreview).not.toHaveBeenCalled();
   });
 
   it("retracts the Telegram preamble headline by item identity", async () => {

@@ -13,7 +13,7 @@ import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
-import type { ThemeMode } from "./theme.ts";
+import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
 export type {
@@ -23,8 +23,16 @@ export type {
   ApplicationGatewaySnapshot,
 } from "./gateway.ts";
 
+export type ApplicationThemeServerSelection = {
+  readonly revision: number;
+  readonly scope: string;
+  readonly theme: ThemeName | null;
+};
+
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
+  readonly serverSelection: ApplicationThemeServerSelection | null;
+  recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
   refresh: () => void;
   subscribe: (listener: () => void) => () => void;
@@ -50,14 +58,16 @@ export type ApplicationNavigationOptions = Partial<
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
+  /** Stable for ordinary snapshots and session selection; rotates on reconnect. */
+  owner: object;
   proposalId: string;
   proposalAgentId: string;
 };
 
 export type ApplicationSkillWorkshopRevisionHandoff = {
   prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
-  consume: (sessionKey: string) => SkillWorkshopRevisionHandoff | null;
-  clear: () => void;
+  consume: (sessionKey: string, owner: object | null) => SkillWorkshopRevisionHandoff | null;
+  clear: (handoff?: SkillWorkshopRevisionHandoff) => void;
 };
 
 export type ApplicationInitialUserMessage = {

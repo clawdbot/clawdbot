@@ -1,13 +1,15 @@
 // Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
+import { formatNextRun } from "../../lib/presenter.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
-
-type AgentsProps = Parameters<typeof renderAgents>[0];
 
 function createSkill() {
   return {
@@ -40,6 +42,21 @@ function createSkill() {
   };
 }
 
+function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name: `Scheduled job ${id}`,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "cron", expr: "0 9 * * *" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "ping" },
+    ...overrides,
+  } as CronJob;
+}
+
 function directText(element: Element | null | undefined): string | undefined {
   return Array.from(element?.childNodes ?? [])
     .filter((node) => node.nodeType === Node.TEXT_NODE)
@@ -56,107 +73,6 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
     throw new Error(`Expected agent tab "${text}"`);
   }
   return button;
-}
-
-function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
-  return {
-    basePath: "",
-    authToken: null,
-    loading: false,
-    error: null,
-    agentsList: {
-      defaultId: "alpha",
-      mainKey: "main",
-      scope: "workspace",
-      agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
-    },
-    selectedAgentId: "beta",
-    activePanel: "overview",
-    config: {
-      form: null,
-      loading: false,
-      saving: false,
-      dirty: false,
-    },
-    channels: {
-      snapshot: null,
-      loading: false,
-      error: null,
-      lastSuccess: null,
-    },
-    cron: {
-      status: null,
-      jobs: [],
-      loading: false,
-      error: null,
-    },
-    agentFiles: {
-      list: null,
-      loading: false,
-      error: null,
-      active: null,
-      contents: {},
-      drafts: {},
-      saving: false,
-    },
-    agentIdentityLoading: false,
-    agentIdentityError: null,
-    agentIdentityById: {},
-    identityDraft: { name: null, emoji: null, avatar: null },
-    identitySaving: false,
-    identityError: null,
-    agentSkills: {
-      report: null,
-      loading: false,
-      error: null,
-      agentId: null,
-      filter: "",
-    },
-    toolsCatalog: {
-      loading: false,
-      error: null,
-      result: null,
-    },
-    toolsEffective: {
-      loading: false,
-      error: null,
-      result: null,
-    },
-    runtimeSessionKey: "main",
-    runtimeSessionMatchesSelectedAgent: false,
-    modelCatalog: [],
-    pinnedAgentIds: [],
-    onRefresh: () => undefined,
-    onSelectAgent: () => undefined,
-    onCreateAgent: () => undefined,
-    onSelectPanel: () => undefined,
-    onLoadFiles: () => undefined,
-    onSelectFile: () => undefined,
-    onFileDraftChange: () => undefined,
-    onFileReset: () => undefined,
-    onFileSave: () => undefined,
-    onToolsProfileChange: () => undefined,
-    onToolsOverridesChange: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
-    onModelChange: () => undefined,
-    onModelFallbacksChange: () => undefined,
-    onChannelsRefresh: () => undefined,
-    onCronRefresh: () => undefined,
-    onCronRunNow: () => undefined,
-    onSkillsFilterChange: () => undefined,
-    onSkillsRefresh: () => undefined,
-    onAgentSkillToggle: () => undefined,
-    onAgentSkillsClear: () => undefined,
-    onAgentSkillsDisableAll: () => undefined,
-    onSetDefault: () => undefined,
-    onIdentityFieldChange: () => undefined,
-    onIdentityAvatarSelect: () => undefined,
-    onIdentitySave: () => undefined,
-    onTogglePinnedAgent: () => undefined,
-    onOpenAgentDefaults: () => undefined,
-    ...overrides,
-  };
 }
 
 describe("renderAgents", () => {
@@ -203,6 +119,152 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
+  });
+
+  it("shows a model-catalog failure and lets the operator retry", () => {
+    const container = document.createElement("div");
+    const onModelCatalogRetry = vi.fn();
+    render(
+      renderAgents(
+        createProps({ modelCatalogError: "model catalog unavailable", onModelCatalogRetry }),
+      ),
+      container,
+    );
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("model catalog unavailable");
+    const retry = Array.from(alert?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent?.trim() === t("common.retry"),
+    );
+    retry?.click();
+
+    expect(onModelCatalogRetry).toHaveBeenCalledOnce();
+  });
+
+  it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
+    const job = createCronJob("implicit-default-job", {
+      name: "Implicit default-agent reminder",
+    });
+    const globalNextWakeAtMs = Date.now() + 60_000;
+    const scopedNextWakeAtMs = globalNextWakeAtMs + 3_600_000;
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          activePanel: "cron",
+          selectedAgentId: "alpha",
+          cron: {
+            status: { enabled: true, jobs: 51, nextWakeAtMs: globalNextWakeAtMs },
+            jobs: [job],
+            jobsTotal: 1,
+            jobsHasMore: false,
+            jobsLoadingMore: false,
+            scopedTotal: 1,
+            scopedNextWakeAtMs,
+            loading: false,
+            error: null,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Implicit default-agent reminder");
+    expect(
+      expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
+        ?.textContent,
+    ).toContain("1");
+
+    const schedulerRows = [...container.querySelectorAll(".settings-row")];
+    const jobsRow = schedulerRows.find(
+      (row) =>
+        row.querySelector(".settings-row__title")?.textContent === t("agents.cronPanel.jobs"),
+    );
+    const nextWakeRow = schedulerRows.find(
+      (row) =>
+        row.querySelector(".settings-row__title")?.textContent === t("agents.cronPanel.nextWake"),
+    );
+    expect(jobsRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe("1");
+    expect(nextWakeRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe(
+      formatNextRun(scopedNextWakeAtMs),
+    );
+    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(globalNextWakeAtMs));
+  });
+
+  it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
+    const jobs = Array.from({ length: 50 }, (_, index) =>
+      createCronJob(`main-${index}`, { agentId: "alpha" }),
+    );
+    const lastJob = createCronJob("main-50", {
+      agentId: "alpha",
+      name: "Fifty-first agent reminder",
+    });
+    const request = vi.fn(async () => ({
+      jobs: [lastJob],
+      total: 51,
+      offset: 50,
+      nextOffset: null,
+      hasMore: false,
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const cronState = {
+      ...createInitialCronState({ client, connected: true }),
+      cronAgentId: "alpha",
+      cronJobs: jobs,
+      cronJobsTotal: 51,
+      cronJobsHasMore: true,
+      cronJobsNextOffset: 50,
+    };
+    const container = document.createElement("div");
+    const renderCurrentPage = (): void => {
+      render(
+        renderAgents(
+          createProps({
+            activePanel: "cron",
+            selectedAgentId: "alpha",
+            cron: {
+              status: { enabled: true, jobs: 80, nextWakeAtMs: null },
+              jobs: cronState.cronJobs,
+              jobsTotal: cronState.cronJobsTotal,
+              jobsHasMore: cronState.cronJobsHasMore,
+              jobsLoadingMore: cronState.cronJobsLoadingMore,
+              scopedTotal: 51,
+              scopedNextWakeAtMs: null,
+              loading: cronState.cronLoading,
+              error: cronState.cronError,
+            },
+            onCronLoadMore: () => {
+              const nextPage = loadCronJobsPage(cronState, {
+                append: true,
+                tableFilters: true,
+              });
+              renderCurrentPage();
+              void nextPage.then(renderCurrentPage);
+            },
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrentPage();
+
+    expect(
+      expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
+        ?.textContent,
+    ).toContain("51");
+    expect(container.textContent).not.toContain(lastJob.name);
+
+    const loadMore = container.querySelector<HTMLButtonElement>(".cron-load-more");
+    expect(loadMore?.textContent?.trim()).toBe(t("cron.list.loadMore"));
+    loadMore?.click();
+    expect(container.querySelector<HTMLButtonElement>(".cron-load-more")?.disabled).toBe(true);
+
+    await vi.waitFor(() => expect(container.textContent).toContain(lastJob.name));
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ agentId: "alpha", limit: 50, offset: 50 }),
+    );
+    expect(container.querySelector(".cron-load-more")).toBeNull();
   });
 
   it("renders Memory after Automations and scopes the panel to the selected agent", () => {
@@ -252,7 +314,7 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     };
 
@@ -265,6 +327,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -287,6 +350,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -316,7 +380,7 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     };
 
@@ -329,6 +393,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
           modelCatalog: [
             {
@@ -387,12 +452,13 @@ describe("renderAgents", () => {
                 defaults: {
                   model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
                 },
-                list: [{ id: "alpha" }, { id: "beta", model }],
+                entries: { alpha: {}, beta: { model } },
               },
             },
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -415,10 +481,10 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        list: [
-          { id: "alpha", model: { primary: "anthropic/claude-sonnet-4-6" } },
-          { id: "beta", model: { primary: "openai/gpt-5.4" } },
-        ],
+        entries: {
+          alpha: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          beta: { model: { primary: "openai/gpt-5.4" } },
+        },
       },
     };
 
@@ -431,6 +497,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -454,6 +521,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -481,7 +549,7 @@ describe("renderAgents", () => {
           agentsList: {
             defaultId: "alpha",
             mainKey: "main",
-            scope: "workspace",
+            scope: "per-sender",
             agents: [
               { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
               { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
@@ -677,6 +745,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -723,6 +792,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -791,6 +861,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -843,6 +914,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -895,6 +967,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -946,6 +1019,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",

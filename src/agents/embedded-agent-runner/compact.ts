@@ -3,6 +3,7 @@
  */
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -21,6 +22,7 @@ import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { resolveProjectKey } from "../project-memory-scope.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -43,6 +45,7 @@ import {
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
@@ -128,7 +131,10 @@ export async function compactEmbeddedAgentSessionDirect(
       failure: { reason: "model_selection_locked" },
     };
   }
-  const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
+  const runSessionTarget = await resolveAgentRunSessionTarget({
+    ...paramsBase,
+    missingSessionKey: "resolve-existing",
+  });
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
     agentId: runSessionTarget.agentId,
@@ -149,6 +155,58 @@ export async function compactEmbeddedAgentSessionDirect(
   const canonicalWorkspaceDir = resolveUserPath(
     resolveAgentWorkspaceDir(requestedParams.config ?? {}, requestedAgentIds.sessionAgentId),
   );
+  const runtimeSelection = resolveCompactionRuntimeSelection({
+    ...requestedParams,
+    modelId: requestedParams.model,
+    boundHarnessRuntime: requestedParams.agentHarnessId,
+    preparedRuntimePlan: requestedParams.runtimePlan,
+  });
+  const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: requestedParams.config,
+    provider: requestedParams.provider,
+    modelId: requestedParams.model,
+    authProfileId: requestedParams.authProfileId,
+    modelSelectionLocked: requestedParams.modelSelectionLocked,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const pluginPlanCandidates = resolveModelCandidateChain({
+    cfg: requestedParams.config,
+    provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
+    model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
+    requestedRouteResolution: "resolved",
+    fallbacksOverride: resolveCompactionFallbacksOverride(requestedParams),
+  });
+  const runtimePluginSelections = [
+    {
+      provider: runtimeSelection.provider,
+      modelId: runtimeSelection.modelId,
+      ...(runtimeSelection.selectedHarnessRuntime
+        ? { runtime: runtimeSelection.selectedHarnessRuntime }
+        : {}),
+      agentId: requestedAgentIds.sessionAgentId,
+    },
+    ...pluginPlanCandidates
+      .filter(
+        (candidate) =>
+          candidate.provider !== runtimeSelection.provider ||
+          candidate.model !== runtimeSelection.modelId,
+      )
+      .map((candidate) =>
+        runtimeSelection.boundHarnessRuntime
+          ? {
+              provider: candidate.provider,
+              modelId: candidate.model,
+              runtime: runtimeSelection.boundHarnessRuntime,
+              agentId: requestedAgentIds.sessionAgentId,
+            }
+          : {
+              provider: candidate.provider,
+              modelId: candidate.model,
+              agentId: requestedAgentIds.sessionAgentId,
+            },
+      ),
+  ];
   const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime({
     config: requestedParams.config ?? {},
     agentId: requestedAgentIds.sessionAgentId,
@@ -156,6 +214,8 @@ export async function compactEmbeddedAgentSessionDirect(
     inheritedAuthDir: resolveDefaultAgentDir(requestedParams.config ?? {}),
     workspaceDir: requestedWorkspaceDir,
     preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+    ...(requestedParams.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+    runtimePluginSelections,
   });
   try {
     const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
@@ -188,83 +248,98 @@ export async function compactEmbeddedAgentSessionDirect(
       workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
     };
-    if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
-      return await compactEmbeddedAgentSessionDirectOnce(params);
-    }
-    const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
-      config: params.config,
-      provider: params.provider,
-      modelId: params.model,
-      authProfileId: params.authProfileId,
-      modelSelectionLocked: params.modelSelectionLocked,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-    const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-    const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
-    const fallbacksOverride = resolveCompactionFallbacksOverride(params);
-    const resolvedPrimaryCandidate = resolveModelCandidateChain({
-      cfg: params.config,
-      provider: primaryProvider,
-      model: primaryModel,
-      requestedRouteResolution: "resolved",
-      fallbacksOverride,
-    })[0];
-    const fallbackAgentId = resolveSessionAgentIds({
-      sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-      config: params.config,
-      agentId: params.agentId,
-    }).sessionAgentId;
-    const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
-    const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
-      cfg: params.config,
-      provider: primaryProvider,
-      model: primaryModel,
-      requestedRouteResolution: "resolved",
-      runId: params.runId ?? params.sessionId,
-      agentDir: params.agentDir,
-      agentId: fallbackAgentId,
-      sessionId: params.sessionId,
-      sessionKey: fallbackSessionKey,
-      abortSignal: params.abortSignal,
-      prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
-        await ensureSelectedAgentHarnessPlugin({
+    const compactPrepared = async () => {
+      if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+        return await compactEmbeddedAgentSessionDirectOnce(params);
+      }
+      const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+        config: params.config,
+        provider: params.provider,
+        modelId: params.model,
+        authProfileId: params.authProfileId,
+        modelSelectionLocked: params.modelSelectionLocked,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
+      const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+      const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+      const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
+      const resolveAuthProvider = (provider: string) =>
+        resolveProviderIdForAuth(provider, {
           config: params.config,
-          provider,
-          modelId: model,
-          agentId: fallbackAgentId,
-          sessionKey: fallbackSessionKey,
-          agentHarnessRuntimeOverride,
-          workspaceDir: params.workspaceDir,
+          metadataSnapshot: preparedModelRuntime.metadataSnapshot,
         });
-      },
-      fallbacksOverride,
-      classifyResult: ({ result, provider, model }) =>
-        classifyCompactionFallbackResult(result, provider, model),
-      run: async (provider, model) => {
-        const isPrimaryCandidate =
-          provider === resolvedPrimaryCandidate?.provider &&
-          model === resolvedPrimaryCandidate.model;
-        const preservesPrimaryAuth =
-          isPrimaryCandidate ||
-          provider === primaryProvider ||
-          provider === requestedPrimaryProvider;
-        const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-        return await compactEmbeddedAgentSessionDirectOnce({
-          ...params,
-          provider,
-          model,
-          authProfileId,
-          authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-          // The primary attempt retains its already prepared atomic plan. An
-          // actual fallback may change route/auth class and must rebuild it.
-          runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
-          runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
-        });
-      },
-    });
-    return fallbackResult.result;
+      const primaryAuthProviders = new Set(
+        [primaryProvider, requestedPrimaryProvider].map(resolveAuthProvider),
+      );
+      const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+      const resolvedPrimaryCandidate = resolveModelCandidateChain({
+        cfg: params.config,
+        provider: primaryProvider,
+        model: primaryModel,
+        requestedRouteResolution: "resolved",
+        fallbacksOverride,
+      })[0];
+      const fallbackAgentId = resolveSessionAgentIds({
+        sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      }).sessionAgentId;
+      const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
+      const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
+        cfg: params.config,
+        provider: primaryProvider,
+        model: primaryModel,
+        requestedRouteResolution: "resolved",
+        runId: params.runId ?? params.sessionId,
+        agentDir: params.agentDir,
+        agentId: fallbackAgentId,
+        sessionId: params.sessionId,
+        sessionKey: fallbackSessionKey,
+        userLockedAuthProfileId:
+          params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+        abortSignal: params.abortSignal,
+        prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+          await ensureSelectedAgentHarnessPlugin({
+            config: params.config,
+            provider,
+            modelId: model,
+            agentId: fallbackAgentId,
+            sessionKey: fallbackSessionKey,
+            agentHarnessRuntimeOverride,
+            workspaceDir: params.workspaceDir,
+            pluginRegistry: preparedModelRuntime.pluginRegistry!,
+          });
+        },
+        fallbacksOverride,
+        classifyResult: ({ result, provider, model }) =>
+          classifyCompactionFallbackResult(result, provider, model),
+        run: async (provider, model) => {
+          const isPrimaryCandidate =
+            provider === resolvedPrimaryCandidate?.provider &&
+            model === resolvedPrimaryCandidate.model;
+          const preservesPrimaryAuth =
+            isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
+          const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+          return await compactEmbeddedAgentSessionDirectOnce({
+            ...params,
+            provider,
+            model,
+            authProfileId,
+            authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+            // The primary attempt retains its already prepared atomic plan. An
+            // actual fallback may change route/auth class and must rebuild it.
+            runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
+            runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
+          });
+        },
+      });
+      return fallbackResult.result;
+    };
+    return await withPluginRuntimeRegistryScope(
+      preparedModelRuntime.pluginRegistry,
+      compactPrepared,
+    );
   } catch (err) {
     return fallbackFailureToCompactionResult(err);
   } finally {

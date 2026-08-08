@@ -8,23 +8,39 @@ import {
   listMockCodexModelInfos,
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
-import { buildMessagesPayload } from "./mock-anthropic-messages.js";
-import { buildAssistantText } from "./mock-openai-assistant-text.js";
+import {
+  buildMessagesPayload,
+  normalizeAnthropicMessagesRequest,
+} from "./mock-anthropic-messages.js";
+import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
+import {
+  buildAssistantText,
+  isCanonicalCompactionRetryWriteResult,
+  QA_COMPACTION_RETRY_FINAL_MARKER,
+} from "./mock-openai-assistant-text.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
   resolveProviderVariant,
   type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotInput,
+  type MockOpenAiRequestKind,
+  type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
+  type QaMockProviderDispatchRequest,
+  type QaMockProviderDispatchResult,
   TINY_PNG_BASE64,
   QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
   QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE,
+  QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE,
   QA_THINKING_VISIBILITY_OFF_PROMPT_RE,
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
+  QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
+  QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
@@ -33,6 +49,7 @@ import {
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
   QA_STRANDED_FINAL_RECOVERY_PROMPT_RE,
@@ -43,13 +60,21 @@ import {
   QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
   QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
+  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
+  buildSlackMpimHistoryBotReply,
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
+  QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_TERMINAL_MARKERS,
+  QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
   QA_NATIVE_STOP_DELAY_MS,
   QA_IMAGE_GENERATION_PROMPT_RE,
@@ -93,7 +118,8 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractBlockStreamingMarkerDirectives,
-  hasDeclaredCustomTool,
+  extractSlackProgressCommentaryDirectives,
+  QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   isQaToolSearchFixture,
@@ -108,7 +134,7 @@ import {
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
-  extractPlannedToolCallId,
+  extractPlannedToolIdentity,
   extractPlannedToolArgs,
   splitMockStreamingText,
   buildQaLongFinalText,
@@ -116,18 +142,21 @@ import {
   buildAssistantEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
+  buildFailedResponseEvents,
 } from "./mock-openai-events.js";
 import {
   extractLastUserText,
   extractLastMatchingUserTurn,
+  hasToolOutput,
   extractToolOutput,
+  extractToolOutputValue,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
   extractLatestToolOutput,
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
+  extractSlackMpimRetainedBotNonce,
   extractAllUserTexts,
-  extractAllInputTexts,
   extractInstructionsText,
   extractAllRequestTexts,
   buildWhatsAppPendingHistoryReply,
@@ -135,30 +164,129 @@ import {
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
   countImageInputs,
-  extractLatestImageUserTurn,
+  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
-import {
-  attachQaMockResponsesWebSocketServer,
-  type QaMockResponsesDispatchResult,
-} from "./mock-openai-responses-websocket.js";
+import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
 import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildCustomToolCallEventsWithInput,
-  buildToolCallEventsWithArgs,
+  buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
+  toolSearchOutputHasCandidate,
   buildQaToolSearchArgs,
+  QA_TOOL_SEARCH_SECONDARY_TARGET,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
+const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
+  /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
+const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
+const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
+const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
+const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
+const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
+const QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE =
+  /\bQA-COMPACTION-EMPTY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
+const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
+  /\bQA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
+const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
+const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
+const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
+- Continue the compaction retry from durable context without replaying a completed mutation.
+
+## Open TODOs
+- Write compaction-retry-summary.txt exactly once.
+- Return the final replay-safety marker.
+
+## Constraints/Rules
+- Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
+- Write exactly: Replay safety: unsafe after write.
+
+## Pending user asks
+- Create compaction-retry-summary.txt, then reply exactly: Protocol note: replay unsafe after write.
+
+## Exact identifiers
+- ${QA_COMPACTION_RETRY_DURABLE_MARKER}
+- compaction-retry-summary.txt`;
+const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
+- Preserve the latest ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} context through staged compaction.
+
+## Open TODOs
+- Continue summarizing the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} sequence.
+
+## Constraints/Rules
+- Keep historical content distinct from live task state.
+- Do not invent durable context absent from the summarized history.
+
+## Pending user asks
+- Retain the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} details.
+
+## Exact identifiers
+- None captured.`;
+const QA_GENERIC_COMPACTION_SUMMARY = `## Decisions
+- Continue from the summary without restarting completed work.
+
+## Open TODOs
+- Continue the active task.
+
+## Constraints/Rules
+- Keep current requirements and identifiers.
+
+## Pending user asks
+- Continue the active task from the retained context.
+
+## Exact identifiers
+- None captured.`;
+const QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY = `## Decisions
+- Retry the typed compaction-summary fault at the compaction owner.
+
+## Open TODOs
+- Continue the active task after compaction.
+
+## Constraints/Rules
+- Preserve the historical recovery user block and current continuation.
+
+## Pending user asks
+- Retain the historical recovery user block context.
+
+## Exact identifiers`;
+
+function resolveCompactionRecoverySummary(allInputText: string) {
+  const faultMarker =
+    QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(allInputText)?.[0] ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(allInputText)?.[0];
+  const recoveryMarker = faultMarker?.startsWith("QA-COMPACTION-EMPTY-")
+    ? QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER
+    : faultMarker
+      ? QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER
+      : undefined;
+  return recoveryMarker && faultMarker
+    ? `${QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY}\n- ${recoveryMarker}\n- ${faultMarker}`
+    : QA_GENERIC_COMPACTION_SUMMARY;
+}
+
+function hasCompactionOutputRecoveryMarker(allInputText: string) {
+  return (
+    QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.test(allInputText) ||
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.test(allInputText)
+  );
+}
+
 const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
   /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
+// Keep each real provider request active long enough for retries to span the
+// unchanged five-minute recovery bound while remaining below first-byte timeout.
+const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -193,17 +321,538 @@ function extractLatestScenarioFamilyPrompt(texts: string[]) {
   return latestIndex < 0 ? "" : envelope.slice(latestIndex);
 }
 
+function stringifyScenarioToolOutput(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function encodeCodeModeTarget(name: string, args: Record<string, unknown>) {
+  return Buffer.from(JSON.stringify({ name, args }), "utf8").toString("base64url");
+}
+
+function decodeCodeModeTarget(code: string | undefined) {
+  const marker = code
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith(`// ${QA_CODE_MODE_TARGET_MARKER}`));
+  if (!marker) {
+    return null;
+  }
+  try {
+    const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      typeof record.name !== "string" ||
+      !record.args ||
+      typeof record.args !== "object" ||
+      Array.isArray(record.args)
+    ) {
+      return null;
+    }
+    return {
+      name: record.name,
+      args: record.args as Record<string, unknown>,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function findNamedToolDefinition(
+  value: unknown,
+  name: string,
+  depth = 0,
+): Record<string, unknown> | null {
+  if (depth > 6 || !value || typeof value !== "object") {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findNamedToolDefinition(item, name, depth + 1);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.name === name || record.tool === name || record.functionName === name) {
+    return record;
+  }
+  for (const item of Object.values(record)) {
+    const match = findNamedToolDefinition(item, name, depth + 1);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+type CodeModeExecSurface = "native" | "guest";
+
+function resolveCodeModeExecSurface(body: Record<string, unknown>): CodeModeExecSurface | null {
+  const tools = [
+    ...(Array.isArray(body.tools) ? body.tools : []),
+    ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
+  ];
+  const execDefinition = findNamedToolDefinition(tools, "exec");
+  if (!execDefinition || !hasToolDefinition(body, "wait")) {
+    return null;
+  }
+  if (execDefinition.type === "custom") {
+    return "native";
+  }
+  const schema =
+    (execDefinition.input_schema as Record<string, unknown> | undefined) ??
+    (execDefinition.parameters as Record<string, unknown> | undefined);
+  if (!schema) {
+    return null;
+  }
+  const properties = schema.properties;
+  const required = schema.required;
+  return properties !== null &&
+    typeof properties === "object" &&
+    !Array.isArray(properties) &&
+    Object.hasOwn(properties, "code") &&
+    Array.isArray(required) &&
+    required.includes("code")
+    ? "guest"
+    : null;
+}
+
+function hasCodeModeExecSurface(body: Record<string, unknown>) {
+  return resolveCodeModeExecSurface(body) !== null;
+}
+
+function resolveCurrentToolDeclarationSurface(
+  body: Record<string, unknown>,
+  input: ResponsesInputItem[],
+) {
+  const additionalTools = input.flatMap((item) =>
+    item.type === "additional_tools" && item.role === "developer" && Array.isArray(item.tools)
+      ? item.tools
+      : [],
+  );
+  return additionalTools.length === 0
+    ? body
+    : {
+        ...body,
+        tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
+      };
+}
+
+function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
+  return input.toReversed().find((item) => {
+    const type = item.type;
+    return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
+  });
+}
+
+function parseToolCallArguments(toolCall: ResponsesInputItem) {
+  if (typeof toolCall.arguments !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(toolCall.arguments) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {
+  if (toolCall?.type === "custom_tool_call" && typeof toolCall.input === "string") {
+    return toolCall.input;
+  }
+  const code = toolCall ? parseToolCallArguments(toolCall)?.code : undefined;
+  return typeof code === "string" ? code : undefined;
+}
+
+function isGeneratedCodeModeExecCall(toolCall: ResponsesInputItem | undefined) {
+  const source = toolCall?.name === "exec" ? readGeneratedCodeModeExecSource(toolCall) : undefined;
+  return typeof source === "string" && decodeCodeModeTarget(source) !== null;
+}
+
+function parseNativeCodeModeOutput(
+  output: unknown,
+): { status: "waiting"; cellId: string } | { status: "completed"; value: unknown } | null {
+  if (!Array.isArray(output)) {
+    return null;
+  }
+  const readText = (item: unknown) =>
+    typeof item === "string"
+      ? item
+      : item &&
+          typeof item === "object" &&
+          typeof (item as Record<string, unknown>).text === "string"
+        ? String((item as Record<string, unknown>).text)
+        : null;
+  const statusText = readText(output[0]);
+  if (!statusText) {
+    return null;
+  }
+  const cellId = /^Script running with cell ID ([^\s\n]+)/u.exec(statusText)?.[1];
+  if (cellId) {
+    return { status: "waiting", cellId };
+  }
+  if (!statusText.startsWith("Script completed\n")) {
+    return null;
+  }
+  for (const item of output.slice(1).toReversed()) {
+    const text = readText(item);
+    if (!text) {
+      continue;
+    }
+    try {
+      return { status: "completed", value: JSON.parse(text) as unknown };
+    } catch {
+      // Native Code Mode may emit non-JSON content before the final value.
+    }
+  }
+  return null;
+}
+
+function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: ResponsesInputItem) {
+  if (toolCall.name !== "wait") {
+    return false;
+  }
+  const args = parseToolCallArguments(toolCall);
+  const waitId =
+    typeof args?.cell_id === "string"
+      ? args.cell_id
+      : typeof args?.runId === "string"
+        ? args.runId
+        : undefined;
+  if (!waitId) {
+    return false;
+  }
+  return input.some((item) => {
+    if (
+      (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") ||
+      typeof item.call_id !== "string"
+    ) {
+      return false;
+    }
+    const native = parseNativeCodeModeOutput(item.output);
+    const parsed = native ?? parseToolOutputJson(stringifyScenarioToolOutput(item.output));
+    return (
+      parsed?.status === "waiting" &&
+      (("cellId" in parsed && parsed.cellId === waitId) ||
+        ("runId" in parsed && parsed.runId === waitId)) &&
+      isGeneratedCodeModeExecCall(findToolCallByCallId(input, item.call_id))
+    );
+  });
+}
+
+function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
+  if (!hasCodeModeExecSurface(body)) {
+    return false;
+  }
+  const toolOutputCallId = extractToolOutputCallId(input);
+  if (!toolOutputCallId) {
+    return false;
+  }
+  const toolCall = findToolCallByCallId(input, toolOutputCallId);
+  return (
+    isGeneratedCodeModeExecCall(toolCall) ||
+    (toolCall ? isGeneratedCodeModeWaitCall(input, toolCall) : false)
+  );
+}
+
+function buildScenarioToolCallEvents(
+  body: Record<string, unknown>,
+  name: string,
+  args: Record<string, unknown>,
+) {
+  // Code Mode hides catalog capabilities behind exec/wait. Route through that
+  // visible surface while retaining the nested capability as debug evidence.
+  if (
+    name === "exec" ||
+    name === "wait" ||
+    hasToolDefinition(body, name) ||
+    !hasCodeModeExecSurface(body)
+  ) {
+    const declaration = [
+      ...(Array.isArray(body.tools) ? body.tools : []),
+      ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
+    ].find((tool) => findNamedToolDefinition(tool, name));
+    const definition = findNamedToolDefinition(declaration, name);
+    // Function and custom calls both retain their declared namespace; Codex
+    // dispatches the complete identity and rejects a flattened nested tool.
+    const namespace =
+      declaration &&
+      typeof declaration === "object" &&
+      declaration.type === "namespace" &&
+      typeof declaration.name === "string"
+        ? declaration.name
+        : undefined;
+    if (definition?.type === "custom" && typeof args.input === "string") {
+      return buildCustomToolCallEventsWithInput(name, args.input, namespace);
+    }
+    return buildRawToolCallEventsWithArgs(name, args, namespace);
+  }
+  const encodedTarget = encodeCodeModeTarget(name, args);
+  if (resolveCodeModeExecSurface(body) === "native") {
+    return buildCustomToolCallEventsWithInput(
+      "exec",
+      [
+        `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+        `const targetName = ${JSON.stringify(name)};`,
+        `const targetArgs = ${JSON.stringify(args)};`,
+        "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
+        "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
+        "let value = await tools[target.name](targetArgs);",
+        'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
+        "  value = { ...value, content: value.content.slice(0, 2048) };",
+        "}",
+        "text(JSON.stringify(value));",
+      ].join("\n"),
+    );
+  }
+  return buildRawToolCallEventsWithArgs("exec", {
+    language: "javascript",
+    code: [
+      `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+      `const targetName = ${JSON.stringify(name)};`,
+      `const targetArgs = ${JSON.stringify(args)};`,
+      "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
+      "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
+      "const value = await tools.callValue(target.id, targetArgs);",
+      'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
+      "  return { ...value, content: value.content.slice(0, 2048) };",
+      "}",
+      "return value;",
+    ].join("\n"),
+  });
+}
+
+function extractScenarioPlannedTool(events: StreamEvent[]) {
+  const wireName = extractPlannedToolName(events);
+  const wireArgs = extractPlannedToolArgs(events);
+  const source =
+    typeof wireArgs?.input === "string"
+      ? wireArgs.input
+      : typeof wireArgs?.code === "string"
+        ? wireArgs.code
+        : undefined;
+  if (wireName !== "exec" || !source) {
+    return { name: wireName, args: wireArgs, wireName };
+  }
+  const target = decodeCodeModeTarget(source);
+  return target
+    ? { name: target.name, args: target.args, wireName }
+    : { name: wireName, args: wireArgs, wireName };
+}
+
+type TerminalRequesterSettleGate = {
+  markSettled: (caseName: string, childSessionKey: string) => void;
+  waitUntilSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+};
+
+function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
+  const settledChildren = new Set<string>();
+  const waiterPromises = new Map<string, Promise<void>>();
+  const waiters = new Map<string, () => void>();
+  const childKey = (caseName: string, childSessionKey: string) => `${caseName}\n${childSessionKey}`;
+  return {
+    markSettled(caseName, childSessionKey) {
+      const key = childKey(caseName, childSessionKey);
+      settledChildren.add(key);
+      waiters.get(key)?.();
+    },
+    async waitUntilSettled(caseName, childSessionKey) {
+      const key = childKey(caseName, childSessionKey);
+      if (settledChildren.has(key)) {
+        return;
+      }
+      const existing = waiterPromises.get(key);
+      if (existing) {
+        return await existing;
+      }
+      const promise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          waiters.delete(key);
+          waiterPromises.delete(key);
+          reject(new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`));
+        }, 30_000);
+        const finish = () => {
+          clearTimeout(timeout);
+          waiters.delete(key);
+          waiterPromises.delete(key);
+          resolve();
+        };
+        waiters.set(key, finish);
+      });
+      waiterPromises.set(key, promise);
+      await promise;
+    },
+  };
+}
+
+function resolveQaRuntimeSessionId(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  return /\bRuntime:\s*[^\n]*\bsessionId=([^\s|]+)/u.exec(extractAllRequestTexts(input, body))?.[1];
+}
+
+function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
+  if (Array.isArray(value)) {
+    return value as ResponsesInputItem[];
+  }
+  if (typeof value === "string") {
+    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
+  }
+  return [];
+}
+
+function resolveQaChildSessionKey(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const systemPrompt = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  return /^- Your session:\s*(.+?)\.\s*$/mu.exec(systemPrompt)?.[1]?.trim();
+}
+
+function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
+  const output = parseToolOutputJson(extractToolOutput(input));
+  return output?.status === "accepted" && typeof output.childSessionKey === "string"
+    ? output.childSessionKey.trim() || undefined
+    : undefined;
+}
+
+function classifyMockOpenAiRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+): MockOpenAiRequestKind {
+  const instructionText = extractAllRequestTexts(
+    input.filter((item) => item.role === "developer" || item.role === "system"),
+    body,
+  );
+  if (QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE.test(instructionText)) {
+    return "compaction-summary";
+  }
+  return hasToolOutput(input) ? "tool-continuation" : "agent-initial";
+}
+
+function resolveCompactionSummaryFaultMode(params: {
+  allInputText: string;
+  requestKind: MockOpenAiRequestKind;
+  servedFaultMarkers: Set<string>;
+}): MockCompactionSummaryFaultMode {
+  if (params.requestKind !== "compaction-summary") {
+    return "none";
+  }
+  const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
+    params.allInputText,
+  )?.[0];
+  const selected = emptyMarker
+    ? {
+        key: emptyMarker,
+        mode: "empty-output-once" as const,
+      }
+    : reasoningMarker
+      ? {
+          key: reasoningMarker,
+          mode: "reasoning-only-output-once" as const,
+        }
+      : undefined;
+  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+    return "none";
+  }
+  params.servedFaultMarkers.add(selected.key);
+  return selected.mode;
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
+  options: {
+    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind?: MockOpenAiRequestKind;
+    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
+  } = {},
 ) {
   const providerVariant = resolveProviderVariant(
     typeof body.model === "string" ? body.model : undefined,
   );
-  const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+  const input = normalizeResponsesInput(body.input);
+  const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
-  const toolOutput = extractToolOutput(input);
+  const hasCompletedToolOutput = hasToolOutput(input);
+  const rawToolOutput = extractToolOutput(input);
+  const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
+  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
+  const codeModeControlJson = hasCodeModeControlOutput
+    ? codeModeSurface === "native"
+      ? parseNativeCodeModeOutput(extractToolOutputValue(input))
+      : parseToolOutputJson(rawToolOutput)
+    : null;
+  const toolOutput =
+    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
+      ? stringifyScenarioToolOutput(codeModeControlJson.value)
+      : codeModeSurface === "native" && hasCodeModeControlOutput
+        ? ""
+        : rawToolOutput;
+  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
+  const completedToolName = (() => {
+    if (completedToolCall?.name !== "exec") {
+      return completedToolCall?.name;
+    }
+    const code = readGeneratedCodeModeExecSource(completedToolCall);
+    return typeof code === "string" ? decodeCodeModeTarget(code)?.name : undefined;
+  })();
+  const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
+    buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const allInputText = extractAllRequestTexts(input, body);
+  const hasCompactionRetryDurableContext = allInputText.includes(
+    QA_COMPACTION_RETRY_DURABLE_MARKER,
+  );
+  const hasCompactionRetryMarker =
+    QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
+    hasCompactionRetryDurableContext ||
+    allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
+  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
+  if (requestKind === "compaction-summary") {
+    if (options.compactionSummaryFaultMode === "empty-output-once") {
+      return buildAssistantEvents("");
+    }
+    if (options.compactionSummaryFaultMode === "reasoning-only-output-once") {
+      return buildReasoningOnlyEvents(
+        "Compaction summary reasoning completed without final summary text.",
+        "reasoning_compaction_summary_fault",
+      );
+    }
+    return buildAssistantEvents(
+      hasCompactionRetryDurableContext
+        ? QA_COMPACTION_RETRY_SUMMARY
+        : allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER) ||
+            allInputText.includes(QA_COMPACTION_RETRY_HISTORICAL_PHRASE)
+          ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
+          : resolveCompactionRecoverySummary(allInputText),
+    );
+  }
+  if (
+    QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
+    /compaction-retry-summary\.txt/i.test(toolOutput)
+  ) {
+    scenarioState.compactionRetryActive = true;
+  }
+  const compactionRetryScenarioActive =
+    scenarioState.compactionRetryActive || hasCompactionRetryMarker;
   const scenarioToolOutput =
     toolOutput ||
     (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
@@ -211,7 +860,35 @@ async function buildResponsesPayload(
     )
       ? extractLatestToolOutput(input)
       : "");
+  // The queued followup carries the stalled prompt in transcript history, so
+  // current-turn dispatch must win before the persistent recovery fixture.
+  if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
+    return buildAssistantEvents(QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER);
+  }
+  if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
+    return buildFailedResponseEvents();
+  }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  if (codeModeControlJson?.status === "waiting" && hasToolDefinition(toolDeclarationBody, "wait")) {
+    if ("cellId" in codeModeControlJson && typeof codeModeControlJson.cellId === "string") {
+      return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
+    }
+    if ("runId" in codeModeControlJson && typeof codeModeControlJson.runId === "string") {
+      return buildRawToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
+    }
+  }
+  if (compactionRetryScenarioActive) {
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return buildAssistantEvents(QA_COMPACTION_RETRY_FINAL_MARKER);
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "compaction-retry-summary.txt",
+        content: "Replay safety: unsafe after write.\n",
+      });
+    }
+    return buildAssistantEvents("");
+  }
   const memoryToolUnavailable =
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
@@ -233,7 +910,7 @@ async function buildResponsesPayload(
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
+  const currentImageRequest = extractCurrentImageRequest(input, body);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -255,17 +932,15 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const canCallMockSubagentTool =
-    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
-    /subagent fanout synthesis check/i.test(allInputText) ||
-    /forked subagent context qa check/i.test(allInputText) ||
-    /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
-    /subagent handoff/i.test(allInputText) ||
-    buildExplicitSessionsSpawnArgs(prompt) !== null;
-  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
+  const isActiveFailedToolTerminalRecovery =
+    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
+  const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
+  const canCallSessionsSpawn =
+    hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
   const canCallSessionsYield =
-    hasDeclaredTool(body, "sessions_yield") ||
-    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
+    hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
   const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
   // Progress scenarios share full session transcripts. Scope completion to
   // the selected prompt so an older turn's tool output cannot finish this one.
@@ -282,36 +957,56 @@ async function buildResponsesPayload(
     const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
+  const slackProgressTurn = extractLastMatchingUserTurn(
+    input,
+    QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
+  );
+  const slackProgressDirectives = slackProgressTurn
+    ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
+    : null;
+  const hasSlackProgressToolOutput = slackProgressTurn
+    ? hasToolOutput(input.slice(slackProgressTurn.index))
+    : false;
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
     }
-    if (/global circuit breaker/i.test(toolOutput)) {
+    if (/do not repeat this exact tool action/i.test(toolOutput)) {
       return buildAssistantEvents(exactReplyDirective ?? "GLOBAL-LOOP-BREAKER-OK");
     }
     scenarioState.toolLoopReadAttempts += 1;
-    if (scenarioState.toolLoopReadAttempts > 31) {
+    if (scenarioState.toolLoopReadAttempts > 21) {
       return buildAssistantEvents("GLOBAL-LOOP-BREAKER-NOT-REACHED");
     }
     return buildToolCallEventsWithArgs("read", { path: "LOOP_STEADY.txt" });
   }
   if (
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
-    !toolOutput
+    QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+    QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
       ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
       : {};
     if (
-      targetTool === "apply_patch" &&
-      hasDeclaredCustomTool(body, targetTool) &&
+      targetTool &&
+      hasCompletedToolOutput &&
+      completedToolName === "tool_search" &&
+      !toolOutput.includes("FAKE_PLUGIN_OK") &&
+      toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
+      hasDeclaredTool(body, "tool_call")
+    ) {
+      return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
+    }
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
+      findNamedToolDefinition(toolDeclarationBody, targetTool)?.type === "custom" &&
       typeof plannedArgs.input === "string"
     ) {
-      return buildCustomToolCallEventsWithInput(targetTool, plannedArgs.input);
+      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
-    if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
+    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search_code")) {
       return buildToolCallEventsWithArgs("tool_search_code", {
         code: [
           `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
@@ -321,7 +1016,24 @@ async function buildResponsesPayload(
         ].join("\n"),
       });
     }
-    if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
+      !hasDeclaredTool(body, targetTool) &&
+      hasDeclaredTool(body, "tool_search")
+    ) {
+      return buildToolCallEventsWithArgs("tool_search", {
+        queries: [
+          { query: targetTool, limit: 1 },
+          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
+        ],
+      });
+    }
+    if (
+      !hasCompletedToolOutput &&
+      targetTool &&
+      (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))
+    ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
@@ -345,7 +1057,7 @@ async function buildResponsesPayload(
     ) {
       return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
     }
-    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
       return buildToolCallEventsWithArgs("exec", {
         language: "javascript",
         restartSafe: true,
@@ -362,7 +1074,7 @@ async function buildResponsesPayload(
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
     QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
   ) {
-    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
       const useApiFiles = QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText);
       return buildToolCallEventsWithArgs("exec", {
         language: "javascript",
@@ -422,6 +1134,106 @@ async function buildResponsesPayload(
       );
     }
   }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
+  }
+  const terminalCompletionCase = extractLastMatchingUserTurn(
+    input,
+    QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+  )
+    ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
+    ?.toLowerCase();
+  if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
+    if (terminalCompletionCase === "empty") {
+      if (completedToolName === "message") {
+        return buildAssistantEvents("");
+      }
+      if (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode) {
+        const deliveryInstructions = extractAllRequestTexts(
+          input.filter((item) => item.role === "system" || item.role === "developer"),
+          body,
+        );
+        const requiresFinal =
+          /visible source replies are not automatically delivered for this run\.[\s\S]*set `?final=true`?/i.test(
+            deliveryInstructions,
+          );
+        return buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          ...(requiresFinal ? { final: true } : {}),
+        });
+      }
+      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+    }
+    // The direct delivery fallback owns visible, silent, restart, and sanitized
+    // fallback results. Use explicit silence so generic empty-response recovery
+    // cannot replay the historical spawn before that fallback runs.
+    return buildAssistantEvents("NO_REPLY");
+  }
+  const terminalWorkerCase = Array.from(
+    allInputText.matchAll(
+      new RegExp(
+        QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.source,
+        `${QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE.flags.replaceAll("g", "")}g`,
+      ),
+    ),
+  )
+    .at(-1)?.[1]
+    ?.toLowerCase();
+  if (terminalWorkerCase) {
+    const childSessionKey = resolveQaChildSessionKey(input, body);
+    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+      await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
+    }
+  }
+  if (terminalWorkerCase === "silent") {
+    return buildAssistantEvents("NO_REPLY");
+  }
+  if (terminalWorkerCase === "empty") {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "write")) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "qa-terminal-empty-side-effect.txt",
+        content: "empty terminal QA side effect completed\n",
+      });
+    }
+    return buildAssistantEvents(
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+  }
+  if (terminalWorkerCase === "fallback") {
+    return buildAssistantEvents(
+      [
+        QA_SUBAGENT_TERMINAL_MARKERS.fallback,
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+  }
+  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+    return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
+  }
+  if (terminalCompletionCase) {
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        label: `qa-terminal-${terminalCompletionCase}`,
+        thread: false,
+        mode: "run",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      // End the requester turn before the delayed worker settles. The terminal
+      // result must therefore use the runtime's direct channel fallback.
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
+  // Protected completion context is excluded from the current user prompt;
+  // ignoring it replays the historical kickoff and recursively spawns workers.
   if (
     allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
     /Internal task completion event/i.test(allInputText)
@@ -429,7 +1241,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput && canCallSessionsSpawn) {
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
         label: "qa-direct-fallback-worker",
@@ -437,14 +1249,14 @@ async function buildResponsesPayload(
         mode: "run",
       });
     }
-    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+    if (hasCompletedToolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
       return buildToolCallEventsWithArgs("sessions_yield", {
         message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
       });
     }
   }
   if (/remember this fact/i.test(prompt)) {
-    return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (isActiveEmptyResponseSideEffectRecovery) {
     if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
@@ -452,13 +1264,26 @@ async function buildResponsesPayload(
         exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
       );
     }
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
     }
     return buildAssistantEvents("");
+  }
+  if (isActiveFailedToolTerminalRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+      }
+      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
+    }
+    if (!hasCompletedToolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
+    }
+    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
@@ -470,16 +1295,16 @@ async function buildResponsesPayload(
     return buildAssistantEvents("BETA-OK");
   }
   if (
-    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /roundtrip image inspection check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return buildAssistantEvents(
       "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
     );
   }
   if (
-    /image understanding check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
+    /image understanding check/i.test(currentImageRequest.text) &&
+    currentImageRequest.imageInputCount > 0
   ) {
     return buildAssistantEvents(
       "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
@@ -522,7 +1347,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("THINKING-OFF-OK");
   }
   if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     if (!hasEmptyResponseRetryInstruction) {
@@ -531,7 +1356,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("EMPTY-RECOVERED-OK");
   }
   if (QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     return buildAssistantEvents("");
@@ -596,7 +1421,7 @@ async function buildResponsesPayload(
   }
   const slackChartMatch = QA_SLACK_CHART_PRESENTATION_PROMPT_RE.exec(allInputText);
   if (slackChartMatch?.[1] && slackChartMatch[2]) {
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: slackChartMatch[1],
@@ -615,24 +1440,24 @@ async function buildResponsesPayload(
         },
       });
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "react",
         emoji: "👍",
       });
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("");
     }
   }
   const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
   if (whatsAppUploadMatch?.[1]) {
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "upload-file",
         buffer: TINY_PNG_BASE64,
@@ -641,7 +1466,7 @@ async function buildResponsesPayload(
         filename: "whatsapp-qa-agent-upload.png",
       });
     }
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("");
     }
   }
@@ -681,6 +1506,30 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  if (slackProgressDirectives) {
+    if (hasSlackProgressToolOutput) {
+      return buildAssistantEvents([
+        {
+          id: "msg_mock_slack_progress_final",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(slackProgressDirectives.finalMarker),
+          text: slackProgressDirectives.finalMarker,
+        },
+      ]);
+    }
+    if (hasDeclaredTool(body, "exec")) {
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_slack_progress_commentary",
+          phase: "commentary",
+          streamDeltas: splitMockStreamingText(slackProgressDirectives.commentaryMarker),
+          text: slackProgressDirectives.commentaryMarker,
+        },
+        "exec",
+        { command: slackProgressDirectives.execCommand },
+      );
+    }
+  }
   const toolProgressReplyDirective =
     extractExactReplyDirective(toolProgressToolOutput) ??
     extractExactMarkerDirective(toolProgressToolOutput) ??
@@ -706,7 +1555,7 @@ async function buildResponsesPayload(
     }
   }
   if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildAssistantThenToolCallEvents(
         {
           id: "msg_mock_block_1",
@@ -734,7 +1583,7 @@ async function buildResponsesPayload(
   }
   if (QA_STRANDED_FINAL_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText)) {
-      if (!toolOutput && hasDeclaredTool(body, "message")) {
+      if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
         return buildToolCallEventsWithArgs("message", {
           action: "send",
           message: buildStrandedFinalRecoveryText(),
@@ -745,7 +1594,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents(buildStrandedFinalRecoveryText());
   }
   if (QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(prompt)) {
-    if (toolOutput) {
+    if (hasCompletedToolOutput) {
       return buildAssistantEvents("");
     }
     const sessionsSendArgs = buildQaA2aMessageToolMirrorSessionsSendArgs(prompt);
@@ -755,13 +1604,25 @@ async function buildResponsesPayload(
   }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
-    if (!toolOutput && hasDeclaredTool(body, "message")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: marker,
       });
     }
     return buildAssistantEvents("");
+  }
+  if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
+    const target = /msteams message target:\s*`([^`]+)`/iu.exec(prompt)?.[1]?.trim();
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+        ...(target ? { target } : {}),
+      });
+    }
+    return buildAssistantEvents(marker);
   }
   if (QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -777,6 +1638,20 @@ async function buildResponsesPayload(
   if (whatsAppStickerMarker) {
     return buildAssistantEvents(whatsAppStickerMarker);
   }
+  const slackMpimHistoryRecall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
+  if (slackMpimHistoryRecall) {
+    const [, botReplyPrefix, recalledMarker, missingMarker] = slackMpimHistoryRecall;
+    const nonce = botReplyPrefix
+      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
+      : undefined;
+    return buildAssistantEvents(
+      nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? ""),
+    );
+  }
+  const slackMpimHistorySeed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
+  if (slackMpimHistorySeed) {
+    return buildAssistantEvents(buildSlackMpimHistoryBotReply(slackMpimHistorySeed));
+  }
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return buildAssistantEvents(promptExactMarkerDirective);
   }
@@ -785,9 +1660,9 @@ async function buildResponsesPayload(
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
-    (Boolean(toolOutput) && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
+    (hasCompletedToolOutput && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
   if (isTelegramCurrentSessionStatusTurn) {
-    if (!toolOutput && hasDeclaredTool(body, "session_status")) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
     const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);
@@ -824,7 +1699,7 @@ async function buildResponsesPayload(
       }),
     );
   }
-  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !toolOutput) {
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("write", {
       path: "animated-gif-qa-checklist.md",
       content: [
@@ -839,7 +1714,7 @@ async function buildResponsesPayload(
     });
   }
   if (QA_RELEASE_AUDIT_PROMPT_RE.test(prompt)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "audit-fixture/README.md" });
     }
     if (/Release readiness task|current checklist/i.test(toolOutput)) {
@@ -986,7 +1861,7 @@ async function buildResponsesPayload(
     }
   }
   if (/lobster invaders/i.test(prompt)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     if (toolOutput.includes("QA mission") || toolOutput.includes("Testing")) {
@@ -997,21 +1872,6 @@ async function buildResponsesPayload(
   <head><meta charset="utf-8" /><title>Lobster Invaders</title></head>
   <body><h1>Lobster Invaders</h1><p>Tiny playable stub.</p></body>
 </html>`,
-      });
-    }
-  }
-  if (
-    /compaction retry mutating tool check/i.test(allInputText) ||
-    /compaction retry evidence/i.test(toolOutput) ||
-    /compaction-retry-summary\.txt/i.test(toolOutput)
-  ) {
-    if (!toolOutput) {
-      return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
-    }
-    if (toolOutput.includes("compaction retry evidence")) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "compaction-retry-summary.txt",
-        content: "Replay safety: unsafe after write.\n",
       });
     }
   }
@@ -1041,7 +1901,7 @@ async function buildResponsesPayload(
     }
   }
   if (isActiveMemorySubagentPrompt(allInputText) && isSnackRecallPrompt(allInputText)) {
-    if (!toolOutput) {
+    if (!hasCompletedToolOutput) {
       if (!hasDeclaredTool(body, "memory_recall")) {
         return buildToolCallEventsWithArgs("memory_search", {
           query: "QA movie night snack lemon pepper wings blue cheese",
@@ -1102,9 +1962,8 @@ async function buildResponsesPayload(
   if (/session memory ranking check/i.test(prompt)) {
     if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "current Project Nebula codename ORBIT-10",
-        maxResults: 3,
-        corpus: "sessions",
+        query: "current Project Nebula codename",
+        maxResults: 6,
       });
     }
     if (memoryToolUnavailable) {
@@ -1164,47 +2023,75 @@ async function buildResponsesPayload(
     return buildAssistantEvents("NONE");
   }
   if (/thread memory check/i.test(allInputText)) {
-    if (!scenarioToolOutput) {
+    if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",
         maxResults: 3,
       });
     }
-    if (memoryToolUnavailable) {
+    const directThreadMemoryJson =
+      Array.isArray(toolJson?.results) || typeof toolJson?.text === "string" ? toolJson : null;
+    const completedMemoryValue =
+      toolJson?.status === "completed" &&
+      (completedToolName === "memory_search" || completedToolName === "memory_get") &&
+      toolJson.value !== null &&
+      typeof toolJson.value === "object" &&
+      !Array.isArray(toolJson.value)
+        ? (toolJson.value as Record<string, unknown>)
+        : null;
+    const threadMemoryJson = completedMemoryValue ?? directThreadMemoryJson;
+    const threadMemoryToolName = completedMemoryValue
+      ? completedToolName
+      : Array.isArray(threadMemoryJson?.results)
+        ? "memory_search"
+        : typeof threadMemoryJson?.text === "string"
+          ? "memory_get"
+          : undefined;
+    const threadMemoryUnavailable =
+      threadMemoryJson?.unavailable === true ||
+      threadMemoryJson?.disabled === true ||
+      (typeof threadMemoryJson?.error === "string" && threadMemoryJson.error.trim().length > 0);
+    if (threadMemoryUnavailable) {
       return buildAssistantEvents("NONE");
     }
-    const transcriptOrbitCode = extractOrbitCode(scenarioToolOutput);
-    if (transcriptOrbitCode) {
-      return buildAssistantEvents(
-        `Protocol note: I checked memory in-thread and the hidden thread codename is ${transcriptOrbitCode}.`,
-      );
+    if (threadMemoryToolName === "memory_search") {
+      const results = Array.isArray(threadMemoryJson?.results)
+        ? (threadMemoryJson.results as Array<Record<string, unknown>>)
+        : [];
+      const first = results[0];
+      if (
+        typeof first?.path === "string" &&
+        (typeof first.startLine === "number" || typeof first.endLine === "number")
+      ) {
+        const from =
+          typeof first.startLine === "number"
+            ? Math.max(1, first.startLine)
+            : typeof first.endLine === "number"
+              ? Math.max(1, first.endLine)
+              : 1;
+        return buildToolCallEventsWithArgs("memory_get", {
+          path: first.path,
+          from,
+          lines: 4,
+        });
+      }
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
-      const from =
-        typeof first.startLine === "number"
-          ? Math.max(1, first.startLine)
-          : typeof first.endLine === "number"
-            ? Math.max(1, first.endLine)
-            : 1;
-      return buildToolCallEventsWithArgs("memory_get", {
-        path: first.path,
-        from,
-        lines: 4,
-      });
+    const memoryGetText =
+      threadMemoryToolName === "memory_get" && typeof threadMemoryJson?.text === "string"
+        ? threadMemoryJson.text
+        : "";
+    const memoryGetOrbitCode = extractOrbitCode(memoryGetText);
+    if (memoryGetOrbitCode) {
+      return buildAssistantEvents(
+        `Protocol note: I checked memory in-thread and the hidden thread codename is ${memoryGetOrbitCode}.`,
+      );
     }
     return buildAssistantEvents("NONE");
   }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
-    !toolOutput &&
-    hasToolDefinition(body, "image_generate")
+    !hasCompletedToolOutput &&
+    (hasToolDefinition(body, "image_generate") || hasCodeModeExecSurface(body))
   ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
@@ -1212,8 +2099,58 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
-    if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
+  const isSubagentFanoutPrompt = /subagent fanout synthesis check/i.test(allInputText);
+  const currentFanoutInstructions = extractAllRequestTexts(
+    input.filter((item) => item.role === "system" || item.role === "developer"),
+    body,
+  );
+  const fanoutRequiresFinalMessage =
+    /visible source replies are not automatically delivered for this run\.\s*use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
+      currentFanoutInstructions,
+    );
+  // Delivery mode belongs to this turn's instructions, not earlier transcript
+  // turns whose private-reply policy may no longer apply.
+  const fanoutHasPrivateSourceReply =
+    isSubagentFanoutPrompt &&
+    (fanoutRequiresFinalMessage ||
+      /visible reply must use `?message\(action=send\)`?;\s*final text is private/i.test(
+        currentFanoutInstructions,
+      ));
+  const fanoutRequiresMessageTool =
+    fanoutHasPrivateSourceReply &&
+    (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode);
+  if (
+    scenarioState.subagentFanoutPhase === 3 &&
+    fanoutRequiresMessageTool &&
+    hasCompletedToolOutput
+  ) {
+    return buildAssistantEvents("");
+  }
+  const completeSubagentFanout = () => {
+    scenarioState.subagentFanoutPhase = 3;
+    const message = "subagent-1: ok\nsubagent-2: ok";
+    return fanoutRequiresMessageTool
+      ? buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message,
+          ...(fanoutRequiresFinalMessage ? { final: true } : {}),
+        })
+      : buildAssistantEvents(message);
+  };
+  if (
+    !hasCompletedToolOutput &&
+    /subagent fanout synthesis check/i.test(prompt) &&
+    scenarioState.subagentFanoutPhase !== 0
+  ) {
+    scenarioState.subagentFanoutPhase = 0;
+    scenarioState.subagentFanoutCompletedWorkers.clear();
+  }
+  // A later requester-settle wake must replay the completed synthesis without spawning again.
+  if (isSubagentFanoutPrompt && scenarioState.subagentFanoutPhase === 3) {
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  }
+  if (canCallSessionsSpawn && isSubagentFanoutPrompt) {
+    if (!hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
@@ -1221,7 +2158,7 @@ async function buildResponsesPayload(
         thread: false,
       });
     }
-    if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
+    if (hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 1) {
       scenarioState.subagentFanoutPhase = 2;
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: subagentFanoutTaskForProvider(providerVariant, "beta"),
@@ -1230,15 +2167,44 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  if (scenarioState.subagentFanoutPhase === 2) {
+    if (/\bALPHA-OK\b/i.test(allInputText)) {
+      scenarioState.subagentFanoutCompletedWorkers.add("alpha");
+    }
+    if (/\bBETA-OK\b/i.test(allInputText)) {
+      scenarioState.subagentFanoutCompletedWorkers.add("beta");
+    }
+    // A frozen child envelope may deny message. Its private final cannot be
+    // published; keep the batch for the requester-owned all-settled wake.
+    if (fanoutHasPrivateSourceReply && !fanoutRequiresMessageTool) {
+      return buildAssistantEvents("");
+    }
+    if (scenarioState.subagentFanoutCompletedWorkers.size === 2) {
+      return completeSubagentFanout();
+    }
+    if (canCallSessionsYield) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for both QA fanout workers to finish.",
+      });
+    }
+    if (fanoutRequiresMessageTool) {
+      // Restricted completion turns cannot yield; stay silent until both
+      // workers settle instead of advancing past the sole visible reply.
+      return buildAssistantEvents("");
+    }
+    if (hasCompletedToolOutput) {
+      return completeSubagentFanout();
+    }
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
-  if (explicitSessionsSpawnArgs && !toolOutput) {
+  if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
-  if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
+  if (
+    canCallSessionsSpawn &&
+    /forked subagent context qa check/i.test(prompt) &&
+    !hasCompletedToolOutput
+  ) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Report the visible code from the requester transcript.",
       label: "qa-fork-context",
@@ -1246,7 +2212,7 @@ async function buildResponsesPayload(
       context: "fork",
     });
   }
-  if (/tool continuity check/i.test(prompt) && !toolOutput) {
+  if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
   if (/repo contract followthrough check/i.test(allInputText)) {
@@ -1336,7 +2302,7 @@ async function buildResponsesPayload(
     canCallSessionsSpawn &&
     (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
       /subagent handoff/i.test(allInputText)) &&
-    !toolOutput &&
+    !hasCompletedToolOutput &&
     !scenarioState.subagentHandoffSpawned
   ) {
     scenarioState.subagentHandoffSpawned = true;
@@ -1348,28 +2314,28 @@ async function buildResponsesPayload(
   }
   if (
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
-    !toolOutput
+    !hasCompletedToolOutput
   ) {
     return buildToolCallEventsWithArgs("read", {
       path: sourceDiscoveryReadPathForProvider(providerVariant),
     });
   }
-  if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
+  if (!hasCompletedToolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
   }
-  if (/visible skill marker/i.test(prompt) && !toolOutput) {
+  if (/visible skill marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("VISIBLE-SKILL-OK");
   }
-  if (/hot install marker/i.test(prompt) && !toolOutput) {
+  if (/hot install marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("HOT-INSTALL-OK");
   }
-  if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
+  if (isGroupChat && isBaselineUnmentionedChannelChatter && !hasCompletedToolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
   if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
     await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
-  return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+  return buildAssistantEvents(buildAssistantText(input, body));
 }
 
 export async function startQaMockOpenAiServer(params?: {
@@ -1380,11 +2346,27 @@ export async function startQaMockOpenAiServer(params?: {
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
-  const scenarioState: MockScenarioState = {
-    anthropicThinkingErrorScenarioKeys: new Set<string>(),
-    subagentFanoutPhase: 0,
-    subagentHandoffSpawned: false,
-    toolLoopReadAttempts: 0,
+  const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
+  const scenarioStates = new Map<string, MockScenarioState>();
+  const servedCompactionSummaryFaultMarkers = new Set<string>();
+  const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
+    const input = normalizeResponsesInput(body.input);
+    const sessionId =
+      resolveQaRuntimeSessionId(input, body) ??
+      (body.client_metadata as { session_id?: unknown } | undefined)?.session_id;
+    const key = typeof sessionId === "string" ? sessionId : "";
+    // Runtime session identity survives provider switches and cache-boundary changes.
+    const state = scenarioStates.get(key) ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      toolLoopReadAttempts: 0,
+    };
+    scenarioStates.set(key, state);
+    return state;
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
@@ -1401,59 +2383,199 @@ export async function startQaMockOpenAiServer(params?: {
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
-  const dispatchResponses = async (request: {
-    body: Record<string, unknown>;
-    raw: string;
-  }): Promise<QaMockResponsesDispatchResult> => {
-    const input = Array.isArray(request.body.input)
-      ? (request.body.input as ResponsesInputItem[])
-      : [];
+  const dispatchProvider = async (
+    request: QaMockProviderDispatchRequest,
+  ): Promise<QaMockProviderDispatchResult> => {
+    const normalized =
+      request.route === "anthropic-messages"
+        ? normalizeAnthropicMessagesRequest(request.body as AnthropicMessagesRequest)
+        : {
+            body: request.body,
+            input: normalizeResponsesInput(request.body.input),
+            model: typeof request.body.model === "string" ? request.body.model : "",
+          };
+    const { body, input, model } = normalized;
     if (isRemoteCompactionV2Request(input)) {
-      return { events: buildRemoteCompactionV2Events() };
+      return { events: buildRemoteCompactionV2Events(), model };
     }
     const prompt = extractLastUserText(input);
-    const allInputText = extractAllRequestTexts(input, request.body);
+    const allInputText = extractAllRequestTexts(input, body);
+    const scenarioState = scenarioStateFor(body);
+    const requestKind = classifyMockOpenAiRequest(input, body);
+    const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
+      allInputText,
+      requestKind,
+      servedFaultMarkers: servedCompactionSummaryFaultMarkers,
+    });
+    if (requestKind !== "compaction-summary" && QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText)) {
+      scenarioState.compactionRetryActive = true;
+    }
+    const rawByteLength = Buffer.byteLength(request.raw);
+    const compactionOverflowThresholdBytes = hasCompactionOutputRecoveryMarker(allInputText)
+      ? QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES
+      : QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES;
+    const requestSnapshotBase = {
+      raw: request.raw,
+      body,
+      prompt,
+      allInputText,
+      instructions: extractInstructionsText(body) || undefined,
+      toolOutput: extractToolOutput(input),
+      model,
+      providerVariant: resolveProviderVariant(model),
+      imageInputCount: countImageInputs(input),
+      requestKind,
+      compactionSummaryFaultMode,
+      rawByteLength,
+    } satisfies Omit<
+      MockOpenAiRequestSnapshotInput,
+      | "outcome"
+      | "errorCode"
+      | "plannedToolCallId"
+      | "plannedToolItemId"
+      | "plannedToolName"
+      | "plannedWireToolName"
+      | "plannedToolArgs"
+      | "toolOutputCallId"
+      | "toolOutputStructuredError"
+    >;
+    if (
+      requestKind === "agent-initial" &&
+      (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
+        hasCompactionOutputRecoveryMarker(allInputText)) &&
+      rawByteLength > compactionOverflowThresholdBytes &&
+      !scenarioState.compactionOverflowInjected
+    ) {
+      scenarioState.compactionOverflowInjected = true;
+      recordRequest({
+        ...requestSnapshotBase,
+        outcome: "error",
+        errorCode: "context_length_exceeded",
+      });
+      return {
+        events: [],
+        model,
+        failure: {
+          status: 400,
+          type: "invalid_request_error",
+          code: "context_length_exceeded",
+          message: "This model's maximum context length was exceeded.",
+        },
+      };
+    }
     const inflightRequestId = nextInflightRequestId++;
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
     let events: StreamEvent[];
+    let injectedFailure: QaMockProviderDispatchResult["failure"];
     try {
-      events = await buildResponsesPayload(request.body, scenarioState);
+      if (
+        request.route === "anthropic-messages" &&
+        QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)
+      ) {
+        const toolOutput = extractToolOutput(input);
+        const toolOutputCallId = extractToolOutputCallId(input);
+        const scenarioKey = `${model}\n${extractLastUserText(input)}`;
+        const shouldFail =
+          toolOutput.length > 0 &&
+          toolOutputCallId.length > 0 &&
+          !scenarioState.anthropicThinkingErrorScenarioKeys.has(scenarioKey);
+        if (shouldFail) {
+          scenarioState.anthropicThinkingErrorScenarioKeys.add(scenarioKey);
+          injectedFailure = {
+            status: 200,
+            type: "api_error",
+            message: "QA injected provider stream failure",
+            presentation: "anthropic-thinking",
+          };
+        }
+        events =
+          toolOutput.length === 0
+            ? buildRawToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
+            : shouldFail
+              ? buildAssistantEvents("")
+              : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      } else {
+        events = await buildResponsesPayload(body, scenarioState, {
+          waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
+          requestKind,
+          compactionSummaryFaultMode,
+        });
+      }
     } finally {
       inflightRequests.delete(inflightRequestId);
     }
-    const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
+    if (request.route === "anthropic-messages") {
+      events = adaptAnthropicToolCallIds(events);
+    }
+    const plannedToolIdentity = extractPlannedToolIdentity(events);
+    const plannedTool = extractScenarioPlannedTool(events);
+    const terminalRequesterCase = extractLastMatchingUserTurn(
+      input,
+      QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
+    )
+      ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
+      ?.toLowerCase();
+    const settledTerminalRequester =
+      terminalRequesterCase && resolveQaRuntimeSessionId(input, body)
+        ? {
+            caseName: terminalRequesterCase,
+            childSessionKey: resolveAcceptedChildSessionKey(input),
+          }
+        : undefined;
+    const settledTerminalCaseName = settledTerminalRequester?.caseName;
+    const settledChildSessionKey = settledTerminalRequester?.childSessionKey;
+    const failure =
+      injectedFailure ??
+      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
+        ? {
+            status: 503,
+            type: "server_error",
+            message: "Service Unavailable",
+          }
+        : undefined);
     recordRequest({
-      raw: request.raw,
-      body: request.body,
-      prompt,
-      allInputText,
-      instructions: extractInstructionsText(request.body) || undefined,
-      toolOutput: extractToolOutput(input),
-      model: resolvedModel,
-      providerVariant: resolveProviderVariant(resolvedModel),
-      imageInputCount: countImageInputs(input),
-      plannedToolCallId: extractPlannedToolCallId(events),
-      plannedToolName: extractPlannedToolName(events),
-      plannedToolArgs: extractPlannedToolArgs(events),
+      ...requestSnapshotBase,
+      outcome:
+        failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
+      ...(events.some((event) => event.type === "response.failed")
+        ? { errorCode: "response_failed_no_details" }
+        : {}),
+      plannedToolCallId: plannedToolIdentity.callId,
+      ...(request.route === "responses" && plannedToolIdentity.itemId
+        ? { plannedToolItemId: plannedToolIdentity.itemId }
+        : {}),
+      plannedToolName: plannedTool.name,
+      ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
+        ? { plannedWireToolName: plannedTool.wireName }
+        : {}),
+      plannedToolArgs: plannedTool.args,
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
     return {
       events,
-      ...(QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && extractToolOutput(input)
+      model,
+      ...(settledTerminalCaseName && settledChildSessionKey
         ? {
-            failure: {
-              status: 503,
-              type: "server_error",
-              message: "Service Unavailable",
-            },
+            onResponseSent: () =>
+              terminalRequesterSettleGate.markSettled(
+                settledTerminalCaseName,
+                settledChildSessionKey,
+              ),
           }
         : {}),
+      ...(failure ? { failure } : {}),
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
+      ...(QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)
+        ? { responsePauseMs: QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS }
+        : {}),
     };
   };
+  const dispatchResponses = (request: Omit<QaMockProviderDispatchRequest, "route">) =>
+    dispatchProvider({ ...request, route: "responses" });
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -1585,27 +2707,21 @@ export async function startQaMockOpenAiServer(params?: {
           writeOpenAiMalformedJsonError(res, "OpenAI Responses");
           return;
         }
-        const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-        if (isRemoteCompactionV2Request(input)) {
-          const events = buildRemoteCompactionV2Events();
-          if (body.stream === false) {
-            writeJson(res, 200, events[1].response);
-          } else {
-            writeSse(res, events);
-          }
-          return;
-        }
         const dispatched = await dispatchResponses({ body, raw });
         if (dispatched.failure) {
           writeJson(res, dispatched.failure.status, {
             error: {
               type: dispatched.failure.type,
+              ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
               message: dispatched.failure.message,
             },
           });
           return;
         }
         const { events } = dispatched;
+        if (dispatched.responsePauseMs !== undefined) {
+          await sleep(dispatched.responsePauseMs);
+        }
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -1613,6 +2729,7 @@ export async function startQaMockOpenAiServer(params?: {
             return;
           }
           writeJson(res, 200, completion.response);
+          dispatched.onResponseSent?.();
           return;
         }
         if (dispatched.previewPauseMs !== undefined) {
@@ -1620,6 +2737,7 @@ export async function startQaMockOpenAiServer(params?: {
         } else {
           writeSse(res, events);
         }
+        dispatched.onResponseSent?.();
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
@@ -1635,39 +2753,25 @@ export async function startQaMockOpenAiServer(params?: {
           });
           return;
         }
-        const {
-          events,
-          input,
-          responseBody,
-          streamEvents,
-          model: normalizedModel,
-        } = await buildMessagesPayload(body, scenarioState, buildResponsesPayload);
-        // Record the adapted request snapshot so /debug/requests gives the QA
-        // suite the same plannedToolName / allInputText / toolOutput signals
-        // on the Anthropic route that the OpenAI route already exposes. This
-        // is what lets a single parity run diff assertions across both lanes.
-        // Reuse the normalized model so an empty-string body.model no longer
-        // leaks through to `lastRequest.model`.
-        recordRequest({
-          raw,
+        const dispatched = await dispatchProvider({
+          route: "anthropic-messages",
           body: body as Record<string, unknown>,
-          prompt: extractLastUserText(input),
-          allInputText: extractAllInputTexts(input),
-          toolOutput: extractToolOutput(input),
-          model: normalizedModel,
-          providerVariant: resolveProviderVariant(normalizedModel),
-          imageInputCount: countImageInputs(input),
-          plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
-          toolOutputCallId: extractToolOutputCallId(input) || undefined,
-          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+          raw,
         });
+        const { responseBody, streamEvents } = buildMessagesPayload(dispatched);
+        if (dispatched.failure?.presentation !== "anthropic-thinking") {
+          if (dispatched.failure) {
+            writeJson(res, dispatched.failure.status, responseBody);
+            return;
+          }
+        }
         if (body.stream === true) {
           writeAnthropicSse(res, streamEvents);
+          dispatched.onResponseSent?.();
           return;
         }
-        writeJson(res, 200, responseBody);
+        writeJson(res, dispatched.failure?.status ?? 200, responseBody);
+        dispatched.onResponseSent?.();
         return;
       }
       writeJson(res, 404, { error: "not found" });

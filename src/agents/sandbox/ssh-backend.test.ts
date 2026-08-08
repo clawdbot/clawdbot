@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  createRequireRecord,
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
@@ -74,12 +75,7 @@ function createSession() {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireMockRecordArg(mock: ReturnType<typeof vi.fn>, callIndex: number, label: string) {
   return requireRecord(mock.mock.calls[callIndex]?.[0], label);
@@ -102,6 +98,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
     scope: "session",
     workspaceAccess: "rw" as const,
     workspaceRoot: "~/.openclaw/sandboxes",
+    dockerTmpfsSource: "configured",
     docker: {
       image: "img",
       containerPrefix: "prefix-",
@@ -414,6 +411,7 @@ describe("ssh sandbox backend", () => {
         scope: "session",
         workspaceAccess: "rw",
         workspaceRoot: "~/.openclaw/sandboxes",
+        dockerTmpfsSource: "configured",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",

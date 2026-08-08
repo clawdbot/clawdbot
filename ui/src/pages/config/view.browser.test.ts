@@ -41,17 +41,31 @@ describe("config view", () => {
     onFormModeChange: vi.fn(),
     onViewStateChange: vi.fn(),
     onFormPatch: vi.fn(),
+    onFormRemove: vi.fn(),
     onSectionChange: vi.fn(),
     onSave: vi.fn(),
     onRawDiscard: vi.fn(),
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
     theme: "claw" as ThemeName,
+    themeOverridden: false,
+    themeProvenance: "default" as const,
+    themeResetValue: "claw" as ThemeName,
     themeMode: "system" as ThemeMode,
-    locale: "en" as const,
+    themeModeOverridden: false,
+    themeModeProvenance: "default" as const,
+    themeModeResetValue: "system" as ThemeMode,
+    systemLocale: "en" as const,
+    localeOverride: undefined,
+    localeOverridden: false,
+    localeProvenance: "default" as const,
+    localeResetValue: undefined,
     onLocaleChange: vi.fn(),
+    resetLocale: vi.fn(),
     setTheme: vi.fn(),
+    resetTheme: vi.fn(),
     setThemeMode: vi.fn(),
+    resetThemeMode: vi.fn(),
     hasCustomTheme: false,
     customThemeLabel: null,
     customThemeSourceUrl: null,
@@ -65,18 +79,29 @@ describe("config view", () => {
     onClearCustomTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
+    textScaleOverridden: false,
     setTextScale: vi.fn(),
+    resetTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    hiddenSessionCatalogIds: new Set<string>(),
+    setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
+    chatSendShortcutOverridden: false,
+    chatSendShortcutProvenance: "default" as const,
+    chatSendShortcutResetValue: "enter" as const,
     setChatSendShortcut: vi.fn(),
+    resetChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
+    chatFollowUpModeOverridden: false,
+    chatFollowUpModeProvenance: "default" as const,
     serverQueueMode: "steer" as const,
     setChatFollowUpMode: vi.fn(),
+    resetChatFollowUpMode: vi.fn(),
     catalogOpenTarget: "viewer" as const,
     setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
@@ -103,12 +128,13 @@ describe("config view", () => {
     }
   });
 
-  it("renders Language first on Appearance with its synced description", () => {
+  it("renders System language first on Appearance and emits locale overrides", () => {
     const onLocaleChange = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      locale: "pt-BR",
+      systemLocale: "pt-BR",
+      localeOverride: undefined,
       onLocaleChange,
     });
 
@@ -120,12 +146,44 @@ describe("config view", () => {
     const select = sections[0]?.querySelector("wa-select") as
       | (HTMLElement & { value: string })
       | null;
-    expect(select?.getAttribute("value")).toBe("pt-BR");
+    expect(select?.value).toBe("system");
+    expect(sections[0]?.querySelector('wa-option[value="system"]')?.textContent).toContain(
+      "System (Português (Brazilian Portuguese))",
+    );
     if (select) {
       Object.defineProperty(select, "value", { configurable: true, value: "fr" });
       select.dispatchEvent(new Event("change", { bubbles: true }));
+      Object.defineProperty(select, "value", { configurable: true, value: "system" });
+      select.dispatchEvent(new Event("change", { bubbles: true }));
     }
     expect(onLocaleChange).toHaveBeenCalledWith("fr");
+    expect(onLocaleChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("labels System from the navigator locale while an explicit locale is selected", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      systemLocale: "de",
+      localeOverride: "fr",
+      localeOverridden: true,
+    });
+    const select = queryRequired(
+      container,
+      "#settings-language wa-select",
+      HTMLElement,
+    ) as HTMLElement & { value: string };
+
+    expect(
+      (
+        select.querySelector('wa-option[value="fr"]') as
+          | (HTMLElement & { selected: boolean })
+          | null
+      )?.selected,
+    ).toBe(true);
+    expect(select.querySelector('wa-option[value="system"]')?.textContent).toContain(
+      "System (Deutsch (German))",
+    );
   });
 
   function findOptionalButtonByText(
@@ -161,6 +219,59 @@ describe("config view", () => {
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
+
+  it("routes restore-default actions through config removal", () => {
+    const onFormPatch = vi.fn();
+    const onFormRemove = vi.fn();
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          gateway: {
+            type: "object",
+            title: "Gateway",
+            properties: {
+              retries: { type: "integer", title: "Retries", default: 3 },
+              mode: {
+                type: "string",
+                title: "Mode",
+                default: "balanced",
+                enum: ["balanced", "fast", "careful", "safe", "strict", "custom"],
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "gateway.retries": { advanced: false },
+        "gateway.mode": { advanced: false },
+      },
+      formValue: { gateway: { retries: 9, mode: "custom" } },
+      activeSection: "gateway",
+      onFormPatch,
+      onFormRemove,
+    });
+
+    const retriesRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (row) => row.textContent?.includes("Retries"),
+    );
+    queryRequired(
+      retriesRow ?? container,
+      "button[aria-label='Reset to default']",
+      HTMLButtonElement,
+    ).click();
+    expect(onFormRemove).toHaveBeenCalledWith(["gateway", "retries"]);
+    expect(onFormPatch).not.toHaveBeenCalled();
+
+    const modeRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (row) => row.textContent?.includes("Mode"),
+    );
+    const select = queryRequired(modeRow ?? container, "select", HTMLSelectElement);
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("custom");
+    select.value = "__unset__";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormRemove).toHaveBeenCalledWith(["gateway", "mode"]);
+  });
 
   it("uses one inline advanced disclosure without mutating config fields", () => {
     const schema = {
@@ -1401,6 +1512,288 @@ describe("config view", () => {
     ).toBe("false");
   });
 
+  it("shows Appearance defaults without reset actions", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      lobsterPetVisits: true,
+      setLobsterPetVisits: vi.fn(),
+      lobsterPetSounds: false,
+      setLobsterPetSounds: vi.fn(),
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
+    });
+    const text = normalizedText(container);
+
+    for (const expected of [
+      "Using default: System",
+      "Using default: Claw",
+      "Using default: 100%",
+      "Using default: Enabled",
+      "Using default: 48rem",
+      "Using default: Enter",
+      "Using default: OpenClaw viewer",
+      "Using default: Disabled",
+    ]) {
+      expect(text).toContain(expected);
+    }
+    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
+  });
+
+  it("resets every explicit Appearance override independently", () => {
+    const resetLocale = vi.fn();
+    const setTheme = vi.fn();
+    const resetTheme = vi.fn();
+    const setThemeMode = vi.fn();
+    const resetThemeMode = vi.fn();
+    const setTextScale = vi.fn();
+    const resetTextScale = vi.fn();
+    const setSidebarLiveActivity = vi.fn();
+    const setChatMessageMaxWidth = vi.fn();
+    const setChatSendShortcut = vi.fn();
+    const resetChatSendShortcut = vi.fn();
+    const setCatalogOpenTarget = vi.fn();
+    const setComposerHoldToRecord = vi.fn();
+    const setLobsterPetVisits = vi.fn();
+    const setLobsterPetSounds = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      systemLocale: "de",
+      localeOverride: "pt-BR",
+      localeOverridden: true,
+      resetLocale,
+      theme: "knot",
+      themeOverridden: true,
+      setTheme,
+      resetTheme,
+      themeMode: "dark",
+      themeModeOverridden: true,
+      setThemeMode,
+      resetThemeMode,
+      textScale: 110,
+      textScaleOverridden: true,
+      setTextScale,
+      resetTextScale,
+      sidebarLiveActivity: false,
+      setSidebarLiveActivity,
+      chatMessageMaxWidth: "82%",
+      setChatMessageMaxWidth,
+      chatSendShortcut: "modifier-enter",
+      chatSendShortcutOverridden: true,
+      setChatSendShortcut,
+      resetChatSendShortcut,
+      catalogOpenTarget: "terminal",
+      setCatalogOpenTarget,
+      composerHoldToRecord: false,
+      setComposerHoldToRecord,
+      lobsterPetVisits: false,
+      setLobsterPetVisits,
+      lobsterPetSounds: true,
+      setLobsterPetSounds,
+    });
+    const resetIn = (element: Element | null) => {
+      const button = element?.querySelector<HTMLButtonElement>(
+        'button[aria-label="Reset to default"]',
+      );
+      expect(button).not.toBeNull();
+      button?.click();
+    };
+    const row = (title: string) =>
+      Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+        (candidate) =>
+          candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+      ) ?? null;
+
+    resetIn(container.querySelector("#settings-language .settings-row"));
+    resetIn(container.querySelector("#settings-appearance-theme > .settings-section__header"));
+    resetIn(row("Color mode"));
+    resetIn(container.querySelector("#settings-appearance-text-size > .settings-section__header"));
+    resetIn(row("Show live agent activity in sidebar"));
+    resetIn(row("Message width"));
+    resetIn(row("Send shortcut"));
+    resetIn(row("Open external sessions in"));
+    resetIn(row("Hold microphone button to dictate"));
+    resetIn(row("Lobster visits"));
+    resetIn(row("Lobster sounds"));
+
+    expect(resetLocale).toHaveBeenCalledOnce();
+    expect(resetTheme).toHaveBeenCalledOnce();
+    expect(resetThemeMode).toHaveBeenCalledOnce();
+    expect(resetTextScale).toHaveBeenCalledOnce();
+    expect(setSidebarLiveActivity).toHaveBeenCalledWith(true);
+    expect(setChatMessageMaxWidth).toHaveBeenCalledWith(undefined);
+    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
+    expect(setCatalogOpenTarget).toHaveBeenCalledWith("viewer");
+    expect(setComposerHoldToRecord).toHaveBeenCalledWith(true);
+    expect(setLobsterPetVisits).toHaveBeenCalledWith(true);
+    expect(setLobsterPetSounds).toHaveBeenCalledWith(false);
+  });
+
+  it("shows reset actions for authored synced values equal to product defaults", () => {
+    const resetTheme = vi.fn();
+    const resetThemeMode = vi.fn();
+    const resetChatSendShortcut = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "claw",
+      themeOverridden: true,
+      themeProvenance: "synced",
+      resetTheme,
+      themeMode: "system",
+      themeModeOverridden: true,
+      themeModeProvenance: "synced",
+      resetThemeMode,
+      chatSendShortcut: "enter",
+      chatSendShortcutOverridden: true,
+      chatSendShortcutProvenance: "synced",
+      resetChatSendShortcut,
+    });
+    const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
+    const shortcutRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Send shortcut",
+    );
+
+    expect(normalizedText(themeSection)).toContain("Default: Claw");
+    expect(normalizedText(themeSection)).toContain("Default: System");
+    expect(shortcutRow?.textContent).toContain("Default: Enter");
+    themeSection
+      .querySelector<HTMLButtonElement>(
+        ":scope > .settings-section__header button[aria-label='Reset to default']",
+      )
+      ?.click();
+    const colorModeRow = Array.from(
+      themeSection.querySelectorAll<HTMLElement>(".settings-row"),
+    ).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "Color mode",
+    );
+    colorModeRow
+      ?.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
+      ?.click();
+    shortcutRow?.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
+
+    expect(resetTheme).toHaveBeenCalledOnce();
+    expect(resetThemeMode).toHaveBeenCalledOnce();
+    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
+  });
+
+  it("renders rejected theme and locale edits as resettable browser-only fallbacks", () => {
+    const resetLocale = vi.fn();
+    const resetTheme = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      localeOverride: "fr",
+      localeOverridden: true,
+      localeProvenance: "device-local",
+      localeResetValue: "de",
+      resetLocale,
+      theme: "knot",
+      themeOverridden: true,
+      themeProvenance: "device-local",
+      themeResetValue: "claw",
+      resetTheme,
+    });
+    const languageRow = queryRequired(container, "#settings-language .settings-row", HTMLElement);
+    const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
+    const themeDescription = queryRequired(
+      themeSection,
+      ":scope > .settings-section__desc",
+      HTMLElement,
+    );
+
+    expect(languageRow.textContent).toContain("Default: Deutsch (German)");
+    expect(languageRow.textContent).toContain("Stored in this browser only");
+    expect(languageRow.textContent).not.toContain("Synced across your devices");
+    expect(
+      (
+        languageRow.querySelector('wa-option[value="fr"]') as HTMLElement & {
+          selected: boolean;
+        }
+      ).selected,
+    ).toBe(true);
+    expect(themeDescription.textContent).toContain("Default: Claw");
+    expect(themeDescription.textContent).toContain("Stored in this browser only");
+    expect(themeDescription.textContent).not.toContain("Synced across your devices");
+    expect(
+      themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    languageRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    themeSection
+      .querySelector<HTMLButtonElement>(
+        ":scope > .settings-section__header button[aria-label='Reset to default']",
+      )
+      ?.click();
+
+    expect(resetLocale).toHaveBeenCalledOnce();
+    expect(resetTheme).toHaveBeenCalledOnce();
+  });
+
+  it("shows pending synced preferences without claiming they already synced", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: "claw",
+      themeOverridden: false,
+      themeProvenance: "pending",
+      chatFollowUpMode: "queue",
+      chatFollowUpModeOverridden: true,
+      chatFollowUpModeProvenance: "pending",
+    });
+    const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
+    const themeDescription = queryRequired(
+      themeSection,
+      ":scope > .settings-section__desc",
+      HTMLElement,
+    );
+    const followUpRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
+        "Follow-ups while the agent is working",
+    );
+
+    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
+    expect(themeDescription.textContent).not.toContain("Synced across your devices");
+    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
+    expect(followUpRow?.textContent).not.toContain("Synced across your devices");
+  });
+
+  it("labels synced and browser-only Chat preferences per row", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      composerHoldToRecord: true,
+      setComposerHoldToRecord: vi.fn(),
+    });
+    const chat = queryRequired(container, "#settings-appearance-chat", HTMLElement);
+    const sectionDescription = Array.from(chat.children).find((child) =>
+      child.classList.contains("settings-section__desc"),
+    );
+    const row = (title: string) =>
+      Array.from(chat.querySelectorAll<HTMLElement>(".settings-row")).find(
+        (candidate) =>
+          candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+      );
+
+    expect(sectionDescription).toBeUndefined();
+    expect(row("Send shortcut")?.textContent).toContain("Synced across your devices");
+    expect(row("Follow-ups while the agent is working")?.textContent).toContain(
+      "Synced across your devices",
+    );
+    for (const title of [
+      "Message width",
+      "Open external sessions in",
+      "Hold microphone button to dictate",
+    ]) {
+      expect(row(title)?.textContent).toContain("Stored in this browser only");
+      expect(row(title)?.textContent).not.toContain("Synced across your devices");
+    }
+  });
+
   it("shows the tweakcn importer once the custom slot is opened", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",
@@ -1715,6 +2108,28 @@ describe("config view", () => {
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
+  it("lists hidden session sections and offers to show them", () => {
+    const setSessionCatalogHidden = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hiddenSessionCatalogIds: new Set(["codex"]),
+      setSessionCatalogHidden,
+    });
+
+    const heading = Array.from(container.querySelectorAll("h3")).find(
+      (candidate) => candidate.textContent?.trim() === "Hidden session sections",
+    );
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "codex",
+    );
+    expect(heading).toBeDefined();
+    expect(row).toBeDefined();
+    row?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(setSessionCatalogHidden).toHaveBeenCalledWith("codex", false);
+  });
+
   it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
     const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
     vi.stubGlobal("localStorage", window.localStorage);
@@ -1754,7 +2169,15 @@ describe("config view", () => {
         unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
       ).toContain("Ripe when thumped.");
 
-      container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
+      const openLink = container.querySelector<HTMLAnchorElement>(".lobsterdex__open");
+      openLink?.addEventListener("click", (event) => event.preventDefault(), {
+        capture: true,
+        once: true,
+      });
+      openLink?.click();
+      expect(onOpenLobsterdex).not.toHaveBeenCalled();
+
+      openLink?.click();
       expect(onOpenLobsterdex).toHaveBeenCalledOnce();
     } finally {
       localStorage.removeItem("openclaw.control.lobsterdex.v1");
@@ -1784,12 +2207,15 @@ describe("config view", () => {
 
   it("marks browser follow-up overrides and resets them to the server", () => {
     const setChatFollowUpMode = vi.fn();
+    const resetChatFollowUpMode = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
       chatFollowUpMode: "queue",
+      chatFollowUpModeOverridden: true,
       serverQueueMode: "steer",
       setChatFollowUpMode,
+      resetChatFollowUpMode,
     });
 
     expect(container.textContent).toContain("Overriding server default (steer)");
@@ -1798,7 +2224,8 @@ describe("config view", () => {
     );
     expect(reset).toBeDefined();
     reset?.click();
-    expect(setChatFollowUpMode).toHaveBeenCalledWith(undefined);
+    expect(resetChatFollowUpMode).toHaveBeenCalledOnce();
+    expect(setChatFollowUpMode).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

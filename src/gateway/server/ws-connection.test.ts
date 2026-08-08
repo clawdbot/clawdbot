@@ -15,12 +15,14 @@ const {
   attachGatewayWsMessageHandlerMock,
   attachWorkerWsMessageHandlerMock,
   broadcastPresenceSnapshotMock,
+  cleanupTalkConnectionMock,
   touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   attachGatewayWsMessageHandlerMock: vi.fn(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   broadcastPresenceSnapshotMock: vi.fn(),
+  cleanupTalkConnectionMock: vi.fn(),
   touchPresenceMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -37,6 +39,9 @@ vi.mock("../../infra/system-presence.js", () => ({
 }));
 vi.mock("./presence-events.js", () => ({
   broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
+}));
+vi.mock("../talk-session-registry.js", () => ({
+  cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -91,6 +96,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
+    cleanupTalkConnectionMock.mockReset();
     touchPresenceMock.mockReset();
     upsertPresenceMock.mockReset();
   });
@@ -260,6 +266,30 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledOnce();
+  });
+
+  it("runs connection-owned Talk cleanup when a gateway connection closes", async () => {
+    const { passed, socket } = await connectTestWs();
+    const handlerParams = passed as {
+      connId: string;
+      setClient: (client: unknown) => boolean;
+    };
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+        connId: handlerParams.connId,
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+
+    socket.emit("close", 1000, Buffer.from("done"));
+
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledOnce();
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledWith(
+      handlerParams.connId,
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
   });
 
   it("continues protocol pings after pong and stops when the connection closes", async () => {

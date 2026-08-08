@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { refreshCostUsageCacheForAgent } from "../infra/session-cost-usage-aggregation.js";
+import {
+  refreshCostUsageCacheForAgent,
+  resolveUsageCostCacheDatabasePath,
+} from "../infra/session-cost-usage-aggregation.js";
 import { testing as sessionCostUsageTestApi } from "../infra/session-cost-usage.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { prepareAgentUsageBudgetWarningBestEffort } from "./usage-budget-warning.js";
@@ -36,7 +40,7 @@ describe("usage budget warning", () => {
   let stateDir: string;
   let previousStateDir: string | undefined;
 
-  async function seedUsage(usage: { totalCost: number; unpricedCalls?: number }) {
+  async function seedUsage(usage: { totalCost: number; unpricedCalls?: number }, nowMs = NOW_MS) {
     const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "usage.jsonl");
@@ -44,7 +48,7 @@ describe("usage budget warning", () => {
       { type: "session", version: 1, id: "usage-budget-warning" },
       {
         type: "message",
-        timestamp: new Date(NOW_MS).toISOString(),
+        timestamp: new Date(nowMs).toISOString(),
         message: {
           role: "assistant",
           usage: { input: 1, output: 1, totalTokens: 2, cost: { total: usage.totalCost } },
@@ -54,7 +58,7 @@ describe("usage budget warning", () => {
     for (let index = 0; index < (usage.unpricedCalls ?? 0); index += 1) {
       entries.push({
         type: "message",
-        timestamp: new Date(NOW_MS - index - 1).toISOString(),
+        timestamp: new Date(nowMs - index - 1).toISOString(),
         message: {
           role: "assistant",
           provider: "custom",
@@ -102,6 +106,31 @@ describe("usage budget warning", () => {
       "Usage budget warning: Spend is $23.50 UTC today, crossing $20.00. Warn-only mode; model calls continue.",
     );
     expect(prepareAgentUsageBudgetWarningBestEffort(params(config(), sessionFile))).toBeUndefined();
+  });
+
+  it("reuses one bounded watermark row across UTC day rollover", async () => {
+    await seedUsage({ totalCost: 12 });
+    expect(prepareAgentUsageBudgetWarningBestEffort(params())).toContain("crossing $10.00");
+
+    const tomorrowMs = NOW_MS + 24 * 60 * 60 * 1000;
+    await seedUsage({ totalCost: 15 }, tomorrowMs);
+    expect(prepareAgentUsageBudgetWarningBestEffort({ ...params(), nowMs: tomorrowMs })).toContain(
+      "crossing $10.00",
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const database = new DatabaseSync(resolveUsageCostCacheDatabasePath("main"), {
+      readOnly: true,
+    });
+    try {
+      expect(
+        database
+          .prepare("SELECT key FROM cache_entries WHERE scope = ?")
+          .all("usage-budget-warning-v1"),
+      ).toEqual([{ key: "state" }]);
+    } finally {
+      database.close();
+    }
   });
 
   it("fails closed for group and non-owner delivery routes", () => {

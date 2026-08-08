@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import { revalidateSetupInferenceOwner } from "./revalidate-inference-owner.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+
+const mocks = vi.hoisted(() => ({ loadAgentRuntimePluginRegistryHandle: vi.fn() }));
+vi.mock("../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+}));
 
 function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfiguredRoute {
   return {
@@ -23,11 +29,13 @@ function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfigur
 }
 
 describe("revalidateSetupInferenceOwner", () => {
-  it("reloads a staged plugin harness before validating its runtime artifact", async () => {
+  it("validates a staged owner inside its registry handle", async () => {
     const order: string[] = [];
     const binding = {} as SystemAgentVerifiedInferenceBinding;
-    const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {
-      order.push("ensure");
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
+      order.push("load");
+      return pluginRegistry;
     });
     const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => {
       order.push("validate");
@@ -43,38 +51,35 @@ describe("revalidateSetupInferenceOwner", () => {
           runtimeOwnerKind: "plugin-harness",
         },
         deps: {
-          ensureSelectedAgentHarnessPlugin,
           createSystemAgentVerifiedInferenceBinding,
         },
       }),
     ).resolves.toBe(binding);
 
-    expect(order).toEqual(["ensure", "validate"]);
-    expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith({
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
+    expect(order).toEqual(["load", "validate"]);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: route.runConfig,
-      agentId: "main",
-      agentHarnessId: "codex",
       workspaceDir: "/tmp/openclaw-workspace",
+      selections: [
+        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
+      ],
     });
   });
 
   it("does not reload the built-in OpenClaw harness", async () => {
-    const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
     const binding = {} as SystemAgentVerifiedInferenceBinding;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
 
     await expect(
       revalidateSetupInferenceOwner({
         route: embeddedRoute("auto"),
         auth: { agentHarnessId: "openclaw", authFingerprint: "auth" },
         deps: {
-          ensureSelectedAgentHarnessPlugin,
           createSystemAgentVerifiedInferenceBinding: vi.fn(async () => binding),
         },
       }),
     ).resolves.toBe(binding);
 
-    expect(ensureSelectedAgentHarnessPlugin).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   });
 });

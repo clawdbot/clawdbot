@@ -25,7 +25,9 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -78,7 +80,7 @@ import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
-import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -241,7 +243,10 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
-    return typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid) ? row.maxRowid : null;
+    if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
+      return row.maxRowid;
+    }
+    return row?.maxRowid === null ? 0 : null;
   } catch (err) {
     logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
     return null;
@@ -488,15 +493,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const recoveryCursorRowid = loadIMessageRecoveryCursor(
     accountInfo.accountId,
     recoveryCursorDbIdentity,
-    { migrateLegacyCatchup: !catchupCfg.enabled },
+    { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
   );
-  const watchSinceRowid = catchupCfg.enabled
+  const reconciledWatchSinceRowid = catchupCfg.enabled
     ? null
     : recoveryCursorRowid !== null
       ? recoveryBoundaryRowid !== null
         ? Math.max(recoveryCursorRowid, recoveryBoundaryRowid - IMESSAGE_RECOVERY_MAX_ROWS)
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
+  // imsg reserves cursor 0 for a subscribe-time MAX(ROWID) self-fence. Use the
+  // exclusive cursor before SQLite's first generated ROWID instead.
+  const watchSinceRowid = reconciledWatchSinceRowid === 0 ? -1 : reconciledWatchSinceRowid;
 
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
   const durableRecoveryCursorRowids = new Set<number>();
@@ -820,12 +828,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (decision.kind === "drop") {
       // Record echo/reflection drops so the rate limiter can detect sustained loops.
       // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate.
+      // are normal and should not escalate. "from me" is excluded: every own-send
+      // (agent replies, multi-chunk sends, operator phone traffic) produces a
+      // from-me row, so counting it lets a normal outbound burst trip the limiter
+      // and silently suppress the next legitimate inbound message.
       const isLoopDrop =
         decision.reason === "echo" ||
         decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content" ||
-        decision.reason === "from me";
+        decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
@@ -861,7 +871,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // remaining messages as a safety net against amplification that slips
     // through the primary guards.
     if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
-      logVerbose(`imessage: rate-limited conversation ${conversationKey} (echo loop detected)`);
+      // A tripped limiter silently eats real user messages — surface it at
+      // default log level (once per conversation) instead of verbose-only.
+      if (!loggedThrottledDropDiagnostics.check(`${rateLimitKey}:rate-limited`)) {
+        const conversationKind = chatId != null ? "group" : "dm";
+        const diagnosticConversationKey = `${conversationKind}:${redactIdentifier(conversationKey)}`;
+        runtime.log?.(
+          warn(
+            `[imessage:${accountInfo.accountId}] Suppressing inbound from ${diagnosticConversationKey}: echo loop detected (rate limiter tripped)`,
+          ),
+        );
+      }
       return;
     }
 
@@ -1163,15 +1183,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             },
           }
         : false,
-      deliver: async (payload: Parameters<typeof deliverReplies>[0]["replies"][number]) => {
+      observeMessageSent: true,
+      deliver: async (payload: Parameters<typeof deliverIMessageReply>[0]["payload"]) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return {
+            visibleReplySent: false,
+            suppression: { reason: "no_visible_result" },
+          } as const;
         }
-        await deliverReplies({
+        return await deliverIMessageReply({
           cfg,
-          replies: [payload],
+          payload,
           target,
           accountId: accountInfo.accountId,
           runtime,
@@ -1203,11 +1227,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // instead of falling back to a durable iMessage bubble.
           onToolResult: async () => {
             await directTypingController?.startTypingLoop();
+            return false;
           },
           ...(supportsTyping
             ? {
                 onToolStart: async () => {
                   await directTypingController?.startTypingLoop();
+                  return false;
                 },
               }
             : {}),
@@ -1542,6 +1568,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         { timeoutMs: probeTimeoutMs },
       );
       attemptSubscriptionId = result?.subscription ?? null;
+      opts.statusSink?.(channelReadyPatch());
       client = attemptClient;
       detachAbortHandler = attemptDetachAbortHandler;
       keepAttemptClient = true;
@@ -1550,9 +1577,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (abort?.aborted) {
         return;
       }
-      const shouldRetry =
-        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      const retriable = isRetriableWatchSubscribeStartupError(err);
+      const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
       if (!shouldRetry) {
+        opts.statusSink?.({
+          connected: false,
+          lifecycle: retriable ? "recovering" : "blocked",
+          terminalDisconnect: retriable ? undefined : true,
+          lastError: String(err),
+        });
         runtime.error?.(
           danger(
             `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
@@ -1571,6 +1604,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         );
         throw err;
       }
+      opts.statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: String(err),
+      });
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({

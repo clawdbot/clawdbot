@@ -50,6 +50,9 @@ export function resolveLiveVideoResolution(params: {
   if (providerId === "pixverse") {
     return "540P";
   }
+  if (providerId === "alibaba" || providerId === "qwen") {
+    return "720P";
+  }
   return "480P";
 }
 

@@ -20,6 +20,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
@@ -317,6 +318,8 @@ export type TranscriptMessageAppendResult<TMessage> = {
   messageId: string;
   /** Parent id actually used by the durable transcript append. */
   effectiveParentId?: string | null;
+  /** Authoritative immutable identity issued by the append transaction. */
+  anchor?: TranscriptEntryAnchor;
 };
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
@@ -341,6 +344,7 @@ export type SessionTranscriptWriteLockAccessorContext = {
   }>;
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
   readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
     existingIdempotencyKeys: Set<string>;
     messagesByIdempotencyKey: Map<string, unknown>;
   }>;
@@ -501,6 +505,8 @@ export type ReplySessionInitializationCommitResult =
     };
 
 export type SessionEntryPatchOptions = {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
   /** Fully resolved maintenance settings when the caller already has config loaded. */
@@ -855,9 +861,4 @@ export type {
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
-};
-
-export type CanonicalizeSessionEntryAliasesResult = {
-  canonicalKey: string;
-  entry?: SessionEntry;
 };

@@ -245,6 +245,18 @@ openclaw hooks enable <hook-name>
 
 On `/new`, `/reset`, daily reset, or idle expiry, extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using `agents.defaults.userTimezone`. When no user timezone is configured, it falls back to the host timezone. Memory capture runs in the background so reset handling and replacement sessions are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
 
+<Note>
+The `memory` source already indexes this hook's saved conversation excerpts. If
+[session transcript indexing](/reference/memory-config#session-memory-search)
+is also enabled, the same conversation can appear from both `memory` and
+`sessions`, producing overlapping search results and additional embedding work.
+For hook-only recall, set `memory.search.sources: ["memory"]` and
+`memory.search.rememberAcrossConversations: false`; `sources` alone does not
+prevent cross-conversation recall from adding `sessions`. For full-transcript
+recall instead, run `openclaw hooks disable session-memory`. Enable both only
+when you intentionally want both representations.
+</Note>
+
 <a id="bootstrap-extra-files"></a>
 
 ### bootstrap-extra-files config
@@ -297,6 +309,14 @@ Plugin-managed internal hooks are different: they participate in this page's
 coarse command/lifecycle event system and show up in `openclaw hooks list` as
 `plugin:<id>`. Use those for side effects and compatibility with hook packs, not
 for ordered middleware or policy gates.
+
+The legacy Plugin SDK `api.registerHook` registers into the internal event
+system only (`command:new`, `gateway:startup`, `message:received`, ...). Typed
+lifecycle event names such as `before_tool_call`, `message_received`, or
+`session_start` are dispatched exclusively by the typed hook runner and are
+**not** invoked through `registerHook`. Registering a typed name with
+`registerHook` emits a registration warning pointing to the public `api.on(...)`
+API as the replacement; it never silently no-ops.
 
 For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 

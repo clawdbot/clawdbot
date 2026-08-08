@@ -83,6 +83,7 @@ describe("Codex ring-zero thread config", () => {
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
     for (const config of [start.config, resume.config]) {
+      expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
       expect(config?.["features.multi_agent"]).toBe(false);
       expect(config?.["features.multi_agent_v2"]).toBe(false);
@@ -134,10 +135,102 @@ describe("Codex delegation capability", () => {
     });
 
     for (const request of [start, resume]) {
+      expect(request.config?.["agents.enabled"]).toBe(false);
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
     }
+  });
+
+  it("keeps message-only completion threads and prompts free of native delegation", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.toolsAllow = ["message"];
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.inputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceChannel: "internal",
+      sourceTool: "subagent_announce",
+    };
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.apps": true,
+      "features.current_time_reminder": true,
+      "features.deferred_executor": true,
+      "features.hooks": true,
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+      "features.plugins": true,
+      "features.standalone_web_search": true,
+      "features.token_budget": true,
+      "orchestrator.mcp.enabled": true,
+      "tools.experimental_request_user_input.enabled": true,
+      "tools.update_plan.enabled": true,
+      mcp_servers: {
+        "local-example": { command: "example-mcp" },
+      },
+      web_search: "live",
+    };
+    const dynamicTools: CodexDynamicToolFunctionSpec[] = [
+      { type: "function", name: "message", description: "Send", inputSchema: { type: "object" } },
+    ];
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools,
+      config,
+      nativeCodeModeEnabled: false,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools,
+      config,
+      nativeCodeModeEnabled: false,
+      threadId: "thread-1",
+    });
+
+    for (const request of [start, resume]) {
+      for (const disabledFeature of [
+        "agents.enabled",
+        "features.apps",
+        "features.current_time_reminder",
+        "features.deferred_executor",
+        "features.hooks",
+        "features.image_generation",
+        "features.multi_agent",
+        "features.multi_agent_v2",
+        "features.plugins",
+        "features.standalone_web_search",
+        "features.token_budget",
+        "orchestrator.mcp.enabled",
+        "tools.experimental_request_user_input.enabled",
+        "tools.update_plan.enabled",
+      ]) {
+        expect(request.config?.[disabledFeature]).toBe(false);
+      }
+      expect(request.config?.web_search).toBe("disabled");
+      expect(request.config?.mcp_servers).toEqual({ "local-example": { enabled: false } });
+      expect(request.developerInstructions).toContain("`message(action=send)`");
+      expect(request.developerInstructions).not.toContain("`spawn_agent`");
+      expect(request.developerInstructions).not.toContain("`tool_search`");
+    }
+    expect(start.environments).toEqual([]);
+
+    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      appServer,
+      cwd: "/repo",
+      dynamicTools,
+      config,
+    });
+    expect(normal.config?.["features.apps"]).toBe(true);
+    expect(normal.config?.["features.image_generation"]).toBe(true);
+    expect(normal.config?.["features.multi_agent"]).toBe(true);
+    expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
+    expect(normal.config?.["features.plugins"]).toBe(true);
+    expect(normal.config?.["tools.update_plan.enabled"]).toBe(true);
+    expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+    expect(normal.developerInstructions).toContain("`spawn_agent`");
   });
 });
 
@@ -456,7 +549,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -520,7 +613,16 @@ function expectSingleLogMessage(
 
 describe("Codex app-server native code mode config", () => {
   it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
-    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "sessions_spawn",
+          description: "Start an OpenClaw session",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
     // Codex defers native collab tools behind tool_search on search-capable
@@ -532,6 +634,30 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain(
       "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
+  });
+
+  it("never advertises unavailable delegation or session tools", () => {
+    const restrictedParams = [
+      Object.assign(createAttemptParams({ provider: "openai" }), {
+        delegationCapability: "report_only" as const,
+      }),
+      Object.assign(createAttemptParams({ provider: "openai" }), { toolsAllow: ["openclaw"] }),
+      Object.assign(createAttemptParams({ provider: "openai" }), { modelId: "gpt-5.4-nano" }),
+      Object.assign(createAttemptParams({ provider: "openai" }), { disableTools: true }),
+    ];
+
+    for (const params of restrictedParams) {
+      const instructions = buildDeveloperInstructions(params);
+      expect(instructions).not.toContain("`spawn_agent`");
+      expect(instructions).not.toContain("`sessions_spawn`");
+      expect(instructions).not.toContain("`wait_agent`");
+    }
+
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [],
+    });
+    expect(instructions).toContain("`spawn_agent`");
+    expect(instructions).not.toContain("`sessions_spawn`");
   });
 
   it("adds native completion handoff guidance only when sessions_yield is available", () => {
@@ -1138,6 +1264,22 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("preserves omitted native tiers until a previously owned sticky tier must be cleared", () => {
+    const options = {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    };
+    const inherited = buildTurnStartParams(createAttemptParams({ provider: "openai" }), options);
+    const cleared = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      ...options,
+      clearInheritedServiceTier: true,
+    });
+
+    expect(inherited).not.toHaveProperty("serviceTier");
+    expect(cleared.serviceTier).toBeNull();
   });
 
   it("allows thread config to opt into Codex code-mode-only", () => {

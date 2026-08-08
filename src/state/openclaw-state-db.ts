@@ -45,7 +45,10 @@ import {
 } from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
+  FIRST_USE_STATE_INDEXES,
+  FIRST_USE_STATE_TABLES,
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -57,6 +60,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertSupportedSchemaVersion,
+  CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   createOpenClawDatabaseVerificationError,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
@@ -74,13 +78,14 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 };
+export const STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMNS;
 export type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -158,22 +163,57 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
   terminalOpenLatch.clear(pathname);
 }
 
+/** Reject shared-state access after a process-local terminal failure. */
+function assertOpenClawStateDatabaseOpenAllowed(options: OpenClawStateDatabaseOptions = {}): void {
+  const pathname = resolveDatabasePath(options);
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
+}
+
+/** Reject a fresh shared-state open after known corruption until repair clears it. */
+export function assertOpenClawStateDatabaseFreshOpenAllowed(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  assertOpenClawStateDatabaseOpenAllowed(options);
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  let quarantineFailure: Error | undefined;
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      quarantineFailure = createOpenClawDatabaseVerificationError(
+        "state",
+        pathname,
+        quarantine.reason,
+      );
+    }
+  } catch {
+    // A broken quarantine store must not brick every state read.
+    // The process latch and daily verifier still cover known damage.
+  }
+  if (quarantineFailure) {
+    throw quarantineFailure;
+  }
+}
+
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
-function executeCanonicalStateSchema(
-  database: DatabaseSync,
-  options: { includeLazyAdditiveTables: boolean },
-): void {
-  if (options.includeLazyAdditiveTables) {
-    database.exec(OPENCLAW_STATE_SCHEMA_SQL);
-    return;
-  }
-
-  // Current-version databases may lack lazy cache tables, but the remaining
-  // canonical DDL must still run so doctor can restore indexes and triggers.
+function canonicalStateSchemaForRuntime(options: {
+  includeVersionLazyAdditiveTables: boolean;
+}): string {
+  // Current-version databases may lack lazy additive tables. First-use tables
+  // remain absent on every schema path so only their feature owner can create them.
   let eagerSchema = OPENCLAW_STATE_SCHEMA_SQL;
-  for (const tableName of LAZY_ADDITIVE_STATE_TABLES) {
+  const omittedTables = options.includeVersionLazyAdditiveTables
+    ? FIRST_USE_STATE_TABLES
+    : LAZY_ADDITIVE_STATE_TABLES;
+  const omittedIndexes = options.includeVersionLazyAdditiveTables
+    ? FIRST_USE_STATE_INDEXES
+    : LAZY_ADDITIVE_STATE_INDEXES;
+  for (const tableName of omittedTables) {
     const startMarker = `CREATE TABLE IF NOT EXISTS ${tableName} (`;
     const start = eagerSchema.indexOf(startMarker);
     const endMarker = "\n) STRICT;";
@@ -183,7 +223,23 @@ function executeCanonicalStateSchema(
     }
     eagerSchema = `${eagerSchema.slice(0, start)}${eagerSchema.slice(end + endMarker.length)}`;
   }
-  database.exec(eagerSchema);
+  for (const indexName of omittedIndexes) {
+    const startMarker = `CREATE INDEX IF NOT EXISTS ${indexName}`;
+    const start = eagerSchema.indexOf(startMarker);
+    const end = start >= 0 ? eagerSchema.indexOf(";", start) : -1;
+    if (start < 0 || end < 0) {
+      throw new Error(`lazy additive state schema index is missing for ${indexName}`);
+    }
+    eagerSchema = `${eagerSchema.slice(0, start)}${eagerSchema.slice(end + 1)}`;
+  }
+  return eagerSchema;
+}
+
+function executeCanonicalStateSchema(
+  database: DatabaseSync,
+  options: { includeVersionLazyAdditiveTables: boolean },
+): void {
+  database.exec(canonicalStateSchemaForRuntime(options));
 }
 
 export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
@@ -244,14 +300,16 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
           executeCanonicalStateSchema(db, {
-            includeLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
           });
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
             repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           }
           const strictMigration = migrateSqliteSchemaToStrictInTransaction(
             db,
-            OPENCLAW_STATE_SCHEMA_SQL,
+            canonicalStateSchemaForRuntime({
+              includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            }),
             { databaseLabel: pathname },
           );
           if (strictMigration.migratedTables.length > 0) {
@@ -363,6 +421,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
           repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
           });
+          ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
         } else if (previousVersion === 5) {
           assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
@@ -372,14 +431,18 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
         executeCanonicalStateSchema(db, {
-          includeLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+          includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
         });
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
-          migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_STATE_SCHEMA_SQL, {
-            databaseLabel: pathname,
-          });
+          migrateSqliteSchemaToStrictInTransaction(
+            db,
+            canonicalStateSchemaForRuntime({
+              includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+            }),
+            { databaseLabel: pathname },
+          );
         }
         repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
           verifyPhysicalIntegrity: false,
@@ -425,26 +488,11 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
 export async function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<OpenClawStateDatabase | undefined> {
-  const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return undefined;
   }
-  const terminalFailure = terminalOpenLatch.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
-  try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      throw createOpenClawDatabaseVerificationError("state", pathname, quarantine.reason);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === "SqliteIntegrityError") {
-      throw error;
-    }
-    // A broken quarantine store must not brick read-only diagnostics.
-  }
+  assertOpenClawStateDatabaseFreshOpenAllowed(options);
   const prepared = await prepareSqliteReadOnlyLocation(pathname);
   let db: DatabaseSync;
   try {
@@ -460,7 +508,10 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     assertSupportedSchemaVersion(db, pathname);
     assertSqliteIntegrity(db, pathname);
     if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-      assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+      assertOpenClawStateDatabaseForMaintenance(db, {
+        pathname,
+        allowedMissingColumns: STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
+      });
     }
   } catch (error) {
     try {
@@ -499,9 +550,18 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   };
 }
 
-function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
+function assertCurrentStateRuntimeSchema(
+  database: DatabaseSync,
+  pathname: string,
+  options: { allowedMissingColumns?: readonly string[] } = {},
+): void {
   assertCanonicalStateSchemaShape(database, pathname);
-  assertOpenClawStateDatabaseForMaintenance(database, { pathname });
+  assertOpenClawStateDatabaseForMaintenance(database, {
+    pathname,
+    ...(options.allowedMissingColumns
+      ? { allowedMissingColumns: options.allowedMissingColumns }
+      : {}),
+  });
 }
 
 function assertStateDatabaseIntegrityBeforeMutation(
@@ -526,8 +586,12 @@ function assertStateDatabaseIntegrityBeforeMutation(
   if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
       allowMissingColumns: true,
-      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
+      validateAfterRepair: () =>
+        assertCurrentStateRuntimeSchema(database, pathname, {
+          allowedMissingColumns: STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
+        }),
     });
+    ensureAdditiveStateColumns(database);
   } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
@@ -549,10 +613,7 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
   // every open fails fast here until doctor repairs the file and clears it.
-  const terminalFailure = terminalOpenLatch.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
+  assertOpenClawStateDatabaseOpenAllowed(options);
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
     return cached;
@@ -563,23 +624,7 @@ export function openOpenClawStateDatabase(
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
   }
-  let quarantineFailure: Error | undefined;
-  try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      quarantineFailure = createOpenClawDatabaseVerificationError(
-        "state",
-        pathname,
-        quarantine.reason,
-      );
-    }
-  } catch {
-    // A broken quarantine store must not brick every state open.
-    // The process latch and daily verifier still cover known damage.
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
+  assertOpenClawStateDatabaseFreshOpenAllowed(options);
   ensureOpenClawStatePermissions(pathname, env);
   const db = openNodeSqliteDatabase(pathname);
   enableNodeSqliteKyselyStatementCache(db);

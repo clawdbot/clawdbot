@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
   type GatewayNativeApprovalMethod,
@@ -10,6 +11,7 @@ import type {
   GatewayApprovalResolved,
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
@@ -20,6 +22,16 @@ import type {
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+
+const loadOutboundMessageRuntime = createLazyRuntimeModule(
+  () => import("../infra/outbound/message.js"),
+);
+
+const RECOVERY_NOTICE_COMPLETION_RETENTION = {
+  idPrefix: "main-session-restart-recovery:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
 
 type GatewayInstanceRuntimeOptions = {
   getContext: () => GatewayRequestContext;
@@ -60,7 +72,6 @@ export function createGatewayInstanceRuntime(
 
   const recoveryClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
   const recoveryMethods = new Set(["agent", "agent.wait"]);
-  const recoveryNoticeMethods = new Set(["message.action"]);
   const approvalClient = createSyntheticPluginRuntimeClient({ scopes: [APPROVALS_SCOPE] });
   const approvalMethods = new Set<GatewayNativeApprovalMethod>(GATEWAY_NATIVE_APPROVAL_METHODS);
   const approvalRouteClient = createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] });
@@ -83,14 +94,32 @@ export function createGatewayInstanceRuntime(
         payload,
         timeoutMs,
       }),
-    sendRecoveryNotice: async <T>(payload: Record<string, unknown>, timeoutMs?: number) =>
-      await dispatch<T>({
-        allowedMethods: recoveryNoticeMethods,
-        client: recoveryClient,
-        method: "message.action",
-        payload,
-        timeoutMs,
-      }),
+    sendRecoveryNotice: async (payload) => {
+      if (closed || !options.isDispatchAvailable()) {
+        throw new Error("Gateway instance dispatch unavailable for recovery notice");
+      }
+      const { sendMessage } = await loadOutboundMessageRuntime();
+      const context = options.getContext();
+      const result = await sendMessage({
+        cfg: context.getRuntimeConfig(),
+        deps: createOutboundSendDeps(context.deps),
+        channel: payload.channel,
+        to: payload.to,
+        accountId: payload.accountId,
+        threadId: payload.threadId,
+        content: payload.text,
+        gatewayOwnedDelivery: true,
+        bestEffort: true,
+        idempotencyKey: payload.idempotencyKey,
+        deliveryIntentId: payload.idempotencyKey,
+        reusePendingDeliveryIntent: true,
+        completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
+        abortSignal: AbortSignal.timeout(10_000),
+      });
+      if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
+        throw new Error(result.error ?? "recovery notice delivery failed");
+      }
+    },
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 

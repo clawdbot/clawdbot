@@ -4,7 +4,10 @@ import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
-import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
+import {
+  canonicalUiSessionKeyForPersistence,
+  isUiSelectedGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -14,6 +17,7 @@ import {
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   handleChatDraftChange,
@@ -85,6 +89,12 @@ async function loadPageAssistantIdentity(
       !identity
     ) {
       return;
+    }
+    if (
+      state.assistantAgentId !== (identity.agentId ?? null) &&
+      isUiSelectedGlobalSessionKey(state, state.sessionKey)
+    ) {
+      retireChatModelSelectionOwnership(state);
     }
     state.assistantName = identity.name;
     state.assistantAvatar = identity.avatar;
@@ -198,7 +208,6 @@ export function createPageState(
     chatSubmitGuards: new Map<string, Promise<void>>(),
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
-    chatQueueByScope: {},
     chatComposerFallbackByScope: {},
     chatSendingScopeKey: null,
     chatMessagesBySession,
@@ -232,6 +241,7 @@ export function createPageState(
     imageLightboxRequestVersion: 0,
     toolStreamById: new Map(),
     toolStreamOrder: [],
+    activityEventSeqById: new Map(),
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,
@@ -253,7 +263,8 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (next) => {
+  state.applySettings = (patch) => {
+    const next = { ...state.settings, ...patch };
     state.settings = patchSettings({
       chatShowThinking: next.chatShowThinking,
       chatShowToolCalls: next.chatShowToolCalls,

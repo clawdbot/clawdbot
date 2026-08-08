@@ -1,3 +1,4 @@
+import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TemplateContext } from "../templating.js";
@@ -66,6 +67,7 @@ export async function executeFollowupTurn(params: {
   onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
+  const sourceOpts = defaults.opts;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
@@ -96,11 +98,14 @@ export async function executeFollowupTurn(params: {
     const level = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
     return level === "on" || level === "full" ? level : "off";
   };
+  const forceToolResultProgress = sourceOpts?.forceToolResultProgress === true;
+  const channelToolResultProgress = forceToolResultProgress ? sourceOpts.onToolResult : undefined;
+  const shouldEmitVerboseToolResult = () => {
+    const level = currentVerboseLevel();
+    return level === "on" || level === "full";
+  };
   const shouldEmitToolResult = () =>
-    progressAllowed() &&
-    (defaults.opts?.forceToolResultProgress === true ||
-      currentVerboseLevel() === "on" ||
-      currentVerboseLevel() === "full");
+    progressAllowed() && (forceToolResultProgress || shouldEmitVerboseToolResult());
   const shouldEmitToolOutput = () => progressAllowed() && currentVerboseLevel() === "full";
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
@@ -121,6 +126,17 @@ export async function executeFollowupTurn(params: {
     pendingProgressTasks.add(trackedTask);
     return progressChain;
   };
+  const enqueueProgressResult = async (
+    deliver: () => Promise<boolean | void> | boolean | void,
+  ): Promise<boolean | void> => {
+    let completed = false;
+    let result: boolean | void = false;
+    await enqueueProgress(async () => {
+      result = await deliver();
+      completed = true;
+    });
+    return completed ? result : false;
+  };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
       ? (value: T) =>
@@ -128,6 +144,19 @@ export async function executeFollowupTurn(params: {
             if (allowed()) {
               await callback(value);
             }
+          })
+      : undefined;
+  const wrapVisibility = <T>(
+    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
+    allowed = progressAllowed,
+  ) =>
+    callback
+      ? (value: T) =>
+          enqueueProgressResult(async () => {
+            if (!allowed()) {
+              return false;
+            }
+            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
@@ -147,7 +176,6 @@ export async function executeFollowupTurn(params: {
         baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart,
       ),
   };
-  const sourceOpts = defaults.opts;
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
     runId: turn.runId,
@@ -158,14 +186,16 @@ export async function executeFollowupTurn(params: {
     onBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
-    onToolStart: wrap(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
+    onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: sourceOpts?.onCommandOutput
       ? (output) =>
-          enqueueProgress(async () => {
+          enqueueProgressResult(async () => {
             if (!shouldEmitToolResult()) {
-              return;
+              return false;
             }
-            const visible = (await sourceOpts.onCommandOutput?.(output)) !== false;
+            const visible = (
+              await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output))
+            ).visible;
             if (
               visible &&
               (output.status === "failed" ||
@@ -174,39 +204,58 @@ export async function executeFollowupTurn(params: {
             ) {
               visibleToolError = true;
             }
+            return visible;
           })
       : undefined,
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
-          enqueueProgress(async () => {
+          enqueueProgressResult(async () => {
             if (!shouldEmitToolResult()) {
-              return;
+              return false;
             }
-            const visible = (await sourceOpts.onItemEvent?.(item)) !== false;
+            const visible = (
+              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
+            ).visible;
             if (
               visible &&
               (item.phase === "error" || item.status === "failed" || item.status === "error")
             ) {
               visibleToolError = true;
             }
+            return visible;
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
-    onPlanUpdate: wrap(sourceOpts?.onPlanUpdate),
-    onApprovalEvent: wrap(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
-    onPatchSummary: wrap(sourceOpts?.onPatchSummary, shouldEmitToolResult),
+    onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
+    onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
+    onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitToolResult),
     onCompactionStart: sourceOpts?.onCompactionStart
       ? () =>
-          enqueueProgress(() => (progressAllowed() ? sourceOpts.onCompactionStart?.() : undefined))
+          enqueueProgressResult(async () =>
+            progressAllowed()
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
+                  .visible
+              : false,
+          )
       : undefined,
     onCompactionEnd: sourceOpts?.onCompactionEnd
       ? () =>
-          enqueueProgress(() => (progressAllowed() ? sourceOpts.onCompactionEnd?.() : undefined))
+          enqueueProgressResult(async () =>
+            progressAllowed()
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!()))
+                  .visible
+              : false,
+          )
       : undefined,
-    onReasoningStream: wrap(sourceOpts?.onReasoningStream),
+    onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
     onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () => enqueueProgress(() => (progressAllowed() ? sourceOpts.onReasoningEnd?.() : undefined))
+      ? () =>
+          enqueueProgressResult(async () =>
+            progressAllowed()
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
+              : false,
+          )
       : undefined,
     shouldSuppressToolErrorWarnings: () => {
       const explicit = sourceOpts?.suppressToolErrorWarnings;
@@ -222,21 +271,27 @@ export async function executeFollowupTurn(params: {
       return undefined;
     },
     onToolResult: async (payload) => {
-      await enqueueProgress(async () => {
+      return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
-          return;
+          return false;
         }
-        const toolResultProgressVisible = shouldEmitToolResult();
+        const verboseToolResult = shouldEmitVerboseToolResult();
+        const toolResultProgressVisible = Boolean(channelToolResultProgress) || verboseToolResult;
         if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
           !toolResultProgressVisible
         ) {
-          return;
+          return false;
         }
-        await params.onToolResult(payload, { runId: turn.runId });
-        if (payload.isError === true) {
+        const visible =
+          channelToolResultProgress && !verboseToolResult
+            ? (await settleProgressVisibilityCallbackResult(channelToolResultProgress(payload)))
+                .visible
+            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
+        if (visible && payload.isError === true) {
           visibleToolError = true;
         }
+        return visible;
       });
     },
   };

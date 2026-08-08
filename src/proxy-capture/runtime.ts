@@ -486,7 +486,16 @@ export function captureHttpExchange(
       method: params.method,
     }),
     contentType: requestContentType,
-    headersJson: runtime.safeJsonString(redactedCaptureHeaders(params.requestHeaders)),
+    headersJson: runtime.safeJsonString(
+      redactedCaptureHeaders(
+        params.requestHeaders,
+        Array.isArray(params.meta?.sensitiveRequestHeaderNames)
+          ? params.meta.sensitiveRequestHeaderNames.filter(
+              (name): name is string => typeof name === "string",
+            )
+          : undefined,
+      ),
+    ),
     metaJson: redactedCaptureJson(params.meta, runtime.safeJsonString),
     ...requestPayload,
   });

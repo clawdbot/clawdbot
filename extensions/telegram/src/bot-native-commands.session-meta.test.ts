@@ -1,9 +1,12 @@
-// Telegram tests cover bot native commands.session meta plugin behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+// Telegram tests cover bot native commands.session meta plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
@@ -15,6 +18,7 @@ import {
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -388,6 +392,10 @@ function registerAndResolveCommandHandlerBase(params: {
     getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
+    sendMessageTelegram: vi.fn(async (_to, text) => {
+      await sendMessage(100, text, {});
+      return { messageId: "999", chatId: "100" };
+    }),
     ...(runModelsAuthLoginFlow ? { runModelsAuthLoginFlow } : {}),
   };
   registerTelegramNativeCommands({
@@ -568,12 +576,7 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown {
   const call = mockFn.mock.calls.at(callIndex);
@@ -729,6 +732,39 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.ctx?.Provider).toBe("telegram");
     expect(call?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
     expect(turnPlan?.record?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
+  });
+
+  it("leaves native-command outcomes to the update middleware owner", async () => {
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await handler(createTelegramPrivateCommandContext());
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("preserves every argument on native queue command turns", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "queue",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "Can you diagnose this?" }));
+
+    expect(dispatchChannelInboundTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          Body: "/queue Can you diagnose this?",
+          CommandBody: "/queue Can you diagnose this?",
+          CommandTurn: expect.objectContaining({
+            kind: "native",
+            body: "/queue Can you diagnose this?",
+          }),
+        }),
+      }),
+    );
   });
 
   it("keeps one live config snapshot through native command execution", async () => {
@@ -1406,6 +1442,161 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
   });
 
+  it("emits the fallback when a non-final suppression precedes a final failure", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled tool reply" },
+        { kind: "tool" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+        },
+      );
+      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
+        kind: "final",
+      });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
+  it("emits the fallback when a suppressed block reply precedes a final failure", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled block reply" },
+        { kind: "block" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "empty_after_reply_payload_sending_hook" },
+        },
+      );
+      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
+        kind: "final",
+      });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
+  });
+
+  it("emits the fallback when a final failure precedes a later suppressed final", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
+        kind: "final",
+      });
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled final reply" },
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+        },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a suppressed final after a non-final delivery failure", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      plan.delivery.onError?.(new Error("Telegram tool delivery failed"), {
+        kind: "tool",
+      });
+      await plan.delivery.onDelivered?.(
+        { text: "cancelled final reply" },
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+        },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not emit the fallback after a partially delivered final", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      plan.delivery.onError?.(
+        createChannelPartialDeliveryError(new Error("Telegram final delivery failed"), {
+          visibleReplySent: true,
+        }),
+        { kind: "final" },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("retains the empty fallback for a true non-silent metadata-only native reply", async () => {
     dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
       plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
@@ -1804,6 +1995,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   });
 
   it("moves the target session to the profile returned by Telegram /login codex", async () => {
+    const finishLogin = createDeferred<void>();
     sessionMocks.loadSessionStore.mockReturnValue({
       "agent:main:main": {
         authProfileOverride: "openai:owner@example.com",
@@ -1812,10 +2004,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       },
     });
     const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
-      await opts.prompter.note?.(
-        "URL: https://auth.openai.com/codex/device\nCode: ABCD-EFGH",
-        "OpenAI Codex device code",
-      );
+      await opts.prompter.deviceCode?.({
+        title: "OpenAI Codex device code",
+        code: "ABCD-EFGH",
+        expiresInMinutes: 15,
+        message: "URL: https://auth.openai.com/codex/device",
+      });
+      await finishLogin.promise;
       return {
         providerId: "openai",
         methodId: "device-code",
@@ -1835,6 +2030,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
 
     await handler(createTelegramPrivateCommandContext({ match: "codex", userId: 200 }));
+    expect(sessionMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    finishLogin.resolve();
 
     expect(runModelsAuthLoginFlow).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1846,13 +2043,15 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(
       (runModelsAuthLoginFlow.mock.calls[0]?.[0] as { profileId?: string } | undefined)?.profileId,
     ).toBeUndefined();
-    expect(sessionMocks.updateSessionStoreEntry).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      requireWriteSuccess: true,
-      skipMaintenance: true,
-      update: expect.any(Function),
-    });
+    await vi.waitFor(() =>
+      expect(sessionMocks.updateSessionStoreEntry).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+        requireWriteSuccess: true,
+        skipMaintenance: true,
+        update: expect.any(Function),
+      }),
+    );
     const patchUpdate = (
       sessionMocks.updateSessionStoreEntry.mock.calls[0]?.[0] as {
         update?: (entry: Record<string, unknown>) => Record<string, unknown>;
@@ -1867,6 +2066,118 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: undefined,
     });
+  });
+
+  it("moves a session created while Telegram login is pending to the returned profile", async () => {
+    const finishLogin = createDeferred<void>();
+    let sessionStore: Record<string, SessionEntry> = {};
+    sessionMocks.loadSessionStore.mockImplementation(() => sessionStore);
+    const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
+      await opts.prompter.deviceCode?.({
+        title: "OpenAI Codex device code",
+        code: "NEW-SESSION",
+      });
+      await finishLogin.promise;
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [
+          { profileId: "openai:new-owner@example.com", provider: "openai", mode: "oauth" },
+        ],
+      };
+    });
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "login",
+      cfg: {
+        commands: { native: true, ownerAllowFrom: ["200"] },
+      } as OpenClawConfig,
+      allowFrom: ["200"],
+      runModelsAuthLoginFlow,
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "codex", userId: 200 }));
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "sess-created-during-login",
+        updatedAt: 2,
+      },
+    };
+    finishLogin.resolve();
+
+    await vi.waitFor(() => expect(sessionMocks.updateSessionStoreEntry).toHaveBeenCalledTimes(1));
+    const update = (
+      sessionMocks.updateSessionStoreEntry.mock.calls[0]?.[0] as {
+        update?: (entry: SessionEntry) => Partial<SessionEntry> | null;
+      }
+    )?.update;
+    expect(
+      update?.({
+        sessionId: "sess-created-during-login",
+        updatedAt: 2,
+      }),
+    ).toEqual({
+      authProfileOverride: "openai:new-owner@example.com",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: undefined,
+    });
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        100,
+        "Codex login complete. Try your request again now.",
+        {},
+      ),
+    );
+  });
+
+  it("preserves a later user-selected profile on a session created during Telegram login", async () => {
+    const finishLogin = createDeferred<void>();
+    let sessionStore: Record<string, SessionEntry> = {};
+    sessionMocks.loadSessionStore.mockImplementation(() => sessionStore);
+    const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
+      await opts.prompter.deviceCode?.({
+        title: "OpenAI Codex device code",
+        code: "LATER-USER-SELECTION",
+      });
+      await finishLogin.promise;
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [{ profileId: "openai:login-profile", provider: "openai", mode: "oauth" }],
+      };
+    });
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "login",
+      cfg: {
+        commands: { native: true, ownerAllowFrom: ["200"] },
+      } as OpenClawConfig,
+      allowFrom: ["200"],
+      runModelsAuthLoginFlow,
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "codex", userId: 200 }));
+    sessionStore = {
+      "agent:main:main": {
+        authProfileOverride: "openai:later-user-profile",
+        authProfileOverrideSource: "user",
+        sessionId: "sess-created-during-login",
+        updatedAt: 2,
+      },
+    };
+    finishLogin.resolve();
+
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        100,
+        "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+        {},
+      ),
+    );
+    expect(sessionStore["agent:main:main"]?.authProfileOverride).toBe("openai:later-user-profile");
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      100,
+      "Codex login complete. Try your request again now.",
+      expect.any(Object),
+    );
   });
 
   it("marks a same-profile Telegram login as user-selected", async () => {

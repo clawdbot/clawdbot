@@ -29,6 +29,7 @@ import {
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -55,6 +56,11 @@ import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
 import {
+  disableUpdatedPackageCompileCacheEnv,
+  resolveUpdatedInstallCommandEnv,
+  resolveUpdatedServicePathEnv,
+} from "./update-command-service-env.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
   isPackageManagerUpdateMode,
@@ -68,13 +74,10 @@ const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
-const SERVICE_REFRESH_PATH_ENV_KEYS = [
+const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
-] as const;
-const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
-  ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
 ] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
@@ -111,6 +114,8 @@ export type PreManagedServiceStop = {
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  serviceMutationAllowed?: boolean;
+  serviceMutationSkipMessage?: string;
   serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
@@ -127,6 +132,41 @@ type WindowsTaskAutoStartRecovery = {
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
+
+export class GatewayServiceUpdateOwnershipError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "GatewayServiceUpdateOwnershipError";
+  }
+}
+
+export function resolveGatewayServiceManagementBlockMessageForUpdate(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  try {
+    assertGatewayServiceManagementAllowedForUpdate(env);
+    return undefined;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+export function assertGatewayServiceManagementAllowedForUpdate(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  try {
+    assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new GatewayServiceUpdateOwnershipError(message, err);
+  }
+}
+
+export function isGatewayServiceManagementAllowedForUpdate(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return resolveGatewayServiceManagementBlockMessageForUpdate(env) === undefined;
+}
 
 export class UpdateCommandAbort extends Error {
   constructor() {
@@ -334,12 +374,38 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   shouldRestart: boolean;
   jsonMode: boolean;
 }): Promise<PreManagedServiceStop> {
+  const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
+    process.env,
+  );
+  if (serviceMutationSkipMessage) {
+    return {
+      stopped: false,
+      inspected: false,
+      runtimeInspected: false,
+      running: false,
+      serviceMutationAllowed: false,
+      serviceMutationSkipMessage,
+    };
+  }
   let service: ReturnType<typeof resolveGatewayService>;
   let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
   try {
     service = resolveGatewayService();
-    serviceState = await readGatewayServiceState(service, { env: process.env });
-  } catch {
+    serviceState = await readGatewayServiceState(service, {
+      env: process.env,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+    });
+  } catch (err) {
+    if (err instanceof GatewayServiceUpdateOwnershipError) {
+      return {
+        stopped: false,
+        inspected: false,
+        runtimeInspected: false,
+        running: false,
+        serviceMutationAllowed: false,
+        blockMessage: err.message,
+      };
+    }
     return { stopped: false, inspected: false, runtimeInspected: false, running: false };
   }
 
@@ -681,35 +747,7 @@ async function resolvePackageRuntimeForPreflight(params: {
   return { version, nodeRunner };
 }
 
-function resolveServiceRefreshEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
-  for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
-    const rawValue = resolvedEnv[key]?.trim();
-    if (!rawValue) {
-      continue;
-    }
-    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    if (!invocationCwd) {
-      resolvedEnv[key] = rawValue;
-      continue;
-    }
-    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
-  }
-  return resolvedEnv;
-}
-
-export function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
-}
+export { disableUpdatedPackageCompileCacheEnv } from "./update-command-service-env.js";
 
 export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const resolvedEnv = { ...env };
@@ -717,13 +755,6 @@ export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.Pro
   delete resolvedEnv.OPENCLAW_SERVICE_KIND;
   delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   return resolvedEnv;
-}
-
-function resolveUpdatedInstallCommandEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
 }
 
 export function resolvePostInstallDoctorEnv(params?: {
@@ -738,7 +769,7 @@ export function resolvePostInstallDoctorEnv(params?: {
     return resolvedEnv;
   }
 
-  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  const serviceEnv = resolveUpdatedServicePathEnv(params.serviceEnv, params.invocationCwd);
   for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
     const value = serviceEnv[key]?.trim();
     if (value) {
@@ -791,7 +822,11 @@ async function refreshGatewayServiceEnv(params: {
       [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
       {
         cwd: params.result.root,
-        env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+        env: resolveUpdatedInstallCommandEnv({
+          processEnv: process.env,
+          serviceEnv: params.env,
+          invocationCwd: params.invocationCwd,
+        }),
         timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
       },
     );
@@ -835,7 +870,11 @@ async function runUpdatedInstallGatewayRestart(params: {
     [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
     {
       cwd: params.result.root,
-      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
+      env: resolveUpdatedInstallCommandEnv({
+        processEnv: process.env,
+        serviceEnv: params.env,
+        invocationCwd: params.invocationCwd,
+      }),
       // Restart health owns migration-aware readiness. Keep only the caller's bounded update
       // budget outside it so the former fixed 60-second watchdog cannot preempt that wait.
       timeoutMs: params.timeoutMs,
@@ -949,6 +988,9 @@ function resolveManagedServiceNodeRunner(
  * when the package root is the same.
  */
 export async function resolveManagedServiceNodeRunnerOverride(): Promise<string | undefined> {
+  if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
+    return undefined;
+  }
   const command = await resolveGatewayService()
     .readCommand(process.env)
     .catch(() => null);
@@ -970,6 +1012,9 @@ export async function resolveManagedServiceNodeRunnerOverride(): Promise<string 
 export async function resolveManagedServicePackageUpdateRoot(params: {
   root: string;
 }): Promise<ManagedServiceRootRedirect | null> {
+  if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
+    return null;
+  }
   const command = await resolveGatewayService()
     .readCommand(process.env)
     .catch(() => null);
@@ -1004,9 +1049,11 @@ export async function gatewayServiceCommandUsesRoot(params: {
   }
   const command =
     params.command === undefined
-      ? await resolveGatewayService()
-          .readCommand(params.env ?? process.env)
-          .catch(() => null)
+      ? isGatewayServiceManagementAllowedForUpdate(params.env ?? process.env)
+        ? await resolveGatewayService()
+            .readCommand(params.env ?? process.env)
+            .catch(() => null)
+        : null
       : params.command;
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
@@ -1037,8 +1084,22 @@ export async function maybeRestartService(params: {
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
   requireRunningServiceAfterRestart?: boolean;
+  serviceMutationSkipMessage?: string;
   timeoutMs: number;
 }): Promise<boolean> {
+  if (
+    params.shouldRestart &&
+    (!isGatewayServiceManagementAllowedForUpdate(process.env) ||
+      !isGatewayServiceManagementAllowedForUpdate(params.serviceEnv ?? process.env))
+  ) {
+    const message =
+      resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
+      resolveGatewayServiceManagementBlockMessageForUpdate(params.serviceEnv ?? process.env);
+    if (message) {
+      defaultRuntime.error(message);
+    }
+    return false;
+  }
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     opts: { requireRunningService?: boolean } = {},
@@ -1321,6 +1382,18 @@ export async function maybeRestartService(params: {
       ) {
         return false;
       }
+    }
+    return true;
+  }
+
+  if (params.serviceMutationSkipMessage) {
+    if (params.opts.json) {
+      defaultRuntime.error(params.serviceMutationSkipMessage);
+    } else {
+      defaultRuntime.log("");
+      defaultRuntime.log(
+        theme.warn(`Gateway: restart skipped: ${params.serviceMutationSkipMessage}`),
+      );
     }
     return true;
   }

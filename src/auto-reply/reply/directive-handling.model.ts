@@ -399,15 +399,22 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
   const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
-  const wantsStatus = directive === "status";
-  const wantsSummary = !rawDirective;
-  const wantsLegacyList = directive === "list";
+  const isLiteralModelDirective = params.directives.modelDirectiveSource !== "alias";
+  const wantsStatus = isLiteralModelDirective && directive === "status";
+  const wantsSummary = isLiteralModelDirective && !rawDirective;
+  const wantsLegacyList = isLiteralModelDirective && directive === "list";
   if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
     return undefined;
   }
 
   if (params.directives.rawModelProfile) {
-    return { text: "Auth profile override requires a model selection." };
+    return { text: "Auth profile override requires a model selection.", isError: true };
+  }
+  if (params.directives.rawModelRuntime) {
+    return { text: "Runtime override requires a model selection.", isError: true };
+  }
+  if (params.directives.modelSessionOnly) {
+    return { text: "Session-only scope requires a model selection.", isError: true };
   }
 
   const pickerCatalog = buildModelPickerCatalog({
@@ -470,9 +477,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
           activeRuntimeLine,
           thinkingLine,
           "",
-          "Tap below to browse models, or use:",
-          "/model <provider/model> to switch",
-          "/model <provider/model> --runtime <runtime> to switch harnesses",
+          "Tap below to switch this session only, or use:",
+          "/model <provider/model> for session + owner/admin default update",
+          "/model <provider/model> -s for this session only",
+          "/model <provider/model> --runtime <runtime> -s to switch harnesses",
           "/model status for details",
         ]
           .filter(Boolean)
@@ -487,8 +495,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
         activeRuntimeLine,
         thinkingLine,
         "",
-        "Switch: /model <provider/model>",
-        "Runtime: /model <provider/model> --runtime <runtime>",
+        "Direct: /model <provider/model> (owner/admin requests a default update)",
+        "Session only: /model <provider/model> -s",
+        "Runtime: /model <provider/model> --runtime <runtime> -s",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ]

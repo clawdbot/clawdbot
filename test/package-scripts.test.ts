@@ -121,7 +121,7 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 4 },
+    { scriptName: "build:docker", expectedCount: 3 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
@@ -185,6 +185,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs direct-run entrypoint coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/direct-run-entrypoints.test.ts",
+    );
+  });
+
   it("runs Docker package process-tree coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
@@ -209,6 +215,18 @@ describe("package scripts", () => {
     );
   });
 
+  it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["test:windows:ci"]).not.toContain("schtasks.integration.e2e.test.ts");
+    expect(scripts["test:windows:schtasks:integration"]).toContain(
+      "CI_WINDOWS_SCHTASKS_INTEGRATION=1",
+    );
+    expect(scripts["test:windows:schtasks:integration"]).toContain(
+      "src/daemon/schtasks.integration.e2e.test.ts",
+    );
+  });
+
   it("runs shared test-state cleanup coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/test-utils/openclaw-test-state.test.ts",
@@ -224,6 +242,13 @@ describe("package scripts", () => {
   it("runs backup verification coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/commands/backup-verify.test.ts",
+    );
+  });
+
+  it("runs SQLite transcript archive worker coverage in Windows CI", () => {
+    const windowsCi = readPackageJson().scripts["test:windows:ci"];
+    expect(windowsCi).toContain(
+      "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
     );
   });
 

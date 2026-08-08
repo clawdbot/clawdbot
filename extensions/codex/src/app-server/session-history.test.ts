@@ -67,6 +67,12 @@ function mirroredTarget(sessionFile: string) {
 async function writeSqliteSession(params: { storedSessionFile?: string } = {}): Promise<{
   marker: string;
   sessionKey: string;
+  sessionTarget: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
 }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
   tempDirs.push(dir);
@@ -96,7 +102,7 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
     ...scope,
     message: { role: "assistant", content: "sqlite answer", timestamp: 2 },
   });
-  return { marker, sessionKey };
+  return { marker, sessionKey, sessionTarget: scope };
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
@@ -153,6 +159,24 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("rejects a legacy transcript whose session header belongs to another session", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({
+        id: "foreign",
+        parentId: null,
+        role: "assistant",
+        content: "foreign answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        sessionFile,
+        sessionId: "another-session",
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("replays SQLite marker history by session identity", async () => {
     const { marker, sessionKey } = await writeSqliteSession();
 
@@ -167,6 +191,57 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "user", content: "sqlite prompt" },
       { role: "assistant", content: "sqlite answer" },
     ]);
+  });
+
+  it("replays SQLite history from the canonical typed session target", async () => {
+    const { sessionKey, sessionTarget } = await writeSqliteSession({
+      storedSessionFile: "agent:main:codex-sqlite",
+    });
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: sessionKey,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it.each([
+    ["agent id", { agentId: "other" }],
+    ["session id", { sessionId: "another-session" }],
+    ["session key", { sessionKey: "agent:main:another-session" }],
+  ])("fails closed when the typed target has a mismatched %s", async (_label, targetPatch) => {
+    const { marker, sessionKey, sessionTarget } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget: { ...sessionTarget, ...targetPatch },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("fails closed when the typed session target is incomplete", async () => {
+    const { sessionKey, sessionTarget } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: sessionKey,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+        sessionTarget: { ...sessionTarget, storePath: undefined },
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("resolves SQLite marker history when the caller has no session key", async () => {
@@ -212,6 +287,47 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         sessionFile: marker,
         sessionId: "codex-sqlite-session",
       }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it("applies the admission fence when session metadata still points to a legacy file", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "prior", parentId: null, role: "user", content: "legacy prior prompt" }),
+      messageEntry({
+        id: "current",
+        parentId: "prior",
+        role: "user",
+        content: "legacy current prompt",
+      }),
+    ]);
+    const { sessionKey, sessionTarget } = await writeSqliteSession({
+      storedSessionFile: sessionFile,
+    });
+    const admitted = await appendSessionTranscriptMessageByIdentity({
+      ...sessionTarget,
+      message: { role: "user", content: "sqlite current prompt", timestamp: 3 },
+    });
+    if (!admitted?.anchor) {
+      throw new Error("expected current-turn admission anchor");
+    }
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(
+        {
+          agentId: sessionTarget.agentId,
+          sessionFile,
+          sessionId: sessionTarget.sessionId,
+          sessionKey,
+        },
+        {
+          ...admitted.anchor,
+          logicalTurnId: "codex-legacy-file-turn",
+          role: "user",
+        },
+      ),
     ).resolves.toMatchObject([
       { role: "user", content: "sqlite prompt" },
       { role: "assistant", content: "sqlite answer" },

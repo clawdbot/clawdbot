@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -172,6 +173,44 @@ describe("AppSidebar group mutation collapsed state", () => {
 
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
     confirmSpy.mockRestore();
+  });
+
+  it("disables only group actions whose exact method is unavailable", async () => {
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({});
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.write"] },
+        features: { methods: ["sessions.groups.put"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    const menu = await openGroupMenu(sidebar);
+    const dropdown = menu.closest("wa-dropdown");
+    const rename = menu.querySelector<HTMLElement>('[value="rename-group"]');
+    const create = menu.querySelector<HTMLElement>('[value="new-group"]');
+    const remove = menu.querySelector<HTMLElement>('[value="delete-group"]');
+
+    expect(rename?.hasAttribute("disabled")).toBe(true);
+    expect(create?.hasAttribute("disabled")).toBe(false);
+    expect(remove?.hasAttribute("disabled")).toBe(true);
+
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value: "rename-group" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value: "delete-group" } },
+      }),
+    );
+
+    expect(harness.groupsRename).not.toHaveBeenCalled();
+    expect(harness.groupsDelete).not.toHaveBeenCalled();
   });
 });
 

@@ -20,6 +20,7 @@ import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js"
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 const WARNING_SCOPE = "usage-budget-warning-v1";
+const WARNING_STATE_KEY = "state";
 // Discover all rollups once per cache/pricing identity; later replies refresh only
 // their transcript, while a pricing change triggers a new full warmup.
 const warmedPricingCaches = new Set<string>();
@@ -137,9 +138,7 @@ function claimWarningThreshold(params: {
   thresholdMultiple: number;
   nowMs: number;
 }): boolean {
-  // Primary and queued result paths share this UTC-day/config key, so only one
-  // of them can claim a crossed threshold.
-  const key = `${params.dayKey}:${params.intervalMicroUsd}`;
+  // Primary and queued result paths share one bounded state row per agent DB.
   return runOpenClawAgentWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
@@ -149,28 +148,55 @@ function claimWarningThreshold(params: {
           .selectFrom("cache_entries")
           .select("value_json")
           .where("scope", "=", WARNING_SCOPE)
-          .where("key", "=", key)
+          .where("key", "=", WARNING_STATE_KEY)
           .limit(1),
       ).rows[0]?.value_json;
-      const previous = current === null || current === undefined ? 0 : Number(JSON.parse(current));
+      const parsed = current === null || current === undefined ? undefined : JSON.parse(current);
+      const state =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as {
+              dayKey?: unknown;
+              intervalMicroUsd?: unknown;
+              thresholdMultiple?: unknown;
+            })
+          : undefined;
+      const previous =
+        state?.dayKey === params.dayKey && state.intervalMicroUsd === params.intervalMicroUsd
+          ? Number(state.thresholdMultiple)
+          : 0;
       if (Number.isFinite(previous) && previous >= params.thresholdMultiple) {
         return false;
       }
       executeSqliteQuerySync(
         database.db,
         kysely
+          .deleteFrom("cache_entries")
+          .where("scope", "=", WARNING_SCOPE)
+          .where("key", "!=", WARNING_STATE_KEY),
+      );
+      executeSqliteQuerySync(
+        database.db,
+        kysely
           .insertInto("cache_entries")
           .values({
             scope: WARNING_SCOPE,
-            key,
-            value_json: JSON.stringify(params.thresholdMultiple),
+            key: WARNING_STATE_KEY,
+            value_json: JSON.stringify({
+              dayKey: params.dayKey,
+              intervalMicroUsd: params.intervalMicroUsd,
+              thresholdMultiple: params.thresholdMultiple,
+            }),
             blob: null,
             expires_at: null,
             updated_at: params.nowMs,
           })
           .onConflict((conflict) =>
             conflict.columns(["scope", "key"]).doUpdateSet({
-              value_json: JSON.stringify(params.thresholdMultiple),
+              value_json: JSON.stringify({
+                dayKey: params.dayKey,
+                intervalMicroUsd: params.intervalMicroUsd,
+                thresholdMultiple: params.thresholdMultiple,
+              }),
               updated_at: params.nowMs,
             }),
           ),

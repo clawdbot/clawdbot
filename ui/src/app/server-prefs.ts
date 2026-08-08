@@ -4,92 +4,24 @@
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { normalizeSidebarEntries } from "../app-navigation.ts";
-import { isSupportedLocale } from "../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../lib/config/index.ts";
 import {
-  loadSettings,
-  normalizeChatFollowUpModeOverride,
-  normalizeChatSendShortcut,
-  patchSettings,
-  type ChatFollowUpMode,
-  type ChatSendShortcut,
-  type UiSettings,
-} from "./settings.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
-const THEMES: ReadonlySet<ThemeName> = new Set(["claw", "knot", "dash", "custom"]);
-const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
-type SyncedPrefSpec<T> = {
-  extract: (value: unknown) => T | undefined;
-  local: (settings: UiSettings) => T | undefined;
-  canApply?: (value: T, settings: UiSettings) => boolean;
-  clearable?: boolean;
-};
-const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
-function prefValuesEqual(left: unknown, right: unknown): boolean {
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((value, index) => value === right[index]);
-  }
-  return left === right;
-}
-/**
- * One descriptor per synced pref — the single source of truth for what syncs
- * through config ui.prefs. Each key defines server validation, local normalization,
- * and applicability; `clearable` keys push an explicit JSON null when unset locally
- * so the merge patch removes them server-side.
- */
-const SYNCED_PREFS = {
-  theme: prefSpec<ThemeName>({
-    extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
-    local: (settings) => settings.theme,
-    // A server "custom" theme is only honorable once this browser imported one;
-    // the imported palette itself is too large to live in config.
-    canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
-  }),
-  themeMode: prefSpec<ThemeMode>({
-    extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
-    local: (settings) => settings.themeMode,
-  }),
-  locale: prefSpec<string>({
-    extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
-    local: (settings) => settings.locale,
-  }),
-  chatShowThinking: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowThinking,
-  }),
-  chatShowToolCalls: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatShowToolCalls,
-  }),
-  chatPersistCommentary: prefSpec<boolean>({
-    extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary !== false,
-  }),
-  chatSendShortcut: prefSpec<ChatSendShortcut>({
-    extract: (value) =>
-      value === "enter" || value === "modifier-enter"
-        ? normalizeChatSendShortcut(value)
-        : undefined,
-    local: (settings) => normalizeChatSendShortcut(settings.chatSendShortcut),
-  }),
-  chatFollowUpMode: prefSpec<ChatFollowUpMode>({
-    extract: (value) => normalizeChatFollowUpModeOverride(value),
-    local: (settings) => normalizeChatFollowUpModeOverride(settings.chatFollowUpMode),
-    // Unset means "use the server-configured queue mode"; clearing must propagate,
-    // so the push serializes an explicit null removal.
-    clearable: true,
-  }),
-  sidebarEntries: prefSpec<string[]>({
-    extract: (value) => normalizeSidebarEntries(value) ?? undefined,
-    local: (settings) => settings.sidebarEntries,
-  }),
-} as const;
-type SyncedPrefKey = keyof typeof SYNCED_PREFS;
-type SyncedPrefValue<K extends SyncedPrefKey> =
-  ReturnType<(typeof SYNCED_PREFS)[K]["extract"]> extends (infer T) | undefined ? T : never;
-type ServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | null };
-type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "runExternalMutation"> & {
+  extractServerUiPrefs,
+  prefValuesEqual,
+  resolveServerUiPrefStateFromSnapshot,
+  serverPrefsLocalPatch,
+  SYNCED_PREF_KEYS,
+  SYNCED_PREFS,
+  type ResettableServerUiPrefKey,
+  type ServerUiPrefs,
+  type ServerUiPrefState,
+  type SyncedPrefKey,
+  type SyncedPrefValue,
+} from "./server-prefs-state.ts";
+import { loadSettings, patchSettings, type UiSettings } from "./settings.ts";
+import type { ThemeName } from "./theme.ts";
+
+type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "canPatch" | "runExternalMutation"> & {
   readonly state: {
     readonly client: GatewayBrowserClient | null;
     readonly connected: boolean;
@@ -97,62 +29,38 @@ type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "runExternalMutation"> 
 };
 type ServerUiPrefsCommit = {
   needsRefresh: boolean;
+  retainedLocal?: boolean;
 };
-const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
-function extractServerUiPrefs(configObject: unknown): ServerUiPrefs {
-  const prefs = asRecord(asRecord(asRecord(configObject)?.ui)?.prefs);
-  if (!prefs) {
-    return {};
-  }
-  const result: ServerUiPrefs = {};
-  for (const key of SYNCED_PREF_KEYS) {
-    const value = SYNCED_PREFS[key].extract(prefs[key]);
-    if (value !== undefined) {
-      (result as Record<string, unknown>)[key] = value;
-    }
-  }
-  return result;
-}
-/** Local-settings patch that would bring the mirror in line with the server. */
-function serverPrefsLocalPatch(
-  prefs: ServerUiPrefs,
-  settings: UiSettings,
-): Partial<UiSettings> | null {
-  const patch: Partial<UiSettings> = {};
-  for (const key of SYNCED_PREF_KEYS) {
-    const specification = SYNCED_PREFS[key];
-    const serverValue = prefs[key];
-    if (serverValue === undefined) {
-      continue;
-    }
-    // Null marks a server-side removal of a clearable key: drop the local override
-    // so this device falls back to the server-configured behavior.
-    if (serverValue === null) {
-      if (specification.clearable && specification.local(settings) !== undefined) {
-        (patch as Record<string, unknown>)[key] = undefined;
-      }
-      continue;
-    }
-    if (prefValuesEqual(serverValue, specification.local(settings))) {
-      continue;
-    }
-    if (
-      specification.canApply &&
-      !(specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
-        serverValue,
-        settings,
-      )
-    ) {
-      continue;
-    }
-    (patch as Record<string, unknown>)[key] = serverValue;
-  }
-  return Object.keys(patch).length > 0 ? patch : null;
+export type { ServerUiPrefProvenance, ServerUiPrefState } from "./server-prefs-state.ts";
+
+export function resolveServerUiPrefState<K extends SyncedPrefKey>(
+  configObject: unknown,
+  key: K,
+  scope = "",
+  settings = loadSettings(),
+  options: { canSync?: boolean | null } = {},
+): ServerUiPrefState<SyncedPrefValue<K>> {
+  const shadowPrefs =
+    scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
+  return resolveServerUiPrefStateFromSnapshot(
+    configObject,
+    key,
+    shadowPrefs,
+    settings,
+    options.canSync,
+  );
 }
 /** Synced-key delta between two local settings snapshots, for the push path. */
 export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): ServerUiPrefs | null {
   const prefs: ServerUiPrefs = {};
   for (const key of SYNCED_PREF_KEYS) {
+    if (requestedDeviceLocalPrefResets.delete(key)) {
+      continue;
+    }
+    if (requestedServerUiPrefResets.delete(key)) {
+      (prefs as Record<string, unknown>)[key] = null;
+      continue;
+    }
     const specification = SYNCED_PREFS[key];
     const previousValue = specification.local(previous);
     const nextValue = specification.local(next);
@@ -177,11 +85,17 @@ const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
 // Pending keys are local edits not yet acknowledged by the gateway. They shadow reconciliation so
 // snapshots cannot revert unacked edits, and persist so offline edits replay after reload/reconnect.
 const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
+// Connected read-only edits never enter the replay outbox. Retain only their keys until the next
+// snapshot establishes a LAST_SEEN baseline, then normal server-delta reconciliation resumes.
+const RETAINED_LOCAL_KEY = "openclaw.control.serverPrefs.retained-local.v1";
 const CONFLICT_REDRAIN_DELAY_MS = 1_000;
 const MAX_CONFLICT_REDRAINS = 5;
+const requestedServerUiPrefResets = new Set<SyncedPrefKey>();
+const requestedDeviceLocalPrefResets = new Set<SyncedPrefKey>();
 let applyingServerPrefs = false;
 let pendingScope = "";
 let pendingPrefs: ServerUiPrefs | null = null;
+let pendingPersistedKeys = new Set<SyncedPrefKey>();
 let pushWriter: ServerUiPrefsWriter | null = null;
 let pushScope = "";
 let pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
@@ -202,23 +116,39 @@ function clearConflictRedrain(): void {
   }
   consecutiveConflictRedrains = 0;
 }
-function readStorage(root: string, scope: string): string | null {
+function readStorageState(
+  root: string,
+  scope: string,
+): { available: boolean; value: string | null } {
   try {
-    return globalThis.localStorage?.getItem(`${root}:${scope}`) ?? null;
+    const storage = globalThis.localStorage;
+    if (!storage) {
+      return { available: false, value: null };
+    }
+    return { available: true, value: storage.getItem(`${root}:${scope}`) };
   } catch {
-    return null;
+    return { available: false, value: null };
   }
 }
-function writeStorage(root: string, scope: string, value: string | null): void {
+function readStorage(root: string, scope: string): string | null {
+  return readStorageState(root, scope).value;
+}
+function writeStorage(root: string, scope: string, value: string | null): boolean {
   try {
+    const storage = globalThis.localStorage;
+    if (!storage) {
+      return false;
+    }
     const key = `${root}:${scope}`;
     if (value === null) {
-      globalThis.localStorage?.removeItem(key);
+      storage.removeItem(key);
     } else {
-      globalThis.localStorage?.setItem(key, value);
+      storage.setItem(key, value);
     }
+    return true;
   } catch {
     // Quota/security failures degrade to in-memory tracking for this session.
+    return false;
   }
 }
 function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
@@ -229,15 +159,89 @@ function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
     return null;
   }
 }
+function readStoredPrefs(
+  root: string,
+  scope: string,
+): { available: boolean; prefs: ServerUiPrefs | null } {
+  const stored = readStorageState(root, scope);
+  return {
+    available: stored.available,
+    prefs: parseStoredPrefs(stored.value),
+  };
+}
+function readRetainedLocalKeys(scope: string): Set<SyncedPrefKey> {
+  const stored = parseStoredPrefs(readStorage(RETAINED_LOCAL_KEY, scope));
+  return new Set(
+    stored
+      ? (Object.keys(stored).filter((key) => Object.hasOwn(SYNCED_PREFS, key)) as SyncedPrefKey[])
+      : [],
+  );
+}
+function writeRetainedLocalKeys(scope: string, keys: ReadonlySet<SyncedPrefKey>): void {
+  writeStorage(
+    RETAINED_LOCAL_KEY,
+    scope,
+    keys.size ? JSON.stringify(Object.fromEntries([...keys].map((key) => [key, true]))) : null,
+  );
+}
+function updateRetainedLocalKeys(
+  scope: string,
+  keys: readonly SyncedPrefKey[],
+  retained: boolean,
+): void {
+  const stored = readRetainedLocalKeys(scope);
+  for (const key of keys) {
+    if (retained) {
+      stored.add(key);
+    } else {
+      stored.delete(key);
+    }
+  }
+  writeRetainedLocalKeys(scope, stored);
+  if (retained && scope === lastReconciledScope) {
+    lastReconciledConfigObject = null;
+  }
+}
 function adoptPendingScope(scope: string, force = false): void {
   if (!force && scope === pendingScope) {
     return;
   }
   pendingScope = scope;
-  pendingPrefs = parseStoredPrefs(readStorage(PENDING_KEY, scope));
+  const stored = readStoredPrefs(PENDING_KEY, scope);
+  pendingPrefs = stored.prefs;
+  pendingPersistedKeys = new Set(
+    stored.available && stored.prefs ? (Object.keys(stored.prefs) as SyncedPrefKey[]) : [],
+  );
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
-  writeStorage(PENDING_KEY, pendingScope, prefs ? JSON.stringify(prefs) : null);
+  const persisted = writeStorage(PENDING_KEY, pendingScope, prefs ? JSON.stringify(prefs) : null);
+  if (persisted) {
+    pendingPersistedKeys = new Set(
+      pendingPrefs ? (Object.keys(pendingPrefs) as SyncedPrefKey[]) : [],
+    );
+  } else {
+    pendingPersistedKeys.clear();
+  }
+}
+function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void {
+  if (scope === pendingScope) {
+    reconcilePersistedPendingPrefs();
+  }
+  const active = scope === pendingScope ? pendingPrefs : null;
+  const remaining = {
+    ...parseStoredPrefs(readStorage(PENDING_KEY, scope)),
+    ...active,
+  };
+  for (const key of keys) {
+    delete remaining[key];
+  }
+  const next = Object.keys(remaining).length ? remaining : null;
+  if (scope === pendingScope) {
+    pendingPrefs = next;
+    writePendingStorage(next);
+    return;
+  }
+  writeStorage(PENDING_KEY, scope, next ? JSON.stringify(next) : null);
 }
 // localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
 // one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has
@@ -257,20 +261,85 @@ function settlePendingStorage(ackedBatch: ServerUiPrefs): void {
   const merged = { ...stored, ...pendingPrefs };
   writePendingStorage(Object.keys(merged).length ? merged : null);
 }
+// Only persisted keys participate in cross-tab reconciliation. An in-memory-only key means
+// localStorage was unavailable, so absence from storage cannot be interpreted as cancellation.
+function reconcilePersistedPendingPrefs(): void {
+  if (!pendingPrefs || pendingPersistedKeys.size === 0) {
+    return;
+  }
+  const stored = readStoredPrefs(PENDING_KEY, pendingScope);
+  if (!stored.available) {
+    return;
+  }
+  const current = stored.prefs ?? {};
+  for (const key of pendingPersistedKeys) {
+    if (!Object.hasOwn(current, key)) {
+      delete pendingPrefs[key];
+      pendingPersistedKeys.delete(key);
+      continue;
+    }
+    const storedValue = current[key];
+    if (!prefValuesEqual(pendingPrefs[key], storedValue)) {
+      (pendingPrefs as Record<string, unknown>)[key] = storedValue;
+    }
+  }
+  if (!Object.keys(pendingPrefs).length) {
+    pendingPrefs = null;
+  }
+}
+function batchIsCurrent(batch: ServerUiPrefs): boolean {
+  const current = pendingPrefs;
+  return Boolean(
+    current &&
+    (Object.keys(batch) as SyncedPrefKey[]).every(
+      (key) => Object.hasOwn(current, key) && prefValuesEqual(current[key], batch[key]),
+    ),
+  );
+}
 export function resetServerUiPrefsSync() {
   clearConflictRedrain();
   applyingServerPrefs = pushDraining = drainRequested = false;
   pendingScope = "";
   pendingPrefs = pushWriter = null;
+  pendingPersistedKeys.clear();
   pushScope = "";
   lastReconciledScope = "";
   lastReconciledConfigObject = null;
+  requestedServerUiPrefResets.clear();
+  requestedDeviceLocalPrefResets.clear();
+}
+
+export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
+  key: K,
+  state?: ServerUiPrefState<SyncedPrefValue<K>>,
+  scope = pendingScope,
+): UiSettings {
+  const specification = SYNCED_PREFS[key];
+  const reset = specification.reset;
+  if (!reset) {
+    throw new Error(`Server UI preference is not resettable: ${key}`);
+  }
+  if (state?.provenance === "device-local") {
+    const write = specification.write as
+      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
+      | undefined;
+    if (!write) {
+      throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
+    }
+    cancelPendingKeys(scope, [key]);
+    updateRetainedLocalKeys(scope, [key], false);
+    requestedDeviceLocalPrefResets.add(key);
+    return patchSettings(write(state.resetValue));
+  }
+  requestedServerUiPrefResets.add(key);
+  return patchSettings(reset(loadSettings()));
 }
 export function applyServerUiPrefs(
   configObject: unknown,
   hooks: {
     scope?: string;
     onApplied: (patch: Partial<UiSettings>) => void;
+    onThemeChanged?: (theme: ThemeName | null) => void;
   },
 ): boolean {
   const scope = hooks.scope ?? "";
@@ -283,10 +352,14 @@ export function applyServerUiPrefs(
   };
   const shadowPrefs =
     scope === pendingScope ? pendingPrefs : parseStoredPrefs(readStorage(PENDING_KEY, scope));
+  const retainedLocalKeys = readRetainedLocalKeys(scope);
   const prefs = extractServerUiPrefs(configObject);
   const key = JSON.stringify(prefs);
   const lastSeenRaw = readStorage(LAST_SEEN_KEY, scope);
   if (key === lastSeenRaw) {
+    if (retainedLocalKeys.size) {
+      updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
+    }
     recordReconciledObject();
     return false;
   }
@@ -297,6 +370,7 @@ export function applyServerUiPrefs(
   for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
     if (
       !(shadowPrefs && prefKey in shadowPrefs) &&
+      !retainedLocalKeys.has(prefKey) &&
       (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
     ) {
       (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
@@ -306,13 +380,20 @@ export function applyServerUiPrefs(
     if (
       !(prefKey in prefs) &&
       !(shadowPrefs && prefKey in shadowPrefs) &&
+      !retainedLocalKeys.has(prefKey) &&
       SYNCED_PREFS[prefKey]?.clearable
     ) {
       (changed as Record<string, unknown>)[prefKey] = null;
     }
   }
   writeStorage(LAST_SEEN_KEY, scope, key);
+  if (retainedLocalKeys.size) {
+    updateRetainedLocalKeys(scope, [...retainedLocalKeys], false);
+  }
   recordReconciledObject();
+  if (Object.hasOwn(changed, "theme")) {
+    hooks.onThemeChanged?.(changed.theme ?? null);
+  }
   const patch = serverPrefsLocalPatch(changed, loadSettings());
   if (!patch) {
     return false;
@@ -334,6 +415,9 @@ function adoptPushWriter(writer: ServerUiPrefsWriter): void {
   if (pushWriter === writer && pushScope === scope) {
     return;
   }
+  // Reconcile the scope being left before moving pre-connection intent forward.
+  // Otherwise another tab can cancel storage while this realm later resurrects its stale memory.
+  reconcilePersistedPendingPrefs();
   const unscopedPending =
     pendingScope === ""
       ? {
@@ -363,6 +447,7 @@ function removeBatch(batch: ServerUiPrefs): void {
   for (const key of Object.keys(batch) as SyncedPrefKey[]) {
     if (prefValuesEqual(pendingPrefs[key], batch[key])) {
       delete pendingPrefs[key];
+      pendingPersistedKeys.delete(key);
     }
   }
   if (!Object.keys(pendingPrefs).length) {
@@ -388,6 +473,10 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
     if (pushWriter !== writer || pushEpoch !== epoch) {
       return;
     }
+    reconcilePersistedPendingPrefs();
+    if (!pendingPrefs) {
+      return;
+    }
     const batch = { ...pendingPrefs };
     const afterCommit = pushAfterCommit;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -406,7 +495,21 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
               : {}),
             note: "control-ui prefs sync",
           }),
-        { waitForWritesResumed: true },
+        {
+          waitForWritesResumed: true,
+          canDispatch: () => {
+            if (writer.canPatch === false) {
+              return false;
+            }
+            reconcilePersistedPendingPrefs();
+            if (batchIsCurrent(batch)) {
+              return true;
+            }
+            drainRequested = Boolean(pendingPrefs);
+            return false;
+          },
+          dispatchError: "Access changed before preferences could sync.",
+        },
       );
       if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
@@ -442,12 +545,19 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         scheduleConflictRedrain(writer, epoch);
         return;
       }
-      if (result.reason === "unavailable" || result.reason === "suspended") {
+      if (
+        result.reason === "error" ||
+        result.reason === "unavailable" ||
+        result.reason === "suspended"
+      ) {
         return;
       }
-      // Connected viewer-scope or validation failures degrade silently to device-local state.
+      // Definitive viewer-scope or validation rejections degrade to device-local state.
+      // LAST_SEEN still owns the authoritative server value per key, so identical
+      // refreshes and reloads preserve this local edit; only a server delta replaces it.
       removeBatch(batch);
       settlePendingStorage(batch);
+      afterCommit?.({ needsRefresh: false, retainedLocal: true });
       return;
     }
   }
@@ -458,6 +568,9 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
     return;
   }
   if (!pendingPrefs) {
+    return;
+  }
+  if (writer.state.connected && writer.canPatch === false) {
     return;
   }
   pushDraining = true;
@@ -481,8 +594,18 @@ export function pushServerUiPrefs(
 ): void {
   adoptPushWriter(writer);
   clearConflictRedrain();
-  pendingPrefs = { ...pendingPrefs, ...prefs };
   pushAfterCommit = hooks.afterCommit;
+  if (writer.state.connected && writer.canPatch === false) {
+    // A connected read-only edit is intentionally browser-local. Supersede only
+    // same-key offline intent so a later authorization cannot replay stale input.
+    const keys = Object.keys(prefs) as SyncedPrefKey[];
+    cancelPendingKeys(pendingScope, keys);
+    updateRetainedLocalKeys(pendingScope, keys, true);
+    hooks.afterCommit?.({ needsRefresh: false, retainedLocal: true });
+    return;
+  }
+  reconcilePersistedPendingPrefs();
+  pendingPrefs = { ...pendingPrefs, ...prefs };
   mergePendingIntoStorage();
   startPendingDrain(writer);
 }

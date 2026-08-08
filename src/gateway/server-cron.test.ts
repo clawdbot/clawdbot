@@ -1,12 +1,13 @@
-// Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
-// delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+// Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
+// delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -255,12 +256,7 @@ function createCronConfig(name: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(
   mock: { mock: { calls: Array<Array<unknown>> } },
@@ -2639,12 +2635,50 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
-    const cfg = createCronConfig("server-cron-ssrf");
+  it.each([
+    {
+      name: "blocks loopback by default",
+      ssrfPolicy: undefined,
+      expectedRequests: 0,
+      expectedDeliveryStatus: "not-delivered",
+    },
+    {
+      name: "allows loopback with the private-network opt-in",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      expectedRequests: 1,
+      expectedDeliveryStatus: "delivered",
+    },
+    {
+      name: "allows exactly configured loopback hostnames",
+      ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+      expectedRequests: 1,
+      expectedDeliveryStatus: "delivered",
+    },
+  ])("$name", async ({ ssrfPolicy, expectedRequests, expectedDeliveryStatus }) => {
+    const receivedMethods: string[] = [];
+    const server = createServer((req, res) => {
+      receivedMethods.push(req.method ?? "");
+      req.resume();
+      res.writeHead(204).end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback webhook listener address");
+    }
+
+    const cfg = createCronConfig(`server-cron-ssrf-${expectedDeliveryStatus}`);
+    if (ssrfPolicy) {
+      cfg.cron = { ...cfg.cron, webhookSsrfPolicy: ssrfPolicy };
+    }
     loadConfigMock.mockReturnValue(cfg);
-    fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
+    const actualFetchGuard = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+      "../infra/net/fetch-guard.js",
     );
+    fetchWithSsrFGuardMock.mockImplementationOnce(actualFetchGuard.fetchWithSsrFGuard);
 
     const state = buildGatewayCronService({
       cfg,
@@ -2655,31 +2689,37 @@ describe("buildGatewayCronService", () => {
       const job = await state.cron.add({
         name: "ssrf-webhook-blocked",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(1).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "hello" },
         delivery: {
           mode: "webhook",
-          to: "http://127.0.0.1:8080/cron-finished",
+          to: `http://127.0.0.1:${address.port}/cron-finished`,
         },
       });
 
       await state.cron.run(job.id, "force");
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const request = requireRecord(
-        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
-        "fetch request",
-      );
-      expect(request.url).toBe("http://127.0.0.1:8080/cron-finished");
-      const init = requireRecord(request.init, "fetch init");
-      expect(init.method).toBe("POST");
-      expect(init.headers).toEqual({ "Content-Type": "application/json" });
-      expect(String(init.body)).toContain('"action":"finished"');
-      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(receivedMethods).toEqual(Array.from({ length: expectedRequests }, () => "POST"));
+      const updatedState = state.cron.getJob(job.id)?.state;
+      expect(updatedState).toMatchObject({
+        lastRunStatus: "ok",
+        lastDelivered: expectedRequests === 1,
+        lastDeliveryStatus: expectedDeliveryStatus,
+      });
+      if (expectedRequests === 0) {
+        expect(updatedState?.lastDeliveryError).toMatch(/blocked.*private|private.*blocked/i);
+      } else {
+        expect(updatedState?.lastDeliveryError).toBeUndefined();
+      }
     } finally {
       state.cron.stop();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 

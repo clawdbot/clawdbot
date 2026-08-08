@@ -17,6 +17,11 @@ import {
 
 export const SESSION_FACE_PREFERENCE_PARAM = "__openclawSessionFacePreference";
 export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
+export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
+
+export function composerDraftSearch(draft: string): string {
+  return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
+}
 const SESSION_KEY_UUID_SUFFIX_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 

@@ -111,6 +111,7 @@ type DiagnosticWorkSnapshot = {
 type DiagnosticLivenessSample = {
   reasons: DiagnosticLivenessWarningReason[];
   intervalMs: number;
+  degradedSinceMs?: number;
   eventLoopDelayP99Ms?: number;
   eventLoopDelayMaxMs?: number;
   eventLoopUtilization?: number;
@@ -420,14 +421,23 @@ function shouldEmitDiagnosticLivenessWarning(now: number, work: DiagnosticWorkSn
 function emitDiagnosticLivenessWarning(
   sample: DiagnosticLivenessSample,
   work: DiagnosticWorkSnapshot,
+  now: number,
 ): void {
   const phase = getCurrentDiagnosticPhase();
-  const recentPhases = getRecentDiagnosticPhases(6);
+  // Attribute only phases completed during this measured liveness interval.
+  // The retained ring is capacity-bounded history, not a temporal recency signal.
+  const recentPhases = getRecentDiagnosticPhases(6, {
+    completedAfter: now - Math.max(0, sample.intervalMs),
+  });
   const recentPhaseSummary = formatRecentDiagnosticPhases(recentPhases);
   const workLabelSummary = formatDiagnosticWorkLabels(work);
   const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
     sample.intervalMs / 1000,
-  )}s eventLoopDelayP99Ms=${formatOptionalDiagnosticMetric(
+  )}s${
+    sample.degradedSinceMs === undefined
+      ? ""
+      : ` degradedFor=${Math.round(sample.degradedSinceMs / 1000)}s`
+  } eventLoopDelayP99Ms=${formatOptionalDiagnosticMetric(
     sample.eventLoopDelayP99Ms,
   )} eventLoopDelayMaxMs=${formatOptionalDiagnosticMetric(
     sample.eventLoopDelayMaxMs,
@@ -441,9 +451,14 @@ function emitDiagnosticLivenessWarning(
     workLabelSummary ? ` work=[${workLabelSummary}]` : ""
   }`;
   const hasBlockingWork = work.waitingCount > 0 || work.queuedCount > 0;
+  const hasPersistentDegradation = sample.degradedSinceMs !== undefined;
   const hasSustainedEventLoopDelay =
     (sample.eventLoopDelayP99Ms ?? 0) >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
-  if (hasBlockingWork || (hasOpenDiagnosticWork(work) && hasSustainedEventLoopDelay)) {
+  if (
+    hasPersistentDegradation ||
+    hasBlockingWork ||
+    (hasOpenDiagnosticWork(work) && hasSustainedEventLoopDelay)
+  ) {
     diag.warn(message);
   } else {
     diag.debug(message);
@@ -452,6 +467,7 @@ function emitDiagnosticLivenessWarning(
     type: "diagnostic.liveness.warning",
     reasons: sample.reasons,
     intervalMs: sample.intervalMs,
+    degradedSinceMs: sample.degradedSinceMs,
     eventLoopDelayP99Ms: sample.eventLoopDelayP99Ms,
     eventLoopDelayMaxMs: sample.eventLoopDelayMaxMs,
     eventLoopUtilization: sample.eventLoopUtilization,
@@ -557,6 +573,10 @@ function isActiveAbortRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   return (
+    (params.classification?.eventType === "session.stalled" &&
+      params.classification.classification === "stalled_agent_run" &&
+      params.activity?.hasActiveEmbeddedRun === true &&
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs) ||
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
     isStalledModelCallRecoveryEligible(params)
@@ -942,6 +962,9 @@ function sessionAttentionFields(params: {
     ...(params.activity.activeToolAgeMs !== undefined
       ? { activeToolAgeMs: params.activity.activeToolAgeMs }
       : {}),
+    ...(params.activity.repeatedRequestNoProgressAgeMs !== undefined
+      ? { repeatedRequestNoProgressAgeMs: params.activity.repeatedRequestNoProgressAgeMs }
+      : {}),
     ...(terminalProgressStale ? { terminalProgressStale: true } : {}),
   };
 }
@@ -962,6 +985,11 @@ function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnaps
   }
   if (activity.activeToolAgeMs !== undefined) {
     fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
+  }
+  if (activity.repeatedRequestNoProgressAgeMs !== undefined) {
+    fields.push(
+      `repeatedRequestNoProgressAge=${Math.round(activity.repeatedRequestNoProgressAgeMs / 1000)}s`,
+    );
   }
   if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
     fields.push("terminalProgressStale=true");
@@ -1049,10 +1077,13 @@ export function logSessionAttention(
         ? "stalled session"
         : "long-running session";
   const activityFields = formatSessionActivityLogFields(activity);
-  const cronFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({ sessionKey: state.sessionKey }),
+  const sessionFields = formatCronSessionDiagnosticFields(
+    resolveCronSessionDiagnosticContext({
+      sessionKey: state.sessionKey,
+      activeSessionId: state.sessionId,
+    }),
   );
-  const detailFields = [activityFields, cronFields].filter(Boolean).join(" ");
+  const detailFields = [activityFields, sessionFields].filter(Boolean).join(" ");
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"
   } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
@@ -1191,7 +1222,11 @@ export function startDiagnosticHeartbeat(
   if (heartbeatInterval) {
     return;
   }
-  startDiagnosticLivenessSampler();
+  // Gateway supplies its lifecycle-owned monitor; other runtimes retain the
+  // built-in sampler. Never allocate two perf monitors for one heartbeat.
+  if (!opts?.sampleLiveness) {
+    startDiagnosticLivenessSampler();
+  }
   const livenessGraceUntil =
     opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   lastDiagnosticHeartbeatTickAt = Date.now();
@@ -1251,7 +1286,7 @@ export function startDiagnosticHeartbeat(
     }
 
     if (shouldEmitLivenessReport && livenessSample) {
-      emitDiagnosticLivenessWarning(livenessSample, work);
+      emitDiagnosticLivenessWarning(livenessSample, work, now);
     }
 
     diag.debug(
@@ -1290,13 +1325,17 @@ export function startDiagnosticHeartbeat(
         activity,
         staleMs: stuckSessionWarnMs,
       });
+      const repeatedRequestAttention =
+        state.state === "processing" &&
+        (activity.repeatedRequestNoProgressAgeMs ?? 0) > stuckSessionWarnMs;
       if (
         (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
+        repeatedRequestAttention ||
         idleQueuedRecoverableStall
       ) {
         const attentionAgeMs = idleQueuedRecoverableStall
           ? (activity.lastProgressAgeMs ?? ageMs)
-          : ageMs;
+          : Math.max(ageMs, activity.repeatedRequestNoProgressAgeMs ?? 0);
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,

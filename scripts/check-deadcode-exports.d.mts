@@ -11,3 +11,12 @@ export function checkUnusedExports(output: string): {
   entries: string[];
   message: string;
 };
+/** Classifies Knip export output, rejecting findings after resolution failures. */
+export function checkExportScan(
+  scanName: string,
+  output: string,
+): {
+  ok: boolean;
+  entries: string[];
+  message: string;
+};

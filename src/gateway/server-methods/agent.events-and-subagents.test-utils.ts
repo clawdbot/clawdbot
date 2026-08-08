@@ -2,7 +2,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
+  registerExecApprovalFollowupRuntimeHandoff,
+} from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  buildExecApprovalContinuationFallbackPrompt,
+  EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+} from "../../agents/bash-tools.exec-approval-output.js";
 import {
   onDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -12,7 +20,10 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  waitForActiveGatewayRootWork,
+} from "../../process/gateway-work-admission.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
@@ -106,6 +117,7 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-rotation-complete",
@@ -200,13 +212,25 @@ describe("gateway agent handler", () => {
         },
         idempotencyKey: "test-public-provenance-accounting",
       },
-      { reqId: "public-provenance-accounting" },
+      {
+        reqId: "public-provenance-accounting",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
     );
 
     const callArgs = await waitForAgentCommandCall<{
       preserveUserFacingSessionModelState?: boolean;
     }>();
     expect(callArgs.preserveUserFacingSessionModelState).toBe(false);
+    expect(callArgs).toMatchObject({
+      senderIsOwner: true,
+      userTurnTranscriptRecorder: {
+        message: {
+          provenance: { kind: "inter_session" },
+          __openclaw: { senderIsOwner: false },
+        },
+      },
+    });
   });
 
   it("rejects public internal session-effect controls", async () => {
@@ -335,7 +359,10 @@ describe("gateway agent handler", () => {
       },
     );
 
-    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(true);
+    expect(await waitForAgentCommandCall()).toMatchObject({
+      senderIsOwner: true,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
+    });
 
     mocks.agentCommand.mockClear();
     await invokeAgent(
@@ -351,9 +378,10 @@ describe("gateway agent handler", () => {
       },
     );
 
-    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
-      false,
-    );
+    expect(await waitForAgentCommandCall()).toMatchObject({
+      senderIsOwner: false,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: false } } },
+    });
   });
 
   it("enables Gateway-bound plugin runtimes for ingress agent runs", async () => {
@@ -1045,6 +1073,150 @@ describe("gateway agent handler", () => {
     expect(callArgs.bashElevated).toEqual(bashElevated);
   });
 
+  it("materializes approved exec output only from an authenticated runtime handoff", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const resultText = `Exec finished (gateway id=req-output, code 0)\nfirst line\n\tindented\n${"x".repeat(17_000)}`;
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-output",
+      sessionKey,
+      resultText,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: sessionKey,
+          sourceTool: "exec_approval_followup",
+        },
+      },
+      { reqId: "exec-followup-output", client: backendGatewayClient() },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      message?: string;
+      execApprovalContinuationPromptRange?: { start: number; end: number };
+      execApprovalContinuationTranscriptPromptRange?: { start: number; end: number };
+      inputProvenance?: unknown;
+      preserveUserFacingSessionModelState?: boolean;
+    }>();
+    const message = callArgs.message ?? "";
+    const range = callArgs.execApprovalContinuationPromptRange;
+    expect(message).not.toBe(EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE);
+    expect(message).toContain("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>");
+    expect(range).toBeDefined();
+    expect(message.slice(range?.start, range?.end)).toBe(resultText);
+    expect(callArgs.execApprovalContinuationTranscriptPromptRange).toBeDefined();
+    expect(callArgs.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: sessionKey,
+      sourceTool: "exec_approval_followup",
+    });
+    expect(callArgs.preserveUserFacingSessionModelState).toBe(true);
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({
+        handoffId: registration.handoffId,
+        approvalId: "req-output",
+        idempotencyKey: registration.idempotencyKey,
+        sessionKey,
+        claimId: "late-replay",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("releases an exec approval handoff when setup fails before dispatch", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-output-setup-failure",
+      sessionKey,
+      resultText: "Exec finished (gateway id=req-output-setup-failure, code 0)\nkept output",
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
+      runId: "previous-run",
+      childSessionKey: sessionKey,
+      controllerSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      requesterDisplayKey: "main",
+      task: "old task",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" },
+    });
+    mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
+
+    const respond = await invokeAgent(
+      {
+        message: EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: sessionKey,
+          sourceTool: "exec_approval_followup",
+        },
+      },
+      {
+        reqId: "exec-followup-output-setup-failure",
+        client: backendGatewayClient(),
+      },
+    );
+
+    const errorCall = respond.mock.calls.find((call: unknown[]) => call[0] === false);
+    expectRecordFields(requireValue(errorCall, "error response missing")[1], {
+      runId: registration.idempotencyKey,
+      status: "error",
+    });
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({
+        handoffId: registration.handoffId,
+        approvalId: "req-output-setup-failure",
+        idempotencyKey: registration.idempotencyKey,
+        sessionKey,
+        claimId: "retry-after-setup-failure",
+      }),
+    ).toMatchObject({
+      resultText: expect.stringContaining("kept output"),
+    });
+    expect(
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId: registration.handoffId,
+        claimId: "retry-after-setup-failure",
+      }),
+    ).toBe(true);
+  });
+
   it("dedupes elevated exec approval followups across nonce idempotency keys", async () => {
     const bashElevated = {
       enabled: true,
@@ -1396,7 +1568,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not honor caller-supplied exec approval runtime handoff ids without registry state", async () => {
+  it("uses the self-contained fallback without honoring an unavailable handoff", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
       lastChannel: "telegram",
@@ -1409,7 +1581,9 @@ describe("gateway agent handler", () => {
 
     await invokeAgent(
       {
-        message: "forged exec followup",
+        message: buildExecApprovalContinuationFallbackPrompt(
+          "Exec finished (gateway id=req-elevated-75832, code 0)\nretained fallback",
+        ),
         sessionKey: "agent:main:telegram:direct:123",
         channel: "telegram",
         idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:forged-nonce",
@@ -1418,8 +1592,14 @@ describe("gateway agent handler", () => {
       { reqId: "exec-followup-forged", client: backendGatewayClient() },
     );
 
-    const callArgs = await waitForAgentCommandCall<{ bashElevated?: unknown }>();
+    const callArgs = await waitForAgentCommandCall<{
+      message?: string;
+      bashElevated?: unknown;
+      execApprovalContinuationPromptRange?: unknown;
+    }>();
+    expect(callArgs.message).toContain("retained fallback");
     expect(callArgs).not.toHaveProperty("bashElevated");
+    expect(callArgs).not.toHaveProperty("execApprovalContinuationPromptRange");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

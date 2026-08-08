@@ -17,48 +17,13 @@ LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="$(openclaw_live_default_profile_file)"
-DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
-DOCKER_HOME_MOUNT=()
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
 DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR":ro)
-TEMP_DIRS=()
-
-cleanup_temp_dirs() {
-  if ((${#TEMP_DIRS[@]} > 0)); then
-    rm -rf "${TEMP_DIRS[@]}"
-  fi
-}
-trap cleanup_temp_dirs EXIT
-
-if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
-  CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif openclaw_live_is_ci; then
-  CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
-  TEMP_DIRS+=("$CACHE_HOME_DIR")
-else
-  CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
-fi
-openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
-
-if openclaw_live_uses_managed_bind_dirs; then
-  DOCKER_USER="$(id -u):$(id -g)"
-  DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
-  TEMP_DIRS+=("$DOCKER_HOME_DIR")
-  openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
-  DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
-fi
-
-PROFILE_MOUNT=()
-PROFILE_STATUS="none"
-if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
-    openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
-  else
-    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
-  fi
-  PROFILE_STATUS="$PROFILE_FILE"
-fi
+openclaw_live_init_temp_dirs
+openclaw_live_init_cache_home_dir
+openclaw_live_init_managed_home
+openclaw_live_init_profile_mount
 
 if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" || -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
   docker_env_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-subagent-live-env.XXXXXX")"

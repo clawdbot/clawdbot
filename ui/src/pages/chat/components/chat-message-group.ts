@@ -10,10 +10,15 @@ import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
-import { isPendingSendMessage, persistedMessageEntryId } from "../chat-thread.ts";
+import {
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  type AssistantMessageExpansionState,
+} from "../chat-thread.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -22,6 +27,8 @@ import {
   renderMessageActionButtons,
   renderReplyButton,
   resolveMessageActionDetails,
+  type AssistantMessageDisclosure,
+  type MessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -35,7 +42,7 @@ import {
   renderChatTimestamp,
   renderMessageMeta,
 } from "./chat-message-timestamp.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
   resolveToolRowText,
@@ -62,6 +69,9 @@ type RenderMessageGroupOptions = {
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
+  loadFullAssistantMessage?: SidebarFullMessageLoader;
+  getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
+  onToggleAssistantMessageExpanded?: (messageId: string) => void;
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string) => void;
   onRequestUpdate?: () => void;
@@ -97,7 +107,25 @@ function buildGroupedMessageRenderOptions(
   item: MessageGroup["messages"][number],
   index: number,
   opts: RenderMessageGroupOptions,
+  actionDetails?: MessageActionDetails | null,
 ): GroupedMessageRenderOptions {
+  let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
+  if (
+    actionDetails?.shouldFetchFullMessage &&
+    actionDetails.messageId &&
+    opts.loadFullAssistantMessage &&
+    opts.onToggleAssistantMessageExpanded
+  ) {
+    const messageId = actionDetails.messageId;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+    assistantMessageDisclosure = {
+      expanded: expansion?.status === "loaded" && expansion.expanded,
+      ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
+      loading: expansion?.status === "loading",
+      error: expansion?.status === "error",
+      onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
+    };
+  }
   return {
     isStreaming: group.isStreaming && index === group.messages.length - 1,
     sessionKey: opts.sessionKey,
@@ -118,6 +146,8 @@ function buildGroupedMessageRenderOptions(
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
     isUserMessageExpanded: opts.isUserMessageExpanded,
     onToggleUserMessageExpanded: opts.onToggleUserMessageExpanded,
+    assistantMessageDisclosure,
+    actionMarkdown: actionDetails?.markdown,
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
@@ -179,6 +209,126 @@ function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boole
   return freshSubmit;
 }
 
+export function renderActivityGroup(
+  groups: readonly MessageGroup[],
+  opts: RenderMessageGroupOptions,
+) {
+  const firstGroup = groups[0];
+  if (!firstGroup || opts.showToolCalls === false) {
+    return nothing;
+  }
+  const cards = groups.flatMap((group) =>
+    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+  );
+  const latestGroup = groups[groups.length - 1] ?? firstGroup;
+  const latestCards = latestGroup.messages.flatMap((item) =>
+    extractToolCardsCached(item.message, item.key),
+  );
+  const toolCount =
+    cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
+  // Aggregate chrome follows the latest group; older failures stay visible
+  // in the settled summary and expanded child rows.
+  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
+  // While a run is live, the newest still-running call names the group so
+  // the collapsed header reads like a status line; afterwards it aggregates.
+  const runningCard = opts.runActive
+    ? latestCards.findLast((card) => isRunningToolCard(card, opts.runActive))
+    : undefined;
+  const groupSummaryLabel = runningCard
+    ? `${resolveToolRowText(runningCard, opts.runActive)}…`
+    : summarizeToolGroup(
+        cards.map((card) => ({
+          name: card.name,
+          args: card.args,
+          isError: isToolCardError(card),
+        })),
+      );
+  const activityDisclosureId = `activity:${firstGroup.key}`;
+  const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
+  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+  const showAvatarGutter = opts.showAvatarGutter !== false;
+  const assistantName = opts.assistantName ?? "Assistant";
+
+  return html`
+    <div
+      class="chat-group tool chat-group--activity chat-group--with-footer"
+      data-chat-row-key=${firstGroup.key}
+      data-chat-row-keys=${JSON.stringify(groups.map((group) => group.key))}
+    >
+      ${showAvatarGutter
+        ? renderChatAvatar(
+            firstGroup.role,
+            {
+              name: assistantName,
+              avatar: opts.assistantAvatar ?? null,
+            },
+            {
+              name: opts.userName ?? null,
+              avatar: opts.userAvatar ?? null,
+            },
+            opts.basePath,
+            opts.assistantAttachmentAuthToken,
+            firstGroup.sender,
+          )
+        : nothing}
+      <div class="chat-group-messages">
+        <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
+          <button
+            class="chat-activity-group__summary ${hasError
+              ? "chat-activity-group__summary--error"
+              : ""}"
+            type="button"
+            aria-expanded=${String(activityExpanded)}
+            aria-controls=${activityBodyId}
+            aria-label=${hasError
+              ? t(
+                  toolCount === 1
+                    ? "chat.toolCards.group.activityErrorOne"
+                    : "chat.toolCards.group.activityErrorMany",
+                  { count: String(toolCount) },
+                )
+              : nothing}
+            @click=${(event: MouseEvent) => {
+              if (shouldToggleSelectableDisclosure(event)) {
+                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
+              }
+            }}
+          >
+            <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
+            <span class="chat-activity-group__label" title=${groupSummaryLabel}
+              >${groupSummaryLabel}</span
+            >
+            <span
+              class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
+              aria-hidden="true"
+              >${icons.chevronDown}</span
+            >
+          </button>
+          <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
+            ${activityExpanded
+              ? groups.map((group) =>
+                  group.messages.map((item, index) =>
+                    renderGroupedMessage(
+                      item.message,
+                      item.key,
+                      buildGroupedMessageRenderOptions(group, item, index, opts),
+                      opts.onOpenSidebar,
+                    ),
+                  ),
+                )
+              : nothing}
+          </div>
+        </div>
+      </div>
+      <div class="chat-group-footer">
+        <span class="chat-sender-name">${t("chat.messages.activity")}</span>
+        ${renderChatTimestamp(firstGroup.timestamp)}
+        ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
+      </div>
+    </div>
+  `;
+}
+
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const isWorkspaceConflict = group.messages.every((item) =>
@@ -230,109 +380,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       : [];
 
   if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
-    const cards = groupedToolCards;
-    const toolCount = cards.length || group.messages.length;
-    const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
-    // While a run is live, the newest still-running call names the group so
-    // the collapsed header reads like a status line; afterwards it aggregates.
-    const runningCard = opts.runActive
-      ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
-      : undefined;
-    const groupSummaryLabel = runningCard
-      ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-      : summarizeToolGroup(
-          cards.map((card) => ({
-            name: card.name,
-            args: card.args,
-            isError: isToolCardError(card),
-          })),
-        );
-    const activityDisclosureId = `activity:${group.key}`;
-    const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
-
-    return html`
-      <div
-        class="chat-group tool chat-group--activity chat-group--with-footer"
-        data-chat-row-key=${group.key}
-      >
-        ${showAvatarGutter
-          ? renderChatAvatar(
-              group.role,
-              {
-                name: assistantName,
-                avatar: opts.assistantAvatar ?? null,
-              },
-              {
-                name: opts.userName ?? null,
-                avatar: opts.userAvatar ?? null,
-              },
-              opts.basePath,
-              opts.assistantAttachmentAuthToken,
-              group.sender,
-            )
-          : nothing}
-        <div class="chat-group-messages">
-          <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
-            <button
-              class="chat-activity-group__summary ${hasError
-                ? "chat-activity-group__summary--error"
-                : ""}"
-              type="button"
-              aria-expanded=${String(activityExpanded)}
-              aria-label=${hasError
-                ? t(
-                    toolCount === 1
-                      ? "chat.toolCards.group.activityErrorOne"
-                      : "chat.toolCards.group.activityErrorMany",
-                    { count: String(toolCount) },
-                  )
-                : nothing}
-              @click=${(event: MouseEvent) => {
-                if (shouldToggleSelectableDisclosure(event)) {
-                  opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
-                }
-              }}
-            >
-              <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
-              <span class="chat-activity-group__label" title=${groupSummaryLabel}
-                >${groupSummaryLabel}</span
-              >
-              <span
-                class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
-                aria-hidden="true"
-                >${icons.chevronDown}</span
-              >
-            </button>
-            ${activityExpanded
-              ? html`
-                  <div class="chat-activity-group__body">
-                    ${group.messages.map((item, index) =>
-                      renderGroupedMessage(
-                        item.message,
-                        item.key,
-                        buildGroupedMessageRenderOptions(group, item, index, opts),
-                        opts.onOpenSidebar,
-                      ),
-                    )}
-                  </div>
-                `
-              : nothing}
-          </div>
-        </div>
-        <div class="chat-group-footer">
-          <span class="chat-sender-name">${t("chat.messages.activity")}</span>
-          ${renderChatTimestamp(group.timestamp)}
-          ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
-        </div>
-      </div>
-    `;
+    return renderActivityGroup([group], opts);
   }
 
   const messageActionDetails = group.messages.map((item) =>
     resolveMessageActionDetails({
       message: item.message,
       messageId: item.key,
-      onOpenSidebar: opts.onOpenSidebar,
+      canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
+      getAssistantMessageExpansion: opts.getAssistantMessageExpansion,
       onReply: opts.onReply,
       senderLabel: who,
     }),
@@ -394,13 +450,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ${renderGroupedMessage(
               item.message,
               item.key,
-              buildGroupedMessageRenderOptions(group, item, index, opts),
+              buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
               opts.onOpenSidebar,
             )}
             ${actionDetails && index < lastMessageIndex
               ? html`
                   <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
-                    ${renderMessageActionButtons(actionDetails, opts, opts.onOpenSidebar)}
+                    ${renderMessageActionButtons(actionDetails, opts)}
                   </div>
                 `
               : nothing}
@@ -454,7 +510,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   ? renderMessageActionButtons(
                       footerActionDetails,
                       opts,
-                      opts.onOpenSidebar,
                       normalizedRole !== "user" ? opts.onDelete : undefined,
                     )
                   : opts.onDelete

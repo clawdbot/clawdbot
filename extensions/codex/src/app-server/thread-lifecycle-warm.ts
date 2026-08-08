@@ -196,26 +196,27 @@ export async function tryReuseCodexLiveThread(
     resumeAuthProfileId,
     dynamicToolsFingerprint,
   );
-  if (
-    !(await consumeCodexAppServerLiveThread(
-      params.client,
-      binding.threadId,
-      liveThreadConfigFingerprint,
-    ))
-  ) {
+  const retainedThread = await consumeCodexAppServerLiveThread(
+    params.client,
+    binding.threadId,
+    liveThreadConfigFingerprint,
+  );
+  if (!retainedThread) {
     return { prebuiltFinalConfigPatch };
   }
 
   try {
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
+    const model = startModelSelection.model;
     // Validate ownership even when relay generation is unchanged; reset may
-    // have replaced the persisted binding since it was first read.
+    // have replaced the persisted binding since it was first read. Model and
+    // cwd are sticky turn settings, so future turns and /btw need current facts.
     const committed = await lifecycleTiming.measure("warm-thread-write-binding", () =>
       params.bindingStore.mutate(bindingIdentity, {
         kind: "patch",
         threadId: binding.threadId,
-        patch: { nativeHookRelayGeneration },
+        patch: { cwd: params.cwd, model, nativeHookRelayGeneration },
       }),
     );
     if (!committed) {
@@ -233,8 +234,13 @@ export async function tryReuseCodexLiveThread(
     return {
       binding: {
         ...binding,
+        cwd: params.cwd,
+        model,
         nativeHookRelayGeneration,
         liveThreadConfigFingerprint,
+        ...(retainedThread.serviceTier && resumeParams.serviceTier === undefined
+          ? { clearInheritedServiceTier: true }
+          : {}),
         lifecycle: { action: "resumed" },
       },
       prebuiltFinalConfigPatch,

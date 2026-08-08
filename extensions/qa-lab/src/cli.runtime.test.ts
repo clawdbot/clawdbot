@@ -1,10 +1,10 @@
-// Qa Lab tests cover cli plugin behavior.
+// QA Lab tests cover cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { QaScenarioPack } from "./scenario-catalog.js";
+import { readQaScenarioById, type QaScenarioPack } from "./scenario-catalog.js";
 
 const {
   runQaManualLane,
@@ -106,7 +106,10 @@ import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
+import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import type { QaProviderModeInput } from "./run-config.js";
+import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
+import type { QaSuiteRunParams } from "./suite.js";
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
 const QA_PASSING_SUITE_SCENARIO = {
@@ -154,12 +157,24 @@ function makeQaEvidence(entries: unknown[] = []) {
 
 function flowSuiteRuntimeResult(params: {
   evidencePath?: string;
+  expectedCells?: Array<{
+    scenarioId: string;
+    executionKind: "flow" | "script" | "vitest" | "playwright";
+    channel: string | null;
+  }>;
+  observedCells?: Array<{
+    scenarioId: string;
+    executionKind: "flow" | "script" | "vitest" | "playwright";
+    channel: string | null;
+  }>;
   reportPath: string;
   summaryPath: string;
   scenarios?: unknown[];
 }) {
   return {
     executionKind: "flow",
+    expectedCells: params.expectedCells ?? params.observedCells ?? [],
+    observedCells: params.observedCells ?? [],
     result: {
       outputDir: path.dirname(params.reportPath),
       evidencePath:
@@ -175,6 +190,16 @@ function flowSuiteRuntimeResult(params: {
 
 function unifiedSuiteRuntimeResult(params: {
   evidencePath: string;
+  expectedCells?: Array<{
+    scenarioId: string;
+    executionKind: "flow" | "script" | "vitest" | "playwright";
+    channel: string | null;
+  }>;
+  observedCells?: Array<{
+    scenarioId: string;
+    executionKind: "flow" | "script" | "vitest" | "playwright";
+    channel: string | null;
+  }>;
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -182,6 +207,8 @@ function unifiedSuiteRuntimeResult(params: {
 }) {
   return {
     executionKind: "suite",
+    expectedCells: params.expectedCells ?? params.observedCells ?? [],
+    observedCells: params.observedCells ?? [],
     result: {
       outputDir: params.outputDir,
       reportPath: params.reportPath,
@@ -191,6 +218,31 @@ function unifiedSuiteRuntimeResult(params: {
       scenarios: params.scenarios ?? [QA_PASSING_SUITE_SCENARIO],
     },
   };
+}
+
+function executionCellsForSuiteParams(params?: QaSuiteRunParams) {
+  const scenarioIds = new Set(params?.scenarioIds ?? []);
+  const scenarios = readQaScenarioPack().scenarios.filter((scenario) =>
+    scenarioIds.has(scenario.id),
+  );
+  const adapterFactories: readonly QaTransportAdapterFactory[] = params?.adapterFactories ?? [];
+  return expandQaScenarioExecutionCells({
+    scenarios,
+    channelDriver: params?.channelDriver ?? "qa-channel",
+    channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+    defaultChannel:
+      params?.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
+    supportsChannel:
+      params?.channelDriver === "crabline"
+        ? isCrablineServerChannel
+        : params?.channelDriver === "live"
+          ? (channel) =>
+              adapterFactories.some((factory) =>
+                factory.matches({ channelId: channel, driver: "live" }),
+              )
+          : undefined,
+    expandChannels: params?.expandScenarioChannels === true,
+  });
 }
 
 describe("qa cli runtime", () => {
@@ -289,12 +341,14 @@ describe("qa cli runtime", () => {
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
     readQaScenarioPack.mockClear();
-    runQaSuite.mockResolvedValue(
-      flowSuiteRuntimeResult({
+    runQaSuite.mockImplementation(async (params) => {
+      const observedCells = executionCellsForSuiteParams(params);
+      return flowSuiteRuntimeResult({
+        observedCells,
         reportPath: suiteReportPath,
         summaryPath: suiteSummaryPath,
-      }),
-    );
+      });
+    });
     runQaFlowSuiteFromRuntime.mockResolvedValue({
       outputDir: suiteArtifactsDir,
       evidencePath: suiteEvidencePath,
@@ -306,6 +360,8 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockResolvedValue({
       reportPath: "/tmp/character-report.md",
       summaryPath: "/tmp/character-summary.json",
+      runs: [{ model: "qa/candidate", status: "pass" }],
+      judgments: [{ model: "qa/judge", rankings: [{ model: "qa/candidate", rank: 1 }] }],
     });
     runQaManualLane.mockResolvedValue({
       model: "openai/gpt-5.6-luna",
@@ -314,12 +370,12 @@ describe("qa cli runtime", () => {
       watchUrl: "http://127.0.0.1:43124",
     });
     runQaMultipass.mockResolvedValue({
-      outputDir: "/tmp/multipass",
-      reportPath: "/tmp/multipass/qa-suite-report.md",
-      summaryPath: "/tmp/multipass/qa-suite-summary.json",
-      hostLogPath: "/tmp/multipass/multipass-host.log",
-      bootstrapLogPath: "/tmp/multipass/multipass-guest-bootstrap.log",
-      guestScriptPath: "/tmp/multipass/multipass-guest-run.sh",
+      outputDir: suiteArtifactsDir,
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      hostLogPath: path.join(suiteArtifactsDir, "multipass-host.log"),
+      bootstrapLogPath: path.join(suiteArtifactsDir, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(suiteArtifactsDir, "multipass-guest-run.sh"),
       vmName: "openclaw-qa-test",
       scenarioIds: ["channel-chat-baseline"],
     });
@@ -464,9 +520,7 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("keeps direct-suite zero-work validation disabled with --allow-failures", async () => {
-    const priorExitCode = process.exitCode;
-    process.exitCode = undefined;
+  it("rejects direct-suite zero-work summaries even with --allow-failures", async () => {
     const optionalScenario = {
       name: "Runtime tool fixture — image_generate",
       status: "skip" as const,
@@ -490,13 +544,107 @@ describe("qa cli runtime", () => {
       }),
     );
 
-    try {
-      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", allowFailures: true });
-      expect(process.exitCode).toBeUndefined();
-    } finally {
-      process.exitCode = priorExitCode;
-    }
+    await expect(
+      runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", allowFailures: true }),
+    ).rejects.toThrow("did not include any executed scenarios");
   });
+
+  it.each([
+    { runner: "host" as const, summary: "missing" as const, expected: "Could not read QA summary" },
+    {
+      runner: "host" as const,
+      summary: "malformed" as const,
+      expected: "Could not parse QA summary",
+    },
+    {
+      runner: "multipass" as const,
+      summary: "missing" as const,
+      expected: "Could not read QA summary",
+    },
+    {
+      runner: "multipass" as const,
+      summary: "malformed" as const,
+      expected: "Could not parse QA summary",
+    },
+    {
+      runner: "multipass" as const,
+      summary: "zero-work" as const,
+      expected: "did not include any executed scenarios",
+    },
+    ...(["host", "flow", "multipass"] as const).flatMap((runner) => [
+      {
+        runner,
+        summary: "required-skip" as const,
+        expected: "did not include any executed scenarios",
+      },
+      {
+        runner,
+        summary: "blocked" as const,
+        expected: "did not include any executed scenarios",
+      },
+    ]),
+  ])(
+    "rejects $summary $runner summaries even with --allow-failures",
+    async ({ runner, summary, expected }) => {
+      if (summary === "missing") {
+        await fs.rm(suiteSummaryPath);
+      } else if (summary === "malformed") {
+        await fs.writeFile(suiteSummaryPath, "{not-json", "utf8");
+      } else if (summary === "zero-work") {
+        await fs.writeFile(
+          suiteSummaryPath,
+          JSON.stringify({
+            counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
+            scenarios: [],
+          }),
+          "utf8",
+        );
+      } else {
+        await fs.writeFile(
+          suiteSummaryPath,
+          JSON.stringify({
+            counts: {
+              total: 1,
+              passed: 0,
+              failed: 0,
+              skipped: summary === "required-skip" ? 1 : 0,
+            },
+            scenarios: [
+              {
+                name: "Required channel scenario",
+                status: summary === "required-skip" ? "skip" : "blocked",
+                details: "Required transport unavailable",
+              },
+            ],
+          }),
+          "utf8",
+        );
+      }
+      if (runner === "host" || runner === "flow") {
+        runQaSuite.mockResolvedValueOnce(
+          runner === "flow"
+            ? flowSuiteRuntimeResult({
+                reportPath: suiteReportPath,
+                summaryPath: suiteSummaryPath,
+              })
+            : unifiedSuiteRuntimeResult({
+                outputDir: suiteArtifactsDir,
+                reportPath: suiteReportPath,
+                summaryPath: suiteSummaryPath,
+                evidencePath: suiteEvidencePath,
+              }),
+        );
+      }
+
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          ...(runner === "multipass" ? { runner } : {}),
+          allowFailures: true,
+        }),
+      ).rejects.toThrow(expected);
+    },
+  );
 
   it("rejects host-only resource options for Playwright scenarios", async () => {
     await expect(
@@ -514,7 +662,7 @@ describe("qa cli runtime", () => {
     const previousProfile = process.env.OPENCLAW_QA_PROFILE;
     process.env.OPENCLAW_QA_PROFILE = "release";
     try {
-      runQaSuite.mockImplementationOnce(async () => {
+      runQaSuite.mockImplementationOnce(async (params) => {
         expect(process.env.OPENCLAW_QA_PROFILE).toBe("smoke-ci");
         await fs.writeFile(
           suiteEvidencePath,
@@ -569,6 +717,14 @@ describe("qa cli runtime", () => {
           "utf8",
         );
         return flowSuiteRuntimeResult({
+          observedCells: expandQaScenarioExecutionCells({
+            scenarios: [readQaScenarioById("telegram-commands-command")],
+            channelDriver: params?.channelDriver ?? "qa-channel",
+            channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+            defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+            supportsChannel: isCrablineServerChannel,
+            expandChannels: true,
+          }),
           reportPath: suiteReportPath,
           summaryPath: suiteSummaryPath,
         });
@@ -607,6 +763,11 @@ describe("qa cli runtime", () => {
         evidenceMode?: unknown;
         entries?: unknown[];
         profile?: unknown;
+        profilePlan?: {
+          counts?: Record<string, unknown>;
+          expectedCells?: unknown[];
+          observedCells?: unknown[];
+        };
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
           coverageIds?: { fulfilled?: unknown };
@@ -618,6 +779,15 @@ describe("qa cli runtime", () => {
         };
       };
       expect(evidence.profile).toBe("smoke-ci");
+      expect(evidence.profilePlan?.counts).toMatchObject({
+        membership: 1,
+        selected: 1,
+        excluded: 0,
+        expectedCells: 1,
+        observedCells: 1,
+        missingCells: 0,
+      });
+      expect(evidence.profilePlan?.observedCells).toEqual(evidence.profilePlan?.expectedCells);
       expect(evidence.evidenceMode).toBe("slim");
       expect(evidence.scorecard).toMatchObject({
         run: {
@@ -693,10 +863,72 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
   });
 
+  it.each([
+    {
+      label: "implicit profile membership",
+      scenarioIds: undefined,
+      expectedExitCode: undefined,
+      explicitScenarioSelection: false,
+    },
+    {
+      label: "explicit profile selection",
+      scenarioIds: ["runtime-tool-image-generate"],
+      expectedExitCode: 1,
+      explicitScenarioSelection: true,
+    },
+  ])(
+    "keeps optional skips $label blocking semantics",
+    async ({ scenarioIds, expectedExitCode, explicitScenarioSelection }) => {
+      const priorExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const optionalScenario = {
+        name: "Runtime tool fixture — image_generate",
+        status: "skip" as const,
+        details: "image_generate mock provider report-only: tool unavailable",
+      };
+      await fs.writeFile(
+        suiteSummaryPath,
+        JSON.stringify({
+          counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+          scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+        }),
+        "utf8",
+      );
+      runQaSuite.mockImplementationOnce(async (params) => {
+        const observedCells = executionCellsForSuiteParams(params);
+        return flowSuiteRuntimeResult({
+          observedCells,
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+          scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+        });
+      });
+
+      try {
+        await runQaProfileCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          profile: "all",
+          surface: "media",
+          category: "media.media-generation",
+          providerMode: "mock-openai",
+          scenarioIds,
+        });
+        expect(process.exitCode).toBe(expectedExitCode);
+        expect(mockFirstObjectArg(runQaSuite).adapterOptions).toMatchObject({
+          explicitScenarioSelection,
+        });
+      } finally {
+        process.exitCode = priorExitCode;
+      }
+    },
+  );
+
   it("filters QA-channel-pinned scenarios from an implicit Crabline smoke profile", async () => {
-    runQaSuite.mockImplementationOnce(async () => {
+    runQaSuite.mockImplementationOnce(async (params) => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
+      const observedCells = executionCellsForSuiteParams(params);
       return flowSuiteRuntimeResult({
+        observedCells,
         reportPath: suiteReportPath,
         summaryPath: suiteSummaryPath,
       });
@@ -2533,6 +2765,54 @@ describe("qa cli runtime", () => {
       candidateConcurrency: undefined,
       judgeConcurrency: undefined,
     });
+  });
+
+  it("keeps a successful character eval exit status clear", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await runQaCharacterEvalCommand({ model: ["qa/candidate"] });
+
+      expect(process.exitCode).toBeUndefined();
+      expectWriteContains(stdoutWrite, "QA character eval report: /tmp/character-report.md");
+      expectWriteContains(stdoutWrite, "QA character eval summary: /tmp/character-summary.json");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it.each([
+    {
+      label: "candidate failure",
+      runs: [{ model: "qa/candidate", status: "fail" }],
+      judgments: [{ model: "qa/judge", rankings: [{ model: "qa/candidate", rank: 1 }] }],
+      expectedVerdict: "QA character eval failed: 1 candidate(s), 0 judge(s).",
+    },
+    {
+      label: "judge failure",
+      runs: [{ model: "qa/candidate", status: "pass" }],
+      judgments: [{ model: "qa/judge", rankings: [], error: "judge unavailable" }],
+      expectedVerdict: "QA character eval failed: 0 candidate(s), 1 judge(s).",
+    },
+  ])("returns a failing exit code on $label without hiding artifacts", async (failure) => {
+    runQaCharacterEval.mockResolvedValueOnce({
+      reportPath: "/tmp/character-report.md",
+      summaryPath: "/tmp/character-summary.json",
+      runs: failure.runs,
+      judgments: failure.judgments,
+    });
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await runQaCharacterEvalCommand({ model: ["qa/candidate"] });
+
+      expect(process.exitCode).toBe(1);
+      expectWriteContains(stderrWrite, failure.expectedVerdict);
+      expectWriteContains(stdoutWrite, "QA character eval report: /tmp/character-report.md");
+      expectWriteContains(stdoutWrite, "QA character eval summary: /tmp/character-summary.json");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
   });
 
   it("rejects invalid character eval thinking levels", async () => {

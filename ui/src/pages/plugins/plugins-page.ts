@@ -30,10 +30,12 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../../lib/config/mcp-servers.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
   readPluginInstallTrustError,
+  runPluginConfigMutation,
   setPluginEnabled,
   uninstallPlugin,
   type PluginCatalogItem,
@@ -42,6 +44,10 @@ import {
   type PluginMutationResult,
   type PluginSearchResult,
 } from "../../lib/plugins/index.ts";
+import {
+  GatewayPageController,
+  type GatewayPageChange,
+} from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchPluginIconBlobUrl } from "./icon-loader.ts";
@@ -67,37 +73,6 @@ export type PluginsRouteData = {
   error: string | null;
   location: RouteLocation;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-async function runPluginConfigMutation<T>(
-  runtimeConfig: ApplicationContext["runtimeConfig"],
-  expectedClient: GatewayBrowserClient,
-  task: (client: GatewayBrowserClient) => Promise<T>,
-): Promise<{ value: T; refreshError: string | null }> {
-  let taskError: Error | undefined;
-  const mutation = await runtimeConfig.runExternalMutation(async (client) => {
-    if (client !== expectedClient) {
-      throw new Error("Connection changed before the plugin update started.");
-    }
-    try {
-      return await task(client);
-    } catch (error) {
-      // Preserve structured Gateway errors used by the ClawHub risk prompt.
-      taskError = error instanceof Error ? error : new Error(String(error));
-      throw taskError;
-    }
-  });
-  if (mutation.ok) {
-    return {
-      value: mutation.value,
-      refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
-    };
-  }
-  throw taskError ?? new Error(mutation.error);
-}
 
 function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {
   return {
@@ -146,8 +121,6 @@ class PluginsPage extends OpenClawLightDomElement {
 
   @property({ attribute: false }) routeData?: PluginsRouteData;
 
-  @state() private client: GatewayBrowserClient | null = null;
-  @state() private connected = false;
   @state() private result: PluginListResult | null = null;
   @state() private error: string | null = null;
   @state() private activeTab: PluginsTab = "installed";
@@ -165,8 +138,6 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private mcpBusy = false;
   @state() private mcpFormOpen = false;
 
-  private gatewaySource?: ApplicationContext["gateway"];
-  private sourceGeneration = 0;
   private routeDataConsumed = false;
   private normalizedLocation = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -178,23 +149,42 @@ class PluginsPage extends OpenClawLightDomElement {
     { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
   >();
   private iconAuthCandidates: string[] = [];
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => {
+      this.result = null;
+      this.error = null;
+      this.messages = {};
+      this.pendingRemoval = {};
+      this.detailPluginId = null;
+      this.pageNotice = null;
+      this.mcpMessage = null;
+    },
+    invalidateRequests: (change) =>
+      this.invalidateRequests(change.snapshot.phase !== "connected" || !change.snapshot.client),
+    onSnapshot: (change) => this.handleGatewaySnapshot(change),
+  });
 
   private readonly catalogTask = new Task(this, {
     autoRun: false,
-    args: () => [this.connected ? this.client : null] as const,
+    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
     task: ([client], { signal }) =>
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
     },
     onError: (error) => {
-      this.error = errorMessage(error);
+      this.error = formatUiError(error);
     },
   });
 
   private readonly configTask = new Task(this, {
     autoRun: false,
-    args: () => [this.connected ? this.client : null, this.context?.runtimeConfig ?? null] as const,
+    args: () =>
+      [
+        this.gateway.connected ? this.gateway.client : null,
+        this.context?.runtimeConfig ?? null,
+      ] as const,
     task: async ([client, runtimeConfig]) => {
       if (!client || !runtimeConfig) {
         return initialState;
@@ -213,7 +203,7 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly searchTask = new Task(this, {
     args: () =>
       [
-        this.connected && this.activeTab === "discover" ? this.client : null,
+        this.gateway.connected && this.activeTab === "discover" ? this.gateway.client : null,
         this.debouncedSearchQuery,
       ] as const,
     task: async ([client, query], { signal }) => {
@@ -229,27 +219,13 @@ class PluginsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
-        this.gatewaySource = gateway;
-        this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
-        return gateway.subscribe((snapshot) => {
-          if (this.gatewaySource === gateway) {
-            this.applyGatewaySnapshot(snapshot, false);
-          }
-        });
-      },
-    )
-    .effect(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => {
-        this.syncMcpServers();
-        return runtimeConfig.subscribe(() => this.syncMcpServers());
-      },
-    );
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.runtimeConfig,
+    (runtimeConfig) => {
+      this.syncMcpServers();
+      return runtimeConfig.subscribe(() => this.syncMcpServers());
+    },
+  );
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -268,7 +244,6 @@ class PluginsPage extends OpenClawLightDomElement {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
     this.clearSearchTimer();
-    this.invalidateRequests();
     this.resetPluginIcons();
     super.disconnectedCallback();
   }
@@ -283,9 +258,8 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   };
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged: boolean) {
-    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
-    const clientChanged = snapshot.client !== this.client;
+  private handleGatewaySnapshot(change: GatewayPageChange) {
+    const snapshot = change.snapshot;
     const nextIconAuthCandidates = resolveControlUiAuthCandidates({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },
@@ -298,26 +272,27 @@ class PluginsPage extends OpenClawLightDomElement {
       );
     this.iconAuthCandidates = nextIconAuthCandidates;
     const shouldRefreshAfterChange =
-      (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
+      !change.initial &&
+      (change.identityChanged || change.connectionChanged || iconAuthChanged) &&
       snapshot.phase === "connected" &&
       this.routeDataConsumed;
-    if (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) {
+    if (
+      !change.initial &&
+      iconAuthChanged &&
+      !change.identityChanged &&
+      !change.connectionChanged
+    ) {
+      this.gateway.invalidate();
       this.invalidateRequests(snapshot.phase !== "connected" || !snapshot.client);
+    }
+    if (
+      !change.initial &&
+      (change.identityChanged || change.connectionChanged || iconAuthChanged)
+    ) {
       this.resetPluginIcons();
-      this.client = snapshot.client;
-      this.connected = snapshot.phase === "connected";
       this.busy = {};
       this.mcpBusy = false;
       this.debouncedSearchQuery = "";
-      if (sourceChanged || clientChanged) {
-        this.result = null;
-        this.error = null;
-        this.messages = {};
-        this.pendingRemoval = {};
-        this.detailPluginId = null;
-        this.pageNotice = null;
-        this.mcpMessage = null;
-      }
     }
     if (shouldRefreshAfterChange) {
       void this.refreshPage();
@@ -328,7 +303,8 @@ class PluginsPage extends OpenClawLightDomElement {
       void this.context?.runtimeConfig.ensureLoaded().then(() => this.syncMcpServers());
     }
     if (
-      (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
+      !change.initial &&
+      (change.identityChanged || change.connectionChanged || iconAuthChanged) &&
       snapshot.phase === "connected" &&
       this.activeTab === "discover"
     ) {
@@ -347,13 +323,10 @@ class PluginsPage extends OpenClawLightDomElement {
     if (urlTab !== this.activeTab) {
       this.changeTab(urlTab);
     }
-    const snapshot = this.context.gateway.snapshot;
-    if (data.gateway !== this.context.gateway || data.gatewaySnapshot !== snapshot) {
+    if (!this.gateway.isRouteDataCurrent(data)) {
       this.ensureInitialData();
       return;
     }
-    this.client = snapshot.client;
-    this.connected = snapshot.phase === "connected";
     this.replaceResult(data.result);
     this.error = data.error;
     this.ensureInitialData();
@@ -381,7 +354,6 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private invalidateRequests(invalidateCatalog = true) {
-    this.sourceGeneration += 1;
     this.clearSearchTimer();
     this.debouncedSearchQuery = "";
     if (invalidateCatalog) {
@@ -537,7 +509,7 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private get loading(): boolean {
-    return this.connected && this.catalogTask.status === TaskStatus.PENDING;
+    return this.gateway.connected && this.catalogTask.status === TaskStatus.PENDING;
   }
 
   private get searchResults(): PluginSearchResult[] | null {
@@ -558,31 +530,28 @@ class PluginsPage extends OpenClawLightDomElement {
   private get searchError(): string | null {
     return this.searchTask.status === TaskStatus.ERROR &&
       this.debouncedSearchQuery === this.query.trim()
-      ? errorMessage(this.searchTask.error)
+      ? formatUiError(this.searchTask.error)
       : null;
   }
 
   private get configRefreshError(): string | null {
     const failure =
       this.configTask.status === TaskStatus.ERROR
-        ? errorMessage(this.configTask.error)
+        ? formatUiError(this.configTask.error)
         : this.configTask.status === TaskStatus.COMPLETE
           ? this.configTask.value
           : null;
     return failure ? t("pluginsPage.configRefreshFailed", { error: failure }) : null;
   }
 
-  private isCurrentSource(client: GatewayBrowserClient, sourceGeneration: number): boolean {
-    return (
-      this.isConnected &&
-      this.connected &&
-      this.client === client &&
-      this.sourceGeneration === sourceGeneration
-    );
-  }
-
   private ensureInitialData() {
-    if (!this.connected || !this.client || this.loading || this.result || this.error) {
+    if (
+      !this.gateway.connected ||
+      !this.gateway.client ||
+      this.loading ||
+      this.result ||
+      this.error
+    ) {
       return;
     }
     if (this.routeData && !this.routeDataConsumed) {
@@ -592,8 +561,8 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private async refreshCatalog(): Promise<void> {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const client = this.gateway.client;
+    if (!client || !this.gateway.connected) {
       return;
     }
     this.error = null;
@@ -601,8 +570,8 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private async refreshRuntimeConfig(): Promise<void> {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const client = this.gateway.client;
+    if (!client || !this.gateway.connected) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
@@ -656,7 +625,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private scheduleSearch() {
     const query = this.query.trim();
-    if (query.length < 2 || !this.connected || !this.client) {
+    if (query.length < 2 || !this.gateway.connected || !this.gateway.client) {
       return;
     }
     this.searchTimer = setTimeout(() => {
@@ -666,8 +635,8 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private async searchClawHub(query: string) {
-    const client = this.client;
-    if (!client || !this.connected || query.length < 2) {
+    const client = this.gateway.client;
+    if (!client || !this.gateway.connected || query.length < 2) {
       return;
     }
     this.debouncedSearchQuery = query;
@@ -675,7 +644,7 @@ class PluginsPage extends OpenClawLightDomElement {
   }
 
   private mutationBlockedReason(): string | null {
-    if (!this.connected) {
+    if (!this.gateway.connected) {
       return t("pluginsPage.connectToChange");
     }
     const auth = this.context.gateway.snapshot.hello?.auth ?? null;
@@ -762,27 +731,32 @@ class PluginsPage extends OpenClawLightDomElement {
       isCurrent: () => boolean,
     ) => Promise<void>,
     onError: (error: unknown) => void = (error) => {
-      this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+      this.setMessage(rowKey, {
+        kind: "error",
+        text: formatUiError(error),
+      });
     },
   ): Promise<void> {
-    const client = this.client;
-    if (!client || !this.canMutate() || this.busy[rowKey]) {
+    const scope = this.gateway.capture();
+    if (!scope || !this.canMutate() || this.busy[rowKey]) {
       return;
     }
-    const sourceGeneration = this.sourceGeneration;
     const mutationToken = ++this.mutationToken;
     this.mutationTokens.set(rowKey, mutationToken);
     const isCurrent = () =>
-      this.isCurrentSource(client, sourceGeneration) &&
-      this.mutationTokens.get(rowKey) === mutationToken;
+      this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
     this.setBusy(rowKey, true);
     this.setMessage(rowKey, null);
     try {
-      const mutation = await runPluginConfigMutation(this.context.runtimeConfig, client, mutate);
+      const mutation = await runPluginConfigMutation(
+        this.context.runtimeConfig,
+        scope.client,
+        mutate,
+      );
       if (!isCurrent()) {
         return;
       }
-      await onSuccess(mutation.value, mutation.refreshError, client, isCurrent);
+      await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent);
     } catch (error) {
       if (isCurrent()) {
         onError(error);
@@ -821,7 +795,10 @@ class PluginsPage extends OpenClawLightDomElement {
           });
           return;
         }
-        this.setMessage(rowKey, { kind: "error", text: errorMessage(error) });
+        this.setMessage(rowKey, {
+          kind: "error",
+          text: formatUiError(error),
+        });
       },
     );
   }
@@ -915,7 +892,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.mcpMessage = { kind: "success", text: params.successText };
       return true;
     } catch (error) {
-      return fail(errorMessage(error));
+      return fail(formatUiError(error));
     } finally {
       this.mcpBusy = false;
       if (params.busyKey) {
@@ -1018,7 +995,7 @@ class PluginsPage extends OpenClawLightDomElement {
           })}
         </div>
         ${renderPlugins({
-          connected: this.connected,
+          connected: this.gateway.connected,
           loading: this.loading,
           result: this.result,
           error: this.pageError(),

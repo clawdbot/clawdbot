@@ -72,6 +72,7 @@ import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";
+import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
@@ -99,6 +100,22 @@ const SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const SLACK_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
+const SLACK_CHANNEL_ACCESS_DOCS_URL =
+  "https://docs.openclaw.ai/channels/slack#access-control-and-routing";
+
+function resolveSlackGroupSessionSubject(params: {
+  channelId: string;
+  channelName?: string;
+  workspaceId: string;
+  workspaceName?: string;
+}): string {
+  const channelName = normalizeOptionalString(params.channelName);
+  const workspaceName = normalizeOptionalString(params.workspaceName);
+  if (channelName && workspaceName) {
+    return `${workspaceName} #${channelName}`;
+  }
+  return `Slack Channel (Workspace ID: ${params.workspaceId}, Channel ID: ${params.channelId})`;
+}
 
 function recordString(
   record: Record<string, unknown> | undefined,
@@ -555,7 +572,9 @@ async function authorizeSlackInboundMessage(params: {
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   conversation: SlackConversationContext;
+  explicitBotMention: boolean;
   eventScope?: SlackEventScope;
+  onVisibleDrop?: () => void;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
@@ -589,6 +608,39 @@ async function authorizeSlackInboundMessage(params: {
       channelType: resolvedChannelType,
     })
   ) {
+    if (
+      conversation.isRoom &&
+      ctx.groupPolicy === "allowlist" &&
+      params.explicitBotMention &&
+      !isBotMessage &&
+      message.user
+    ) {
+      let subject = "This OpenClaw bot";
+      if (ctx.botUserId) {
+        try {
+          const botIdentity = await ctx.resolveUserName(ctx.botUserId, params.eventScope);
+          const botName = normalizeOptionalString(botIdentity?.name);
+          if (botName) {
+            subject = escapeSlackMrkdwn(botName);
+          }
+        } catch (error) {
+          logVerbose(`slack allowlist denial bot-name lookup failed: ${formatSlackError(error)}`);
+        }
+      }
+      try {
+        await (params.eventScope?.client ?? ctx.app.client).chat.postEphemeral({
+          token: ctx.botToken,
+          channel: message.channel,
+          user: message.user,
+          text: `${subject} can’t reply here because this channel isn’t in its OpenClaw channel allowlist. Ask the OpenClaw owner to allow this channel. <${SLACK_CHANNEL_ACCESS_DOCS_URL}|Learn how to configure Slack channel access.>`,
+        });
+        params.onVisibleDrop?.();
+      } catch (error) {
+        ctx.runtime.error?.(
+          `slack allowlist denial notice failed for channel ${message.channel}: ${formatSlackError(error)}`,
+        );
+      }
+    }
     logVerbose("slack: drop message (channel not allowed)");
     return null;
   }
@@ -649,13 +701,16 @@ export async function prepareSlackMessage(params: {
     eventScope?: SlackEventScope;
     /** Handler-owned race check for suppressing a duplicate dropped-history record. */
     shouldRecordDroppedHistory?: () => boolean;
+    /** Handler-owned signal that a gate produced a user-visible terminal outcome. */
+    onVisibleDrop?: () => void;
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const slackClient = opts.eventScope?.client ?? ctx.app.client;
-  const threadStarterWorkspaceScope = opts.eventScope
-    ? { accountId: account.accountId, teamId: opts.eventScope.teamId }
-    : undefined;
+  const threadStarterWorkspaceScope = {
+    accountId: account.accountId,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
+  };
   const cfg = ctx.cfg;
   const conversation = await resolveSlackConversationContext({
     ctx,
@@ -674,18 +729,25 @@ export async function prepareSlackMessage(params: {
     allowBotsMode,
     isBotMessage,
   } = conversation;
+  const messageText = message.text ?? "";
+  const mentionMetadata = collectSlackMentionMetadata(messageText);
+  const normalizedBotUserId = normalizeSlackId(ctx.botUserId);
+  const explicitBotMention =
+    opts.source === "app_mention" ||
+    Boolean(normalizedBotUserId && mentionMetadata.mentionedUserIds.includes(normalizedBotUserId));
   const authorization = await authorizeSlackInboundMessage({
     ctx,
     account,
     message,
     conversation,
+    explicitBotMention,
     eventScope: opts.eventScope,
+    onVisibleDrop: opts.onVisibleDrop,
   });
   if (!authorization) {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
-  const messageText = message.text ?? "";
   let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {
     if (resolvedSenderName) {
@@ -702,7 +764,6 @@ export async function prepareSlackMessage(params: {
     resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
     return resolvedSenderName;
   };
-  const mentionMetadata = collectSlackMentionMetadata(messageText);
   const { mentionedUserIds, mentionedSubteamIds, hasAnyMention } = mentionMetadata;
   const messageAssistantThreadContext = resolveSlackMessageAssistantThreadContext(message);
   const assistantContextLookupChannelId =
@@ -1385,6 +1446,22 @@ export async function prepareSlackMessage(params: {
         : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
+  const workspaceId = opts.eventScope?.teamId || ctx.teamId;
+  const workspaceName =
+    ctx.installationIdentity?.kind === "workspace" &&
+    ctx.installationIdentity.teamId === workspaceId
+      ? ctx.installationIdentity.teamName
+      : undefined;
+  // Stable Slack ids already own routing. Session presentation uses both human names or an
+  // explicit id-labelled fallback so shared metadata never has to infer Slack identifiers.
+  const groupSessionSubject = isRoomish
+    ? resolveSlackGroupSessionSubject({
+        channelId: message.channel,
+        channelName,
+        workspaceId,
+        workspaceName,
+      })
+    : undefined;
   const senderName = await resolveSenderName();
   const preview = truncateUtf16Safe(bodyForAgent.replace(/\s+/g, " "), 160);
   const inboundLabel = isDirectMessage
@@ -1509,6 +1586,7 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
+    isGroupDm,
     isThreadReply,
     threadTs,
     threadStarter,
@@ -1619,7 +1697,7 @@ export async function prepareSlackMessage(params: {
       groupSystemPrompt,
     },
     extra: {
-      GroupSubject: isRoomish ? roomLabel : undefined,
+      GroupSubject: groupSessionSubject,
       ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
       ChannelStructuredContext:
         agentContextEntities.length > 0

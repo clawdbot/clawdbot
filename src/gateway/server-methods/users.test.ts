@@ -91,6 +91,58 @@ describe("users gateway methods", () => {
     expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
   });
 
+  it("uses the connect-time provider profile without recreating an email alias", async () => {
+    const providerClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
+
+    const respond = await runUsersHandler("users.self", {}, providerClient);
+
+    expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
+  });
+
+  it("keeps generic proxy identities on the legacy profile fallback", async () => {
+    const proxyClient = {
+      authenticatedUserId: "ada@github",
+      connect: { scopes: ["operator.write"] },
+    };
+    ensureProfileForEmail.mockReturnValue({ id: profile.id });
+    getUserProfileListItem.mockReturnValue(profile);
+
+    const respond = await runUsersHandler("users.self", {}, proxyClient);
+
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+    expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@github");
+  });
+
+  it("does not recreate a failed Tailscale provider snapshot as an email alias", async () => {
+    const tailscaleClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
+
+    const respond = await runUsersHandler("users.self", {}, tailscaleClient);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+    );
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
+  });
+
   it("rejects users.self without an authenticated user", async () => {
     expect(
       await runUsersHandler("users.self", {}, { connect: { scopes: ["operator.write"] } }),
@@ -213,6 +265,31 @@ describe("users gateway methods", () => {
     expect(displayName).toHaveBeenCalledWith(true, { profile });
     expect(avatar).toHaveBeenCalledWith(true, { profile });
     expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
+  });
+
+  it("authorizes provider-owned profile edits from the connect-time profile id", async () => {
+    const providerClient = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+    resolveUserProfileId.mockReturnValue(profile.id);
+    setDisplayName.mockReturnValue(profile);
+
+    expect(
+      await runUsersHandler(
+        "users.setDisplayName",
+        { profileId: profile.id, displayName: "Ada Lovelace" },
+        providerClient,
+      ),
+    ).toHaveBeenCalledWith(true, { profile });
+    expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
   it("denies an identified write caller changing another profile's avatar", async () => {

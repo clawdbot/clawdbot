@@ -9,7 +9,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
-  - "@openclaw/fs-safe@0.5.0"
+  - "@openclaw/fs-safe@0.5.2"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
   - "@openclaw/uirouter@0.1.0"
@@ -20,10 +20,11 @@ minimumReleaseAgeExclude:
   - "axios"
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
-  - "brace-expansion@5.0.8"
+  - "brace-expansion@5.0.9"
   - "hono"
   - "libopus-wasm@0.2.0"
   - "libsignal@6.0.0"
+  - "nanoid@3.3.18"
   - "openclaw"
   - "protobufjs"
   - "vite"
@@ -114,10 +115,12 @@ minimumReleaseAgeExclude:
   - "clawpdf"
 
 nodeLinker: hoisted
+# GWTs share node_modules; script commands must not reconcile that shared install.
+verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.146.0
+  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.146.1
   "@anthropic-ai/sdk": 0.115.0
   "@opentelemetry/core": 2.10.0
   "@opentelemetry/propagator-jaeger": 2.10.0
@@ -127,14 +130,15 @@ overrides:
   hono: 4.12.32
   "@hono/node-server": 2.0.12
   axios: 1.18.1
-  fast-uri: 4.1.1
+  fast-uri: 4.1.2
+  "undici@7": 7.29.0
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.10.1
   request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.0.2
-  brace-expansion: 5.0.8
+  brace-expansion: 5.0.9
   file-type: 22.0.1
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"

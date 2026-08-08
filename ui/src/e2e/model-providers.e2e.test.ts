@@ -125,7 +125,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const openaiCard = page.locator('[data-provider-id="openai"]');
       const readiness = page.locator('[data-model-readiness="model-required"]');
       await readiness.waitFor();
-      await expect.poll(async () => readiness.textContent()).toContain("Connect your AI");
+      await expect
+        .poll(async () => readiness.textContent())
+        .toContain("Connect a verified AI model");
       await expect.poll(async () => readiness.textContent()).toContain("No models available");
       await expect.poll(async () => openaiCard.textContent()).toContain("Signed in");
       expect(await page.locator(".model-providers__defaults").count()).toBe(0);
@@ -369,7 +371,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "models.probe"],
+      featureMethods: ["chat.metadata", "chat.startup", "config.patch", "models.probe"],
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {

@@ -8,6 +8,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
@@ -28,10 +29,11 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
+import { sessionClassificationForRow } from "./session-classification.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
@@ -47,7 +49,6 @@ import {
   resolvePositiveNumber,
   resolveProjectableCompactionCheckpoints,
   resolveRuntimeChildSessionKeys,
-  resolveSessionRuntimeMs,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
@@ -61,7 +62,6 @@ import {
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 /** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(
@@ -77,21 +77,14 @@ export function projectSessionActor(
   }
   let identity = userProfileIdentityById.get(id);
   if (!userProfileIdentityById.has(id)) {
-    try {
-      const profile = getUserProfileListItem(id);
-      const label = normalizeOptionalString(profile.displayName);
-      identity = {
-        ...(label ? { label } : {}),
-        ...(profile.hasAvatar
-          ? {
-              avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}`,
-            }
-          : {}),
-      };
-    } catch {
-      // Human actors can also be channel sender ids; only profile ids resolve here.
-      identity = undefined;
-    }
+    const display = resolveCurrentUserProfileDisplay(id);
+    identity =
+      display.kind === "unresolved"
+        ? undefined
+        : {
+            ...(display.label ? { label: display.label } : {}),
+            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
+          };
     userProfileIdentityById.set(id, identity);
   }
   return { type: actor.type, id, ...identity };
@@ -182,7 +175,7 @@ export function buildGatewaySessionRow(params: {
   const subagentRunState = subagentRun
     ? liveSubagentRunActive
       ? "active"
-      : typeof subagentRun.endedAt === "number" ||
+      : typeof subagentRun.execution.endedAt === "number" ||
           persistedSessionStatus === "done" ||
           persistedSessionStatus === "failed" ||
           persistedSessionStatus === "killed" ||
@@ -197,7 +190,7 @@ export function buildGatewaySessionRow(params: {
       : persistedSessionStatus === "running"
         ? undefined
         : (persistedSessionStatus ??
-          (typeof subagentRun.endedAt === "number"
+          (typeof subagentRun.execution.endedAt === "number"
             ? resolveSubagentSessionStatus(subagentRun)
             : undefined))
     : undefined;
@@ -208,15 +201,15 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const subagentEndedAt = subagentRun
     ? liveSubagentRunActive
-      ? subagentRun.endedAt
-      : (persistedSessionEndedAt ?? subagentRun.endedAt)
+      ? subagentRun.execution.endedAt
+      : (persistedSessionEndedAt ?? subagentRun.execution.endedAt)
     : undefined;
   const subagentRuntimeMs = subagentRun
     ? liveSubagentRunActive
-      ? resolveSessionRuntimeMs(subagentRun, now)
+      ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (persistedSessionRuntimeMs ??
-        (typeof subagentRun.endedAt === "number"
-          ? resolveSessionRuntimeMs(subagentRun, now)
+        (typeof subagentRun.execution.endedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
@@ -431,6 +424,7 @@ export function buildGatewaySessionRow(params: {
     label: entry?.label,
     category: entry?.category,
     boardFace: entry?.boardFace,
+    ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
     displayName,
     derivedTitle,
     lastMessagePreview,

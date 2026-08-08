@@ -147,6 +147,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 });
 
 type RunMessageActionInput = {
+  actionOrigin?: "message-tool";
   agentId?: string;
   broadcastAccountPlan?: {
     accountId: string;
@@ -491,8 +492,41 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
+  it("reports model-authored send normalization without inviting a retry", async () => {
+    const notice =
+      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: { ok: true },
+      normalization: { locationOmitted: true, notice },
+      toolResult: {
+        content: [{ type: "text", text: "sent" }],
+        details: { ok: true },
+      },
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const { call, result } = await executeSendWithResult({
+      action: { channel: "telegram", target: "telegram:123", message: "hello" },
+    });
+
+    expect(call?.actionOrigin).toBe("message-tool");
+    expect(result).toEqual({
+      content: [
+        { type: "text", text: "sent" },
+        { type: "text", text: notice },
+      ],
+      details: { ok: true },
+    });
+  });
+
   it("does not advertise the Codex-only final delivery control", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+    expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
   it("advertises timeoutMs as a positive integer", () => {
@@ -563,6 +597,231 @@ describe("message tool gateway timeout", () => {
     });
 
     expect(call?.gateway?.timeoutMs).toBe(5000);
+  });
+});
+
+describe("completion source-reply authority", () => {
+  function createRestrictedTool(
+    overrides: Partial<NonNullable<Parameters<CreateMessageTool>[0]>> = {},
+  ) {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "delete", "ban"],
+      config: { listAccountIds: () => ["source-account"] },
+      messageActionTargetAliases: {
+        send: { aliases: ["destination"], deliveryTargetAliases: ["destination"] },
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+    return createMessageTool({
+      config: {} as never,
+      sourceReplyOnly: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "discord",
+      currentChannelId: "channel:source",
+      currentThreadTs: "thread-1",
+      currentMessageId: "message-1",
+      agentAccountId: "source-account",
+      runMessageAction: mocks.runMessageAction as never,
+      ...overrides,
+    });
+  }
+
+  it("advertises only same-source text sends and validated source routing", () => {
+    const tool = createRestrictedTool();
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(Object.keys(properties).toSorted()).toEqual(
+      ["accountId", "action", "channel", "message", "replyTo", "target", "threadId"].toSorted(),
+    );
+    expectStringSchema(properties.message, {
+      description: "Text to send to the current source conversation.",
+    });
+    expect(tool.description).toContain("Supports actions: send.");
+    expect(tool.description).not.toContain("delete");
+  });
+
+  it.each([
+    { name: "delete", args: { action: "delete" } },
+    { name: "ban", args: { action: "ban" } },
+    { name: "broadcast", args: { action: "broadcast" } },
+    { name: "other provider", args: { action: "send", channel: "telegram" } },
+    { name: "other target", args: { action: "send", target: "channel:other" } },
+    { name: "legacy recipient", args: { action: "send", to: "channel:other" } },
+    { name: "channel-id alias", args: { action: "send", channelId: "channel:other" } },
+    { name: "plugin target alias", args: { action: "send", destination: "channel:other" } },
+    { name: "other account", args: { action: "send", accountId: "other-account" } },
+    { name: "other thread", args: { action: "send", threadId: "thread-2" } },
+    { name: "hidden thread alias", args: { action: "send", thread_ts: "thread-2" } },
+    { name: "other reply", args: { action: "send", replyTo: "message-2" } },
+    { name: "multiple targets", args: { action: "send", targets: ["channel:other"] } },
+    { name: "remote gateway", args: { action: "send", gatewayUrl: "wss://other.example" } },
+    { name: "gateway token", args: { action: "send", gatewayToken: "other-token" } },
+    { name: "local media", args: { action: "send", media: "./AGENTS.md" } },
+    { name: "remote media", args: { action: "send", mediaUrl: "https://other.example/file" } },
+    { name: "media URL array", args: { action: "send", mediaUrls: ["file:///etc/passwd"] } },
+    { name: "local path", args: { action: "send", path: "./AGENTS.md" } },
+    { name: "file path", args: { action: "send", filePath: "./AGENTS.md" } },
+    { name: "file URL", args: { action: "send", fileUrl: "file:///etc/passwd" } },
+    { name: "image alias", args: { action: "send", image: "./AGENTS.md" } },
+    { name: "nested attachment", args: { action: "send", attachments: [{ path: "./AGENTS.md" }] } },
+    { name: "inline buffer", args: { action: "send", buffer: "c2VjcmV0" } },
+    { name: "filename", args: { action: "send", filename: "AGENTS.md" } },
+    { name: "content type", args: { action: "send", contentType: "text/plain" } },
+    { name: "MIME type", args: { action: "send", mimeType: "text/plain" } },
+    { name: "caption", args: { action: "send", caption: "secret" } },
+    { name: "presentation", args: { action: "send", presentation: { blocks: [] } } },
+    { name: "interactive controls", args: { action: "send", interactive: { buttons: [] } } },
+    { name: "location", args: { action: "send", location: { latitude: 1, longitude: 1 } } },
+    { name: "delivery controls", args: { action: "send", delivery: { pin: { enabled: true } } } },
+    { name: "silent delivery", args: { action: "send", silent: true } },
+    { name: "dry run", args: { action: "send", dryRun: true } },
+    { name: "unknown plugin argument", args: { action: "send", pluginFile: "./AGENTS.md" } },
+    { name: "hidden text alias", args: { action: "send", text: "completion" } },
+    { name: "hidden content alias", args: { action: "send", content: "completion" } },
+    { name: "legacy send alias", args: { action: "send", SendMessage: "completion" } },
+    { name: "whitespace-only message", args: { action: "send", message: " \n\t " } },
+    { name: "silent reply token", args: { action: "send", message: "NO_REPLY" } },
+    { name: "silent reply envelope", args: { action: "send", message: '{"action":"NO_REPLY"}' } },
+    {
+      name: "inline reply route",
+      args: { action: "send", message: "[[reply_to:message-2]] stolen thread" },
+    },
+    {
+      name: "inline current reply directive",
+      args: { action: "send", message: "[[reply_to_current]] completion" },
+    },
+    {
+      name: "inline audio directive",
+      args: { action: "send", message: "[[audio_as_voice]] completion" },
+    },
+    {
+      name: "inline reaction directive",
+      args: { action: "send", message: "[[react:🔥]] completion" },
+    },
+    {
+      name: "inline current-message reaction directive",
+      args: { action: "send", message: "[[react_to_current:🔥]] completion" },
+    },
+    {
+      name: "inline local media directive",
+      args: { action: "send", message: "completion\nMEDIA:./AGENTS.md" },
+    },
+    {
+      name: "inline remote media directive",
+      args: { action: "send", message: "completion\nmedia:https://other.example/file.png" },
+    },
+    {
+      name: "channel-extracted remote Markdown image",
+      args: { action: "send", message: "completion ![image](https://other.example/file.png)" },
+    },
+    {
+      name: "escaped-newline local media directive",
+      args: { action: "send", message: String.raw`completion\nMEDIA:./AGENTS.md` },
+    },
+    {
+      name: "citation-obfuscated local media directive",
+      args: { action: "send", message: "completion\nMEciteDIA:./AGENTS.md" },
+    },
+    {
+      name: "citation-obfuscated reaction directive",
+      args: { action: "send", message: "[[reciteact:🔥]] completion" },
+    },
+    {
+      name: "citation-obfuscated reply directive",
+      args: { action: "send", message: "[[reply_citeto:message-2]] completion" },
+    },
+    {
+      name: "reply directive inside citation marker",
+      args: { action: "send", message: "cite[[reply_to:message-2]]" },
+    },
+    {
+      name: "media escaping a tool-call-owned Markdown fence",
+      args: {
+        action: "send",
+        message: [
+          "<function=read><parameter=x>",
+          "```text",
+          "</parameter></function>",
+          "MEDIA:./AGENTS.md",
+          "```",
+        ].join("\n"),
+      },
+    },
+    {
+      name: "sanitizer-assembled reply directive",
+      args: { action: "send", message: "[[reply_<final>to:message-2]] stolen thread" },
+    },
+    {
+      name: "sanitizer-assembled audio directive",
+      args: { action: "send", message: "[[audio_<final>as_voice]] completion" },
+    },
+    {
+      name: "sanitizer-assembled reaction directive",
+      args: { action: "send", message: "[[rea<final>ct:🔥]] completion" },
+    },
+    {
+      name: "sanitizer-assembled local media directive",
+      args: { action: "send", message: "completion\nME<final>DIA:./AGENTS.md" },
+    },
+  ])("rejects $name before resolving secrets or dispatching", async ({ args }) => {
+    const tool = createRestrictedTool();
+
+    await expect(tool.execute("restricted", { message: "completion", ...args })).rejects.toThrow(
+      /Completion source replies/,
+    );
+    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows Codex final controls and matched canonical source-thread text sends", async () => {
+    mockSendResult({ channel: "discord", to: "channel:source" });
+    const tool = createRestrictedTool();
+
+    await tool.execute("implicit", { action: "send", message: "completion", final: true });
+    await tool.execute("media-prose", {
+      action: "send",
+      message: "See the MEDIA: section for details.",
+    });
+    await tool.execute("media-code-example", {
+      action: "send",
+      message: "Example:\n```text\nMEDIA:./AGENTS.md\n```",
+    });
+    await tool.execute("explicit", {
+      action: "send",
+      channel: "discord",
+      target: "channel:source",
+      accountId: "source-account",
+      threadId: "thread-1",
+      replyTo: "message-1",
+      message: "completion",
+      final: false,
+    });
+
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails closed when the authoritative source target is missing", async () => {
+    const tool = createRestrictedTool({ currentChannelId: undefined });
+
+    await expect(
+      tool.execute("missing-source", { action: "send", message: "completion" }),
+    ).rejects.toThrow("authoritative current conversation");
+    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not narrow ordinary message-tool-only turns", async () => {
+    const tool = createRestrictedTool({ sourceReplyOnly: false });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(expect.arrayContaining(["send", "delete", "ban"]));
+    expect(properties).toHaveProperty("media");
+    expect(properties).toHaveProperty("attachments");
+    expect(properties).toHaveProperty("buffer");
   });
 });
 
@@ -920,6 +1179,17 @@ describe("message tool secret scoping", () => {
     expect(input?.params?.idempotencyKey).toMatch(
       /^run-message-tool:message-tool:[A-Za-z0-9_-]+:[A-Za-z0-9._:-]+$/,
     );
+  });
+
+  it("preserves a host-supplied retry idempotency key", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi", idempotencyKey: "stable-retry-key" },
+      toolOptions: { runId: "run-message-tool" },
+    });
+
+    expect(input?.params?.idempotencyKey).toBe("stable-retry-key");
   });
 
   it("keeps the Codex final control out of delivery and retry idempotency", async () => {

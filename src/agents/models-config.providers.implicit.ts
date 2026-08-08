@@ -58,6 +58,7 @@ type ImplicitProviderParams = {
   agentDir: string;
   authStore?: AuthProfileStore;
   config?: OpenClawConfig;
+  discoveryAuthConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -600,15 +601,6 @@ export async function resolveImplicitProviders(
       allowKeychainPrompt: false,
       externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
-  const context: ImplicitProviderContext = {
-    ...params,
-    get authStore() {
-      return getAuthStore();
-    },
-    env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
-  };
   const discoveryPluginIds = resolveProviderDiscoveryFilter({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -618,6 +610,18 @@ export async function resolveImplicitProviders(
       : undefined,
     providerIds: params.providerDiscoveryProviderIds,
   });
+  // The runtime config has already resolved SecretRefs at its owning boundary.
+  // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.
+  const discoveryAuthConfig = params.discoveryAuthConfig ?? params.config;
+  const context: ImplicitProviderContext = {
+    ...params,
+    get authStore() {
+      return getAuthStore();
+    },
+    env,
+    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, discoveryAuthConfig),
+    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, discoveryAuthConfig),
+  };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(
         ({ provider }) =>

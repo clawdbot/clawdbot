@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 
 const mocks = vi.hoisted(() => {
   class OwnerNotPublishedError extends Error {}
@@ -53,6 +54,9 @@ function createSnapshot(
     fork: vi.fn(),
     getAll: vi.fn(() => models),
     getAvailable: vi.fn(() => models),
+    getProviderMetadataOwners: vi.fn<() => PluginMetadataSnapshotOwnerMaps | undefined>(
+      () => undefined,
+    ),
     find: vi.fn((provider: string, id: string) =>
       models.find((model) => model.provider === provider && model.id === id),
     ),
@@ -165,6 +169,31 @@ describe("prepared agent model registry", () => {
     expect(normalized).toMatchObject({ provider: "openai", id: "gpt-test" });
     expect(loaded.registry.find("openai", "gpt-test")).toBe(normalized);
     expect(rawFind).toHaveBeenCalledWith("openai", "gpt-test");
+  });
+
+  it("normalizes with the registry's exact plugin metadata generation", async () => {
+    const { registry, snapshot } = createSnapshot();
+    const providerMetadataOwners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    };
+    registry.getProviderMetadataOwners.mockReturnValue(providerMetadataOwners);
+    mocks.prepareSnapshot.mockResolvedValue(snapshot);
+
+    const loaded = await loadPreparedAgentModelRegistry({});
+    loaded.registry.getAll();
+
+    expect(mocks.normalizeModel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "gpt-test" }),
+      "/agents/main",
+      expect.objectContaining({ providerMetadataOwners }),
+    );
   });
 
   it("prepares a distinct credential-free lifecycle owner", async () => {

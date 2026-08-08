@@ -342,69 +342,65 @@ describe("processMessage group system prompt wiring", () => {
     ).toBe("from config");
   });
 
-  it("marks detected WhatsApp slash messages as text command turns", async () => {
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    isControlCommandMessageMock.mockReturnValue(true);
-    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
-
-    await callProcessMessage({
-      msg: makeBaseMsg({ body: "/status" }),
-    });
-
-    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
-    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      command: {
-        kind: "text-slash",
-        authorization: { kind: "authorized" },
-        body: "/status",
+  it.each([
+    {
+      name: "marks detected WhatsApp slash messages as text command turns",
+      message: { body: "/status" },
+      commandBody: "/status",
+      isControlCommand: true,
+      expectedContext: {
+        command: {
+          kind: "text-slash",
+          authorization: { kind: "authorized" },
+          body: "/status",
+        },
+        rawBody: "/status",
       },
-      rawBody: "/status",
-    });
-  });
-
-  it("keeps generated media notices out of command input", async () => {
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    isControlCommandMessageMock.mockReturnValue(true);
-    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
-
-    await callProcessMessage({
-      msg: makeBaseMsg({
+    },
+    {
+      name: "keeps generated media notices out of command input",
+      message: {
         body: "/reset\n\n[whatsapp attachment unavailable]",
         commandBody: "/reset",
-      }),
-    });
-
-    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
-    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
-      command: {
-        kind: "text-slash",
-        authorization: { kind: "authorized" },
-        body: "/reset",
       },
-      rawBody: "/reset",
-    });
-  });
-
-  it("checks auth for inline command tokens without marking them as command-source turns", async () => {
+      commandBody: "/reset",
+      isControlCommand: true,
+      expectedContext: {
+        bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+        command: {
+          kind: "text-slash",
+          authorization: { kind: "authorized" },
+          body: "/reset",
+        },
+        rawBody: "/reset",
+      },
+    },
+    {
+      name: "checks auth for inline command tokens without marking them as command-source turns",
+      message: { body: "please inspect `/tmp/foo`" },
+      commandBody: "please inspect `/tmp/foo`",
+      isControlCommand: false,
+      expectedContext: {
+        command: {
+          kind: "normal",
+          authorization: { kind: "authorized" },
+          body: "please inspect `/tmp/foo`",
+        },
+        rawBody: "please inspect `/tmp/foo`",
+      },
+    },
+  ])("$name", async ({ message, commandBody, isControlCommand, expectedContext }) => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    isControlCommandMessageMock.mockReturnValue(false);
+    isControlCommandMessageMock.mockReturnValue(isControlCommand);
     shouldComputeCommandAuthorizedMock.mockReturnValue(true);
 
-    await callProcessMessage({
-      msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
-    });
+    await callProcessMessage({ msg: makeBaseMsg(message) });
 
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      command: {
-        kind: "normal",
-        authorization: { kind: "authorized" },
-        body: "please inspect `/tmp/foo`",
-      },
-      rawBody: "please inspect `/tmp/foo`",
-    });
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith(commandBody, {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith(commandBody, {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject(
+      expectedContext,
+    );
   });
 
   it("passes pending group history from the history window into inbound context", async () => {

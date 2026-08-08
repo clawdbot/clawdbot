@@ -167,6 +167,19 @@ export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100
   return best;
 }
 
+export const UI_APPEARANCE_DEFAULTS = {
+  theme: "claw",
+  themeMode: "system",
+  textScale: 100,
+  sidebarLiveActivity: true,
+  chatMessageMaxWidth: "48rem",
+  chatSendShortcut: "enter",
+  catalogOpenTarget: "viewer",
+  composerHoldToRecord: true,
+  lobsterPetVisits: true,
+  lobsterPetSounds: false,
+} as const;
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -206,7 +219,7 @@ export type UiSettings = {
 
 type LastActiveSessionHost = {
   settings: UiSettings;
-  applySettings(next: UiSettings): void;
+  applySettings(patch: Partial<UiSettings>): void;
 };
 
 export function setLastActiveSessionKey(host: LastActiveSessionHost, next: string) {
@@ -214,7 +227,7 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
   if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
     return;
   }
-  host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
+  host.applySettings({ lastActiveSessionKey: trimmed });
 }
 
 function isViteDevPage(): boolean {
@@ -420,21 +433,20 @@ export function loadSettings(): UiSettings {
     token: loadSessionToken(defaultUrl),
     sessionKey: "main",
     lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "system",
+    theme: UI_APPEARANCE_DEFAULTS.theme,
+    themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
-    chatSendShortcut: "enter",
-    catalogOpenTarget: "viewer",
+    chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
+    catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-    sidebarLiveActivity: true,
+    sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
-    textScale: 100,
-    composerHoldToRecord: true,
+    composerHoldToRecord: UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   };
 
   try {
@@ -537,7 +549,11 @@ export function loadSettings(): UiSettings {
           ? parsed.showAdvancedSettings
           : defaults.showAdvancedSettings,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
-      textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
+      textScale:
+        typeof parsed.textScale === "number" &&
+        normalizeTextScale(parsed.textScale) !== UI_APPEARANCE_DEFAULTS.textScale
+          ? normalizeTextScale(parsed.textScale)
+          : undefined,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
@@ -676,7 +692,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }
       : {}),
-    textScale: normalizeTextScale(next.textScale),
+    ...(next.textScale !== undefined ? { textScale: normalizeTextScale(next.textScale) } : {}),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),

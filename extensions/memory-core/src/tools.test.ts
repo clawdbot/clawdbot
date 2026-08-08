@@ -18,6 +18,7 @@ import {
   setResolvedMemoryBackend,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+  setMemoryStatusDirty,
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
 import {
@@ -976,6 +977,27 @@ describe("memory_search unavailable payloads", () => {
       "MEMORY.md",
     );
     expect(searchCalls).toBe(2);
+  });
+
+  it("qualifies empty results when the index remains dirty after retry", async () => {
+    setMemoryStatusDirty(true);
+    setMemorySearchImpl(async () => []);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("dirty-index", { query: "hidden codeword" });
+
+    expect(result.details).toMatchObject({
+      results: [],
+      stale: true,
+      warning: "Memory index is dirty. Search results may be incomplete.",
+      action: "Run: openclaw memory status --index --agent main",
+    });
+    expect(getMemorySyncMockCalls()).toBe(1);
   });
 
   it("keeps the zero-hit bootstrap retry for one-shot qmd searches", async () => {

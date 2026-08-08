@@ -24,16 +24,6 @@ private final class DashboardWindow: NSWindow {
     }
 }
 
-private final class DashboardWindowDragRegionView: NSView {
-    override var mouseDownCanMoveWindow: Bool {
-        true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
-    }
-}
-
 private final class DashboardLinkSplitView: NSSplitView {
     var onDividerDragEnded: (() -> Void)?
 
@@ -126,6 +116,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         gatewaySnapshot: DashboardGatewaySnapshot? = nil,
         windowTitle: String = "OpenClaw",
         windowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName,
+        reusingWindow: NSWindow? = nil,
         requestBrowserProfileImportOffer:
         @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool = { shouldApply in
             await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
@@ -208,15 +199,21 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserSplitView = linkBrowserSplitView
         self.splitViewController = splitViewController
 
+        let preservedWindowFrame = reusingWindow?.frame
+        let restoreKeyboardFocus = reusingWindow?.isKeyWindow == true
         let window = Self.makeWindow(
             contentView: splitViewController.view,
             title: windowTitle,
-            frameAutosaveName: windowAutosaveName)
+            frameAutosaveName: windowAutosaveName,
+            reusing: reusingWindow)
         super.init(window: window)
         // NSWindowController adopts its own frame state during initialization;
         // keep it aligned with the autosave name installed by makeWindow, then
         // re-correct placement in case the assignment re-applied a stale frame.
         self.windowFrameAutosaveName = windowAutosaveName
+        if let preservedWindowFrame {
+            window.setFrame(preservedWindowFrame, display: false)
+        }
         WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
 
         // Width is autosaved, while each new dashboard window starts with the
@@ -238,6 +235,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         self.window?.delegate = self
         self.installHistoryStateBridge()
+        if restoreKeyboardFocus {
+            window.makeFirstResponder(self.webView)
+        }
     }
 
     func setUpdateBridgeEnabled(_ enabled: Bool) {
@@ -340,26 +340,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return nil
     }
 
-    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = "OpenClaw Dashboard"
-        if let host, !host.isEmpty {
-            alert.informativeText = "\(host) is asking:\n\n\(message)"
-        } else {
-            alert.informativeText = message
-        }
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        return alert
-    }
-
-    private static func javaScriptConfirmResult(
-        for response: NSApplication.ModalResponse)
-        -> Bool
-    {
-        response == .alertFirstButtonReturn
-    }
-
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
         fatalError("init(coder:) is not supported")
@@ -426,14 +406,21 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window?.performClose(nil)
     }
 
-    func releaseFrameAutosaveForReplacement() {
-        // AppKit rejects duplicate autosave owners. Release only when the manager
-        // replaces this controller so the successor can restore the saved frame.
-        self.window?.saveFrame(usingName: self.dashboardFrameAutosaveName)
+    func detachWindowForReplacement() -> NSWindow? {
+        guard let window else { return nil }
+        // Route changes replace the privileged document, not its native shell;
+        // detaching first transfers AppKit ownership without a close/focus cycle.
+        self.webView.stopLoading()
+        self.closeLinkBrowser(focusDashboard: false)
+        self.onClosed = nil
+        window.delegate = nil
+        window.saveFrame(usingName: self.dashboardFrameAutosaveName)
         self.windowFrameAutosaveName = ""
+        self.window = nil
+        return window
     }
 
-    func showFailure(title: String, message: String, detail: String? = nil) {
+    func showFailure(title: String, message: String, detail: String? = nil, present: Bool = true) {
         self.hasLiveContent = false
         self.isShowingFailurePage = true
         self.advanceNavigationGeneration()
@@ -449,7 +436,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView.loadHTMLString(
             DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
             baseURL: nil)
-        self.show()
+        if present {
+            self.show()
+        }
     }
 
     private func load(_ url: URL) {
@@ -598,7 +587,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         else {
             return
         }
-        window.performDrag(with: event)
+        DashboardWindowDragGesture.handle(event, in: window)
     }
 
     static func isWindowDragRequest(_ body: Any) -> Bool {
@@ -695,12 +684,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return scheme == "cursor" || scheme == "vscode" || scheme == "windsurf" || scheme == "zed"
     }
 
-    private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
-        lhs.scheme?.lowercased() == rhs.scheme?.lowercased() &&
-            lhs.host?.lowercased() == rhs.host?.lowercased() &&
-            lhs.port == rhs.port
-    }
-
     private func refreshNativeAuthScript(url: URL, auth: DashboardWindowAuth) {
         let controller = self.webView.configuration.userContentController
         controller.removeAllUserScripts()
@@ -739,14 +722,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             """)
     }
 
-    func navigateBack() {
-        self.activeNavigationWebView.goBack()
-    }
-
-    func navigateForward() {
-        self.activeNavigationWebView.goForward()
-    }
-
     private var activeNavigationWebView: WKWebView {
         guard let linkWebView = self.linkBrowser.activeWebView,
               let firstResponder = self.window?.firstResponder as? NSView,
@@ -760,13 +735,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private static func makeWindow(
         contentView: NSView,
         title: String,
-        frameAutosaveName: String) -> NSWindow
+        frameAutosaveName: String,
+        reusing existingWindow: NSWindow?) -> NSWindow
     {
-        let window = DashboardWindow(
+        let window = existingWindow ?? DashboardWindow(
             contentRect: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
+        let existingFrame = existingWindow?.frame
         let container = DashboardWindowContentView(frame: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize))
         contentView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(contentView)
@@ -805,18 +782,26 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
+        // The singleton manager, not AppKit state restoration, owns this window.
+        window.isRestorable = false
         window.hasShadow = true
         window.backgroundColor = .windowBackgroundColor
         window.isOpaque = true
         let viewController = NSViewController()
         viewController.view = container
         window.contentViewController = viewController
-        window.center()
+        if existingWindow == nil {
+            window.center()
+        }
         window.minSize = DashboardWindowLayout.windowMinSize
         // Autosave restore first, placement correction last: a frame saved on
         // a since-disconnected monitor must not leave the window off-screen.
         window.setFrameAutosaveName(frameAutosaveName)
-        WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
+        if let existingFrame {
+            window.setFrame(existingFrame, display: false)
+        } else {
+            WindowPlacement.ensureOnScreen(window: window, defaultSize: DashboardWindowLayout.windowSize)
+        }
         return window
     }
 
@@ -1033,6 +1018,40 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    func navigateBack() {
+        self.activeNavigationWebView.goBack()
+    }
+
+    func navigateForward() {
+        self.activeNavigationWebView.goForward()
+    }
+
+    private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.scheme?.lowercased() == rhs.scheme?.lowercased() &&
+            lhs.host?.lowercased() == rhs.host?.lowercased() &&
+            lhs.port == rhs.port
+    }
+
+    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "OpenClaw Dashboard"
+        if let host, !host.isEmpty {
+            alert.informativeText = "\(host) is asking:\n\n\(message)"
+        } else {
+            alert.informativeText = message
+        }
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        return alert
+    }
+
+    private static func javaScriptConfirmResult(
+        for response: NSApplication.ModalResponse)
+        -> Bool
+    {
+        response == .alertFirstButtonReturn
+    }
+
     /// Commands are deliverable when a document is live or a load is in flight
     /// (the queue flushes at `didFinish`). A failure page, or a terminally
     /// cancelled load with no successor, needs a reload before dispatch —
@@ -1192,11 +1211,12 @@ extension DashboardWindowController {
     private func evaluateNativeNavigation(_ navigation: DashboardNativeNavigation) {
         let generation = self.navigationGeneration
         let sourceURL = self.currentURL
+        let searchLiteral = navigation.search.map(Self.jsStringLiteral) ?? "undefined"
         let script =
             """
             (() => !window.dispatchEvent(new CustomEvent('openclaw:native-navigate', {
               cancelable: true,
-              detail: {path: \(Self.jsStringLiteral(navigation.path))}
+              detail: {path: \(Self.jsStringLiteral(navigation.path)), search: \(searchLiteral)}
             })))()
             """
         Task { @MainActor [weak self] in

@@ -17,6 +17,7 @@ import type {
   MainSessionRecoveryTransitionResult,
   MainSessionRecoveryView,
 } from "./main-session-recovery-types.js";
+import { MAX_RECOVERY_RETRIES } from "./main-session-restart-recovery-shared.js";
 
 export type {
   MainSessionRecoveryCommand,
@@ -26,13 +27,15 @@ export type {
   MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-types.js";
 
-const MAIN_RESTART_RECOVERY_MAX_AUTOMATIC_ATTEMPTS = 3;
-
 const MAIN_RESTART_RECOVERY_REMEDIATION_HINT =
   "inspect the failed main session and use /new or reset to start a replacement session";
 
-function nextRevision(state: MainRestartRecoveryState): number {
-  return state.revision + 1;
+function updateRecoveryState(
+  entry: SessionEntry,
+  state: MainRestartRecoveryState,
+  patch: Omit<Partial<MainRestartRecoveryState>, "revision">,
+): MainRestartRecoveryState {
+  return (entry.mainRestartRecovery = { ...state, revision: state.revision + 1, ...patch });
 }
 
 function createCycle(cycleId: string): MainRestartRecoveryState {
@@ -40,18 +43,6 @@ function createCycle(cycleId: string): MainRestartRecoveryState {
     cycleId,
     revision: 1,
     chargedAttempts: 0,
-  };
-}
-
-function observationFor(entry: SessionEntry): MainSessionRecoveryObservation | undefined {
-  const state = entry.mainRestartRecovery;
-  if (!state) {
-    return undefined;
-  }
-  return {
-    sessionId: entry.sessionId,
-    cycleId: state.cycleId,
-    revision: state.revision,
   };
 }
 
@@ -75,6 +66,17 @@ function hasCurrentForegroundClaim(
   return (
     state.foregroundClaims?.lifecycleGeneration === lifecycleGeneration &&
     state.foregroundClaims.tokens.length > 0
+  );
+}
+
+function ownsForegroundClaim(
+  state: MainRestartRecoveryState | undefined,
+  claim: { cycleId: string; lifecycleGeneration: string; claimId: string },
+): boolean {
+  return (
+    state?.cycleId === claim.cycleId &&
+    state.foregroundClaims?.lifecycleGeneration === claim.lifecycleGeneration &&
+    state.foregroundClaims.tokens.includes(claim.claimId)
   );
 }
 
@@ -102,43 +104,22 @@ function validateRecoveryAdmission(
   return hasCurrentForegroundClaim(state, command.lifecycleGeneration) ? "foreground_active" : null;
 }
 
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
+    (left, right) => left.runId.localeCompare(right.runId),
+  );
+}
+
 function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): void {
-  // Lifecycle fences can overlap and are consumed independently by their matching events.
-  const runs = new Map<string, RestartRecoveryRun>();
-  for (const existing of entry.restartRecoveryRuns ?? []) {
-    runs.set(`${existing.runId}\u0000${existing.lifecycleGeneration}`, existing);
-  }
-  runs.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
-  entry.restartRecoveryRuns = [...runs.values()].toSorted((a, b) =>
-    a.runId === b.runId
-      ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
-      : a.runId.localeCompare(b.runId),
-  );
-}
-
-function hasLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): boolean {
-  return Boolean(
-    entry.restartRecoveryRuns?.some(
-      (candidate) =>
-        candidate.runId === run.runId && candidate.lifecycleGeneration === run.lifecycleGeneration,
-    ),
-  );
-}
-
-function formatAttemptBudgetReason(attempts: number): string {
-  return (
-    `main-session restart recovery blocked after ${attempts} charged automatic resume attempts; ` +
-    MAIN_RESTART_RECOVERY_REMEDIATION_HINT
-  );
-}
-
-export function isMainSessionRecoveryExhausted(entry: SessionEntry): boolean {
-  return (
-    entry.status === "running" &&
-    entry.abortedLastRun === true &&
-    (entry.mainRestartRecovery?.chargedAttempts ?? 0) >=
-      MAIN_RESTART_RECOVERY_MAX_AUTOMATIC_ATTEMPTS
-  );
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
 }
 
 export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: string): boolean {
@@ -152,6 +133,18 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
     !isSubagentSessionKey(sessionKey) &&
     !isCronSessionKey(sessionKey) &&
     !isAcpSessionKey(sessionKey)
+  );
+}
+
+export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {
+  const state = entry.mainRestartRecovery;
+  return (
+    entry.status === "running" &&
+    entry.abortedLastRun === true &&
+    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    !state?.foregroundClaims &&
+    !state?.reservation &&
+    !state?.tombstone
   );
 }
 
@@ -208,18 +201,24 @@ function inspectMainSessionRecovery(params: {
   ) {
     return { status: "inactive" };
   }
-  const observation = observationFor(entry);
-  if (!state || !observation) {
+  if (!state) {
     return { status: "inactive" };
   }
+  const observation = {
+    sessionId: entry.sessionId,
+    cycleId: state.cycleId,
+    revision: state.revision,
+  };
   if (state.reservation) {
     return { status: "blocked" };
   }
-  if (state.chargedAttempts >= MAIN_RESTART_RECOVERY_MAX_AUTOMATIC_ATTEMPTS) {
+  if (state.chargedAttempts >= MAX_RECOVERY_RETRIES) {
     return {
       status: "exhausted",
       observation,
-      reason: formatAttemptBudgetReason(state.chargedAttempts),
+      reason:
+        `main-session restart recovery blocked after ${state.chargedAttempts} charged automatic resume attempts; ` +
+        MAIN_RESTART_RECOVERY_REMEDIATION_HINT,
     };
   }
   return {
@@ -267,6 +266,7 @@ export function transitionMainSessionRecovery(
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
       entry.status = "running";
+      entry.lifecycleRunId = undefined;
       entry.abortedLastRun = true;
       if (command.resetRuntime) {
         entry.startedAt = undefined;
@@ -310,11 +310,7 @@ export function transitionMainSessionRecovery(
           Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
           state = undefined;
         } else {
-          entry.mainRestartRecovery = state = {
-            ...state,
-            revision: nextRevision(state),
-            foregroundClaims: undefined,
-          };
+          state = updateRecoveryState(entry, state, { foregroundClaims: undefined });
         }
       }
       if (
@@ -323,11 +319,7 @@ export function transitionMainSessionRecovery(
       ) {
         // A process restart makes dispatch outcome unknowable: retain the charge,
         // but release the stale slot so the next bounded attempt can proceed.
-        entry.mainRestartRecovery = {
-          ...state,
-          revision: nextRevision(state),
-          reservation: undefined,
-        };
+        updateRecoveryState(entry, state, { reservation: undefined });
       }
       return {
         kind: "observed",
@@ -356,16 +348,23 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      const executionIdentityAdmission =
+        command.executionIdentity.state === "disabled"
+          ? undefined
+          : state.executionIdentity
+            ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
+            : ({ kind: "capture", token: command.executionIdentity.token } as const);
+      updateRecoveryState(entry, state, {
         chargedAttempts: command.attempt,
+        ...(executionIdentityAdmission?.kind === "capture"
+          ? { executionIdentity: executionIdentityAdmission.token }
+          : {}),
         reservation: {
           runId: command.runId,
           attempt: command.attempt,
           lifecycleGeneration: command.lifecycleGeneration,
         },
-      };
+      });
       entry.updatedAt = command.now;
       return {
         kind: "reserved",
@@ -375,6 +374,7 @@ export function transitionMainSessionRecovery(
           lifecycleGeneration: command.lifecycleGeneration,
           runId: command.runId,
           attempt: command.attempt,
+          ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
         },
       };
     }
@@ -392,15 +392,17 @@ export function transitionMainSessionRecovery(
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      updateRecoveryState(entry, state, {
         chargedAttempts:
           command.kind === "cancel_reservation"
             ? Math.max(0, command.reservation.attempt - 1)
             : state.chargedAttempts,
         reservation: undefined,
-      };
+        ...(command.kind === "cancel_reservation" &&
+        command.reservation.executionIdentityAdmission?.kind === "capture"
+          ? { executionIdentity: undefined }
+          : {}),
+      });
       return { kind: "applied" };
     }
     case "validate_recovery": {
@@ -413,13 +415,12 @@ export function transitionMainSessionRecovery(
         return { kind: "rejected", reason: conflict };
       }
       const state = entry.mainRestartRecovery!;
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      updateRecoveryState(entry, state, {
         reservation: undefined,
         foregroundClaims: undefined,
-      };
+      });
       entry.abortedLastRun = false;
+      entry.lifecycleRunId = command.runId;
       recordLifecycleFence(entry, {
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
@@ -442,14 +443,15 @@ export function transitionMainSessionRecovery(
       if (
         !state ||
         state.reservation ||
-        !hasLifecycleFence(entry, {
-          runId: command.runId,
-          lifecycleGeneration: command.lifecycleGeneration,
-        })
+        !entry.restartRecoveryRuns?.some(
+          (run) =>
+            run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
+        )
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
       entry.status = "running";
+      entry.lifecycleRunId = undefined;
       entry.abortedLastRun = true;
       entry.startedAt = undefined;
       entry.endedAt = undefined;
@@ -482,7 +484,7 @@ export function transitionMainSessionRecovery(
       if (state.tombstone) {
         return { kind: "rejected", reason: "already_tombstoned" };
       }
-      if (state.chargedAttempts >= MAIN_RESTART_RECOVERY_MAX_AUTOMATIC_ATTEMPTS) {
+      if (state.chargedAttempts >= MAX_RECOVERY_RETRIES) {
         // The final charge fences foreground work until the scheduler commits
         // the matching tombstone. Admitting here can race that reconciliation.
         return { kind: "rejected", reason: "recovery_exhausted" };
@@ -505,9 +507,7 @@ export function transitionMainSessionRecovery(
           runId: command.runId,
         });
       }
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      updateRecoveryState(entry, state, {
         reservation:
           state.reservation?.lifecycleGeneration === command.lifecycleGeneration
             ? state.reservation
@@ -517,7 +517,7 @@ export function transitionMainSessionRecovery(
           tokens,
           ...(runIdsByClaimId ? { runIdsByClaimId } : {}),
         },
-      };
+      });
       return {
         kind: "foreground_claimed",
         claim: {
@@ -533,47 +533,32 @@ export function transitionMainSessionRecovery(
     case "bind_foreground_run": {
       const state = entry.mainRestartRecovery;
       const claims = state?.foregroundClaims;
-      if (
-        !state ||
-        state.cycleId !== command.claim.cycleId ||
-        claims?.lifecycleGeneration !== command.claim.lifecycleGeneration ||
-        !claims.tokens.includes(command.claim.claimId)
-      ) {
+      if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
       recordLifecycleFence(entry, {
         lifecycleGeneration: command.claim.lifecycleGeneration,
         runId: command.runId,
       });
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      updateRecoveryState(entry, state, {
         foregroundClaims: {
           ...claims,
           runIdsByClaimId: { ...claims.runIdsByClaimId, [command.claim.claimId]: command.runId },
         },
-      };
+      });
       return { kind: "applied" };
     }
     case "validate_foreground": {
       const state = entry.mainRestartRecovery;
-      const claims = state?.foregroundClaims;
       return entry.sessionId === command.claim.sessionId &&
-        state?.cycleId === command.claim.cycleId &&
-        claims?.lifecycleGeneration === command.claim.lifecycleGeneration &&
-        claims.tokens.includes(command.claim.claimId)
+        ownsForegroundClaim(state, command.claim)
         ? { kind: "foreground_validated" }
         : { kind: "no_change" };
     }
     case "release_foreground": {
       const state = entry.mainRestartRecovery;
       const claims = state?.foregroundClaims;
-      if (
-        !state ||
-        state.cycleId !== command.claim.cycleId ||
-        claims?.lifecycleGeneration !== command.claim.lifecycleGeneration ||
-        !claims.tokens.includes(command.claim.claimId)
-      ) {
+      if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
       const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
@@ -586,9 +571,7 @@ export function transitionMainSessionRecovery(
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
       }
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      updateRecoveryState(entry, state, {
         foregroundClaims:
           tokens.length > 0
             ? {
@@ -597,7 +580,7 @@ export function transitionMainSessionRecovery(
                 ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
               }
             : undefined,
-      };
+      });
       return { kind: "applied" };
     }
     case "tombstone": {
@@ -612,15 +595,14 @@ export function transitionMainSessionRecovery(
       if (state.tombstone) {
         return { kind: "rejected", reason: "already_tombstoned" };
       }
-      entry.mainRestartRecovery = {
-        ...state,
-        revision: nextRevision(state),
+      updateRecoveryState(entry, state, {
         tombstone: {
           reason: command.reason,
         },
-      };
+      });
       entry.abortedLastRun = false;
       entry.status = "failed";
+      entry.lifecycleRunId = undefined;
       entry.endedAt = command.now;
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;
@@ -633,6 +615,7 @@ export function transitionMainSessionRecovery(
       }
       const noticeEntry = structuredClone(entry);
       entry.status = "failed";
+      entry.lifecycleRunId = undefined;
       entry.abortedLastRun = true;
       entry.endedAt = command.now;
       entry.updatedAt = command.now;

@@ -1,16 +1,19 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
   flushServerUiPrefs,
   pushServerUiPrefs,
+  resetServerUiPref,
   resetServerUiPrefsSync,
+  resolveServerUiPrefState,
 } from "./server-prefs.ts";
-import { loadSettings, patchSettings } from "./settings.ts";
+import { loadSettings, patchSettings, setSettingsChangeListener } from "./settings.ts";
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -18,53 +21,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSettingsChangeListener(null);
   resetServerUiPrefsSync();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-function configWithPrefs(prefs: Record<string, unknown>) {
-  return { ui: { prefs } };
-}
-
-type RequestMock = ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
-
-function createServerPrefsWriter(
-  request: RequestMock,
-  gatewayUrl = "ws://gw",
-  connected = true,
-  refresh: { ok: true } | { ok: false; error: string } = { ok: true },
-): Parameters<typeof pushServerUiPrefs>[0] {
-  const client = { request, gatewayUrl, connected } as unknown as GatewayBrowserClient;
-  const writer = {
-    state: { client, connected },
-    runExternalMutation: async <T>(task: (client: GatewayBrowserClient) => Promise<T>) => {
-      if (!writer.state.connected) {
-        return {
-          ok: false as const,
-          reason: "unavailable" as const,
-          error: "offline",
-        };
-      }
-      try {
-        return {
-          ok: true as const,
-          value: await task(client),
-          refresh,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          ok: false as const,
-          reason: message.includes("config changed since last load")
-            ? ("conflict" as const)
-            : ("error" as const),
-          error: message,
-        };
-      }
-    },
-  };
-  return writer;
+function validationError(message = "invalid config") {
+  return new GatewayRequestError({ code: "INVALID_REQUEST", message });
 }
 
 describe("server pref extraction", () => {
@@ -109,6 +73,59 @@ describe("server pref extraction", () => {
     resetServerUiPrefsSync();
     expect(applyServerUiPrefs(null, { onApplied })).toBe(false);
     expect(onApplied).not.toHaveBeenCalled();
+  });
+
+  it("preserves authored provenance when a server value equals the product default", () => {
+    const config = configWithPrefs({
+      theme: "claw",
+      themeMode: "system",
+      chatSendShortcut: "enter",
+    });
+
+    expect(resolveServerUiPrefState(config, "theme")).toEqual({
+      overridden: true,
+      provenance: "synced",
+      resetValue: "claw",
+      value: "claw",
+    });
+    expect(resolveServerUiPrefState(config, "themeMode")).toEqual({
+      overridden: true,
+      provenance: "synced",
+      resetValue: "system",
+      value: "system",
+    });
+    expect(resolveServerUiPrefState(config, "chatSendShortcut")).toEqual({
+      overridden: true,
+      provenance: "synced",
+      resetValue: "enter",
+      value: "enter",
+    });
+  });
+
+  it("preserves a server custom-theme override when this device lacks its palette", () => {
+    const state = resolveServerUiPrefState(configWithPrefs({ theme: "custom" }), "theme");
+
+    expect(state).toEqual({
+      overridden: true,
+      provenance: "synced",
+      resetValue: "claw",
+      value: "claw",
+    });
+    patchSettings({ theme: "knot" });
+    expect(
+      resolveServerUiPrefState(configWithPrefs({ theme: "custom" }), "theme", "", loadSettings(), {
+        canSync: false,
+      }),
+    ).toEqual({
+      overridden: true,
+      provenance: "device-local",
+      resetValue: "claw",
+      value: "knot",
+    });
+
+    const beforeReset = loadSettings();
+    const afterReset = resetServerUiPref("theme", state);
+    expect(changedServerUiPrefs(beforeReset, afterReset)).toEqual({ theme: null });
   });
 });
 
@@ -238,8 +255,18 @@ describe("applyServerUiPrefs", () => {
 
   it("ignores a server custom theme until this browser imported one", () => {
     const onApplied = vi.fn();
-    expect(applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied })).toBe(false);
+    const onThemeChanged = vi.fn();
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied, onThemeChanged }),
+    ).toBe(false);
     expect(loadSettings().theme).toBe("claw");
+    expect(onThemeChanged).toHaveBeenLastCalledWith("custom");
+
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "claw" }), { onApplied, onThemeChanged }),
+    ).toBe(false);
+    expect(onThemeChanged).toHaveBeenLastCalledWith("claw");
+    expect(onApplied).not.toHaveBeenCalled();
   });
 });
 
@@ -295,6 +322,53 @@ describe("changedServerUiPrefs", () => {
       changedServerUiPrefs(withOverrides, { ...withOverrides, chatFollowUpMode: undefined }),
     ).toEqual({ chatFollowUpMode: null });
   });
+
+  it("pushes an explicit locale removal when returning to System", () => {
+    const previous = loadSettings();
+    const explicit = { ...previous, locale: "de" };
+
+    expect(changedServerUiPrefs(previous, explicit)).toEqual({ locale: "de" });
+    expect(changedServerUiPrefs(explicit, { ...explicit, locale: undefined })).toEqual({
+      locale: null,
+    });
+  });
+
+  it("pushes null when resetting authored synced values already equal to defaults", () => {
+    const previous = loadSettings();
+
+    const theme = resetServerUiPref("theme");
+    expect(changedServerUiPrefs(previous, theme)).toEqual({ theme: null });
+    const themeMode = resetServerUiPref("themeMode");
+    expect(changedServerUiPrefs(theme, themeMode)).toEqual({ themeMode: null });
+    const shortcut = resetServerUiPref("chatSendShortcut");
+    expect(changedServerUiPrefs(themeMode, shortcut)).toEqual({
+      chatSendShortcut: null,
+    });
+  });
+
+  it("syncs an authored default-valued reset through the settings listener", async () => {
+    const scope = "ws://gw";
+    const request = vi.fn(async () => ({}));
+    const writer = createServerPrefsWriter(request, scope);
+    setSettingsChangeListener((previous, next) => {
+      const prefs = changedServerUiPrefs(previous, next);
+      if (prefs) {
+        pushServerUiPrefs(writer, prefs);
+      }
+    });
+
+    const state = resolveServerUiPrefState(configWithPrefs({ theme: "claw" }), "theme", scope);
+    resetServerUiPref("theme", state);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "config.patch",
+        expect.objectContaining({
+          raw: JSON.stringify({ ui: { prefs: { theme: null } } }),
+        }),
+      ),
+    );
+  });
 });
 
 describe("clearable pref removal from the server", () => {
@@ -305,6 +379,40 @@ describe("clearable pref removal from the server", () => {
 
     expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
     expect(loadSettings().chatFollowUpMode).toBeUndefined();
+  });
+
+  it("clears the local locale override when the server removes it", () => {
+    const onApplied = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ locale: "de" }), { onApplied });
+    expect(loadSettings().locale).toBe("de");
+
+    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
+    expect(loadSettings().locale).toBeUndefined();
+    expect(onApplied).toHaveBeenLastCalledWith({ locale: undefined });
+  });
+
+  it("restores product defaults when authored synced values are removed", () => {
+    const onApplied = vi.fn();
+    applyServerUiPrefs(
+      configWithPrefs({
+        theme: "knot",
+        themeMode: "dark",
+        chatSendShortcut: "modifier-enter",
+      }),
+      { onApplied },
+    );
+
+    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
+    const reset = loadSettings();
+    expect(reset).toMatchObject({
+      theme: "claw",
+      themeMode: "system",
+    });
+    expect(reset.chatSendShortcut).toBe("enter");
+    const persisted = JSON.parse(
+      localStorage.getItem(`openclaw.control.settings.v1:${reset.gatewayUrl}`) ?? "{}",
+    ) as Record<string, unknown>;
+    expect(Object.hasOwn(persisted, "chatSendShortcut")).toBe(false);
   });
 });
 
@@ -323,6 +431,185 @@ describe("pushServerUiPrefs", () => {
   const readPending = (scope: string) =>
     JSON.parse(localStorage.getItem(pendingKey(scope)) ?? "{}") as Record<string, unknown>;
   const createClient = createServerPrefsWriter;
+
+  it("does not publish a server theme change shadowed by pending local intent", async () => {
+    const scope = "ws://gw";
+    const requestGate = deferred();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      () => requestGate.promise,
+    );
+    const client = createClient(request, scope);
+    const onApplied = vi.fn();
+    const onThemeChanged = vi.fn();
+    applyServerUiPrefs(configWithPrefs({ theme: "claw" }), {
+      scope,
+      onApplied,
+      onThemeChanged,
+    });
+    onThemeChanged.mockClear();
+
+    pushServerUiPrefs(client, { theme: "knot" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "knot" }), {
+        scope,
+        onApplied,
+        onThemeChanged,
+      }),
+    ).toBe(false);
+    expect(onThemeChanged).not.toHaveBeenCalled();
+
+    requestGate.resolve({});
+    await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+  });
+
+  it("keeps a synced default reset as a pending offline null intent", () => {
+    const scope = "ws://gw";
+    const previous = loadSettings();
+    const next = resetServerUiPref("theme");
+    const prefs = changedServerUiPrefs(previous, next);
+    expect(prefs).toEqual({ theme: null });
+
+    pushServerUiPrefs(createClient(vi.fn(), scope, false), prefs ?? {});
+
+    expect(readPending(scope)).toEqual({ theme: null });
+    expect(resolveServerUiPrefState(configWithPrefs({ theme: "claw" }), "theme", scope)).toEqual({
+      overridden: false,
+      provenance: "pending",
+      resetValue: "claw",
+      value: "claw",
+    });
+  });
+
+  it("marks an offline value as pending until the gateway acknowledges it", () => {
+    const scope = "ws://gw";
+    const beforeLocalEdit = loadSettings();
+    const pending = patchSettings({ chatFollowUpMode: "steer" });
+    const prefs = changedServerUiPrefs(beforeLocalEdit, pending);
+
+    pushServerUiPrefs(createClient(vi.fn(), scope, false), prefs ?? {});
+
+    expect(readPending(scope)).toEqual({ chatFollowUpMode: "steer" });
+    expect(
+      resolveServerUiPrefState(
+        configWithPrefs({ chatFollowUpMode: "queue" }),
+        "chatFollowUpMode",
+        scope,
+      ),
+    ).toEqual({
+      overridden: true,
+      provenance: "pending",
+      resetValue: undefined,
+      value: "steer",
+    });
+  });
+
+  it("retains rejected appearance edits as device-local state with local-only reset", async () => {
+    const scope = "ws://gw";
+    const config = configWithPrefs({
+      theme: "claw",
+      locale: "de",
+      chatFollowUpMode: "queue",
+    });
+    applyServerUiPrefs(config, { scope, onApplied: vi.fn() });
+    const beforeLocalEdit = loadSettings();
+    const retained = patchSettings({
+      theme: "knot",
+      locale: "fr",
+      chatFollowUpMode: "steer",
+    });
+    const prefs = changedServerUiPrefs(beforeLocalEdit, retained);
+    const afterCommit = vi.fn();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
+      throw validationError();
+    });
+
+    pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
+
+    await vi.waitFor(() =>
+      expect(afterCommit).toHaveBeenCalledWith({
+        needsRefresh: false,
+        retainedLocal: true,
+      }),
+    );
+    const themeState = resolveServerUiPrefState(config, "theme", scope);
+    const localeState = resolveServerUiPrefState(config, "locale", scope);
+    const followUpState = resolveServerUiPrefState(config, "chatFollowUpMode", scope);
+    expect(themeState).toEqual({
+      overridden: true,
+      provenance: "device-local",
+      resetValue: "claw",
+      value: "knot",
+    });
+    expect(localeState).toEqual({
+      overridden: true,
+      provenance: "device-local",
+      resetValue: "de",
+      value: "fr",
+    });
+    expect(followUpState).toEqual({
+      overridden: true,
+      provenance: "device-local",
+      resetValue: "queue",
+      value: "steer",
+    });
+
+    const beforeThemeReset = loadSettings();
+    const themeReset = resetServerUiPref("theme", themeState);
+    expect(changedServerUiPrefs(beforeThemeReset, themeReset)).toBeNull();
+    expect(themeReset.theme).toBe("claw");
+    const beforeLocaleReset = loadSettings();
+    const localeReset = resetServerUiPref("locale", localeState);
+    expect(changedServerUiPrefs(beforeLocaleReset, localeReset)).toBeNull();
+    expect(localeReset.locale).toBe("de");
+    const beforeFollowUpReset = loadSettings();
+    const followUpReset = resetServerUiPref("chatFollowUpMode", followUpState);
+    expect(changedServerUiPrefs(beforeFollowUpReset, followUpReset)).toBeNull();
+    expect(followUpReset.chatFollowUpMode).toBe("queue");
+  });
+
+  it("retains a rejected local edit until that server key actually changes", async () => {
+    const scope = "ws://gw";
+    const initialConfig = configWithPrefs({ theme: "claw", locale: "de" });
+    const onApplied = vi.fn();
+    applyServerUiPrefs(initialConfig, { scope, onApplied });
+    const beforeLocalEdit = loadSettings();
+    const retained = patchSettings({ theme: "knot" });
+    const prefs = changedServerUiPrefs(beforeLocalEdit, retained);
+    const afterCommit = vi.fn();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
+      throw validationError();
+    });
+
+    pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
+    await vi.waitFor(() =>
+      expect(afterCommit).toHaveBeenCalledWith({
+        needsRefresh: false,
+        retainedLocal: true,
+      }),
+    );
+
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "de" }), { scope, onApplied }),
+    ).toBe(false);
+    expect(loadSettings().theme).toBe("knot");
+
+    resetServerUiPrefsSync();
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "de" }), { scope, onApplied }),
+    ).toBe(false);
+    expect(loadSettings().theme).toBe("knot");
+
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "fr" }), { scope, onApplied }),
+    ).toBe(true);
+    expect(loadSettings()).toMatchObject({ theme: "knot", locale: "fr" });
+
+    expect(
+      applyServerUiPrefs(configWithPrefs({ theme: "dash", locale: "fr" }), { scope, onApplied }),
+    ).toBe(true);
+    expect(loadSettings().theme).toBe("dash");
+  });
 
   it("sends one hash-free patch and acknowledges lastSeen plus pending", async () => {
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({}));
@@ -379,7 +666,7 @@ describe("pushServerUiPrefs", () => {
   it("drops only this tab's validation-rejected keys from persisted pending", async () => {
     const scope = "ws://gw";
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
-      throw new Error("invalid config");
+      throw validationError();
     });
     const client = createClient(request, scope);
     flushServerUiPrefs(client);
@@ -447,6 +734,49 @@ describe("pushServerUiPrefs", () => {
     request.mockResolvedValue({});
     flushServerUiPrefs(client);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+  });
+
+  it("retains in-memory pending intent when localStorage is unavailable", async () => {
+    const storageError = new Error("storage unavailable");
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw storageError;
+      },
+      removeItem: () => {
+        throw storageError;
+      },
+      setItem: () => {
+        throw storageError;
+      },
+    });
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({}));
+    const client = createClient(request, "ws://gw", false);
+
+    pushServerUiPrefs(client, { locale: "de" });
+    (client.state as { connected: boolean }).connected = true;
+    flushServerUiPrefs(client);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("config.patch", {
+      raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
+      note: "control-ui prefs sync",
+    });
+  });
+
+  it("retains a connected transient failure and retries it on flush", async () => {
+    const request = vi
+      .fn<(method: string, params?: unknown) => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValueOnce({});
+    const client = createClient(request);
+
+    pushServerUiPrefs(client, { locale: "de" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(readPending("ws://gw")).toEqual({ locale: "de" });
+
+    flushServerUiPrefs(client);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
@@ -600,7 +930,7 @@ describe("pushServerUiPrefs", () => {
     localStorage.clear();
     const validationRequest = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       async () => {
-        throw new Error("invalid config");
+        throw validationError();
       },
     );
     pushServerUiPrefs(createClient(validationRequest), { locale: "de" });

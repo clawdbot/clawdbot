@@ -4,7 +4,7 @@ import {
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { InternalHookHandler } from "../hooks/internal-hooks.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
@@ -17,10 +17,6 @@ import {
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import { getPluginCompatRecord } from "./compat/registry.js";
-import {
-  replaceLegacyPluginInternalHook,
-  type LegacyPluginInternalHookRegistration,
-} from "./legacy-internal-hook-state.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -100,13 +96,8 @@ function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
 }
 
 export function createToolHookRegistrars(state: PluginRegistryState) {
-  const {
-    registry,
-    registryParams,
-    pluginHookRollback,
-    pluginsWithChannelRegistrationConflict,
-    pushDiagnostic,
-  } = state;
+  const { registry, registryParams, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
+    state;
 
   const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
@@ -321,6 +312,22 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     pluginConfig: unknown,
   ) => {
     const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
+    // Typed lifecycle names (before_tool_call, message_received, ...) are dispatched only by
+    // the typed hook runner; registerHook uses the legacy internal-hook path so they never
+    // fire. Warn so authors move to `api.on(...)` instead of trusting a false "loaded".
+    for (const event of normalizedEvents) {
+      if (isPluginHookName(event)) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `hook event "${event}" is dispatched by the typed hook runner only; ` +
+            `api.registerHook registrations for it are not invoked. ` +
+            `Use api.on("${event}", ...) instead.`,
+        });
+      }
+    }
     const entry = opts?.entry ?? null;
     const hookName = entry?.hook.name ?? opts?.name?.trim();
     if (!hookName) {
@@ -373,14 +380,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       source: record.source,
     });
     const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
-    if (
-      !registryParams.activateGlobalSideEffects ||
-      !hookSystemEnabled ||
-      opts?.register === false
-    ) {
+    if (!hookSystemEnabled || opts?.register === false) {
       return;
     }
-    const nextRegistrations: LegacyPluginInternalHookRegistration[] = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
         const context = evt.context;
@@ -398,12 +400,13 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
           }
         }
       };
-      nextRegistrations.push({ event, handler: wrappedHandler });
+      registry.legacyInternalHooks.push({
+        pluginId: record.id,
+        name: hookName,
+        event,
+        handler: wrappedHandler,
+      });
     }
-    const previousRegistrations = replaceLegacyPluginInternalHook(hookName, nextRegistrations);
-    const rollbackEntries = pluginHookRollback.get(record.id) ?? [];
-    rollbackEntries.push({ name: hookName, previousRegistrations });
-    pluginHookRollback.set(record.id, rollbackEntries);
   };
 
   const registerTypedHook = <K extends PluginHookName>(
@@ -509,20 +512,11 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     } as TypedPluginHookRegistration);
   };
 
-  const rollbackHooks = (pluginId: string) => {
-    const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
-    for (const entry of hookRollbackEntries.toReversed()) {
-      replaceLegacyPluginInternalHook(entry.name, entry.previousRegistrations);
-    }
-    pluginHookRollback.delete(pluginId);
-  };
-
   return {
     registerCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware,
     registerTool,
     registerHook,
     registerTypedHook,
-    rollbackHooks,
   };
 }

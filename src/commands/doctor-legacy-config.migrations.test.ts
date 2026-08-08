@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import { validateConfigObject } from "../config/validation.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -28,37 +32,40 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({
-    diagnostics: [],
-    plugins: [
-      {
-        id: "brave",
-        origin: "bundled",
-        channels: [],
-        contracts: { webSearchProviders: ["brave"] },
-      },
-      {
-        id: "google",
-        origin: "bundled",
-        channels: [],
-        contracts: { webSearchProviders: ["gemini"] },
-      },
-      {
-        id: "firecrawl",
-        origin: "bundled",
-        channels: [],
-        contracts: { webSearchProviders: ["firecrawl"] },
-      },
-    ],
-  }),
-  resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
-    if (value === "gemini") {
-      return "google";
-    }
-    return value === "brave" || value === "firecrawl" ? value : undefined;
-  },
-}));
+vi.mock("../plugins/manifest-registry.js", () => {
+  const plugin = (id: string, webSearchProvider: string) => {
+    const rootDir = `/plugins/${id}`;
+    return {
+      id,
+      origin: "bundled",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      contracts: { webSearchProviders: [webSearchProvider] },
+      rootDir,
+      source: `${rootDir}/index.ts`,
+      manifestPath: `${rootDir}/openclaw.plugin.json`,
+    };
+  };
+  return {
+    loadPluginManifestRegistry: () => ({
+      diagnostics: [],
+      plugins: [
+        plugin("brave", "brave"),
+        plugin("google", "gemini"),
+        plugin("firecrawl", "firecrawl"),
+      ],
+    }),
+    resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
+      if (value === "gemini") {
+        return "google";
+      }
+      return value === "brave" || value === "firecrawl" ? value : undefined;
+    },
+  };
+});
 
 function legacyConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -970,6 +977,66 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
     expect(result.config.agents?.list?.[0]?.model).toBe("agent-local/model");
     expect(result.config.agents?.list?.[1]?.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("uses a retained metadata snapshot for plugin-owned providers", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: "my-cli/model",
+        },
+      },
+    } as OpenClawConfig;
+    const baseSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry([
+        {
+          id: "my-cli-plugin",
+          channels: [],
+          providers: ["my-cli"],
+        },
+      ]),
+    });
+    const pluginMetadataSnapshot = {
+      ...baseSnapshot,
+      owners: {
+        ...baseSnapshot.owners,
+        providers: new Map([["my-cli", ["my-cli-plugin"]]]),
+      },
+    };
+
+    const result = repairStaleAgentModelRefs(config, {
+      pluginMetadataSnapshot,
+      persistedProviderIdsByAgentId: new Map(),
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
+  });
+
+  it("preserves model refs backed by a configured installable provider", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        plugins: {
+          allow: ["mistral"],
+          entries: { mistral: { enabled: true } },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "mistral/mistral-large-latest" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "mistral/mistral-large-latest",
+    });
   });
 
   it("does not treat one agent-local provider as globally available", () => {

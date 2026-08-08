@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   resolveSessionLifecycleTimestamps,
@@ -91,11 +92,12 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
 }
 
 function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): void {
-  if (entry.authProfileOverrideSource === "user") {
+  const source = resolveSessionAuthProfileOverrideSource(entry);
+  if (source === "user") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }
-    target.authProfileOverrideSource = entry.authProfileOverrideSource;
+    target.authProfileOverrideSource = source;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       target.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     }

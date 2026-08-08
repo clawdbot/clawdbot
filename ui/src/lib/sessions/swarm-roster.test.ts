@@ -48,7 +48,7 @@ describe("isSwarmEnabledInConfig", () => {
       isSwarmEnabledInConfig(
         {
           tools: { swarm: false },
-          agents: { entries: { worker: { tools: { swarm: true } } } },
+          agents: { entries: { WORKER: { tools: { swarm: true } } } },
         },
         "worker",
       ),
@@ -66,11 +66,11 @@ describe("isSwarmEnabledInConfig", () => {
       isSwarmEnabledInConfig(
         {
           tools: { swarm: false },
-          agents: { list: [{ id: "worker", tools: { swarm: true } }] },
+          agents: { entries: [{ id: "worker", tools: { swarm: true } }] },
         },
         "worker",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

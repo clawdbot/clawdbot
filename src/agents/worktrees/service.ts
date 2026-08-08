@@ -76,6 +76,8 @@ export class WorktreeSnapshotError extends Error {
     this.snapshotError = snapshotError;
   }
 }
+
+export class WorktreeRepositoryError extends Error {}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -181,9 +183,13 @@ async function resolveRepositoryFromRealPath(
 ): Promise<ResolvedRepository> {
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
   if (rootResult.code !== 0) {
-    throw new Error(`not a git checkout: ${requestedLabel}`);
+    throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
   const sourceRoot = await fs.realpath(rootResult.stdout.trim());
+  const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  if (headResult.code !== 0) {
+    throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
+  }
   const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
   const commonDir = await fs.realpath(
     path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
@@ -204,6 +210,43 @@ async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> 
     throw new Error(`repository does not exist: ${repoRoot}`);
   });
   return await resolveRepositoryFromRealPath(requested, repoRoot);
+}
+
+async function canonicalPathKey(target: string): Promise<string> {
+  const canonical = await fs.realpath(target);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+async function shouldPreserveOrphanCandidate(
+  target: string,
+  managedPaths: ReadonlySet<string>,
+): Promise<boolean> {
+  const targetKey = await canonicalPathKey(target);
+  if (managedPaths.has(targetKey)) {
+    return true;
+  }
+  const hasOwnGitMarker = await pathExists(path.join(target, ".git"));
+  if (!hasOwnGitMarker) {
+    return false;
+  }
+  // Query from the checkout itself so registered unborn worktrees do not pass
+  // through resolveRepository's intentional HEAD commit requirement.
+  const listed = await listGitWorktrees(target);
+  for (const entry of listed) {
+    let listedKey: string;
+    try {
+      listedKey = await canonicalPathKey(entry.path);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    if (listedKey === targetKey) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {
@@ -527,6 +570,14 @@ export class ManagedWorktreeService {
     this.now = options.now ?? Date.now;
   }
 
+  private async worktreesRoot(): Promise<string> {
+    const root = path.join(resolveStateDir(this.env), "worktrees");
+    await fs.mkdir(root, { recursive: true });
+    // Git canonicalizes paths in `git worktree list`; minting below the real root keeps
+    // lock-state and adoption comparisons aligned when the state path traverses symlinks.
+    return await fs.realpath(root);
+  }
+
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
     const repository = await resolveRepository(params.repoRoot);
     if (params.ownerId) {
@@ -590,7 +641,7 @@ export class ManagedWorktreeService {
     repository: Awaited<ReturnType<typeof resolveRepository>>,
     inferredName: string,
   ): Promise<ManagedWorktreeRecord> {
-    const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
+    const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name = validateName(
       params.name ??
         (await generateName(
@@ -919,10 +970,7 @@ export class ManagedWorktreeService {
         throw commandError("git branch -D", branchDelete);
       }
       await requireGit(record.repoRoot, ["worktree", "prune"]);
-      await removeEmptyParents(
-        path.dirname(record.path),
-        path.join(resolveStateDir(this.env), "worktrees"),
-      );
+      await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
       const removedAt = this.now();
       updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
       finalizeWorktreeRemoval(this.env, record.id);
@@ -1230,8 +1278,17 @@ export class ManagedWorktreeService {
   }
 
   private async reconcileOrphans(records: ManagedWorktreeRecord[]): Promise<number> {
-    const managedPaths = new Set(records.map((record) => path.resolve(record.path)));
-    const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
+    const managedPaths = new Set<string>();
+    for (const record of records) {
+      try {
+        managedPaths.add(await canonicalPathKey(record.path));
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          throw error;
+        }
+      }
+    }
+    const worktreesRoot = await this.worktreesRoot();
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
     let deleted = 0;
     for (const fingerprint of fingerprints) {
@@ -1239,21 +1296,19 @@ export class ManagedWorktreeService {
         continue;
       }
       const fingerprintPath = path.join(worktreesRoot, fingerprint.name);
+      // A root entry can be a checkout, not a fingerprint container; descending
+      // before applying the same preservation rule would expose its contents to deletion.
+      if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths)) {
+        continue;
+      }
       const names = await fs.readdir(fingerprintPath, { withFileTypes: true }).catch(() => []);
       for (const name of names) {
         if (!name.isDirectory()) {
           continue;
         }
         const candidate = path.join(fingerprintPath, name.name);
-        if (managedPaths.has(path.resolve(candidate))) {
+        if (await shouldPreserveOrphanCandidate(candidate, managedPaths)) {
           continue;
-        }
-        const repository = await resolveRepository(candidate).catch(() => undefined);
-        if (repository) {
-          const listed = await listGitWorktrees(repository.repoRoot).catch(() => []);
-          if (listed.some((entry) => path.resolve(entry.path) === path.resolve(candidate))) {
-            continue;
-          }
         }
         await fs.rm(candidate, { recursive: true, force: true });
         deleted += 1;

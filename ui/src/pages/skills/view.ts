@@ -34,10 +34,10 @@ import {
   isSkillAvailable,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import {
   clawhubVerdictKey,
   type ClawHubSkillSecurityVerdict,
-  type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type SkillOperation,
   type SkillMessageMap,
@@ -55,6 +55,8 @@ export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
 type SkillsProps = {
+  canUpdate: boolean;
+  canInstall: boolean;
   connected: boolean;
   loading: boolean;
   report: SkillStatusReport | null;
@@ -156,6 +158,7 @@ function verdictForSkill(skill: SkillStatusEntry, verdicts: SkillsProps["clawhub
       clawhubVerdictKey({
         registry: link.registry,
         slug: link.slug,
+        ownerHandle: link.ownerHandle,
         version: link.installedVersion,
       })
     ] ?? null
@@ -208,6 +211,14 @@ function verdictStatusKind(
 
 function skillControlsLocked(props: SkillsProps): boolean {
   return props.loading || props.operation !== null;
+}
+
+function skillUpdateLocked(props: SkillsProps): boolean {
+  return skillControlsLocked(props) || !props.canUpdate;
+}
+
+function skillInstallLocked(props: SkillsProps): boolean {
+  return skillControlsLocked(props) || !props.canInstall;
 }
 
 function activeSkillMutation(props: SkillsProps, skillKey: string): boolean {
@@ -415,7 +426,7 @@ function renderClawHubSection(props: SkillsProps) {
                   type="button"
                   class="btn btn--sm"
                   style="margin-top: 10px; white-space: normal;"
-                  ?disabled=${skillControlsLocked(props)}
+                  ?disabled=${skillInstallLocked(props)}
                   @click=${() =>
                     props.onClawHubInstall(
                       props.clawhubInstallMessage?.acknowledgeSlug ?? "",
@@ -466,7 +477,7 @@ function renderClawHubResults(props: SkillsProps) {
             ${r.version ? renderSettingsValue(`v${r.version}`) : nothing}
             <button
               class="btn btn--sm"
-              ?disabled=${skillControlsLocked(props)}
+              ?disabled=${skillInstallLocked(props)}
               @click=${() => props.onClawHubInstall(r.slug)}
             >
               ${activeClawHubMutation(props, r.slug)
@@ -549,7 +560,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                       : nothing}
                     <button
                       class="btn primary"
-                      ?disabled=${skillControlsLocked(props)}
+                      ?disabled=${skillInstallLocked(props)}
                       @click=${() => {
                         if (props.clawhubDetailSlug) {
                           props.onClawHubInstall(props.clawhubDetailSlug);
@@ -569,7 +580,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
 }
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
-  const locked = skillControlsLocked(props);
+  const locked = skillUpdateLocked(props);
   const verdict = verdictForSkill(skill, props.clawhubVerdicts);
 
   return html`
@@ -604,7 +615,8 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
 }
 
 function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
-  const locked = skillControlsLocked(props);
+  const updateLocked = skillUpdateLocked(props);
+  const installLocked = skillInstallLocked(props);
   const active = activeSkillMutation(props, skill.skillKey);
   const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
@@ -701,7 +713,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
           <div style="display: flex; align-items: center; gap: 12px;">
             ${renderSettingsToggle({
               checked: !skill.disabled,
-              disabled: locked,
+              disabled: updateLocked,
               ariaLabel: skill.name,
               onChange: () => props.onToggle(skill.skillKey, skill.disabled),
             })}
@@ -711,7 +723,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${installOption
               ? html`<button
                   class="btn"
-                  ?disabled=${locked}
+                  ?disabled=${installLocked}
                   @click=${() =>
                     installOption && props.onInstall(skill.skillKey, skill.name, installOption.id)}
                 >
@@ -737,7 +749,8 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                     >
                     <input
                       type="password"
-                      ?disabled=${locked}
+                      required
+                      ?disabled=${updateLocked}
                       .value=${editValue}
                       @input=${(e: Event) =>
                         props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
@@ -756,7 +769,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   })()}
                   <button
                     class="btn primary"
-                    ?disabled=${locked}
+                    ?disabled=${updateLocked || !editValue.trim()}
                     @click=${() => props.onSaveKey(skill.skillKey)}
                   >
                     ${t("skillsPage.saveKey")}
@@ -806,6 +819,7 @@ function renderInstalledClawHubOverview(
   }
   const auditHref = safeExternalHref(verdict?.securityAuditUrl ?? undefined);
   const reasonText = verdict?.reasons?.length ? verdict.reasons.join(", ") : null;
+  const installedRef = `${link.ownerHandle ? `@${link.ownerHandle}/` : ""}${link.slug}@${link.installedVersion}`;
   return html`
     <div
       class="callout"
@@ -813,7 +827,7 @@ function renderInstalledClawHubOverview(
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>
-        <span class="muted" style="font-size: 12px;">${link.slug}@${link.installedVersion}</span>
+        <span class="muted" style="font-size: 12px;">${installedRef}</span>
         ${props.clawhubVerdictsLoading
           ? html`<span class="muted">${t("skillsPage.refreshing")}</span>`
           : nothing}

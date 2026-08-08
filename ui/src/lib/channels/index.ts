@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type {
+  ChannelAccountSnapshot,
   ChannelsPairingApproveResult,
   ChannelsPairingListResult,
   ChannelsStatusSnapshot,
@@ -81,6 +82,15 @@ export type ChannelCapability = {
   dispose: () => void;
 };
 
+export function resolveChannelAccounts(
+  channelAccounts: ChannelsStatusSnapshot["channelAccounts"] | null | undefined,
+  channelId: string,
+): ChannelAccountSnapshot[] {
+  const accounts =
+    channelAccounts && Object.hasOwn(channelAccounts, channelId) && channelAccounts[channelId];
+  return Array.isArray(accounts) ? accounts : [];
+}
+
 export function channelSnapshotEntryIsActive(
   snapshot: ChannelsStatusSnapshot | null,
   channelId: string,
@@ -88,11 +98,13 @@ export function channelSnapshotEntryIsActive(
   if (!snapshot) {
     return false;
   }
-  const status = asRecord(snapshot.channels[channelId]);
+  const status = asRecord(
+    Object.hasOwn(snapshot.channels, channelId) ? snapshot.channels[channelId] : undefined,
+  );
   if (status?.configured === true || status?.running === true || status?.connected === true) {
     return true;
   }
-  return (snapshot.channelAccounts[channelId] ?? []).some(
+  return resolveChannelAccounts(snapshot.channelAccounts, channelId).some(
     (account) =>
       account.configured === true || account.running === true || account.connected === true,
   );
@@ -159,9 +171,9 @@ function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = 
   };
 }
 
-function delay(ms: number): Promise<"timeout"> {
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(() => resolve("timeout"), ms);
+    setTimeout(resolve, ms);
   });
 }
 
@@ -220,14 +232,9 @@ async function loadChannels(
   })();
 
   const softTimeoutMs = options.softTimeoutMs;
-  if (typeof softTimeoutMs === "number" && softTimeoutMs > 0) {
-    const outcome = await Promise.race([refresh.then(() => "done" as const), delay(softTimeoutMs)]);
-    if (outcome === "timeout") {
-      return;
-    }
-    return;
-  }
-  await refresh;
+  await (typeof softTimeoutMs === "number" && softTimeoutMs > 0
+    ? Promise.race([refresh, delay(softTimeoutMs)])
+    : refresh);
 }
 
 function isCurrentPairingRefresh(

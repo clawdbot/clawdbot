@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -13,10 +14,12 @@ import {
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
+import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
+  maybeRestartService,
   shouldPrepareUpdatedInstallRestart,
 } from "./update-command-service.js";
 import { testing as updateCommandServiceTesting } from "./update-command-service.test-support.js";
@@ -176,6 +179,31 @@ describe("resolveUpdatedGatewayRestartPort", () => {
   });
 });
 
+describe("maybeRestartService", () => {
+  it("reports service ownership skips to JSON callers", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
+    await expect(
+      maybeRestartService({
+        shouldRestart: false,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        opts: { json: true },
+        refreshServiceEnv: false,
+        gatewayPort: 18789,
+        serviceMutationSkipMessage: "service management skipped: ownership conflict",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(true);
+
+    expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
+  });
+});
+
 describe("resolvePostUpdateServiceStateReadEnv", () => {
   it("keeps package restart preparation anchored to the pre-update service env", () => {
     const processEnv = {
@@ -262,6 +290,28 @@ describe("resolvePostInstallDoctorEnv", () => {
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
+  });
+});
+
+describe("resolveUpdatedInstallCommandEnv", () => {
+  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+    const env = resolveUpdatedInstallCommandEnv({
+      invocationCwd: "/srv/openclaw",
+      processEnv: {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
+        OPENCLAW_STATE_DIR: "/wrong/state",
+        PATH: "/caller/bin",
+      },
+      serviceEnv: {
+        OPENCLAW_STATE_DIR: "daemon-state",
+        PATH: "/daemon/bin",
+      },
+    });
+
+    expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
+    expect(env.PATH).toBe("/daemon/bin");
+    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
   });
 });
 

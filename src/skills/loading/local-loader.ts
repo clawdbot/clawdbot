@@ -28,6 +28,9 @@ function readSkillFileSync(params: {
     rootPath: params.rootRealPath,
     rootRealPath: params.rootRealPath,
     boundaryLabel: "skill root",
+    // Operator skill roots are commonly symlinked; fs-safe still rejects hops
+    // whose canonical target escapes the skill root.
+    rejectSymlinks: false,
     maxBytes: params.maxBytes,
   });
   if (!opened.ok) {

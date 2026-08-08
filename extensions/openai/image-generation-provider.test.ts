@@ -354,6 +354,10 @@ describe("openai image generation provider", () => {
     expect(provider.capabilities.geometry?.sizes).toContain("2048x2048");
     expect(provider.capabilities.geometry?.sizes).toContain("3840x2160");
     expect(provider.capabilities.geometry?.sizes).toContain("2160x3840");
+    expect(provider.capabilities.geometry?.sizesByModel).toEqual({
+      "gpt-image-2": [],
+      "gpt-image-2-2026-04-21": [],
+    });
     expect(provider.capabilities.output).toEqual({
       formats: ["png", "jpeg", "webp"],
       qualities: ["low", "medium", "high", "auto"],
@@ -676,6 +680,56 @@ describe("openai image generation provider", () => {
     });
     expect(result.images).toHaveLength(1);
   });
+
+  it.each([
+    { model: "gpt-image-2", size: "1536x864" },
+    { model: "gpt-image-2", size: "1024x640" },
+    { model: "gpt-image-2", size: "2304x2304" },
+    { model: "gpt-image-2", size: "2560x2560" },
+    { model: "gpt-image-2", size: "2880x2880" },
+    { model: "gpt-image-2", size: "3072x2176" },
+    { model: "gpt-image-2-2026-04-21", size: "864x1536" },
+  ])("preserves flexible $model generation dimensions $size", async ({ model, size }) => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model,
+      prompt: "Preserve the requested image dimensions",
+      cfg: {},
+      size,
+    });
+
+    expect(jsonRequestCall().body).toEqual({
+      model,
+      prompt: "Preserve the requested image dimensions",
+      n: 1,
+      size,
+    });
+    expect(result.metadata).toBeUndefined();
+  });
+
+  it.each(["16x16", "1024x624", "1025x1024", "3088x1024", "4096x2048", "2896x2896"])(
+    "normalizes unsupported flexible-model dimensions %s",
+    async (size) => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Normalize unsupported image dimensions",
+        cfg: {},
+        size,
+      });
+
+      const normalizedSize = (jsonRequestCall().body as { size: string }).size;
+      expect(normalizedSize).not.toBe(size);
+      expect(provider.capabilities.geometry?.sizes).toContain(normalizedSize);
+      expect(result.metadata).toEqual({ requestedSize: size, normalizedSize });
+    },
+  );
 
   it("normalizes legacy gpt-image-1 sizes before native OpenAI generation", async () => {
     mockGeneratedPngResponse();
@@ -1012,6 +1066,30 @@ describe("openai image generation provider", () => {
     expect(images[1]?.type).toBe("image/jpeg");
     expectNoJsonRequestUrl("https://api.openai.com/v1/images/edits");
     expect(result.images).toHaveLength(1);
+  });
+
+  it.each([
+    { model: "gpt-image-2", size: "1536x864" },
+    { model: "gpt-image-2", size: "2560x2560" },
+    { model: "gpt-image-2-2026-04-21", size: "864x1536" },
+  ])("preserves flexible $model multipart-edit dimensions $size", async ({ model, size }) => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model,
+      prompt: "Preserve the requested edited image dimensions",
+      cfg: {},
+      size,
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+    });
+
+    const request = multipartRequestCall() as RequestCall & { body: FormData };
+    expect(request.url).toBe("https://api.openai.com/v1/images/edits");
+    expect(request.body.get("model")).toBe(model);
+    expect(request.body.get("size")).toBe(size);
+    expect(result.metadata).toBeUndefined();
   });
 
   it("forwards supported OpenAI options on multipart edits", async () => {
@@ -1660,6 +1738,293 @@ describe("openai image generation provider", () => {
 
   it.each([
     {
+      name: "data fields without optional whitespace",
+      frame: (event: string) => `data:${event}\n\n`,
+    },
+    {
+      name: "one event split across multiple data fields",
+      frame: (event: string) => `data:${event.replace(',"item":', ',\ndata:"item":')}\n\n`,
+    },
+  ])("parses Codex SSE $name", async ({ frame }) => {
+    mockCodexAuthOnly();
+    const item = JSON.stringify({
+      type: "response.output_item.done",
+      item: {
+        type: "image_generation_call",
+        result: Buffer.from("framed-image").toString("base64"),
+      },
+    });
+    const completed = JSON.stringify({ type: "response.completed", response: { output: [] } });
+    mockCodexRawStream(`${frame(item)}data:${completed}\n\n`);
+
+    const result = await buildOpenAIImageGenerationProvider().generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw an image from a standards-compliant SSE frame",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("framed-image"));
+  });
+
+  it("surfaces the authoritative nested Codex response failure", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.failed",
+        response: {
+          status: "failed",
+          error: { code: "rate_limit_exceeded", message: "quota was exhausted" },
+        },
+      })}\n\n`,
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an image after the provider rejects the turn",
+        cfg: {},
+      }),
+    ).rejects.toThrow("quota was exhausted");
+  });
+
+  it("rejects incomplete Codex image turns with their provider reason", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.incomplete",
+        response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+      })}\n\n`,
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an image before the model runs out of output tokens",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/incomplete.*max_output_tokens/i);
+  });
+
+  it("rejects Codex image output when the stream closes before its terminal response", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        item: {
+          type: "image_generation_call",
+          result: Buffer.from("unconfirmed-image").toString("base64"),
+        },
+      })}\n\n`,
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an image on an interrupted stream",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/closed before response\.completed/i);
+  });
+
+  it("rejects completed Codex turns that contain no generated image", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n\n`,
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an image instead of silently returning no assets",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/did not produce an image/i);
+  });
+
+  it("uses the completed Codex response as the authoritative image snapshot", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "image_generation_call",
+            result: Buffer.from("stale-image").toString("base64"),
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "image_generation_call",
+                result: Buffer.from("final-image").toString("base64"),
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    const result = await buildOpenAIImageGenerationProvider().generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw an image from the final provider-owned snapshot",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("final-image"));
+  });
+
+  it.each([
+    { name: "completed without an image", status: "completed", result: null },
+    { name: "failed without an image", status: "failed", result: null },
+    {
+      name: "failed with stale image data",
+      status: "failed",
+      result: Buffer.from("failed-image").toString("base64"),
+    },
+    {
+      name: "in progress with stale image data",
+      status: "in_progress",
+      result: Buffer.from("in-progress-image").toString("base64"),
+    },
+    {
+      name: "generating with stale image data",
+      status: "generating",
+      result: Buffer.from("generating-image").toString("base64"),
+    },
+  ])("rejects an authoritative completed image call $name", async ({ status, result }) => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "image_generation_call",
+            status: "completed",
+            result: Buffer.from("stale-interim-image").toString("base64"),
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            output: [{ type: "image_generation_call", status, result }],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Honor the authoritative completed image status instead of a stale interim image",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/did not produce an image|image call did not complete/i);
+  });
+
+  it("rejects a failed interim image when the completed snapshot omits image calls", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "image_generation_call",
+            status: "failed",
+            result: Buffer.from("failed-interim-image").toString("base64"),
+          },
+        },
+        { type: "response.completed", response: { output: [] } },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Reject a failed compatibility image instead of returning it",
+        cfg: {},
+      }),
+    ).rejects.toThrow(/image call did not complete/i);
+  });
+
+  it("ignores malformed interim image data when the completed snapshot provides the final image", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: { type: "image_generation_call", result: "not valid base64" },
+        },
+        {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                type: "image_generation_call",
+                result: Buffer.from("final-image").toString("base64"),
+              },
+            ],
+          },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    const result = await buildOpenAIImageGenerationProvider().generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Use the completed image instead of an invalid interim snapshot",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("final-image"));
+  });
+
+  it("does not let malformed interim image data hide an authoritative provider failure", async () => {
+    mockCodexAuthOnly();
+    mockCodexRawStream(
+      [
+        {
+          type: "response.output_item.done",
+          item: { type: "image_generation_call", result: "not valid base64" },
+        },
+        {
+          type: "response.failed",
+          response: { error: { message: "provider account is over quota" } },
+        },
+      ]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join(""),
+    );
+
+    await expect(
+      buildOpenAIImageGenerationProvider().generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Return the real provider failure instead of an interim decoding error",
+        cfg: {},
+      }),
+    ).rejects.toThrow("provider account is over quota");
+  });
+
+  it.each([
+    {
       name: "invalid alphabet from output item",
       event: {
         type: "response.output_item.done",
@@ -1698,7 +2063,11 @@ describe("openai image generation provider", () => {
     },
   ])("rejects malformed Codex image base64 from $name events", async ({ event }) => {
     mockCodexAuthOnly();
-    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n`);
+    const terminal =
+      event.type === "response.completed"
+        ? ""
+        : `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n\n`;
+    mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n${terminal}`);
 
     const provider = buildOpenAIImageGenerationProvider();
     await expect(
@@ -1717,7 +2086,7 @@ describe("openai image generation provider", () => {
       `data: ${JSON.stringify({
         type: "response.output_item.done",
         item: { type: "image_generation_call", result: "\u0085aGVsbG8=\u0085" },
-      })}\n\n`,
+      })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n\n`,
     );
 
     const provider = buildOpenAIImageGenerationProvider();

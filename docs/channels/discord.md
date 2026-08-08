@@ -34,7 +34,7 @@ Create a Discord application with a bot, add the bot to your server, and pair it
   <Step title="Enable privileged intents">
     Still on the **Bot** page, under **Privileged Gateway Intents** enable:
 
-    - **Message Content Intent** (required)
+    - **Message Content Intent** (required for normal guild messages)
     - **Server Members Intent** (recommended; required for role allowlists, name-to-ID matching, and channel-audience access groups)
     - **Presence Intent** (optional; only for presence updates)
 
@@ -202,6 +202,12 @@ openclaw pairing approve discord <CODE>
 
   </Step>
 </Steps>
+
+If Discord cannot grant Message Content Intent, OpenClaw can still operate in DMs and in
+guild channels where users explicitly mention the bot. Set
+`channels.discord.intents.messageContent: false` so the Gateway does not request the
+unavailable privileged intent, and keep `requireMention: true` on every configured guild
+channel. Discord omits user-authored content from other guild messages in this mode.
 
 <Note>
 Token resolution is account-aware. Config token values win over the env fallback, and `DISCORD_BOT_TOKEN` is only used for the default account.
@@ -694,7 +700,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming.mode` takes `off` | `partial` | `block` | `progress` (default when no `streaming`/legacy `streamMode` key is set). `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `off`; set `channels.discord.streaming.mode` to `partial`, `block`, or `progress` to opt in. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
 
 ```json5
 {
@@ -716,10 +722,10 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
-    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. When block streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
+    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
     - `progress` keeps one editable status draft until final delivery. It shows the agent's latest preamble or narration as a status headline, with the compact tool rows underneath and no generated label.
     - Media, error, and explicit-reply finals cancel pending preview edits.
-    - `streaming.preview.toolProgress` and `streaming.progress.toolProgress` both default to `true` in every mode. Tool rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` appear without config; set either key to `false` to keep the status headline only.
+    - `streaming.preview.toolProgress` and `streaming.progress.toolProgress` both default to `true` when preview streaming is active. Tool rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` need no additional progress config; set either key to `false` to keep the status headline only.
     - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
     - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
@@ -806,25 +812,6 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - If thread bindings are disabled, `/focus` and related operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
-
-  </Accordion>
-
-  <Accordion title="Subagent progress on the source message">
-    Set `channels.discord.subagentProgress: true` to show background child activity on the Discord message that started the parent run.
-
-```json5
-{
-  channels: {
-    discord: {
-      subagentProgress: true,
-    },
-  },
-}
-```
-
-    While child runs are active, OpenClaw keeps Discord typing active for up to one hour and replaces one count reaction (`1️⃣` through `🔟`) as the concurrent count changes; `🔟` also represents 10 or more. The count reaction is removed after the final child ends. A failed, timed-out, or killed child leaves a `🔴` reaction.
-
-    This is opt-in and uses fixed internal timing and emoji defaults. The bot needs **Add Reactions** permission for reaction feedback. Account-level `channels.discord.accounts.<id>.subagentProgress` overrides the top-level value.
 
   </Accordion>
 

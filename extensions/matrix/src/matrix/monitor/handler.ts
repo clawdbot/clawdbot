@@ -526,7 +526,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
             dispatcherOptions: {
               ...turnDispatcherOptions,
-              onSettled: () => draftController.progressDraftGate.cancel(),
+              onSettled: () => draftController.cancelProgressDraft(),
             },
             replyOptions: {
               skillFilter: roomConfig?.skills,
@@ -539,9 +539,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onBlockReplyQueued: draftStream
                 ? (payload, context) => {
                     if (payload.isCompactionNotice === true) {
-                      return;
+                      return false;
                     }
                     draftController.queueDraftBlockBoundary(payload, context);
+                    return false;
                   }
                 : undefined,
               // Reset draft boundary bookkeeping on assistant message
@@ -551,6 +552,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? () => {
                     draftController.resetDraftBlockOffsets();
                     draftController.resetPreviewToolProgress();
+                    return false;
                   }
                 : undefined,
               onQueuedFollowupAdmitted: draftStream

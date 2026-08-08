@@ -440,7 +440,16 @@ export async function runMemoryStatus(
         lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
       };
       if (status.backend === "builtin") {
-        const storeState = formatVectorState(status.vector.storeAvailable);
+        const storeState =
+          status.vector.storeAvailable === undefined && status.vector.enabled
+            ? status.vector.index?.state === "complete"
+              ? "indexed (unprobed)"
+              : status.vector.index?.state === "incomplete"
+                ? "index incomplete (unprobed)"
+                : status.vector.index?.state === "unverified"
+                  ? "index unverified (unprobed)"
+                  : formatVectorState(undefined)
+            : formatVectorState(status.vector.storeAvailable);
         formatVectorLine("Vector store", storeState);
         if (status.vector.semanticAvailable !== undefined) {
           formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
@@ -552,7 +561,15 @@ export async function runMemoryStatus(
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
       if (!opts.fix) {
-        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+        // Only a subset of audit issues are repaired by `--fix`; a missing qmd
+        // index needs a reindex instead, so each hint is gated on the matching
+        // issue actually being present.
+        if (audit.issues.some((issue) => issue.fixable)) {
+          lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+        }
+        if (audit.issues.some((issue) => issue.code === "qmd-index-missing")) {
+          lines.push(`  ${muted(`Fix: openclaw memory index --agent ${agentId}`)}`);
+        }
       }
     }
     if (dreamingAudit?.issues.length) {
@@ -562,7 +579,7 @@ export async function runMemoryStatus(
       for (const issue of dreamingAudit.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
-      if (!opts.fix) {
+      if (!opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }

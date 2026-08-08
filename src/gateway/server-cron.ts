@@ -53,6 +53,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
+import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -84,6 +86,7 @@ import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
+  sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 import {
@@ -278,6 +281,9 @@ export function buildGatewayCronService(params: {
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  // Resolve once per cron service snapshot so every webhook route shares the
+  // same explicit opt-in while omitted config keeps the guard strict.
+  const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
@@ -607,6 +613,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
+    listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     ...(scriptRuntime
       ? {
           evaluateCronTrigger: ({ job, script, state, streamBatch, abortSignal }) =>
@@ -846,6 +853,17 @@ export function buildGatewayCronService(params: {
         };
       }
     },
+    sendCronWebhook: async ({ job, event, abortSignal, deadlineAtMs, onDeliveryAccepted }) => {
+      await sendGatewayCronWebhook({
+        job,
+        event,
+        abortSignal,
+        onDeliveryAccepted,
+        ...(deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
+        webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
+      });
+    },
     runScriptJob: async ({ job, streamBatch, abortSignal }) => {
       if (!scriptRuntime || job.payload.kind !== "script") {
         return { status: "error", error: "cron script payload executor is unavailable" };
@@ -987,12 +1005,13 @@ export function buildGatewayCronService(params: {
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
-    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId }) =>
+    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId, threadId }) =>
       await sendGatewayCronFailureAlert({
         deps: params.deps,
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
+        ssrfPolicy: webhookSsrfPolicy,
         job,
         text,
         runAtMs,
@@ -1000,6 +1019,7 @@ export function buildGatewayCronService(params: {
         to,
         mode,
         accountId,
+        threadId,
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
@@ -1093,6 +1113,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
+          ssrfPolicy: webhookSsrfPolicy,
           globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }
@@ -1133,6 +1154,26 @@ export function buildGatewayCronService(params: {
         }),
       );
     },
+    updateWatcherState: async (job, patch) =>
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        try {
+          // Same identity guard as persistCompletion: a watcher whose job was
+          // edited/replaced must not write failure state onto the successor
+          // (which could push it into failure backoff or auto-disable).
+          return await cron.updateWithPrecondition(job.id, { state: patch }, (current) => {
+            if (
+              !current.enabled ||
+              current.schedule.kind !== "on-exit" ||
+              current.updatedAtMs !== job.updatedAtMs
+            ) {
+              throw new Error("cron on-exit job changed before watcher-state write");
+            }
+          });
+        } catch {
+          // Stale watcher identity is a no-op, not an error to surface.
+          return undefined;
+        }
+      }),
     logger: cronLogger,
   });
   const updateCron = cron.update.bind(cron);

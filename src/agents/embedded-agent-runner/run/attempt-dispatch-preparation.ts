@@ -96,7 +96,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const basePrompt =
     sessionPromptState.activePrompt.override ??
-    resolveEmbeddedAttemptBasePrompt({ nativeModelOwned, provider, prompt: params.prompt });
+    resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
   const prompt = terminalRetryState.compactionContinuationInstruction
     ? `${basePrompt}\n\n${terminalRetryState.compactionContinuationInstruction}`
     : basePrompt;

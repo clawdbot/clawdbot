@@ -124,6 +124,7 @@
   "qa-runtime",
   "realtime-bootstrap-context",
   "realtime-transcription",
+  "realtime-voice-audio-queue",
   "realtime-voice",
   "reply-payload-testing",
   "reply-reference",

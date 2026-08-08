@@ -44,10 +44,21 @@ type QaChatHistoryResponse = {
   messages?: unknown[];
 };
 
+type QaAgentTerminalReply =
+  | { disposition: "visible"; text: string }
+  | { disposition: "silent" }
+  | { disposition: "empty" };
+
 type QaAgentWaitResult = {
   status?: string;
   error?: string;
   stopReason?: string;
+  terminalDelivery?: {
+    status: "sent" | "suppressed" | "partial_failed" | "failed";
+    resultCount: number;
+  };
+  terminalReceipt?: Record<string, unknown>;
+  terminalReply?: QaAgentTerminalReply;
 };
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
@@ -265,6 +276,7 @@ async function runQaCli(
   opts?: { timeoutMs?: number; json?: boolean; env?: NodeJS.ProcessEnv },
 ) {
   const stdout = createQaChildOutputCapture();
+  const stdoutTail = createQaChildOutputTail();
   const stderr = createQaChildOutputTail();
   const distEntryPath = path.join(env.repoRoot, "dist", "index.js");
   const nodeExecPath = await resolveQaNodeExecPath();
@@ -281,11 +293,25 @@ async function runQaCli(
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
       signalQaCliProcessTree(child, "SIGKILL");
+      const stdoutText = formatQaChildOutputTail(stdoutTail, "qa cli stdout");
+      const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
+      const diagnostics = [
+        stdoutText ? `stdout:\n${stdoutText}` : "",
+        stderrText ? `stderr:\n${stderrText}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
       reject(
-        new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
+        new QaSuiteInfraError(
+          "qa_cli_timeout",
+          `qa cli timed out: openclaw ${args.join(" ")}${diagnostics ? `\n${diagnostics}` : ""}`,
+        ),
       );
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
+    child.stdout.on("data", (chunk) => {
+      appendQaChildOutput(stdout, chunk);
+      appendQaChildOutputTail(stdoutTail, chunk);
+    });
     child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
     child.once("error", (error) => {
       clearTimeout(timeout);

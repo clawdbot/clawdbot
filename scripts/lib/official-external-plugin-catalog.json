@@ -170,6 +170,46 @@
       }
     },
     {
+      "name": "@openclaw/duckduckgo-plugin",
+      "description": "OpenClaw DuckDuckGo plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "duckduckgo",
+          "label": "DuckDuckGo"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "duckduckgo"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "duckduckgo",
+            "label": "DuckDuckGo Search (experimental)",
+            "hint": "Free web search fallback with no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://duckduckgo.com/",
+            "docsUrl": "https://docs.openclaw.ai/tools/duckduckgo-search",
+            "credentialPath": "",
+            "autoDetectOrder": 100
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/duckduckgo-plugin",
+          "npmSpec": "@openclaw/duckduckgo-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/exa-plugin",
       "description": "OpenClaw Exa plugin.",
       "source": "official",
@@ -272,6 +312,25 @@
           "npmSpec": "@openclaw/firecrawl-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/fish-audio-speech",
+      "description": "OpenClaw Fish Audio speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "legacyPluginIds": ["fish-audio"],
+        "plugin": {
+          "id": "fish-audio-speech",
+          "label": "Fish Audio Speech"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/fish-audio-speech",
+          "npmSpec": "@openclaw/fish-audio-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },
@@ -629,6 +688,32 @@
       }
     },
     {
+      "name": "@openclaw/teams-meetings",
+      "description": "OpenClaw Microsoft Teams browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "teams-meetings",
+          "label": "Microsoft Teams meetings"
+        },
+        "contracts": {
+          "tools": [
+            "teams_meetings"
+          ],
+          "transcriptSourceProviders": [
+            "teams"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/teams-meetings",
+          "npmSpec": "@openclaw/teams-meetings",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tokenjuice",
       "description": "OpenClaw tokenjuice exec output compaction plugin",
       "source": "official",
@@ -664,6 +749,32 @@
           "npmSpec": "@openclaw/voice-call",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/zoom-meetings",
+      "description": "OpenClaw Zoom browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "zoom-meetings",
+          "label": "Zoom meetings"
+        },
+        "contracts": {
+          "tools": [
+            "zoom_meetings"
+          ],
+          "transcriptSourceProviders": [
+            "zoom"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/zoom-meetings",
+          "npmSpec": "@openclaw/zoom-meetings",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     }

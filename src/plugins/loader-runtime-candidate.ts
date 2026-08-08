@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   resolveEffectiveEnableState,
@@ -19,7 +20,7 @@ import {
   formatBundledChannelWrongLoaderError,
   type PluginModuleLoader,
   resolvePluginModuleExport,
-  runPluginRegisterSync,
+  runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import {
   formatAutoEnabledActivationReason,
@@ -49,7 +50,6 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
 import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
@@ -224,6 +224,7 @@ export function loadRuntimePluginCandidate(params: {
     origin: candidate.origin,
     preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
     packageManifest: candidate.packageManifest,
+    registry,
   });
   const runtimeSetupEntry = manifestRecord.setupSource
     ? resolvePluginRuntimeArtifact({
@@ -234,6 +235,7 @@ export function loadRuntimePluginCandidate(params: {
         origin: candidate.origin,
         preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
         packageManifest: candidate.packageManifest,
+        registry,
       })
     : undefined;
   const scopedSetupOnlyChannelPluginRequested =
@@ -258,10 +260,7 @@ export function loadRuntimePluginCandidate(params: {
     manifestRecord,
     cfg: context.cfg,
     env: context.env,
-    preferSetupRuntimeForChannelPlugins: context.forceFullRuntimeForChannelPlugins
-      ? false
-      : context.preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins: context.forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent: context.channelPluginLoadIntent,
     toolDiscovery: params.options.toolDiscovery === true,
   });
   if (!registrationPlan) {
@@ -435,8 +434,6 @@ export function loadRuntimePluginCandidate(params: {
       registryBuilder: params.registryBuilder,
       cfg: context.cfg,
       entry,
-      env: context.env,
-      preferSetupRuntimeForChannelPlugins: context.preferSetupRuntimeForChannelPlugins,
       seenIds: state.seenIds,
       candidateOrigin: candidate.origin,
       logger: params.logger,
@@ -527,19 +524,13 @@ export function loadRuntimePluginCandidate(params: {
     hookPolicy: entry?.hooks,
     registrationMode: registrationPlan.mode,
   });
-  const transaction = createPluginRegistrationTransaction({
-    registry,
-    activeRecord: record,
-    rollbackGlobalSideEffects: () =>
-      params.registryBuilder.rollbackPluginGlobalSideEffects(record.id),
-  });
   const beforeRegister = performance.now();
   let registerFailed = false;
   try {
     withProfile(
       { pluginId: record.id, source: record.source },
       `${registrationPlan.mode}:register`,
-      () => runPluginRegisterSync(register, api),
+      () => runPluginRegisterSyncInRegistry(register, api, registry, record.id),
     );
     // Dashboard entries stay inside the same registry snapshot as their RPC handlers.
     // Non-activating snapshots are private until cached activation; rollback restores both.
@@ -548,14 +539,13 @@ export function loadRuntimePluginCandidate(params: {
     }
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
-    transaction.commit({ activate: context.shouldActivate });
     if (clearMismatchedQuarantineAfterLoad) {
       // Plugin ids can intentionally shadow an installed source via load.paths.
       // Clear stale install state only after the selected override registers.
       clearActiveDegradedPlugin(pluginId);
     }
   } catch (error) {
-    transaction.rollback();
+    params.registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
     recordPluginError({
       logger: params.logger,
       registry,
@@ -588,20 +578,8 @@ function recordBundleDiagnostics(params: {
 }): void {
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
-      capability !== "skills" &&
-      capability !== "mcpServers" &&
-      capability !== "settings" &&
-      !(
-        (capability === "commands" ||
-          capability === "agents" ||
-          capability === "outputStyles" ||
-          capability === "lspServers") &&
-        (params.record.bundleFormat === "claude" || params.record.bundleFormat === "cursor")
-      ) &&
-      !(
-        capability === "hooks" &&
-        (params.record.bundleFormat === "codex" || params.record.bundleFormat === "claude")
-      ),
+      !params.record.bundleFormat ||
+      !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
     params.registry.diagnostics.push({
@@ -637,7 +615,7 @@ function recordBundleDiagnostics(params: {
         source: params.record.source,
         message:
           "bundle MCP servers use unsupported transports or incomplete configs " +
-          `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
       });
     }
   }

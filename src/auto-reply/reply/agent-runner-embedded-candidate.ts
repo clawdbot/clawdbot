@@ -4,6 +4,7 @@ import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import {
@@ -23,6 +24,7 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -43,9 +45,9 @@ import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.j
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
+  | "classifyStreamingPartial"
+  | "sanitizeStreamingText"
   | "normalizeStreamingText"
-  | "preparePartialForTyping"
-  | "handlePartialForTyping"
   | "startPresentationWhileTyping"
   | "blockReplyHandler"
 >;
@@ -70,6 +72,8 @@ export async function runEmbeddedFallbackCandidate(params: {
   suppressAssistantErrorPersistenceForCandidate: boolean;
   onAssistantErrorMessagePersisted: () => void;
   userTurnTranscriptRecorder: NonNullable<AgentTurnParams["opts"]>["userTurnTranscriptRecorder"];
+  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
+  onContextEngineTurnCandidate: RunEmbeddedAgentParams["onContextEngineTurnCandidate"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -214,6 +218,8 @@ export async function runEmbeddedFallbackCandidate(params: {
         transcriptPrompt: turn.transcriptCommandBody,
         media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+        contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+        onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
@@ -260,22 +266,39 @@ export async function runEmbeddedFallbackCandidate(params: {
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
         onPartialReply: async (payload) => {
+          const classified = params.presentation.classifyStreamingPartial(payload);
+          if (classified.skip || !classified.text) {
+            return false;
+          }
+          const textForTyping = classified.text;
+          let didMaterialize = false;
+          let materializedText: string | undefined;
+          const partialPayload: PartialReplyPayload = {
+            get text() {
+              if (!didMaterialize) {
+                const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
+                materializedText = sanitized.skip ? undefined : sanitized.text;
+                didMaterialize = true;
+              }
+              return materializedText;
+            },
+            mediaUrls: payload.mediaUrls,
+          };
+          const onPartialReply = turn.opts?.onPartialReply;
           if (!params.preserveProgressCallbackStartOrder) {
-            const textForTyping = await params.presentation.handlePartialForTyping(payload);
-            if (!turn.opts?.onPartialReply || textForTyping === undefined) {
-              return;
+            await turn.typingSignals.signalTextDelta(textForTyping);
+            if (!onPartialReply) {
+              return false;
             }
-            await turn.opts.onPartialReply({ text: textForTyping, mediaUrls: payload.mediaUrls });
-            return;
+            return await onPartialReply(partialPayload);
           }
-          const textForTyping = params.presentation.preparePartialForTyping(payload);
-          if (textForTyping === undefined) {
-            return;
+          if (!onPartialReply) {
+            await turn.typingSignals.signalTextDelta(textForTyping);
+            return false;
           }
-          await params.presentation.startPresentationWhileTyping(
+          return await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () =>
-              turn.opts?.onPartialReply?.({ text: textForTyping, mediaUrls: payload.mediaUrls }),
+            () => onPartialReply(partialPayload),
           );
         },
         onAssistantMessageStart: async () => {
@@ -286,7 +309,9 @@ export async function runEmbeddedFallbackCandidate(params: {
           }
           await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalMessageStart(),
-            () => turn.opts?.onAssistantMessageStart?.(),
+            async () => {
+              await turn.opts?.onAssistantMessageStart?.();
+            },
           );
         },
         onReasoningStream:
@@ -307,18 +332,23 @@ export async function runEmbeddedFallbackCandidate(params: {
                 }
                 await params.presentation.startPresentationWhileTyping(
                   turn.typingSignals.signalReasoningDelta(),
-                  () =>
-                    turn.opts?.onReasoningStream?.({
+                  async () => {
+                    await turn.opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
                       isReasoningSnapshot: payload.isReasoningSnapshot,
                       requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                    }),
+                    });
+                  },
                 );
               }
             : undefined,
         streamReasoningInNonStreamModes: turn.opts?.streamReasoningInNonStreamModes,
-        onReasoningEnd: turn.opts?.onReasoningEnd,
+        onReasoningEnd: turn.opts?.onReasoningEnd
+          ? async () => {
+              await turn.opts?.onReasoningEnd?.();
+            }
+          : undefined,
         onAgentEvent: createAgentRunEventHandler({
           turn,
           lifecycleBackstop,
@@ -327,6 +357,7 @@ export async function runEmbeddedFallbackCandidate(params: {
           messageToolDeliveryState: params.messageToolDeliveryState,
           provider: params.provider,
           model: params.model,
+          runId: params.runId,
           effectiveSessionId: params.effectiveRun.sessionId,
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
           onCompactionCompleted: () => {
@@ -354,25 +385,26 @@ export async function runEmbeddedFallbackCandidate(params: {
               // Serialized delivery preserves tool result order across detached callbacks.
               let toolResultChain: Promise<void> = Promise.resolve();
               return (payload: ReplyPayload) => {
-                toolResultChain = toolResultChain
-                  .then(async () => {
-                    turn.replyOperation?.recordActivity();
-                    const { text, skip } = params.presentation.normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    if (text !== undefined) {
-                      await turn.typingSignals.signalTextDelta(text);
-                    }
-                    await turn.opts?.onToolResult?.({ ...payload, text });
-                  })
-                  .catch((err: unknown) => {
-                    logVerbose(`tool result delivery failed: ${String(err)}`);
-                  });
+                const delivery = toolResultChain.then(async () => {
+                  turn.replyOperation?.recordActivity();
+                  const { text, skip } = params.presentation.normalizeStreamingText(payload);
+                  if (skip) {
+                    return;
+                  }
+                  if (text !== undefined) {
+                    await turn.typingSignals.signalTextDelta(text);
+                  }
+                  await turn.opts?.onToolResult?.({ ...payload, text });
+                });
+                // Keep later results best-effort while exposing this delivery to awaiting owners.
+                toolResultChain = delivery.catch((err: unknown) => {
+                  logVerbose(`tool result delivery failed: ${String(err)}`);
+                });
                 const task = toolResultChain.finally(() => {
                   turn.pendingToolTasks.delete(task);
                 });
                 turn.pendingToolTasks.add(task);
+                return delivery;
               };
             })()
           : undefined,

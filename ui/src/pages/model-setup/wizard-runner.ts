@@ -15,7 +15,7 @@ export type ModelSetupWizardStartMethod =
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   onChange: (state: ModelSetupWizardState) => void;
-  onDone: (startMethod: ModelSetupWizardStartMethod) => void;
+  onDone: (startMethod: ModelSetupWizardStartMethod, preparedModelRef?: string) => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -153,7 +153,7 @@ export class ModelSetupWizardRunner {
     if (next.phase === "done") {
       this.sessionId = null;
       this.abortController = null;
-      this.options.onDone(this.startMethod);
+      this.options.onDone(this.startMethod, next.preparedModelRef);
       return;
     }
     // Gateway-executed steps (download/pull progress) carry no input controls,

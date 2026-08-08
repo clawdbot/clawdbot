@@ -5,6 +5,7 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
@@ -13,6 +14,7 @@ import {
   sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
 import {
+  composerDraftSearch,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
@@ -23,6 +25,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
@@ -105,8 +108,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
   private readonly attention = new SessionAttentionController(this);
 
-  // These controllers initialize on AppSidebar after the navigation-owned
-  // controllers, matching the former inheritance-chain field order.
+  // Controller order preserves the former inheritance-chain field initialization order.
   declare readonly sessionOrganizer: SessionOrganizerController;
   declare readonly sidebarMenus: SidebarMenusController;
 
@@ -198,8 +200,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
         void this.sessionData.loadChildSessions(session.key);
       }
     }
-    // The main session hides behind the identity card, so nothing in the list
-    // triggers its child fetch; load eagerly or its threads never surface.
+    // The hidden main row needs an eager child fetch or its threads never surface.
     const mainRow = this.mainSessionRow();
     if (
       mainRow &&
@@ -371,20 +372,16 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
-    if (event.defaultPrevented || event.button !== 0) {
-      return;
-    }
-    if (session.isChild) {
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-        return;
-      }
+    if (session.isChild && shouldHandleNavigationClick(event)) {
       event.preventDefault();
       this.clearSessionSelection();
       this.selectSession(session.key);
       return;
     }
-    // Cmd/Ctrl and Shift clicks build the multi-select instead of the browser's
-    // open-in-new-tab default; middle-click still opens the row in a new tab.
+    if (session.isChild || event.defaultPrevented || event.button !== 0) {
+      return;
+    }
+    // Modified parent clicks build multi-select; middle-click keeps native new-tab behavior.
     if (event.metaKey || event.ctrlKey) {
       event.preventDefault();
       this.toggleSessionSelected(session.key);
@@ -546,7 +543,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       return;
     }
     const key = this.agentResumeKey(agentId);
-    const draft = encodeURIComponent(t("chat.welcome.suggestions.whatCanYouDo"));
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey: key,
@@ -558,7 +554,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this.setApplicationSession(key, this.selectedAgentIdForSessions());
     this.onNavigate?.("chat", {
       ...target.options,
-      search: `?draft=${draft}`,
+      search: composerDraftSearch(t("chat.welcome.suggestions.whatCanYouDo")),
     });
   }
 
@@ -671,7 +667,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       ...rows,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
     ].filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return (
         parentKey != null &&
         mainSessionKeys.has(parentKey) &&

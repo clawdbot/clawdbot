@@ -122,6 +122,49 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  it("materializes only the newest lazy partial in a throttle window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { throttleMs: 250 });
+      let materializeCount = 0;
+
+      for (let index = 1; index <= 24; index += 1) {
+        stream.updateLazy(() => {
+          materializeCount += 1;
+          return `partial ${index}`;
+        });
+      }
+
+      expect(materializeCount).toBe(0);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(1);
+      expectPreviewSend(api, "partial 24");
+
+      vi.setSystemTime(500);
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return undefined;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(materializeCount).toBe(2);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return "visible after empty";
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(3);
+      expectPreviewEdit(api, "visible after empty");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports the provider response after the first preview becomes durable", async () => {
     const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
     const onProviderMessage = vi.fn();
@@ -140,6 +183,24 @@ describe("createTelegramDraftStream", () => {
     expect(onProviderMessage).toHaveBeenCalledWith(
       expect.objectContaining({ message_id: 101, message_thread_id: 99 }),
     );
+  });
+
+  it("stops before another preview when accepted-message validation fails", async () => {
+    const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 7 }));
+    const validationError = new Error("provider topic mismatch");
+    const validateProviderMessage = vi.fn(async () => {
+      throw validationError;
+    });
+    const stream = createDraftStream(api, { validateProviderMessage });
+
+    stream.update("First preview");
+    await expect(stream.flush()).rejects.toBe(validationError);
+    stream.update("Second preview");
+    await expect(stream.flush()).rejects.toBe(validationError);
+
+    expect(validateProviderMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("stops accepting updates before awaiting durable provider observation", async () => {

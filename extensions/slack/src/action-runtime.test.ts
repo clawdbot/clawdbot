@@ -1,5 +1,6 @@
-// Slack tests cover action runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Slack tests cover action runtime plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
@@ -90,12 +91,7 @@ describe("handleSlackAction", () => {
     return { cfg, context, hasRepliedRef };
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function requireArray(value: unknown, label: string): unknown[] {
     expect(Array.isArray(value)).toBe(true);
@@ -640,6 +636,48 @@ describe("handleSlackAction", () => {
       uploadFileName: "report-final.png",
       uploadTitle: "Report Final",
     });
+  });
+
+  it.each([
+    {
+      action: "sendMessage",
+      params: {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "render",
+        mediaUrl: "renders/chart.png",
+      },
+    },
+    {
+      action: "uploadFile",
+      params: {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "renders/chart.png",
+        initialComment: "render",
+      },
+    },
+  ] as const)("forwards trusted media access unchanged for $action", async ({ params }) => {
+    const cfg = slackConfig();
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = {
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/workspace-agent",
+    };
+
+    await handleSlackAction(params, cfg, {
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+    });
+
+    const sendOptions = expectSlackSendCall(0, "channel:C123", "render", {
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: undefined,
+    });
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
   });
 
   it("rejects replyBroadcast for uploadFile", async () => {

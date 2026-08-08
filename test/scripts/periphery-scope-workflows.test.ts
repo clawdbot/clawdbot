@@ -131,37 +131,47 @@ function writeFixture(repoRoot: string, relativePath: string, contents: string):
 }
 
 describe("Periphery scope workflows", () => {
-  it.each(WORKFLOW_CASES)("uses the synthetic merge parent for $name scope", ({ path }) => {
-    const workflow = readWorkflow(path);
-    const steps = workflow.jobs?.scope?.steps ?? [];
-    const checkout = steps.find((step) => step.name === "Checkout");
-    const script = scopeScript(path);
+  it.each(WORKFLOW_CASES)(
+    "uses the synthetic merge parent for $name scope",
+    ({ path: workflowPath }) => {
+      const workflow = readWorkflow(workflowPath);
+      const steps = workflow.jobs?.scope?.steps ?? [];
+      const checkout = steps.find((step) => step.name === "Checkout");
+      const script = scopeScript(workflowPath);
 
-    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-    expect(workflow.on?.pull_request?.paths).toBeUndefined();
-    expect(checkout?.with?.["fetch-depth"]).toBe(2);
-    expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
-    expect(script).toContain('"HEAD^1"');
-    expect(script).not.toContain("pulls.listFiles");
-    expect(() =>
-      compileFunction(`return (async () => {\n${script}\n})();`, ["context", "core", "exec"]),
-    ).not.toThrow();
-  });
+      expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
+      expect(workflow.on?.pull_request?.paths).toBeUndefined();
+      expect(checkout?.with?.["fetch-depth"]).toBe(2);
+      expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
+      expect(script).toContain('"HEAD^1"');
+      expect(script).not.toContain("pulls.listFiles");
+      expect(() =>
+        compileFunction(`return (async () => {\n${script}\n})();`, ["context", "core", "exec"]),
+      ).not.toThrow();
+    },
+  );
 
-  it.each(WORKFLOW_CASES)("selects only $name scope changes", async ({ path, scopedPath }) => {
-    await expect(runScope(path, { files: [scopedPath] })).resolves.toBe("true");
-    await expect(runScope(path, { files: ["docs/index.md"] })).resolves.toBe("false");
-    await expect(runScope(path, { draft: true, files: [scopedPath] })).resolves.toBe("false");
-    await expect(runScope(path, { eventName: "workflow_dispatch" })).resolves.toBe("true");
-    await expect(
-      runScope(path, {
-        files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }],
-      }),
-    ).resolves.toBe("true");
-    await expect(runScope(path, { diffExitCode: 128 })).rejects.toThrow(
-      "git diff failed with exit code 128",
-    );
-  });
+  it.each(WORKFLOW_CASES)(
+    "selects only $name scope changes",
+    async ({ path: workflowPath, scopedPath }) => {
+      await expect(runScope(workflowPath, { files: [scopedPath] })).resolves.toBe("true");
+      await expect(runScope(workflowPath, { files: ["docs/index.md"] })).resolves.toBe("false");
+      await expect(runScope(workflowPath, { draft: true, files: [scopedPath] })).resolves.toBe(
+        "false",
+      );
+      await expect(runScope(workflowPath, { eventName: "workflow_dispatch" })).resolves.toBe(
+        "true",
+      );
+      await expect(
+        runScope(workflowPath, {
+          files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }],
+        }),
+      ).resolves.toBe("true");
+      await expect(runScope(workflowPath, { diffExitCode: 128 })).rejects.toThrow(
+        "git diff failed with exit code 128",
+      );
+    },
+  );
 
   it("ignores scoped files added only by base-branch drift", async () => {
     const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-scope-");

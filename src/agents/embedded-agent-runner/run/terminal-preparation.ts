@@ -2,6 +2,7 @@ import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
@@ -39,7 +40,6 @@ export function prepareEmbeddedRunTerminal(input: {
   outerContextTokenMeta: { contextTokens?: number };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
-  lastTurnTotal?: number;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
@@ -72,18 +72,17 @@ export function prepareEmbeddedRunTerminal(input: {
     usageAccumulator: input.usageAccumulator,
     lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
-    lastTurnTotal: input.lastTurnTotal,
   });
-  const reportedModelRef = resolveReportedModelRef({
+  const resolvedModelRef = resolveReportedModelRef({
     provider: input.provider,
     model: input.model,
     assistant: terminalAssistant,
   });
+  const responseModel = terminalAssistant?.responseModel?.trim() || resolvedModelRef.model;
+  const reportedModelRef = { ...resolvedModelRef, model: responseModel };
   const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const terminalAssistantCanOwnFinalText =
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
-  // Total-only usage (lastTurnTotal override) carries no token split, so cost
-  // math uses the accumulated input/output/cache fields untouched by it.
   const costUsd = estimateUsageCost({
     usage: usageMeta.usage,
     cost: resolveModelCostConfig({
@@ -133,6 +132,30 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
+  const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
+  const successfulToolNames = [
+    ...new Set(
+      attempt.toolMetas
+        .filter((entry) => entry.isError === false)
+        .map((entry) => entry.toolName.trim())
+        .filter(Boolean),
+    ),
+  ];
+  Object.assign(agentMeta, {
+    terminalReceipt: {
+      runId: runParams.runId,
+      sessionId: input.sessionIdUsed,
+      turnId: terminalTurnId?.trim() || runParams.runId,
+      requested: { provider: input.provider, model: input.model },
+      effective: {
+        provider: reportedModelRef.provider,
+        model: reportedModelRef.model,
+        responseModel,
+      },
+      successfulToolNames,
+      rerouted: responseModel !== input.model,
+    } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
+  });
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
   // not an earlier completed cycle, owns paused-turn classification.
   const payloadAssistant = attempt.yieldDetected

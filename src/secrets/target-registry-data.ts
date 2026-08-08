@@ -467,8 +467,8 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   preferPersisted?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
-    config: {},
     env: params.env,
+    allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);

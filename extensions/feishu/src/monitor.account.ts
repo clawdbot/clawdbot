@@ -77,8 +77,9 @@ export async function resolveReactionSyntheticEvent(
 
   const emoji = event.reaction_type?.emoji_type;
   const messageId = event.message_id;
-  const senderId = event.user_id?.open_id;
-  const senderUserId = event.user_id?.user_id;
+  const senderOpenId = event.user_id?.open_id?.trim();
+  const senderUserId = event.user_id?.user_id?.trim();
+  const senderId = senderOpenId || senderUserId;
   if (!emoji || !messageId || !senderId) {
     return null;
   }
@@ -135,14 +136,18 @@ export async function resolveReactionSyntheticEvent(
   return {
     sender: {
       sender_id: {
-        open_id: senderId,
+        ...(senderOpenId ? { open_id: senderOpenId } : {}),
         ...(senderUserId ? { user_id: senderUserId } : {}),
       },
       sender_type: "user",
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      // Synthetic IDs are local-only; replies and topic routing must retain the real message facts.
+      reply_target_message_id: messageId,
       typing_target_message_id: messageId,
+      ...(reactedMsg.rootId ? { root_id: reactedMsg.rootId } : {}),
+      ...(reactedMsg.threadId ? { thread_id: reactedMsg.threadId } : {}),
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",

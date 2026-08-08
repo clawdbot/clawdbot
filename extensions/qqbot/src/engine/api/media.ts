@@ -161,7 +161,10 @@ export async function downloadDirectUploadUrl(
   const { response, release } = await fetchDirectUploadDownload(parsed.toString());
   try {
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // A debug-capture clone can keep the tee open, so waiting for cancel would
+      // hang before the error is returned. Fire-and-forget matches the timeout
+      // path above and the pattern used across other plugins.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
     }
     return await readDirectUploadResponse(response, opts.maxBytes ?? MAX_UPLOAD_SIZE);

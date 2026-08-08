@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const schemaDir = path.join(repoRoot, "packages/gateway-protocol/src/schema");
 const failures = [];
 const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -111,8 +111,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map((match) => match[1]);
 check(
-  ownerModules.length === 52 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 52-module owner list",
+  ownerModules.length === 54 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 54-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,

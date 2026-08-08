@@ -17,6 +17,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   modelCatalogPricingFingerprint,
   resolveCatalogModelPricing,
@@ -293,12 +294,7 @@ function loadModelsJsonCostIndex(options?: {
         normalizedEntries: null,
         rawEntries: null,
       };
-      if (modelsJsonCostCacheByAgentDir.size >= MODELS_JSON_COST_CACHE_LIMIT) {
-        const oldestAgentDir = modelsJsonCostCacheByAgentDir.keys().next().value;
-        if (oldestAgentDir !== undefined) {
-          modelsJsonCostCacheByAgentDir.delete(oldestAgentDir);
-        }
-      }
+      pruneMapToMaxSize(modelsJsonCostCacheByAgentDir, MODELS_JSON_COST_CACHE_LIMIT - 1);
       modelsJsonCostCacheByAgentDir.set(agentDir, modelsJsonCostCache);
     }
 

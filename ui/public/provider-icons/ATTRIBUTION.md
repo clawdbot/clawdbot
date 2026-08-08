@@ -17,15 +17,22 @@ content otherwise match the cited upstream files.
 
 Provider names and marks remain the property of their respective owners.
 
+## Pi icon
+
+`ProviderIcon-pi.svg` is a metadata-cleaned copy of the official Pi logo:
+
+- Source: https://pi.dev/logo.svg
+- Press kit: https://pi.dev/press-kit
+
 ## LM Studio icon
 
-`ProviderIcon-lmstudio.svg` is a metadata-cleaned copy of the LM Studio mark
-distributed by Simple Icons:
+`ProviderIcon-lmstudio.svg` is the official monochrome outline icon published
+by LM Studio:
 
 - Source:
-  https://simpleicons.org/?q=lmstudio
-- Upstream license:
-  https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md
+  https://lmstudio.ai/assets/marketing/brand/download/logos/lm-studio-icon-outline-white.svg
+- Brand guidelines:
+  https://lmstudio.ai/brand
 
 ## llama.cpp icon
 

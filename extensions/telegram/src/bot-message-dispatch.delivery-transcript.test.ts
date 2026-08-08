@@ -1,3 +1,4 @@
+import type { Message } from "grammy/types";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -25,12 +26,10 @@ import type {
   TelegramBotDeps,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
-import {
-  buildTelegramConversationContext,
-  createTelegramMessageCache,
-  resolveTelegramMessageCacheScope,
-} from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { buildTelegramConversationContext, createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
   it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
@@ -215,14 +214,16 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
         NonNullable<TelegramBotDeps["createTelegramDraftStream"]>
       >[0];
-      await streamParams.onProviderMessage?.({
+      const providerMessage = {
         chat: { id: 123, type: "private", first_name: "Keshav" },
         message_thread_id: 777,
         message_id: 1497,
         date: 1_779_425_461,
         text: "Initial streamed text",
         from: { id: 999, is_bot: true, first_name: "Telegram Bot Name" },
-      });
+      } satisfies Message;
+      await streamParams.validateProviderMessage?.(providerMessage);
+      await streamParams.onProviderMessage?.(providerMessage);
       await dispatcherOptions.deliver(
         { text: "Done already: timeoutSeconds is now 7200s." },
         { kind: "final" },
@@ -245,6 +246,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     });
 
     expect(recordResults).toEqual([true, true]);
+    expect(wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
 
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),

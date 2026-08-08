@@ -49,6 +49,7 @@ const PROVIDER_ICON_NAMES = new Set([
   "opencodego",
   "openrouter",
   "perplexity",
+  "pi",
   "poe",
   "qoder",
   "sakana",
@@ -112,6 +113,13 @@ export function formatRawProviderLabel(provider: string): string {
 /** Brand display name for a (normalized, lowercase) provider id. */
 export function providerDisplayLabel(provider: string): string {
   return PROVIDER_DISPLAY_LABELS[provider] ?? formatRawProviderLabel(provider);
+}
+
+/** Provider id from a canonical `provider/model` reference, or null when absent. */
+export function providerIdFromModelRef(modelRef: string): string | null {
+  const separator = modelRef.indexOf("/");
+  const provider = separator > 0 ? modelRef.slice(0, separator).trim().toLowerCase() : "";
+  return provider || null;
 }
 
 /** Icon asset name for a (normalized, lowercase) provider id, or null when no brand mark ships. */

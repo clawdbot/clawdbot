@@ -882,9 +882,7 @@ describe("scripts/test-group-report arg parsing", () => {
               flag,
               expectDefined(values[1], `second ${flag} value`),
             ];
-      expect(() => parseTestGroupReportArgs(args)).toThrow(
-        `${String(flag)} was provided more than once`,
-      );
+      expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
     }
     expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([
       "a.ts",

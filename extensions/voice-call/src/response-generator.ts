@@ -4,8 +4,9 @@
  */
 
 import crypto from "node:crypto";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  applyModelOverrideToSessionEntry,
+  applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
@@ -292,6 +293,7 @@ export async function generateVoiceResponse(
 
         // Resolve model from config
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
         let sessionEntry = existingSessionEntry;
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
@@ -316,8 +318,14 @@ export async function generateVoiceResponse(
                       updatedAt: now,
                     };
                 if (voiceConfig.responseModel) {
-                  applyModelOverrideToSessionEntry({
+                  applyModelOverrideWithAuthProfileCompatibility({
+                    cfg,
+                    agentDir,
                     entry: next,
+                    currentProvider:
+                      entry.providerOverride?.trim() ||
+                      entry.modelProvider?.trim() ||
+                      configuredModel.provider,
                     selection: { provider, model },
                     selectionSource: "auto",
                   });

@@ -289,6 +289,114 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("preserves durable lanes when a channel derives ephemeral claim lanes", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue("message-1", { text: "debounced" }, { laneKey: "chat:123" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "imessage-worker",
+        deriveLaneKey: (record) => `${record.laneKey ?? "event"}:${record.id}`,
+      });
+
+      expect(claimed?.laneKey).toBe("chat:123");
+      expect((await queue.listClaims())[0]?.laneKey).toBe("chat:123");
+    });
+  });
+
+  it("reconciles opted-in persisted lanes before blocking and claiming", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue(
+        "a",
+        { lane: "chat:123" },
+        { laneKey: "chat:123:topic:7", receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "b",
+        { lane: "chat:456" },
+        { laneKey: "chat:456:topic:9", receivedAt: 2 },
+      );
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        blockedLaneKeys: ["chat:123"],
+        deriveLaneKey: (record) => record.payload.lane,
+        reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) =>
+          storedLaneKey === `${derivedLaneKey}:topic:7` ||
+          storedLaneKey === `${derivedLaneKey}:topic:9`,
+      });
+
+      expect(claimed?.id).toBe("b");
+      expect(claimed?.laneKey).toBe("chat:456");
+      expect((await queue.listClaims())[0]?.laneKey).toBe("chat:456");
+      expect((await queue.listPending())[0]?.laneKey).toBe("chat:123:topic:7");
+    });
+  });
+
+  it("blocks opted-in legacy candidate lanes using their canonical owner", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue(
+        "a",
+        { lane: "chat:123" },
+        { laneKey: "chat:123:topic:7", receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "b",
+        { lane: "chat:123" },
+        { laneKey: "chat:123:topic:8", receivedAt: 2 },
+      );
+      await queue.enqueue(
+        "c",
+        { lane: "chat:456" },
+        { laneKey: "chat:456:topic:9", receivedAt: 3 },
+      );
+      await queue.claim("a", { ownerId: "sibling-worker" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        candidateIds: ["a", "b", "c"],
+        orderBy: "id",
+        deriveLaneKey: (record) => record.payload.lane,
+        reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) =>
+          storedLaneKey.startsWith(`${derivedLaneKey}:topic:`),
+      });
+
+      expect(claimed?.id).toBe("c");
+      expect(claimed?.laneKey).toBe("chat:456");
+      expect((await queue.listClaims()).find((record) => record.id === "a")?.laneKey).toBe(
+        "chat:123:topic:7",
+      );
+      expect((await queue.listPending())[0]?.laneKey).toBe("chat:123:topic:8");
+    });
+  });
+
+  it("preserves persisted lanes when an owner rejects their reconciliation", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue("a", { lane: "chat:123" }, { laneKey: "chat:999:topic:7" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        deriveLaneKey: (record) => record.payload.lane,
+        reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) =>
+          storedLaneKey === `${derivedLaneKey}:topic:7`,
+      });
+
+      expect(claimed?.laneKey).toBe("chat:999:topic:7");
+      expect((await queue.listClaims())[0]?.laneKey).toBe("chat:999:topic:7");
+    });
+  });
+
   it("blocks lanes claimed by candidate rows before claiming later candidates", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;

@@ -392,6 +392,27 @@ exit 1
     }
   });
 
+  it("keeps POSIX provider secrets out of executable command lines", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+    const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
+        exportLine,
+      ]);
+      expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
+      expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
+      expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
+      expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
+        "with_provider_api_key",
+      );
+    }
+  });
+
   it("does not recreate retired workspace setup state in release smoke scripts", () => {
     const input = {
       auth: TEST_AUTH,
@@ -837,6 +858,110 @@ exit 1
     expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $donePath");
     expect(commands).not.toContain("Set-Content -Path $pidPath");
     expect(commands).not.toContain("ReadAllBytes");
+  });
+
+  it.each([
+    {
+      scenario: "a successfully launched job",
+      launchStatus: 0,
+      launchOutput: "started\n",
+      expectedError: "windows setup deadline timed out",
+    },
+    {
+      scenario: "a launch that never materializes",
+      launchStatus: 0,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 0",
+    },
+    {
+      scenario: "a genuine launch failure",
+      launchStatus: 17,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 17",
+    },
+  ])("preserves $scenario when Windows setup exhausts its active budget", async (testCase) => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let launchAttempts = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        launchAttempts++;
+        return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows setup deadline",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output test",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).rejects.toThrow(testCase.expectedError);
+      expect(launchAttempts).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("drains a completed Windows job when setup exhausts the active budget", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let completionProbes = 0;
+    let logProbes = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args.includes("cmd.exe")) {
+        const command = args.at(-1) ?? "";
+        if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+          logProbes++;
+          const markers = extractWindowsBackgroundControlMarkers(command);
+          return {
+            status: 0,
+            stderr: "",
+            stdout: [`${markers.exitPrefix}0`, markers.done, ""].join("\n"),
+          };
+        }
+        if (command.includes("(echo done) else (echo wait)")) {
+          completionProbes++;
+          return { status: 0, stderr: "", stdout: "done\n" };
+        }
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows completed before first poll",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output done",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).resolves.toBeUndefined();
+      expect(completionProbes).toBe(1);
+      expect(logProbes).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("does not treat Windows background log text as completion control", async () => {

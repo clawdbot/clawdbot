@@ -46,6 +46,7 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
       releaseForPrompt: vi.fn(async () => {
         order.push("release-prompt-lock");
       }),
+      isPromptSubmissionBlockedError: vi.fn(() => false),
     },
     withOwnedSessionWriteLock: vi.fn(async (operation) => await operation()),
     waitForPendingEvents: vi.fn(async () => {
@@ -245,6 +246,52 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     );
   });
 
+  it("settles an aborted run when prompt release returns its recorded cancellation reason", async () => {
+    const cancellationReason = new Error("cancelled by operator");
+    const fixture = createFixture({
+      sessionLockController: {
+        releaseForPrompt: vi.fn(async () => {
+          throw cancellationReason;
+        }),
+        isPromptSubmissionBlockedError: (error: unknown) => error === cancellationReason,
+      } as never,
+      repairedRejectedThinkingReplay: false,
+    });
+    fixture.input.settle.readLifecycleState = () => ({
+      aborted: true,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+    const settledStream = {
+      promptError: cancellationReason,
+      promptErrorSource: "prompt",
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [],
+      sessionIdUsed: "session-1",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    };
+    mocks.settleStream.mockResolvedValue(settledStream);
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    await expect(finalizeEmbeddedAttemptStreamPhase(fixture.input)).resolves.toEqual({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    expect(mocks.settleStream).toHaveBeenCalledOnce();
+    expect(mocks.completeAfterTurn).toHaveBeenCalledOnce();
+  });
+
   it("publishes mutated settlement error state before rethrowing", async () => {
     const fixture = createFixture({ repairedRejectedThinkingReplay: false });
     const settlementError = new Error("settlement failed");
@@ -290,6 +337,7 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
         releaseForPrompt: vi.fn(async () => {
           throw releaseError;
         }),
+        isPromptSubmissionBlockedError: () => false,
       } as never,
       repairedRejectedThinkingReplay: false,
       getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,

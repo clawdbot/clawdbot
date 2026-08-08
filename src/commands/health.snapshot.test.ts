@@ -695,31 +695,34 @@ describe("collectGatewayHealthSnapshot", () => {
         channels: {
           telegram: {
             accountId: "default",
+            running: true,
             connected: true,
             lastConnectedAt: 123,
+            healthState: "reconnecting",
           },
         },
         channelAccounts: {},
       },
     });
-    const telegram = snap.channels.telegram as {
+    type RuntimeStateFields = {
+      running?: boolean;
       connected?: boolean;
       lastConnectedAt?: number;
+      healthState?: string;
       probe?: { ok?: boolean; bot?: { username?: string } };
-      accounts?: Record<
-        string,
-        {
-          connected?: boolean;
-          lastConnectedAt?: number;
-          probe?: { ok?: boolean; bot?: { username?: string } };
-        }
-      >;
+    };
+    const telegram = snap.channels.telegram as RuntimeStateFields & {
+      accounts?: Record<string, RuntimeStateFields>;
     };
 
+    expect(telegram.running).toBe(true);
     expect(telegram.connected).toBe(true);
     expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.healthState).toBe("reconnecting");
     expect(telegram.probe?.bot?.username).toBe("runtime_bot");
+    expect(telegram.accounts?.default?.running).toBe(true);
     expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.healthState).toBe("reconnecting");
     expect(telegram.accounts?.default?.probe?.ok).toBe(true);
   });
 

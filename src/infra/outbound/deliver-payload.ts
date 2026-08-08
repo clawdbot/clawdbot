@@ -4,6 +4,7 @@ import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbo
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
 import {
   hasReplyPayloadContent,
+  type MessagePresentationBlock,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   type ReplyPayloadDeliveryPin,
@@ -356,6 +357,28 @@ export async function renderPresentationForDelivery(
     capabilities: handler.presentationCapabilities,
   });
   const textIsFallback = payload.presentationTextMode === "fallback";
+  const countDataBlocks = (blocks: readonly MessagePresentationBlock[]) =>
+    blocks.filter((block) => block.type === "table" || block.type === "chart").length;
+  const hasInteractiveBlocks = presentation.blocks.some(
+    (block) => block.type === "buttons" || block.type === "select",
+  );
+  // When every structured data block degraded to text and nothing interactive
+  // remains, the producer's authored fallback text beats generic block
+  // flattening; skip the channel renderer so that text survives verbatim.
+  if (
+    textIsFallback &&
+    payload.text?.trim() &&
+    !hasInteractiveBlocks &&
+    countDataBlocks(presentation.blocks) > 0 &&
+    countDataBlocks(adaptedPresentation.blocks) === 0
+  ) {
+    const {
+      presentation: _degradedPresentation,
+      presentationTextMode: _degradedPresentationTextMode,
+      ...authoredFallback
+    } = payload;
+    return authoredFallback;
+  }
   const adaptedPayload = {
     ...payload,
     ...(textIsFallback ? { text: undefined } : {}),
@@ -377,14 +400,14 @@ export async function renderPresentationForDelivery(
     presentationTextMode: _presentationTextMode,
     ...withoutPresentation
   } = payload;
+  // Native controls may be clipped or split; plain fallback must retain authored labels.
   return {
     ...withoutPresentation,
     text: textIsFallback
-      ? (payload.text ??
-        renderMessagePresentationFallbackText({ presentation: adaptedPresentation }))
+      ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
       : renderMessagePresentationFallbackText({
           text: payload.text,
-          presentation: adaptedPresentation,
+          presentation,
         }),
   };
 }

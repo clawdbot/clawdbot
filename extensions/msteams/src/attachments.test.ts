@@ -526,6 +526,39 @@ describe("msteams attachments", () => {
       expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
     });
 
+    it("returns the final auth failure with a readable response body", async () => {
+      let authAttempt = 0;
+      let observedStatus = 0;
+      let observedBodyUsed = true;
+      let observedBody = "";
+      const tokenProvider = createTokenProvider((scope) => `token:${scope}`);
+      const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
+        if (!new Headers(opts?.headers).has("Authorization")) {
+          return createTextResponse("initial unauthorized", 401);
+        }
+        authAttempt += 1;
+        return createTextResponse(`auth failure ${authAttempt}`, 403);
+      });
+      saveResponseMediaMock.mockImplementationOnce(async (response: Response) => {
+        observedStatus = response.status;
+        observedBodyUsed = response.bodyUsed;
+        observedBody = await response.text();
+        throw new Error(`HTTP ${response.status}`);
+      });
+
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
+        { tokenProvider, authAllowHosts: [TEST_HOST] },
+      );
+
+      expect(media).toEqual([{ kind: "image" }]);
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
+      expect(observedStatus).toBe(403);
+      expect(observedBodyUsed).toBe(false);
+      expect(observedBody).toBe("auth failure 2");
+    });
+
     it("does not forward Authorization to redirects outside auth allowlist", async () => {
       const tokenProvider = createTokenProvider("top-secret-token");
       const graphFileUrl = createUrlForHost(GRAPH_HOST, "file");

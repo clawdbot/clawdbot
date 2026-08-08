@@ -22,6 +22,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { runGit } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   readSessionTranscriptVisibleMessageDelta,
@@ -131,13 +132,7 @@ function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined 
 function writeTouchedFilesCache(key: string, entry: TouchedFilesCacheEntry): void {
   touchedFilesCache.delete(key);
   touchedFilesCache.set(key, entry);
-  while (touchedFilesCache.size > TOUCHED_FILES_CACHE_LIMIT) {
-    const oldestKey = touchedFilesCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    touchedFilesCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(touchedFilesCache, TOUCHED_FILES_CACHE_LIMIT);
 }
 
 function sessionFilesError(type: string, message: string, details?: Record<string, unknown>) {

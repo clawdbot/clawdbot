@@ -4,92 +4,32 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import {
+  boundedCronCompletionRetention,
+  drainMatrixReconnect,
+  matrixOutboundForQueueTest,
+} from "./deliver.queue-integration.test-support.js";
 import { collectEntrySpoolPaths, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   claimDeliveryPlatformSendAttempt,
-  drainPendingDeliveries,
-  enqueueDeliveryOnce,
-  recoverPendingDeliveries,
-  type DeliverFn,
-} from "./delivery-queue.js";
+  loadPendingDeliveries,
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
+import { enqueueDeliveryOnce, recoverPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
-
-const boundedCronCompletionRetention = {
-  idPrefix: "cron-direct-delivery:v1:",
-  maxAgeMs: 24 * 60 * 60_000,
-  maxEntries: 2_000,
-} as const;
-
-type MatrixSendFn = (
-  to: string,
-  text: string,
-  options?: Record<string, unknown>,
-) => Promise<{ messageId: string } & Record<string, unknown>>;
-
-function resolveMatrixSender(
-  deps: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]["deps"],
-): MatrixSendFn {
-  const sender = deps?.matrix;
-  if (typeof sender !== "function") {
-    throw new Error("missing matrix sender");
-  }
-  return sender as MatrixSendFn;
-}
-
-function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
-  return {
-    channel: "matrix" as const,
-    ...result,
-  };
-}
-
-const matrixOutboundForQueueTest: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async ({ cfg, to, text, accountId, deps }) =>
-    withMatrixChannel(
-      await resolveMatrixSender(deps)(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
-      }),
-    ),
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) =>
-    withMatrixChannel(
-      await resolveMatrixSender(deps)(to, text ?? "", {
-        cfg,
-        accountId: accountId ?? undefined,
-        mediaUrl,
-      }),
-    ),
-};
-
-async function drainMatrixReconnect(opts: { deliver: DeliverFn; stateDir: string }): Promise<void> {
-  await drainPendingDeliveries({
-    drainKey: "matrix:reconnect-test",
-    logLabel: "Matrix reconnect drain",
-    cfg: {} as OpenClawConfig,
-    log: createRecoveryLog(),
-    stateDir: opts.stateDir,
-    deliver: opts.deliver,
-    selectEntry: (entry) => ({ match: entry.channel === "matrix", bypassBackoff: true }),
-  });
-}
 
 function createPartialSendFailure() {
   return vi
@@ -134,7 +74,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   afterEach(() => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -487,7 +427,14 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       staged.mediaStageId,
     );
     const pending = (await loadPendingDeliveries(tmpDir))[0];
-    expect(collectEntrySpoolPaths(pending?.payloads ?? [], tmpDir)).toEqual([spoolPath]);
+    expect(
+      collectEntrySpoolPaths(
+        pending
+          ? acceptedPreparedOutboundEntries(pending.preparedBatch).map((entry) => entry.payload)
+          : [],
+        tmpDir,
+      ),
+    ).toEqual([spoolPath]);
     await fs.rm(originalSource);
 
     let deliveredBytes: string | undefined;
@@ -779,6 +726,52 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       ).not.toBe("completed");
     },
   );
+
+  it("preserves queue custody when a provider timeout looks like an abort", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const timeout = new DOMException("Matrix request timed out", "AbortError");
+    const sendMatrix = vi.fn().mockRejectedValue(timeout);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "preserve this delivery until reconciliation" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow(timeout.message);
+
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      recoveryState: "unknown_after_send",
+      retryCount: 1,
+    });
+  });
+
+  it("removes an unsent queue intent when the caller cancels after publication", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const controller = new AbortController();
+    const sendMatrix = vi.fn();
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "cancel before provider dispatch" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        abortSignal: controller.signal,
+        onDeliveryIntent: () =>
+          controller.abort(new DOMException("Operator cancelled delivery", "AbortError")),
+      }),
+    ).rejects.toThrow("Operation aborted");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+  });
 
   it.each(["abort", "permanent rejection"] as const)(
     "preserves an already-sent Matrix payload when a later payload ends in %s",

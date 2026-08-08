@@ -85,6 +85,37 @@ const accountFixture: ResolvedMattermostAccount = {
   streamingMode: "partial",
   config: {},
 };
+const slashCallbackUrl = "https://gateway.example.com/slash";
+
+function createCurrentCommand(
+  overrides: Partial<MattermostCommandResponse> = {},
+): MattermostCommandResponse {
+  return {
+    id: "cmd-1",
+    token: "valid-token",
+    team_id: "t1",
+    trigger: "oc_status",
+    method: MATTERMOST_SLASH_POST_METHOD,
+    url: slashCallbackUrl,
+    auto_complete: true,
+    delete_at: 0,
+    ...overrides,
+  };
+}
+
+function createSlashPayload(
+  overrides: Partial<MattermostSlashCommandPayload> = {},
+): MattermostSlashCommandPayload {
+  return {
+    token: "valid-token",
+    team_id: "t1",
+    channel_id: "c1",
+    user_id: "u1",
+    command: "/oc_status",
+    text: "",
+    ...overrides,
+  };
+}
 
 let slashTestSequence = 0;
 let slashTestAccountId = "";
@@ -100,7 +131,7 @@ function createRegisteredCommand(params?: {
     teamId: params?.teamId ?? "t1",
     trigger: params?.trigger ?? "oc_status",
     token: params?.token ?? "valid-token",
-    url: params?.url ?? "https://gateway.example.com/slash",
+    url: params?.url ?? slashCallbackUrl,
     managed: false,
   };
 }
@@ -189,6 +220,25 @@ async function validateMattermostSlashCommandToken(params: {
     throw error;
   }
   return response.res.statusCode !== 401;
+}
+
+async function expectTokenValidation(params: {
+  client: MattermostClient;
+  registeredCommand: MattermostRegisteredCommand;
+  expected: boolean;
+  accountId?: string;
+  payload?: MattermostSlashCommandPayload;
+  log?: (message: string) => void;
+}): Promise<void> {
+  await expect(
+    validateMattermostSlashCommandToken({
+      accountId: params.accountId ?? "default",
+      client: params.client,
+      registeredCommand: params.registeredCommand,
+      payload: params.payload ?? createSlashPayload({ token: params.registeredCommand.token }),
+      log: params.log,
+    }),
+  ).resolves.toBe(params.expected);
 }
 
 function firstLogMessage(log: ReturnType<typeof vi.fn>): string {
@@ -300,33 +350,10 @@ describe("slash-http", () => {
   it("rejects the startup token when Mattermost has rotated the current command token", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
     const client = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "new-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      command: createCurrentCommand({ token: "new-token" }),
     });
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "old-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false });
 
     expect(registeredCommand.token).toBe("old-token");
   });
@@ -334,33 +361,10 @@ describe("slash-http", () => {
   it("accepts the startup token while the current Mattermost command still matches", async () => {
     const registeredCommand = createRegisteredCommand({ token: "valid-token" });
     const client = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      command: createCurrentCommand(),
     });
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(true);
+    await expectTokenValidation({ client, registeredCommand, expected: true });
   });
 
   it("rate-limits sequential current-command lookups without caching successes", async () => {
@@ -368,47 +372,13 @@ describe("slash-http", () => {
     vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
     try {
       const registeredCommand = createRegisteredCommand({ token: "valid-token" });
-      const command = {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      };
-      const client = createCommandLookupClient({ command });
-      const payload = {
-        token: "valid-token",
-        team_id: "t1",
-        channel_id: "c1",
-        user_id: "u1",
-        command: "/oc_status",
-        text: "",
-      };
+      const client = createCommandLookupClient({ command: createCurrentCommand() });
       const log = vi.fn();
 
       for (let i = 0; i < 20; i += 1) {
-        await expect(
-          validateMattermostSlashCommandToken({
-            accountId: "default",
-            client,
-            registeredCommand,
-            payload,
-            log,
-          }),
-        ).resolves.toBe(true);
+        await expectTokenValidation({ client, registeredCommand, expected: true, log });
       }
-      await expect(
-        validateMattermostSlashCommandToken({
-          accountId: "default",
-          client,
-          registeredCommand,
-          payload,
-          log,
-        }),
-      ).resolves.toBe(false);
+      await expectTokenValidation({ client, registeredCommand, expected: false, log });
 
       expect(client.requests).toHaveLength(20);
       expect(log).toHaveBeenCalledWith(
@@ -421,48 +391,17 @@ describe("slash-http", () => {
 
   it("rechecks matching current commands so startup tokens are not accepted after rotation", async () => {
     const registeredCommand = createRegisteredCommand({ token: "valid-token" });
-    let command = {
-      id: "cmd-1",
-      token: "valid-token",
-      team_id: "t1",
-      trigger: "oc_status",
-      method: MATTERMOST_SLASH_POST_METHOD,
-      url: "https://gateway.example.com/slash",
-      auto_complete: true,
-      delete_at: 0,
-    };
+    let command = createCurrentCommand();
     const client = createCommandLookupClient({
       command: () => command,
     });
-    const payload = {
-      token: "valid-token",
-      team_id: "t1",
-      channel_id: "c1",
-      user_id: "u1",
-      command: "/oc_status",
-      text: "",
-    };
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload,
-      }),
-    ).resolves.toBe(true);
+    await expectTokenValidation({ client, registeredCommand, expected: true });
     command = {
       ...command,
       token: "new-token",
     };
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload,
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false });
 
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands/cmd-1"]);
   });
@@ -470,42 +409,11 @@ describe("slash-http", () => {
   it("briefly caches failed current command validation without accepting stale tokens", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
     const client = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "new-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      command: createCurrentCommand({ token: "new-token" }),
     });
-    const payload = {
-      token: "old-token",
-      team_id: "t1",
-      channel_id: "c1",
-      user_id: "u1",
-      command: "/oc_status",
-      text: "",
-    };
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload,
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload,
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false });
+    await expectTokenValidation({ client, registeredCommand, expected: false });
 
     expect(client.requests).toEqual(["/commands/cmd-1"]);
   });
@@ -516,42 +424,11 @@ describe("slash-http", () => {
     try {
       const registeredCommand = createRegisteredCommand({ token: "old-token" });
       const client = createCommandLookupClient({
-        command: {
-          id: "cmd-1",
-          token: "new-token",
-          team_id: "t1",
-          trigger: "oc_status",
-          method: MATTERMOST_SLASH_POST_METHOD,
-          url: "https://gateway.example.com/slash",
-          auto_complete: true,
-          delete_at: 0,
-        },
+        command: createCurrentCommand({ token: "new-token" }),
       });
-      const payload = {
-        token: "old-token",
-        team_id: "t1",
-        channel_id: "c1",
-        user_id: "u1",
-        command: "/oc_status",
-        text: "",
-      };
 
-      await expect(
-        validateMattermostSlashCommandToken({
-          accountId: "default",
-          client,
-          registeredCommand,
-          payload,
-        }),
-      ).resolves.toBe(false);
-      await expect(
-        validateMattermostSlashCommandToken({
-          accountId: "default",
-          client,
-          registeredCommand,
-          payload,
-        }),
-      ).resolves.toBe(false);
+      await expectTokenValidation({ client, registeredCommand, expected: false });
+      await expectTokenValidation({ client, registeredCommand, expected: false });
 
       expect(client.requests).toEqual(["/commands/cmd-1", "/commands/cmd-1"]);
     } finally {
@@ -564,55 +441,16 @@ describe("slash-http", () => {
     vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
     try {
       const registeredCommand = createRegisteredCommand({ token: "valid-token" });
-      const command = {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      };
-      const client = createCommandLookupClient({ command });
-      const payload = {
-        token: "valid-token",
-        team_id: "t1",
-        channel_id: "c1",
-        user_id: "u1",
-        command: "/oc_status",
-        text: "",
-      };
+      const client = createCommandLookupClient({ command: createCurrentCommand() });
 
       for (let i = 0; i < 20; i += 1) {
-        await expect(
-          validateMattermostSlashCommandToken({
-            accountId: "default",
-            client,
-            registeredCommand,
-            payload,
-          }),
-        ).resolves.toBe(true);
+        await expectTokenValidation({ client, registeredCommand, expected: true });
       }
-      await expect(
-        validateMattermostSlashCommandToken({
-          accountId: "default",
-          client,
-          registeredCommand,
-          payload,
-        }),
-      ).resolves.toBe(false);
+      await expectTokenValidation({ client, registeredCommand, expected: false });
 
       const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
       try {
-        await expect(
-          validateMattermostSlashCommandToken({
-            accountId: "default",
-            client,
-            registeredCommand,
-            payload,
-          }),
-        ).resolves.toBe(true);
+        await expectTokenValidation({ client, registeredCommand, expected: true });
       } finally {
         dateNow.mockRestore();
       }
@@ -627,60 +465,24 @@ describe("slash-http", () => {
     const registeredCommandA = createRegisteredCommand({ token: "token-a" });
     const registeredCommandB = createRegisteredCommand({ token: "token-b" });
     const clientA = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "token-a",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      command: createCurrentCommand({ token: "token-a" }),
     });
     const clientB = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "token-b",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      command: createCurrentCommand({ token: "token-b" }),
     });
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "a1",
-        client: clientA,
-        registeredCommand: registeredCommandA,
-        payload: {
-          token: "token-a",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "a2",
-        client: clientB,
-        registeredCommand: registeredCommandB,
-        payload: {
-          token: "token-b",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(true);
+    await expectTokenValidation({
+      accountId: "a1",
+      client: clientA,
+      registeredCommand: registeredCommandA,
+      expected: true,
+    });
+    await expectTokenValidation({
+      accountId: "a2",
+      client: clientB,
+      registeredCommand: registeredCommandB,
+      expected: true,
+    });
 
     expect(clientA.requests).toEqual(["/commands/cmd-1"]);
     expect(clientB.requests).toEqual(["/commands/cmd-1"]);
@@ -689,115 +491,36 @@ describe("slash-http", () => {
   it("rejects a command that Mattermost reports as deleted", async () => {
     const registeredCommand = createRegisteredCommand();
     const client = createCommandLookupClient({
-      command: {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 123,
-      },
+      command: createCurrentCommand({ delete_at: 123 }),
     });
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false });
   });
 
   it("rejects a regenerated command when the current command id changed", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
-    const oldDeletedCommand = {
-      id: "cmd-1",
-      token: "old-token",
-      team_id: "t1",
-      trigger: "oc_status",
-      method: MATTERMOST_SLASH_POST_METHOD,
-      url: "https://gateway.example.com/slash",
-      auto_complete: true,
-      delete_at: 123,
-    };
-    const newCommand = {
-      id: "cmd-2",
-      token: "new-token",
-      team_id: "t1",
-      trigger: "oc_status",
-      method: MATTERMOST_SLASH_POST_METHOD,
-      url: "https://gateway.example.com/slash",
-      auto_complete: true,
-      delete_at: 0,
-    };
+    const oldDeletedCommand = createCurrentCommand({ token: "old-token", delete_at: 123 });
+    const newCommand = createCurrentCommand({ id: "cmd-2", token: "new-token" });
     const client = createCommandLookupClient({
       command: oldDeletedCommand,
       listCommands: [oldDeletedCommand, newCommand],
     });
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "old-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false });
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
   it("logs when command lookup by id returns a deleted command before fallback", async () => {
     const registeredCommand = createRegisteredCommand();
     const commandId = `${"i".repeat(199)}😀tail`;
-    const command = {
-      id: commandId,
-      token: "valid-token",
-      team_id: "t1",
-      trigger: "oc_status",
-      method: MATTERMOST_SLASH_POST_METHOD,
-      url: "https://gateway.example.com/slash",
-      auto_complete: true,
-      delete_at: 123,
-    };
+    const command = createCurrentCommand({ id: commandId, delete_at: 123 });
     const client = createCommandLookupClient({
       command,
       listCommands: [],
     });
     const log = vi.fn();
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-        log,
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false, log });
 
     const message = log.mock.calls
       .map(([entry]) => (typeof entry === "string" ? entry : ""))
@@ -815,94 +538,35 @@ describe("slash-http", () => {
     const registeredCommand = createRegisteredCommand();
 
     for (const [index, command] of [
-      {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: "G",
-        url: "https://gateway.example.com/slash",
-        auto_complete: true,
-        delete_at: 0,
-      },
-      {
-        id: "cmd-1",
-        token: "valid-token",
-        team_id: "t1",
-        trigger: "oc_status",
-        method: MATTERMOST_SLASH_POST_METHOD,
-        url: "https://gateway.example.com/other",
-        auto_complete: true,
-        delete_at: 0,
-      },
+      createCurrentCommand({ method: "G" }),
+      createCurrentCommand({ url: "https://gateway.example.com/other" }),
     ].entries()) {
       const client = createCommandLookupClient({ command });
 
-      await expect(
-        validateMattermostSlashCommandToken({
-          accountId: `default-${index}`,
-          client,
-          registeredCommand,
-          payload: {
-            token: "valid-token",
-            team_id: "t1",
-            channel_id: "c1",
-            user_id: "u1",
-            command: "/oc_status",
-            text: "",
-          },
-        }),
-      ).resolves.toBe(false);
+      await expectTokenValidation({
+        accountId: `default-${index}`,
+        client,
+        registeredCommand,
+        expected: false,
+      });
     }
   });
 
   it("falls back to the team command list when command lookup is unavailable", async () => {
     const registeredCommand = createRegisteredCommand();
-    const command = {
-      id: "cmd-1",
-      token: "valid-token",
-      team_id: "t1",
-      trigger: "oc_status",
-      method: MATTERMOST_SLASH_POST_METHOD,
-      url: "https://gateway.example.com/slash",
-      auto_complete: true,
-      delete_at: 0,
-    };
+    const command = createCurrentCommand();
     const client = createCommandLookupClient({
       commandLookupError: new Error("not implemented"),
       listCommands: [command],
     });
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-      }),
-    ).resolves.toBe(true);
+    await expectTokenValidation({ client, registeredCommand, expected: true });
     expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
   });
 
   it("logs sanitized command lookup failures when falling back to the team command list", async () => {
     const registeredCommand = createRegisteredCommand();
-    const command = {
-      id: "cmd-1",
-      token: "valid-token",
-      team_id: "t1",
-      trigger: "oc_status",
-      method: MATTERMOST_SLASH_POST_METHOD,
-      url: "https://gateway.example.com/slash",
-      auto_complete: true,
-      delete_at: 0,
-    };
+    const command = createCurrentCommand();
     const client = createCommandLookupClient({
       commandLookupError: new Error(
         "primary\ntoken=secret-token https://user:pass@chat.example.com/api?access_token=secret-access&client_secret=secret-client",
@@ -911,22 +575,7 @@ describe("slash-http", () => {
     });
     const log = vi.fn();
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-        log,
-      }),
-    ).resolves.toBe(true);
+    await expectTokenValidation({ client, registeredCommand, expected: true, log });
 
     const message = log.mock.calls
       .map(([entry]) => (typeof entry === "string" ? entry : ""))
@@ -955,22 +604,7 @@ describe("slash-http", () => {
     });
     const log = vi.fn();
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-        log,
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false, log });
 
     expect(log).toHaveBeenCalledTimes(1);
     const message = firstLogMessage(log);
@@ -994,22 +628,7 @@ describe("slash-http", () => {
     });
     const log = vi.fn();
 
-    await expect(
-      validateMattermostSlashCommandToken({
-        accountId: "default",
-        client,
-        registeredCommand,
-        payload: {
-          token: "valid-token",
-          team_id: "t1",
-          channel_id: "c1",
-          user_id: "u1",
-          command: "/oc_status",
-          text: "",
-        },
-        log,
-      }),
-    ).resolves.toBe(false);
+    await expectTokenValidation({ client, registeredCommand, expected: false, log });
 
     expect(log).toHaveBeenCalledTimes(1);
     expect(firstLogMessage(log)).toBe(

@@ -12,9 +12,9 @@ import {
 } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
-
-const repoRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
@@ -274,6 +274,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MEMORY_CORE_DTS_INPUTS = [
+  "extensions/memory-core/api.ts",
+  "extensions/memory-core/src",
+  "extensions/memory-core/tsconfig.json",
+];
+const MEMORY_CORE_DTS_STAMP = "dist/plugin-sdk/extensions/memory-core/.boundary-dts.stamp";
+const MEMORY_CORE_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/memory-core/api.d.ts"];
 const MATRIX_DTS_INPUTS = [
   "extensions/matrix/test-api.ts",
   "extensions/matrix/src",
@@ -416,10 +423,11 @@ function hasMissingOutput(paths) {
   return paths.some((relativePath) => !fs.existsSync(resolve(repoRoot, relativePath)));
 }
 
-function removeIncrementalStateForMissingOutput(params) {
-  if (!hasMissingOutput(params.outputPaths)) {
-    return;
-  }
+// Stale inputs invalidate the whole incremental emit graph, not just missing
+// outputs: reused .tsbuildinfo can skip re-emitting declarations whose own
+// sources did not change even when the cached d.ts predates their current
+// exports (observed on sticky-disk CI runners).
+function removeStaleIncrementalState(params) {
   fs.rmSync(resolve(repoRoot, params.tsBuildInfoPath), { force: true });
 }
 
@@ -767,6 +775,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const memoryCoreDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MEMORY_CORE_DTS_INPUTS,
+        outputPaths: [MEMORY_CORE_DTS_STAMP, ...MEMORY_CORE_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MEMORY_CORE_DTS_REQUIRED_OUTPUTS);
     const matrixDtsFresh =
       isArtifactSetFresh({
         inputPaths: MATRIX_DTS_INPUTS,
@@ -802,8 +816,7 @@ async function main(argv = process.argv.slice(2)) {
     const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
         });
         prerequisiteSteps.push({
@@ -818,8 +831,7 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (!packageDtsFresh) {
-      removeIncrementalStateForMissingOutput({
-        outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
+      removeStaleIncrementalState({
         tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
       });
       prerequisiteSteps.push({
@@ -834,8 +846,7 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (mode === "all") {
       if (!qaChannelDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: QA_CHANNEL_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -864,9 +875,38 @@ async function main(argv = process.argv.slice(2)) {
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
       }
+      if (!memoryCoreDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "memory-core boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/memory-core/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/memory-core",
+            "--rootDir",
+            "extensions/memory-core",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MEMORY_CORE_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[memory-core boundary dts] fresh; skipping\n");
+      }
       if (!matrixDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: MATRIX_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -896,8 +936,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: DISCORD_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -927,8 +966,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
       }
       if (!slackDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: SLACK_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -958,8 +996,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[slack boundary dts] fresh; skipping\n");
       }
       if (!whatsappDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: WHATSAPP_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
         });
         dependentSteps.push({
@@ -989,8 +1026,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
       }
       if (!telegramDtsFresh) {
-        removeIncrementalStateForMissingOutput({
-          outputPaths: TELEGRAM_DTS_REQUIRED_OUTPUTS,
+        removeStaleIncrementalState({
           tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
         });
         dependentSteps.push({

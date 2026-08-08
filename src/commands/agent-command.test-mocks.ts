@@ -10,6 +10,10 @@ vi.mock("../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin,
 }));
 
+vi.mock("../agents/runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+}));
+
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
     subsystem: "test",
@@ -64,6 +68,10 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalog: vi.fn(),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
 }));
 
 vi.mock("../agents/model-selection.js", () => {

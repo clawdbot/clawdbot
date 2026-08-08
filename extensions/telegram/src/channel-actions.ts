@@ -26,6 +26,7 @@ import {
   createTelegramPollExtraToolSchemas,
   createTelegramRichSendExtraToolSchemas,
 } from "./message-tool-schema.js";
+import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
@@ -75,6 +76,7 @@ function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  rejectTelegramNativeButtonParams(ctx.params);
   if (
     ctx.action !== "send" ||
     (!payload.presentation && !payload.location && payload.videoAsNote !== true)
@@ -170,7 +172,10 @@ function describeTelegramMessageTool({
       schema: null,
     };
   }
-  const actions = new Set<ChannelMessageActionName>(["send"]);
+  const actions = new Set<ChannelMessageActionName>();
+  if (discovery.isEnabled("sendMessage")) {
+    actions.add("send");
+  }
   if (discovery.pollEnabled) {
     actions.add("poll");
   }
@@ -245,6 +250,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     params,
     cfg,
     accountId,
+    mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
     sessionKey,
@@ -260,6 +266,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     const {
       conversationReadOrigin: _modelConversationReadOrigin,
+      mediaAccess: _modelMediaAccess,
       requesterAccountId: _modelRequesterAccountId,
       toolContext: _modelToolContext,
       ...runtimeParams
@@ -279,6 +286,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
       cfg,
       {
+        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
         mediaLocalRoots,
         mediaReadFile,
         sessionKey,

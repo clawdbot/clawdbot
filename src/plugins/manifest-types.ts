@@ -20,7 +20,7 @@ export type PluginConfigUiHint = {
 export type PluginFormat = "openclaw" | "bundle";
 
 /** Supported external bundle manifest formats. */
-export type PluginBundleFormat = "codex" | "claude" | "cursor";
+export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 
 /**
  * Closed classification codes for plugin diagnostics. Health surfaces branch
@@ -147,7 +147,6 @@ export type PluginManifestSecretProviderIntegration = {
   jsonOnly?: boolean;
   env?: Record<string, string>;
   passEnv?: string[];
-  allowInsecurePath?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -550,6 +549,8 @@ export type PluginManifestProviderAuthChoice = {
   cliDescription?: string;
   /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
   appGuidedSecret?: boolean;
+  /** Short provider-owned command label for starting app-guided setup. */
+  appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */
   appGuidedAuth?: "oauth" | "device-code";
   /**

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import type { AgentHarness } from "./harness/types.js";
 
 const mocks = vi.hoisted(() => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(),
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   getRegisteredAgentHarness: vi.fn(),
   isCliRuntimeAliasForProvider: vi.fn(() => false),
@@ -39,6 +41,9 @@ vi.mock("./harness/runtime-plugin.js", () => ({
 vi.mock("./model-runtime-aliases.js", () => ({
   isCliRuntimeAliasForProvider: mocks.isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider: mocks.resolveCliRuntimeExecutionProvider,
+}));
+vi.mock("./prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: mocks.acquireAgentRunPreparedModelRuntime,
 }));
 vi.mock("./simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModel: mocks.prepareSimpleCompletionModel,
@@ -94,6 +99,10 @@ function request() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
+    snapshot: { pluginRegistry: createEmptyPluginRegistry() },
+    release: vi.fn(),
+  });
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
   mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
   mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
@@ -268,11 +277,60 @@ describe("runIsolatedCompletion", () => {
     });
   });
 
+  it.each(["error", "aborted"] as const)(
+    "rejects %s harness output before usage reaches the runtime finalizer",
+    async (stopReason) => {
+      mocks.getRegisteredAgentHarness.mockReturnValue({
+        harness: {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          runIsolatedCompletion: vi.fn(async () => ({
+            assistant: assistant([{ type: "text", text: "partial" }], stopReason),
+          })),
+        } satisfies AgentHarness,
+      });
+
+      await expect(runIsolatedCompletion(request())).rejects.toMatchObject({
+        code: "output-rejected",
+        message: expect.stringContaining(`stop reason ${stopReason}`),
+      });
+    },
+  );
+
+  it("rejects thinking-only harness output before usage reaches the runtime finalizer", async () => {
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletion: vi.fn(async () => ({
+          assistant: assistant([{ type: "thinking", thinking: "hidden" }]),
+        })),
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).rejects.toMatchObject({
+      code: "output-rejected",
+      message: expect.stringContaining("empty output"),
+    });
+  });
+
   it("routes CLI owners through one exact empty-tool run without direct preparation", async () => {
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
     mocks.runCliAgent.mockResolvedValue({
       payloads: [{ text: '{"cli":true}' }],
-      meta: { durationMs: 1 },
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+          usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
+        },
+      },
     });
 
     await expect(
@@ -287,6 +345,7 @@ describe("runIsolatedCompletion", () => {
       provider: "anthropic",
       model: "claude-test",
       owner: { kind: "cli", id: "claude-cli" },
+      usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
     });
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.runCliAgent).toHaveBeenCalledWith(
@@ -300,6 +359,30 @@ describe("runIsolatedCompletion", () => {
         cliToolAvailability: { native: [], openClaw: [] },
       }),
     );
+  });
+
+  it("keeps unavailable CLI usage absent", async () => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "claude-test",
+        },
+      },
+    });
+
+    const result = await runIsolatedCompletion({
+      ...request(),
+      provider: "anthropic",
+      model: "claude-test",
+      agentHarnessRuntimeOverride: "claude-cli",
+    });
+
+    expect(result).not.toHaveProperty("usage");
   });
 
   it("forwards one explicit auth profile unchanged to a CLI owner", async () => {

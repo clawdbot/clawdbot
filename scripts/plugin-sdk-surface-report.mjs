@@ -4,7 +4,8 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mjs";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -13,8 +14,9 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const require = createRequire(import.meta.url);
 let ts;
 
@@ -30,19 +32,21 @@ Options:
 }
 
 function parsePluginSdkSurfaceReportArgs(argv) {
-  const args = { check: false, help: false };
-  for (const arg of argv) {
-    if (arg === "--check") {
-      args.check = true;
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      args.help = true;
-      continue;
-    }
-    throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    { check: false, help: false },
+    [
+      booleanFlag("--check", "check", true, { repeatable: true }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
+      },
+    },
+  );
 }
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
@@ -159,7 +163,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: budgeted root-bounded directory walking.
       // +1: pinned secret reads and first-writer-wins creation.
       // +2: restore the documented session-catalog and tool-results plugin contracts.
-      148,
+      // +1: focused inbound-event delivery correlation for channel plugins.
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -188,6 +193,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: typed owner-required error for session store path resolution.
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
+      // +2: shared low-cardinality diagnostic dimension normalizers.
+      // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
@@ -204,9 +211,19 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
-      4819,
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      // +1: shared inbound-event delivery correlation factory for channel plugins.
+      // +1: canonical webhook route identity for plugin-owned target registries.
+      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
+      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
+      // +1: auth-profile preservation decision for native model pickers.
+      // +2: shared channel question-reaction store and preflight-audio factories.
+      // +1: shared channel interactive dispatcher with canonical binding authorization.
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      4835,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,6 +247,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: focused media-local-roots helpers.
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
+      // +2: shared low-cardinality diagnostic dimension normalizers.
+      // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
@@ -243,9 +262,19 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: watched-sessions prompt block for plugin-owned harness runtimes.
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
+      // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
-      2896,
+      // +1: forwarding-routed approver-restricted native approval capability factory.
+      // +1: shared inbound-event delivery correlation factory for channel plugins.
+      // +1: canonical webhook route identity for plugin-owned target registries.
+      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
+      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
+      // +1: auth-profile preservation decision for native model pickers.
+      // +2: shared channel question-reaction store and preflight-audio factories.
+      // +1: shared channel interactive dispatcher with canonical binding authorization.
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      2912,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -262,7 +291,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      82,
+      // -1: text-runtime now names its global-singleton exports explicitly.
+      81,
       env,
     ),
   };

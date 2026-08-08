@@ -4,8 +4,14 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.types.js";
 
 type EmbeddedRunnerFastRunMockOptions = {
   runEmbeddedAttempt: (params: unknown) => unknown;
@@ -22,6 +28,71 @@ type EmbeddedRunnerBackoffMockOptions = {
   ) => number;
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
+
+function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
+  return {
+    policyHash: "",
+    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "",
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
+}
+
+function createEmptyPreparedModelRuntimeSnapshot(
+  input: PreparedModelRuntimeInput,
+): PreparedModelRuntimeSnapshot {
+  return {
+    ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+    agentDir: input.agentDir,
+    ...(input.inheritedAuthDir !== undefined ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
+    ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
+    activeProjectKeys: [],
+    config: input.config,
+    metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
+    pluginRegistry: createEmptyPluginRegistry(),
+    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    modelCatalog: { entries: [], routeVariants: [] },
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    createStores: () => ({
+      authStorage: { setRuntimeApiKey: vi.fn() } as never,
+      modelRegistry: {} as never,
+    }),
+  };
+}
 
 /** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
@@ -49,9 +120,56 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       dispose: async () => undefined,
     })),
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
+    resolveLogicalTurnContextEngines: vi.fn(async () => {
+      const engine = {
+        info: { id: "legacy", name: "Legacy Context Engine" },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble({ messages }: { messages: unknown[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+        async dispose() {},
+      };
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()),
+  }));
+  vi.doMock("../prepared-model-runtime.js", () => {
+    const acquire = async (input: PreparedModelRuntimeInput) => {
+      if (!input.readOnly) {
+        const { ensureOpenClawModelsJson } = await import("../models-config.js");
+        await ensureOpenClawModelsJson(
+          input.config,
+          input.agentDir,
+          input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {},
+        );
+      }
+      return {
+        snapshot: createEmptyPreparedModelRuntimeSnapshot(input),
+        release: vi.fn(),
+      };
+    };
+    return {
+      acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
+      acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
+      prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
+        createEmptyPreparedModelRuntimeSnapshot(input),
+      ),
+    };
+  });
+  vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderRuntimePluginHandle: vi.fn((params: object) => params),
+    wrapProviderStreamFn: vi.fn(() => undefined),
   }));
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),

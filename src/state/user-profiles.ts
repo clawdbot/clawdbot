@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-// Durable user profiles and mutable login-email aliases in the shared state DB.
+// Durable user profiles plus typed login identities in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sql } from "kysely";
@@ -16,11 +16,17 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { USER_PROFILES_SCHEMA_SQL } from "./user-profiles-schema.js";
-
-const MAX_USER_PROFILE_AVATAR_BYTES = 512 * 1024;
-const USER_PROFILE_AVATAR_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
-
-type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
+import {
+  fetchTailscaleAvatar,
+  MAX_USER_PROFILE_AVATAR_BYTES,
+  USER_PROFILE_AVATAR_MIME_TYPES,
+  type TailscaleAvatarFetchOptions,
+  type UserProfileAvatarMime,
+} from "./user-profiles-tailscale-avatar.js";
+import {
+  classifyTailscaleLogin,
+  type TailscaleProfileIdentity,
+} from "./user-profiles-tailscale-login.js";
 
 type UserProfile = {
   id: string;
@@ -43,6 +49,13 @@ type UserProfileAvatar = {
   updatedAt: number;
 };
 
+type UserProfileDisplay = {
+  id: string;
+  displayName: string | null;
+  avatarRevision: string;
+  hasAvatar: boolean;
+};
+
 type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
@@ -58,7 +71,7 @@ export class UserProfileNotFoundError extends Error {
   }
 }
 
-type UserProfilesDatabase = {
+export type UserProfilesDatabase = {
   user_profiles: {
     id: string;
     display_name: string | null;
@@ -71,6 +84,12 @@ type UserProfilesDatabase = {
   };
   user_profile_emails: {
     email: string;
+    profile_id: string;
+    created_at: number;
+  };
+  user_profile_identities: {
+    provider: string;
+    subject: string;
     profile_id: string;
     created_at: number;
   };
@@ -91,7 +110,7 @@ function profileDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
 }
 
-function ensureUserProfilesSchema(options: OpenClawStateDatabaseOptions): void {
+export function ensureUserProfilesSchema(options: OpenClawStateDatabaseOptions): void {
   const database = openOpenClawStateDatabase(options);
   if (ensuredDatabases.has(database.db)) {
     return;
@@ -114,6 +133,11 @@ function normalizeEmail(email: string): string {
     throw new TypeError("email must not be empty");
   }
   return normalized;
+}
+
+function normalizeInitialDisplayName(name: string | undefined): string | null {
+  const normalized = name?.trim();
+  return normalized ? normalized.slice(0, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
 function toAvatarMime(value: string | null): UserProfileAvatarMime | null {
@@ -232,18 +256,41 @@ export function getUserProfileListItem(
   return selectUserProfileListItemById(db, requireResolvedProfileById(db, profileId).id);
 }
 
-/** Resolves an email alias or atomically creates its first durable profile. */
-export function ensureProfileForEmail(
-  email: string,
+/** Reads merge-aware display data without exposing avatar content through list/RPC shapes. */
+export function getUserProfileDisplay(
+  profileId: string,
   options: OpenClawStateDatabaseOptions = {},
+): UserProfileDisplay {
+  ensureUserProfilesSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  const profile = requireResolvedProfileById(db, profileId);
+  const avatarMime = toAvatarMime(profile.avatar_mime);
+  const avatarRevision =
+    profile.avatar_sha256 && avatarMime
+      ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
+      : String(profile.updated_at);
+  return {
+    id: profile.id,
+    displayName: profile.display_name,
+    avatarRevision,
+    hasAvatar: profile.avatar !== null,
+  };
+}
+
+function ensureProfileForEmailWithInitialName(
+  email: string,
+  initialDisplayName: string | null,
+  options: OpenClawStateDatabaseOptions,
 ): UserProfile {
   const normalizedEmail = normalizeEmail(email);
   const profileId = generateSecureUuid();
   const now = Date.now();
-  const displayName = (normalizedEmail.split("@", 1)[0] || normalizedEmail).slice(
-    0,
-    MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
-  );
+  const displayName =
+    initialDisplayName ??
+    (normalizedEmail.split("@", 1)[0] || normalizedEmail).slice(
+      0,
+      MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+    );
   ensureUserProfilesSchema(options);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -282,6 +329,179 @@ export function ensureProfileForEmail(
     options,
     { operationLabel: "user-profiles.ensure" },
   );
+}
+
+/** Resolves an email alias or atomically creates its first durable profile. */
+export function ensureProfileForEmail(
+  email: string,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfile {
+  return ensureProfileForEmailWithInitialName(email, null, options);
+}
+
+function ensureProfileForProviderIdentity(params: {
+  provider: string;
+  subject: string;
+  initialDisplayName: string | null;
+  options: OpenClawStateDatabaseOptions;
+}): UserProfile {
+  const profileId = generateSecureUuid();
+  const now = Date.now();
+  ensureUserProfilesSchema(params.options);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = profileDb(db);
+      const existingIdentity = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("profile_id")
+          .where("provider", "=", params.provider)
+          .where("subject", "=", params.subject),
+      );
+      if (existingIdentity) {
+        return toUserProfile(requireResolvedProfileById(db, existingIdentity.profile_id));
+      }
+      const row: UserProfileRow = {
+        id: profileId,
+        display_name: params.initialDisplayName,
+        avatar: null,
+        avatar_mime: null,
+        avatar_sha256: null,
+        merged_into: null,
+        created_at: now,
+        updated_at: now,
+      };
+      executeSqliteQuerySync(db, kysely.insertInto("user_profiles").values(row));
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("user_profile_identities").values({
+          provider: params.provider,
+          subject: params.subject,
+          profile_id: profileId,
+          created_at: now,
+        }),
+      );
+      return toUserProfile(row);
+    },
+    params.options,
+    { operationLabel: "user-profiles.ensure-identity" },
+  );
+}
+
+function adoptDisplayNameIfEmpty(
+  profileId: string,
+  displayName: string | null,
+  options: OpenClawStateDatabaseOptions,
+): UserProfile {
+  if (!displayName) {
+    const { db } = openOpenClawStateDatabase(options);
+    return toUserProfile(requireResolvedProfileById(db, profileId));
+  }
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const profile = requireResolvedProfileById(db, profileId);
+      if (profile.display_name !== null) {
+        return toUserProfile(profile);
+      }
+      executeSqliteQuerySync(
+        db,
+        profileDb(db)
+          .updateTable("user_profiles")
+          .set({ display_name: displayName, updated_at: now })
+          .where("id", "=", profile.id),
+      );
+      return toUserProfile({ ...profile, display_name: displayName, updated_at: now });
+    },
+    options,
+    { operationLabel: "user-profiles.adopt-display-name" },
+  );
+}
+
+async function adoptAvatarIfEmpty(params: {
+  profileId: string;
+  profilePic: string | undefined;
+  options: OpenClawStateDatabaseOptions;
+  fetchOptions: TailscaleAvatarFetchOptions;
+}): Promise<UserProfile> {
+  const { db } = openOpenClawStateDatabase(params.options);
+  const beforeFetch = requireResolvedProfileById(db, params.profileId);
+  if (beforeFetch.avatar !== null || !params.profilePic) {
+    return toUserProfile(beforeFetch);
+  }
+  const avatar = await fetchTailscaleAvatar(params.profilePic, params.fetchOptions);
+  if (!avatar) {
+    return toUserProfile(requireResolvedProfileById(db, params.profileId));
+  }
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db: transactionDb }) => {
+      const profile = requireResolvedProfileById(transactionDb, params.profileId);
+      if (profile.avatar !== null) {
+        return toUserProfile(profile);
+      }
+      const sha256 = createHash("sha256").update(avatar.bytes).digest("hex");
+      executeSqliteQuerySync(
+        transactionDb,
+        profileDb(transactionDb)
+          .updateTable("user_profiles")
+          .set({
+            avatar: avatar.bytes,
+            avatar_mime: avatar.mime,
+            avatar_sha256: sha256,
+            updated_at: now,
+          })
+          .where("id", "=", profile.id),
+      );
+      return toUserProfile({
+        ...profile,
+        avatar: avatar.bytes,
+        avatar_mime: avatar.mime,
+        avatar_sha256: sha256,
+        updated_at: now,
+      });
+    },
+    params.options,
+    { operationLabel: "user-profiles.adopt-avatar" },
+  );
+}
+
+/** Resolves a verified Tailscale login and adopts its display name into an empty field. */
+export function ensureProfileForTailscaleIdentity(
+  identity: TailscaleProfileIdentity,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfile {
+  const classified = classifyTailscaleLogin(identity.login);
+  if (classified.kind === "invalid") {
+    throw new TypeError("Tailscale login must contain a nonempty subject and suffix");
+  }
+  const displayName = normalizeInitialDisplayName(identity.name);
+  const resolved =
+    classified.kind === "email"
+      ? ensureProfileForEmailWithInitialName(classified.email, displayName, options)
+      : ensureProfileForProviderIdentity({
+          provider: classified.provider,
+          subject: classified.subject,
+          initialDisplayName: displayName,
+          options,
+        });
+  return adoptDisplayNameIfEmpty(resolved.id, displayName, options);
+}
+
+/** Best-effort avatar adoption runs after authentication so remote I/O cannot delay login. */
+export async function adoptTailscaleProfileAvatar(
+  profileId: string,
+  profilePic: string | undefined,
+  options: OpenClawStateDatabaseOptions = {},
+  fetchOptions: TailscaleAvatarFetchOptions = {},
+): Promise<UserProfile> {
+  return await adoptAvatarIfEmpty({
+    profileId,
+    profilePic,
+    options,
+    fetchOptions,
+  });
 }
 
 /** Links an email to a profile and retains an aliasless prior profile as a merge tombstone. */

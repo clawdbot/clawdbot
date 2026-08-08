@@ -1,7 +1,8 @@
-// Tests miscellaneous run-reply-agent behaviors and artifact output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Tests miscellaneous run-reply-agent behaviors and artifact output.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
@@ -164,7 +165,15 @@ vi.mock("../../runtime.js", () => {
 
 vi.mock("./queue.js", () => {
   return {
+    admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    parkSteerCandidate: vi.fn(() => ({
+      admit: async () => "steer",
+      accepted: vi.fn(),
+      fallback: vi.fn(),
+      consume: vi.fn(),
+    })),
+    resolveFollowupAbortSignal: vi.fn(() => undefined),
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
@@ -181,6 +190,7 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 // Dedicated suites cover these sidecars; misc runner cases keep them inert to avoid unrelated graphs.
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
+  getAgentRuntimeOptionalCommandSecretPaths: () => new Set<string>(),
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
@@ -219,11 +229,16 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: () => null,
-  listSubagentRunsForController: () => [],
-  markSubagentRunTerminated: () => 0,
-}));
+vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
+  return {
+    ...actual,
+    getSwarmRunByLaunchReplayKey: () => undefined,
+    getLatestSubagentRunByChildSessionKey: () => null,
+    listSubagentRunsForController: () => [],
+    markSubagentRunTerminated: () => 0,
+  };
+});
 
 // #85714: keep the real private-final decision but spy the WARN emitter so we
 // can assert it fires only through the substantive text suppression branch.
@@ -241,12 +256,7 @@ type RunWithModelFallbackParams = {
   run: (provider: string, model: string) => Promise<unknown>;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,
@@ -436,7 +446,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
       typing,
       sessionCtx,
@@ -501,7 +510,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         shouldSteer: false,
         shouldFollowup: false,
         isActive: false,
-        isStreaming: false,
         typing,
         sessionCtx,
         sessionEntry,
@@ -565,7 +573,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -706,7 +713,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -763,7 +769,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -841,7 +846,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         shouldSteer: false,
         shouldFollowup: false,
         isActive: false,
-        isStreaming: false,
         typing,
         sessionCtx,
         sessionEntry,
@@ -869,11 +873,18 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
-    const { usageEvent } = await runBaseReplyWithAgentMeta({
+    const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
       tmpPrefix: "openclaw-usage-diagnostic-",
       collectDiagnostics: true,
       agentMeta: {
         usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
+        diagnosticUsage: {
+          input: 90_000,
+          output: 8_000,
+          cacheRead: 30_000,
+          cacheWrite: 2_000,
+          total: 130_000,
+        },
         lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
         promptTokens: 44_000,
       },
@@ -890,11 +901,12 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectRecordFields(
       usagePayload.usage,
       {
-        input: 75_000,
-        output: 5_000,
-        cacheRead: 25_000,
-        promptTokens: 100_000,
-        total: 105_000,
+        input: 90_000,
+        output: 8_000,
+        cacheRead: 30_000,
+        cacheWrite: 2_000,
+        promptTokens: 122_000,
+        total: 130_000,
       },
       "usage diagnostic usage",
     );
@@ -906,6 +918,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
       "usage diagnostic context",
     );
+    expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
   });
 
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
@@ -1057,7 +1070,6 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: { onBlockReply },
       typing,
       sessionCtx,
@@ -1163,7 +1175,6 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: { onBlockReply, blockReplyTimeoutMs: 1 },
       typing,
       sessionCtx,
@@ -1278,7 +1289,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1367,7 +1377,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1455,7 +1464,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1620,7 +1628,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1791,7 +1798,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1897,7 +1903,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1997,7 +2002,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2064,7 +2068,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "claude-cli/opus-4.5",
@@ -2184,7 +2187,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2274,7 +2276,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2346,7 +2347,6 @@ describe("runReplyAgent messaging tool dedupe", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionKey,
@@ -2480,7 +2480,6 @@ describe("runReplyAgent reminder commitment guard", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
@@ -2712,7 +2711,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry: params?.sessionEntry,
@@ -2853,7 +2851,6 @@ describe("runReplyAgent response usage footer", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -3097,7 +3094,6 @@ describe("runReplyAgent transient HTTP retry", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude-opus-4-6",
@@ -3173,7 +3169,6 @@ describe("runReplyAgent billing error classification", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude",
@@ -3234,7 +3229,6 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude",
@@ -3414,7 +3408,6 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing: createMockTypingController(),
       sessionCtx,
       sessionEntry,

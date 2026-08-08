@@ -76,6 +76,7 @@ const frozenCoreScenarioIds = [
   "thread-memory-isolation",
   "model-switch-tool-continuity",
   "approval-turn-tool-followthrough",
+  // Mirrors the immutable report shape for the fixed candidate SHAs, not the live catalog.
   "codex-plugin-pinned-new",
   "codex-plugin-pinned-old",
   "compaction-retry-mutating-tool",
@@ -160,6 +161,34 @@ describe("frozen QA runtime-pair summary validation", () => {
       failed: 0,
       skipped: 0,
     });
+  });
+
+  it("accepts an older all-passing summary that omitted zero skipped count", () => {
+    const fixture = summary([scenario({ name: "legacy passing", status: "pass" })]);
+    delete (fixture.counts as { skipped?: number }).skipped;
+
+    expect(validateQaRuntimePairSummary(fixture)).toEqual({
+      total: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it("requires skipped count when validated evidence contains skips", () => {
+    const fixture = summary([
+      scenario({
+        name: "tracked gap",
+        status: "skip",
+        codexStatus: "skip",
+        codexDetails: "known-harness-gap exec: tracked",
+      }),
+    ]);
+    delete (fixture.counts as { skipped?: number }).skipped;
+
+    expect(() => validateQaRuntimePairSummary(fixture)).toThrow(
+      "counts do not match validated scenario evidence",
+    );
   });
 
   it("accepts a tracked Codex harness gap kept advisory by the current classifier", () => {

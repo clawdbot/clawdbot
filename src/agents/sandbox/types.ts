@@ -79,6 +79,8 @@ export type SandboxConfig = {
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  // Podman must omit only the inherited bare /run tmpfs default; explicit /run is rejected.
+  dockerTmpfsSource: "default" | "configured";
   docker: SandboxDockerConfig;
   ssh: SandboxSshConfig;
   browser: SandboxBrowserConfig;

@@ -204,6 +204,37 @@ describe("status-all format", () => {
     });
   });
 
+  it("redacts credential-bearing Gateway URLs from text and JSON status", () => {
+    const gatewayConnection = {
+      url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
+      urlSource: "cli --url",
+    };
+
+    const summary = buildGatewayStatusSummaryParts({
+      gatewayMode: "remote",
+      remoteUrlMissing: false,
+      gatewayConnection,
+      gatewayReachable: false,
+      gatewayProbe: { error: "unreachable" },
+      gatewayProbeAuth: null,
+    });
+    const json = buildGatewayStatusJsonPayload({
+      gatewayMode: "remote",
+      gatewayConnection,
+      remoteUrlMissing: false,
+      gatewayReachable: false,
+      gatewayProbe: { error: "unreachable" },
+      gatewaySelf: null,
+    });
+    const output = JSON.stringify({ summary, json });
+
+    expect(output).toContain("gateway.example/ws");
+    expect(output).not.toContain("password");
+    expect(output).not.toContain("secret");
+    expect(output).not.toContain("api-key");
+    expect(output).not.toContain("signed");
+  });
+
   it("builds shared gateway surface values for node and gateway views", () => {
     expect(
       buildStatusGatewaySurfaceValues({
