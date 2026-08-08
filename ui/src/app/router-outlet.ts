@@ -22,7 +22,10 @@ export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
-  renderOwnerKey?: (data: TData | undefined) => string | undefined;
+  renderOwnerKey?: (
+    match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
+    settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
+  ) => string | undefined;
 };
 
 type RouterOutletOptions<TLoadContext = unknown> = {
@@ -255,9 +258,10 @@ class OpenClawRouterOutlet<
     });
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
     const routeModule = renderedMatch?.module;
-    const declaredOwnerKey = isRenderableModule<TData>(routeModule)
-      ? routeModule.renderOwnerKey?.(renderedMatch?.data)
-      : undefined;
+    const declaredOwnerKey =
+      renderedMatch && isRenderableModule<TData>(routeModule)
+        ? routeModule.renderOwnerKey?.(renderedMatch, snapshot.settled)
+        : undefined;
     const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
     const retainCurrent =
       explicitOwnerKey !== undefined &&

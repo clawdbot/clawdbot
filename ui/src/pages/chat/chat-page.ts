@@ -24,8 +24,8 @@ import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
 import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
-import { routeDraft } from "./route-draft.ts";
-import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
+import { locationWithoutDraft, routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
@@ -409,12 +409,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (layout && layout.activePaneId !== paneId) {
       this.persistLayout(setActivePane(layout, paneId));
     }
-    const session = this.context.sessions.state.result?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, sessionKey),
-    );
-    if (session?.boardFace !== face) {
-      persistSessionBoardFace(this.context, sessionKey, face);
-    }
+    persistSessionBoardFace(this.context, sessionKey, face);
     this.updateRoute(sessionKey, false, face);
   };
 

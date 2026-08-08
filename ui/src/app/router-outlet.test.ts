@@ -1,4 +1,4 @@
-import { createRouter, definePage, type Router } from "@openclaw/uirouter";
+import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
 import { html, nothing, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,9 +8,13 @@ import "./router-outlet.ts";
 type RouteId = "page" | "next";
 type TestContext = { label: string };
 type TestData = { label: string };
+type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
 type TestModule = {
   render: (data: TestData | undefined) => unknown;
-  renderOwnerKey?: (data: TestData | undefined) => string | undefined;
+  renderOwnerKey?: (
+    match: TestOwnerMatch,
+    settled: TestOwnerMatch | undefined,
+  ) => string | undefined;
 };
 type TestRouter = Router<RouteId, TestContext, TestModule, TestData>;
 type RouterOutletElement = LitElement & {

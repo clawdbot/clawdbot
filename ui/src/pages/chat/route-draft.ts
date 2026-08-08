@@ -12,6 +12,14 @@ function focusComposerFromLocation(location: RouteLocation): boolean {
   return new URLSearchParams(location.search).get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
 }
 
+export function locationWithoutDraft(location: RouteLocation): RouteLocation {
+  const params = new URLSearchParams(location.search);
+  params.delete("draft");
+  params.delete(SESSION_COMPOSER_FOCUS_PARAM);
+  const search = params.toString();
+  return { ...location, search: search ? `?${search}` : "" };
+}
+
 export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
   const draft = draftFromLocation(location);
   return {
