@@ -101,13 +101,19 @@ function readPackageVersion(): string | null {
   }
 }
 
+function readGit(args: string[]): string {
+  return execFileSync("git", ["--no-optional-locks", "-C", repoRoot, ...args], {
+    encoding: "utf8",
+    // Metadata reads need no index lock; disabling it makes the hard startup deadline safe.
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
+  });
+}
+
 function readGitCommit(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
-    });
+    const raw = readGit(["rev-parse", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
@@ -116,11 +122,7 @@ function readGitCommit(): string | null {
 
 function readGitBranch(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
-    });
+    const raw = readGit(["rev-parse", "--abbrev-ref", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
@@ -129,11 +131,7 @@ function readGitBranch(): string | null {
 
 function readGitCommitTimestamp(commit: string): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "show", "-s", "--format=%ct", commit], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
-    });
+    const raw = readGit(["show", "-s", "--format=%ct", commit]);
     const seconds = Number.parseInt(raw.trim(), 10);
     const date = new Date(seconds * 1000);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -144,11 +142,7 @@ function readGitCommitTimestamp(commit: string): string | null {
 
 function readGitDirty(): boolean | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
-    });
+    const raw = readGit(["status", "--porcelain"]);
     return Boolean(raw.trim());
   } catch {
     return null;
