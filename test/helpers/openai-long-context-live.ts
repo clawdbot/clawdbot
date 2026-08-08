@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import type { OpenClawConfig } from "../../src/config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
 
 export const OPENAI_LONG_CONTEXT_LIVE_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT";
 export const OPENAI_LONG_CONTEXT_PROFILE_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE";
 export const OPENAI_LONG_CONTEXT_METRICS_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS";
 export const OPENAI_LONG_OUTPUT_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT";
-export const OPENAI_LONG_TOOL_OUTPUT_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT";
+const OPENAI_LONG_TOOL_OUTPUT_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT";
 export const OPENAI_LONG_TOOL_BYTES_ENV = "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_BYTES";
 
 const OFFICIAL_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -73,7 +74,7 @@ const PROFILES = {
   },
 } as const satisfies Record<string, OpenAILongContextProfile>;
 
-export type OpenAILongContextLiveSettings =
+type OpenAILongContextLiveSettings =
   | { enabled: false }
   | {
       enabled: true;
@@ -264,7 +265,7 @@ export function assertOpenAILongContextConfig(
   const configuredModels = cfg.agents?.defaults?.models ?? {};
   expectConfigValue(
     "agents.defaults.model.primary",
-    cfg.agents?.defaults?.model?.primary,
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
     profile.modelRef,
   );
   expectConfigValue("agents.defaults.models", Object.keys(configuredModels), [profile.modelRef]);
@@ -530,7 +531,7 @@ export function validateLongOutput(params: {
   return { lineCount: lines.length, chars: normalized.length };
 }
 
-export type ToolOutputFixture = {
+type ToolOutputFixture = {
   content: string;
   bytes: number;
   marker: string;
@@ -674,7 +675,7 @@ function finite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-export type OpenAILongContextTurnMetric = {
+type OpenAILongContextTurnMetric = {
   runtime: string;
   model: string;
   phase: string;
