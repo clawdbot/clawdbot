@@ -120,6 +120,23 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       dispose: async () => undefined,
     })),
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
+    resolveLogicalTurnContextEngines: vi.fn(async () => {
+      const engine = {
+        info: { id: "legacy", name: "Legacy Context Engine" },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble({ messages }: { messages: unknown[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+        async dispose() {},
+      };
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
     loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()),

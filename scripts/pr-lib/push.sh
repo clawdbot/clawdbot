@@ -159,7 +159,7 @@ GRAPHQL
   rm -f "$variables_file"
 
   local result
-  result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
+  result=$(gh_plain api graphql --input - <<< "$payload" 2>&1) || {
     echo "GraphQL push failed: $result" >&2
     return 1
   }

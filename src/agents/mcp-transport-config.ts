@@ -136,20 +136,26 @@ function resolveHttpTransportConfig(
   serverName: string,
   rawServer: unknown,
   transportType: HttpMcpTransportType,
+  logWarnings: boolean,
 ): ResolvedHttpMcpTransportConfig | null {
-  const launch = resolveHttpMcpServerLaunchConfig(rawServer, {
-    transportType,
-    onDroppedHeader: (key) => {
-      logWarn(
-        `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
-      );
-    },
-    onMalformedHeaders: () => {
-      logWarn(
-        `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
-      );
-    },
-  });
+  const launch = resolveHttpMcpServerLaunchConfig(
+    rawServer,
+    logWarnings
+      ? {
+          transportType,
+          onDroppedHeader: (key: string) => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
+            );
+          },
+          onMalformedHeaders: () => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
+            );
+          },
+        }
+      : { transportType },
+  );
   if (!launch.ok) {
     return null;
   }
@@ -190,18 +196,25 @@ function resolveHttpTransportConfig(
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
+  options?: { logWarnings?: boolean },
 ): ResolvedMcpTransportConfig | null {
   const logServerName = sanitizeForLog(serverName);
+  const logWarnings = options?.logWarnings !== false;
   const requestedTransport = getRequestedTransport(rawServer);
   const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
   const effectiveTransport = requestedTransport || requestedTransportAlias;
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
-    onDroppedEnv: (key) => {
-      logWarn(
-        `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
-      );
-    },
-  });
+  const stdioLaunch = resolveStdioMcpServerLaunchConfig(
+    rawServer,
+    logWarnings
+      ? {
+          onDroppedEnv: (key: string) => {
+            logWarn(
+              `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
+            );
+          },
+        }
+      : undefined,
+  );
   if (stdioLaunch.ok) {
     // A command-bearing server is always treated as stdio even when HTTP-ish
     // aliases are present, matching existing MCP config precedence.
@@ -224,28 +237,37 @@ export function resolveMcpTransportConfig(
     effectiveTransport !== "sse" &&
     effectiveTransport !== "streamable-http"
   ) {
-    logWarn(
-      `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
-    );
+    if (logWarnings) {
+      logWarn(
+        `bundle-mcp: skipped server "${logServerName}" because transport "${sanitizeForLog(effectiveTransport)}" is not supported.`,
+      );
+    }
     return null;
   }
 
   if (effectiveTransport === "streamable-http") {
-    const httpTransport = resolveHttpTransportConfig(serverName, rawServer, "streamable-http");
+    const httpTransport = resolveHttpTransportConfig(
+      serverName,
+      rawServer,
+      "streamable-http",
+      logWarnings,
+    );
     if (httpTransport) {
       return httpTransport;
     }
   }
 
-  const sseTransport = resolveHttpTransportConfig(serverName, rawServer, "sse");
+  const sseTransport = resolveHttpTransportConfig(serverName, rawServer, "sse", logWarnings);
   if (sseTransport) {
     return sseTransport;
   }
 
   const httpLaunch = resolveHttpMcpServerLaunchConfig(rawServer);
   const httpReason = httpLaunch.ok ? "not an HTTP MCP server" : httpLaunch.reason;
-  logWarn(
-    `bundle-mcp: skipped server "${logServerName}" because ${stdioLaunch.reason} and ${httpReason}.`,
-  );
+  if (logWarnings) {
+    logWarn(
+      `bundle-mcp: skipped server "${logServerName}" because ${stdioLaunch.reason} and ${httpReason}.`,
+    );
+  }
   return null;
 }

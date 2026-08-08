@@ -1,14 +1,11 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import type { AgentExecutionAttribution } from "../agents/agent-execution-attribution.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 type AgentRunContext = {
-  /** Immutable admission-owned correlation; later context merges cannot replace it. */
-  readonly attribution?: AgentExecutionAttribution;
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -53,8 +50,6 @@ type AgentRunRegistryState = {
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
 
-export class AgentRunAttributionCollisionError extends TypeError {}
-
 function getAgentRunRegistryState(): AgentRunRegistryState {
   return resolveGlobalSingleton<AgentRunRegistryState>(AGENT_RUN_REGISTRY_STATE_KEY, () => ({
     contexts: new Map<string, AgentRunContext>(),
@@ -66,105 +61,6 @@ function getAgentRunRegistryState(): AgentRunRegistryState {
 
 function bumpAgentRunIndexVersion(): void {
   getAgentRunRegistryState().version += 1;
-}
-
-function attachAgentExecutionAttribution(
-  context: AgentRunContext,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  if (!attribution || context.attribution) {
-    return;
-  }
-  Object.defineProperty(context, "attribution", {
-    value: attribution,
-    enumerable: true,
-    configurable: false,
-    writable: false,
-  });
-}
-
-/** Rejects a same-generation run id that is already bound to different private identity. */
-export function assertAgentRunAttributionCompatible(
-  existingAttribution: AgentExecutionAttribution | undefined,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  if (existingAttribution && !attribution) {
-    throw new AgentRunAttributionCollisionError(
-      "Agent run ID is already bound to host-owned execution attribution.",
-    );
-  }
-  if (
-    existingAttribution &&
-    attribution &&
-    (existingAttribution.contextId !== attribution.contextId ||
-      existingAttribution.executionId !== attribution.executionId ||
-      existingAttribution.createdAt !== attribution.createdAt)
-  ) {
-    throw new AgentRunAttributionCollisionError(
-      "Agent run ID is already bound to different execution attribution.",
-    );
-  }
-}
-
-/**
- * Atomically reserves current-generation attribution before admission audit capture.
- * The first admission owns the immutable value; later conflicting callers fail closed.
- */
-export function reserveAgentRunAttribution(
-  runId: string,
-  lifecycleGeneration: string,
-  attribution: AgentExecutionAttribution,
-): AgentExecutionAttribution {
-  if (attribution.runId !== runId) {
-    throw new TypeError("Agent run attribution runId does not match the reserved runId.");
-  }
-  if (attribution.lifecycleGeneration !== lifecycleGeneration) {
-    throw new TypeError(
-      "Agent run attribution lifecycleGeneration does not match the reserved generation.",
-    );
-  }
-  const state = getAgentRunRegistryState();
-  const existing = state.contexts.get(runId);
-  if (existing?.lifecycleGeneration === lifecycleGeneration) {
-    assertAgentRunAttributionCompatible(existing.attribution, attribution);
-    attachAgentExecutionAttribution(existing, attribution);
-    return existing.attribution ?? attribution;
-  }
-  // Stale callers fail the normal lifecycle guard without replacing a current run.
-  if (lifecycleGeneration !== state.lifecycleGeneration) {
-    return attribution;
-  }
-  state.owners.delete(runId);
-  state.contexts.set(
-    runId,
-    createAgentRunContext(
-      {
-        attribution,
-        sessionKey: attribution.sessionKey,
-        sessionId: attribution.sessionId,
-        agentId: attribution.agentId,
-      },
-      lifecycleGeneration,
-    ),
-  );
-  state.sequenceResetHandler?.(runId);
-  clearAgentRunUsage(runId);
-  bumpAgentRunIndexVersion();
-  return attribution;
-}
-
-function createAgentRunContext(
-  context: AgentRunContext,
-  lifecycleGeneration: string,
-): AgentRunContext {
-  const { attribution, ...fields } = context;
-  const stored: AgentRunContext = {
-    ...fields,
-    lifecycleGeneration,
-    registeredAt: context.registeredAt ?? Date.now(),
-  };
-  attachAgentExecutionAttribution(stored, attribution);
-  return stored;
 }
 
 /** Reads the process-local version of the active-run projection inputs. */
@@ -209,7 +105,11 @@ export function registerAgentRunContext(
   }
   const existing = state.contexts.get(runId);
   if (!existing) {
-    state.contexts.set(runId, createAgentRunContext(context, lifecycleGeneration));
+    state.contexts.set(runId, {
+      ...context,
+      lifecycleGeneration,
+      registeredAt: context.registeredAt ?? Date.now(),
+    });
     bumpAgentRunIndexVersion();
     return;
   }
@@ -220,7 +120,6 @@ export function registerAgentRunContext(
   ) {
     return;
   }
-  attachAgentExecutionAttribution(existing, context.attribution);
   let runIndexChanged = false;
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
@@ -342,7 +241,11 @@ export function claimAgentRunContext(
     }
     return claimId;
   }
-  state.contexts.set(runId, createAgentRunContext(context, lifecycleGeneration));
+  state.contexts.set(runId, {
+    ...context,
+    lifecycleGeneration,
+    registeredAt: context.registeredAt ?? Date.now(),
+  });
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
   bumpAgentRunIndexVersion();

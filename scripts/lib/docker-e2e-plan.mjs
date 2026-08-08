@@ -99,6 +99,10 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
 ]);
 
+// Upgrade recipes select an OpenAI model whose runtime is supplied by the
+// version-matched Codex companion after the candidate replaces the baseline.
+const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
+
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
@@ -674,16 +678,20 @@ function configuredChannelIdsForLane(poolLane, scenario) {
 
 export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
   const configuredChannelIds = new Set();
+  const requiredPackages = new Set();
   for (const poolLane of poolLanes) {
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;
     }
+    for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
+      requiredPackages.add(packageName);
+    }
     for (const channelId of configuredChannelIdsForLane(poolLane, scenario)) {
       configuredChannelIds.add(channelId);
     }
   }
-  return (officialExternalChannelCatalog.entries ?? [])
+  for (const packageName of (officialExternalChannelCatalog.entries ?? [])
     .filter((entry) => {
       const channelId = entry.openclaw?.channel?.id;
       const install = entry.openclaw?.install;
@@ -694,8 +702,10 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
         install?.npmSpec === entry.name
       );
     })
-    .map((entry) => entry.name)
-    .toSorted((a, b) => a.localeCompare(b));
+    .map((entry) => entry.name)) {
+    requiredPackages.add(packageName);
+  }
+  return [...requiredPackages].toSorted((a, b) => a.localeCompare(b));
 }
 
 function buildPlanJson(params) {

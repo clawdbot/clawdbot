@@ -863,6 +863,17 @@ function isSystemdUnitMissingDetail(detail: string): boolean {
   );
 }
 
+function isSystemdUnitAlreadyMissingOrInactive(detail: string, unitName: string): boolean {
+  const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
+  return new RegExp(
+    `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
+      `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
+      `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
+      `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
+    "u",
+  ).test(normalizeLowercaseStringOrEmpty(detail));
+}
+
 const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
@@ -1054,6 +1065,30 @@ async function execSystemctlUser(
   return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
 }
 
+async function disableSystemdUserUnitForRemoval(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<void> {
+  const result = await execSystemctlUser(env, ["disable", "--now", unitName]);
+  if (result.code === 0) {
+    return;
+  }
+  const detail = readSystemctlDetail(result);
+  if (isSystemdUnitAlreadyMissingOrInactive(detail, unitName)) {
+    return;
+  }
+  throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
+}
+
+async function reloadSystemdUserManager(env: GatewayServiceEnv): Promise<void> {
+  const result = await execSystemctlUser(env, ["daemon-reload"]);
+  if (result.code !== 0) {
+    throw new Error(
+      `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,
+    );
+  }
+}
+
 export async function isSystemdUserServiceAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<boolean> {
@@ -1115,6 +1150,9 @@ async function writeSystemdUnit({
   await assertNoSystemGatewayOwnership(env);
 
   const unitPath = resolveSystemdUnitPath(env);
+  const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
+    (await readSystemdServiceExecStart(env))?.environment,
+  );
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await assertSystemdManagedPathIsNotSymlink(unitPath);
   const fileManagedKeys = collectSystemdFileManagedKeys({
@@ -1166,7 +1204,8 @@ async function writeSystemdUnit({
   try {
     const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
       stateDir,
-      dotenvVars: stateDirDotEnvVars,
+      stateDirDotEnvKeys: Object.keys(stateDirDotEnvVars),
+      priorManagedKeys,
       inlineManagedKeys,
       fileManagedKeys,
       skippedManagedKeys: skippedShellReferenceKeys,
@@ -1317,7 +1356,12 @@ async function publishSystemdUnit(params: {
 
 async function writeSystemdGatewayEnvironmentFile(params: {
   stateDir: string;
-  dotenvVars: Record<string, string>;
+  /** Keys loaded by the Gateway directly from the state-dir .env. They must be removed from
+   *  generated files so a supervisor restart cannot shadow a later .env edit. */
+  stateDirDotEnvKeys?: Iterable<string>;
+  /** Keys owned by the previously installed service. Preserve the prior ownership record so
+   *  deleting a managed dotenv key cannot reclassify its stale file value as operator-owned. */
+  priorManagedKeys?: Iterable<string>;
   /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
    *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
   inlineManagedKeys?: ReadonlySet<string>;
@@ -1330,7 +1374,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   fileBackedEnvironment?: Record<string, string>;
   environment?: GatewayServiceEnv;
 }): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
-  const incoming = { ...params.dotenvVars, ...params.fileBackedEnvironment };
+  const incoming = { ...params.fileBackedEnvironment };
   for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
       throw new Error(
@@ -1376,6 +1420,8 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   const managedKeysToDrop = normalizeServiceEnvKeys([
     ...(params.inlineManagedKeys ?? []),
     ...(params.fileManagedKeys ?? []),
+    ...(params.priorManagedKeys ?? []),
+    ...(params.stateDirDotEnvKeys ?? []),
     ...(params.skippedManagedKeys ?? []),
   ]);
   const operatorOnly = Object.fromEntries(
@@ -1543,21 +1589,7 @@ export async function uninstallSystemdService({
   await assertSystemdAvailable(env);
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const disabled = await execSystemctlUser(env, ["disable", "--now", unitName]);
-  if (disabled.code !== 0) {
-    const detail = readSystemctlDetail(disabled);
-    const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
-    const alreadyMissingOrInactive = new RegExp(
-      `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
-        `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
-        `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
-        `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
-      "u",
-    ).test(normalizeLowercaseStringOrEmpty(detail));
-    if (!alreadyMissingOrInactive) {
-      throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
-    }
-  }
+  await disableSystemdUserUnitForRemoval(env, unitName);
 
   const unitPath = resolveSystemdUnitPath(env);
   let removed = false;
@@ -1800,19 +1832,27 @@ export async function uninstallLegacySystemdUnits({
   }
 
   const systemctlAvailable = await isSystemctlAvailable(env);
+  let removedAny = false;
   for (const unit of units) {
     if (systemctlAvailable) {
-      await execSystemctlUser(env, ["disable", "--now", `${unit.name}.service`]);
+      await disableSystemdUserUnitForRemoval(env, `${unit.name}.service`);
     } else {
       stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
     }
 
     try {
       await fs.unlink(unit.unitPath);
+      removedAny = true;
       stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }
+  }
+  if (systemctlAvailable && removedAny) {
+    await reloadSystemdUserManager(env);
   }
 
   return units;
@@ -1844,7 +1884,7 @@ export async function uninstallUserSystemdGatewayUnit({
   const unitPath = resolveSystemdUnitPath(env);
   let disabled = false;
   if (await isSystemctlAvailable(env)) {
-    await execSystemctlUser(env, ["disable", "--now", unitName]);
+    await disableSystemdUserUnitForRemoval(env, unitName);
     disabled = true;
   } else {
     stdout.write(
@@ -1865,7 +1905,7 @@ export async function uninstallUserSystemdGatewayUnit({
   // The manager keeps a deleted unit's definition loaded until it reloads, so
   // without this the unit stays startable while the detector reports it gone.
   if (removed && disabled) {
-    await execSystemctlUser(env, ["daemon-reload"]);
+    await reloadSystemdUserManager(env);
   }
   return { unitName, unitPath, removed, disabled };
 }

@@ -6,6 +6,28 @@ import OSLog
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
+private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodable] {
+    var details: [String: ProtoAnyCodable] = [:]
+    if let nested = error?.details?.value as? [String: ProtoAnyCodable] {
+        details.merge(nested) { _, nestedValue in nestedValue }
+    }
+    if let error {
+        if details["code"] == nil {
+            details["code"] = ProtoAnyCodable(error.code)
+        } else {
+            details["errorCode"] = ProtoAnyCodable(error.code)
+        }
+        details["message"] = ProtoAnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = ProtoAnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = ProtoAnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
+
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.isEmpty ? nil : self
@@ -13,10 +35,22 @@ extension String {
 }
 
 public actor GatewayChannelActor {
+    nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
+        timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
+    }
+
+    nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
+        // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
+        if role == "node", clientMode == "node" {
+            return GATEWAY_MIN_NODE_PROTOCOL_VERSION
+        }
+        return GATEWAY_MIN_PROTOCOL_VERSION
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
     private var activeConnectAttemptID: UUID?
-    var pending: [String: PendingRequest] = [:]
+    var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false
     private var connectAttemptTask: Task<Void, Never>?
     /// Socket ownership epoch. Every callback and send stays bound to the task
@@ -1089,10 +1123,8 @@ extension GatewayChannelActor {
         switch frame {
         case let .res(res):
             let id = res.id
-            if let request = pending.removeValue(forKey: id) {
-                // Keep response observers ahead of the next socket frame.
-                await request.onResponse?(res)
-                request.continuation.resume(returning: .res(res))
+            if let waiter = pending.removeValue(forKey: id) {
+                waiter.resume(returning: .res(res))
             }
         case let .event(evt):
             if evt.event == "connect.challenge" { return }
@@ -1351,8 +1383,7 @@ extension GatewayChannelActor {
             params: params,
             timeoutMs: timeoutMs,
             task: task,
-            connectionGeneration: connectionGeneration,
-            onResponse: nil)
+            connectionGeneration: connectionGeneration)
     }
 
     /// Sends a request only on an already-connected physical socket. Unlike
@@ -1372,28 +1403,7 @@ extension GatewayChannelActor {
             params: params,
             timeoutMs: timeoutMs,
             task: task,
-            connectionGeneration: expectedGeneration,
-            onResponse: nil)
-    }
-
-    func request(
-        method: String,
-        params: [String: AnyCodable]?,
-        timeoutMs: Double? = nil,
-        ifCurrentConnectionGeneration expectedGeneration: UInt64,
-        onResponse: @escaping @Sendable (ResponseFrame) async -> Void) async throws -> Data
-    {
-        guard self.isConnected(connectionGeneration: expectedGeneration),
-              let task = self.task,
-              task.state == .running
-        else { throw CancellationError() }
-        return try await self.request(
-            method: method,
-            params: params,
-            timeoutMs: timeoutMs,
-            task: task,
-            connectionGeneration: expectedGeneration,
-            onResponse: onResponse)
+            connectionGeneration: expectedGeneration)
     }
 
     /// The generation is usable as a lease only while its socket is live.
@@ -1410,8 +1420,7 @@ extension GatewayChannelActor {
         params: [String: AnyCodable]?,
         timeoutMs: Double?,
         task: WebSocketTaskBox,
-        connectionGeneration: UInt64,
-        onResponse: (@Sendable (ResponseFrame) async -> Void)?) async throws -> Data
+        connectionGeneration: UInt64) async throws -> Data
     {
         // Zero leaves terminal-operation deadlines to the Gateway owner.
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
@@ -1426,9 +1435,7 @@ extension GatewayChannelActor {
                         cont.resume(throwing: CancellationError())
                         return
                     }
-                    self.pending[payload.id] = PendingRequest(
-                        continuation: cont,
-                        onResponse: onResponse)
+                    self.pending[payload.id] = cont
                     if let effectiveTimeout {
                         Task { [weak self] in
                             guard let self else { return }
@@ -1613,23 +1620,23 @@ extension GatewayChannelActor {
     private func failPending(_ error: Error) async {
         let waiters = self.pending
         self.pending.removeAll()
-        for (_, request) in waiters {
-            request.continuation.resume(throwing: error)
+        for (_, waiter) in waiters {
+            waiter.resume(throwing: error)
         }
     }
 
     private func timeoutRequest(id: String, timeoutMs: Double) async {
-        guard let request = self.pending.removeValue(forKey: id) else { return }
+        guard let waiter = self.pending.removeValue(forKey: id) else { return }
         let err = NSError(
             domain: "Gateway",
             code: 5,
             userInfo: [NSLocalizedDescriptionKey: "gateway request timed out after \(Int(timeoutMs))ms"])
-        request.continuation.resume(throwing: err)
+        waiter.resume(throwing: err)
     }
 
     private func cancelRequest(id: String) {
-        guard let request = self.pending.removeValue(forKey: id) else { return }
-        request.continuation.resume(throwing: CancellationError())
+        guard let waiter = self.pending.removeValue(forKey: id) else { return }
+        waiter.resume(throwing: CancellationError())
     }
 
     private func cancelConnectWaiter(id: UUID) {

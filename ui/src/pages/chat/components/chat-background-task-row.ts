@@ -51,6 +51,7 @@ function renderTaskMeta(
   task: TaskSummary,
   props: BackgroundTasksProps,
   facts: TaskDisplayFacts,
+  transcriptReturnTo: "list" | "detail",
 ): TemplateResult {
   const tone = STATUS_TONES[task.status];
   const showTranscript = task.runtime !== "subagent" && facts.transcriptSessionKey;
@@ -98,7 +99,7 @@ function renderTaskMeta(
               type="button"
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
-                props.onOpenSession(facts.transcriptSessionKey!);
+                props.onOpenTranscript(task, transcriptReturnTo);
               }}
             >
               ${t("chat.backgroundTasks.viewTranscript")}
@@ -164,7 +165,7 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
             `
           : nothing}
       </div>
-      ${renderTaskMeta(task, props, facts)}
+      ${renderTaskMeta(task, props, facts, "list")}
       ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
     </div>
   `;
@@ -185,7 +186,7 @@ export function renderTaskDetail(task: TaskSummary, props: BackgroundTasksProps)
           ${newest.status === "running"
             ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
             : nothing}
-          ${renderTaskMeta(newest, props, facts)}
+          ${renderTaskMeta(newest, props, facts, "detail")}
         </div>
         ${facts.active && props.canCancel
           ? html`

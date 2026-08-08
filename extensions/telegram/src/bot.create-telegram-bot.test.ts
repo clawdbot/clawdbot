@@ -42,6 +42,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
+const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
@@ -5371,8 +5372,11 @@ describe("createTelegramBot", () => {
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
-    const patchSessionEntrySpy = vi.spyOn(sessionStoreRuntime, "patchSessionEntry");
-    patchSessionEntrySpy.mockRejectedValueOnce(new Error("session store boom"));
+    const applySessionModelSelectionSpy = vi.spyOn(
+      modelSessionRuntime,
+      "applySessionModelSelection",
+    );
+    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = makeCallbackRetryContext({
       updateId: 890,
@@ -5385,7 +5389,7 @@ describe("createTelegramBot", () => {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
     } finally {
-      patchSessionEntrySpy.mockRestore();
+      applySessionModelSelectionSpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

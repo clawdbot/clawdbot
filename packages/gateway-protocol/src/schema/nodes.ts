@@ -129,19 +129,6 @@ export const NodeSkillsUpdateParamsSchema = closedObject({
 export type NodeSkillDescriptor = Static<typeof NodeSkillDescriptorSchema>;
 export type NodeSkillsUpdateParams = Static<typeof NodeSkillsUpdateParamsSchema>;
 
-export const NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE =
-  "node-invoke-session-key-envelope-v1";
-const NodeProtocolFeatureSchema = Type.String({ minLength: 1, maxLength: 128 });
-
-/** Replaces transient protocol features supported by this node connection. */
-export const NodeProtocolFeaturesUpdateParamsSchema = closedObject({
-  features: Type.Array(NodeProtocolFeatureSchema, { maxItems: 32, uniqueItems: true }),
-});
-
-export type NodeProtocolFeaturesUpdateParams = Static<
-  typeof NodeProtocolFeaturesUpdateParamsSchema
->;
-
 /** Acknowledges queued node work that the node has consumed. */
 export const NodePendingAckParamsSchema = closedObject({
   ids: Type.Array(NonEmptyString, { minItems: 1 }),
@@ -245,8 +232,6 @@ export const NodeInvokeRequestEventSchema = closedObject({
   paramsJSON: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   idempotencyKey: Type.Optional(NonEmptyString),
-  // Presence marks Gateway-owned attribution; null means intentionally unattributed.
-  sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
 });
 
 /** Ordered input frame sent by the gateway to one long-lived node invoke. */

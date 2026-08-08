@@ -74,7 +74,6 @@ const CURRENT_TRAIN_METHODS = [
   "cron.scratch.get",
   "cron.scratch.set",
   "memory.search",
-  "node.protocolFeatures.update",
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
   "hooks.status",

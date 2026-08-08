@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
 export type LocalTurnPlacementClaim = {
@@ -9,7 +9,7 @@ export type LocalTurnPlacementClaim = {
   runId: string;
 };
 
-export type SessionPlacementTurnParams = RunEmbeddedAgentInternalParams & { sessionFile: string };
+export type SessionPlacementTurnParams = RunEmbeddedAgentParams & { sessionFile: string };
 
 export type SessionPlacementAdmissionProvider = {
   executeLocalTurn: <T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) => Promise<T>;

@@ -672,6 +672,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
     expectSourceContract("channel-secret-basic-runtime", {
       mentions: [
+        "createSimpleChannelSecretContract",
         "collectSimpleChannelFieldAssignments",
         "collectConditionalChannelFieldAssignments",
         "collectSecretInputAssignment",

@@ -11,6 +11,7 @@ import {
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import {
   readSessionMessageByIdAsync,
@@ -134,6 +135,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     const projectedMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
+          resolveCurrentUserProfileDisplay,
         })
       : undefined;
     const projected = projectedMessage

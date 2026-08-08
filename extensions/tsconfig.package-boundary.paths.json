@@ -134,9 +134,6 @@
       "openclaw/plugin-sdk/agent-harness-exec-review-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-exec-review-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/agent-harness-tool-authority-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-tool-authority-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/agent-harness-tool-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-tool-runtime.d.ts"
       ],

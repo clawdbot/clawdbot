@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage as formatQaErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
@@ -219,6 +220,16 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     formatErrorMessage: params.formatErrorMessage,
     liveTurnTimeoutMs: params.liveTurnTimeoutMs,
     resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
+    normalizeModelRef: (raw: string) => {
+      const split = params.splitModelRef(raw);
+      return split
+        ? (resolveModelRefFromString({
+            cfg: params.env.cfg,
+            raw,
+            defaultProvider: split.provider,
+          })?.ref ?? null)
+        : null;
+    },
     splitModelRef: params.splitModelRef,
   } satisfies QaScenarioRuntimeDeps;
 }

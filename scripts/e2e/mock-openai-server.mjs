@@ -505,6 +505,24 @@ function mcpAppConformanceEvents(body, bodyText) {
     : responseEvents("MCP_APP_CONFORMANCE_FAIL");
 }
 
+function agentPluginBundleEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/agent plugin bundle qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    return hasDeclaredTool(bodyText, "weather-probe__weather_probe")
+      ? toolCallEvents("weather-probe__weather_probe", {})
+      : responseEvents("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+  }
+  return toolOutput.includes("probe ok") &&
+    toolOutput.includes("PLUGIN_ROOT=") &&
+    toolOutput.includes("PLUGIN_DATA=")
+    ? responseEvents("AGENT_BUNDLE_MCP_OK")
+    : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -550,6 +568,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
+      if (agentBundleEvents) {
+        writeResponsesEvents(res, body.stream, agentBundleEvents);
+        return;
+      }
       const appEvents = mcpAppConformanceEvents(body, bodyText);
       if (appEvents) {
         writeResponsesEvents(res, body.stream, appEvents);

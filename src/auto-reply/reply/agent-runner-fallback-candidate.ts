@@ -1,11 +1,13 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
+import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import { CommandLane } from "../../process/lanes.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -55,6 +57,46 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     milestone: "before_model_fallback",
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
+  const resolveCandidateRuntime = (provider: string, model: string) => {
+    const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
+    const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
+    const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+      provider,
+      entry: activeEntry,
+      cfg: params.runtimeConfig,
+    });
+    const locksPersistedHarness =
+      activeEntry?.modelSelectionLocked === true &&
+      normalizeLowercaseStringOrEmpty(activeEntry.agentHarnessId) === sessionRuntimeOverride;
+    const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
+      config: params.runtimeConfig,
+    });
+    const pinnedCliRuntime =
+      !locksPersistedHarness &&
+      sessionRuntimeOverride &&
+      isCliProvider(sessionRuntimeOverride, params.runtimeConfig)
+        ? sessionRuntimeOverride
+        : undefined;
+    const cliExecutionProvider =
+      pinnedCliRuntime ??
+      (sessionRuntimeOverride
+        ? provider
+        : (resolveCliRuntimeExecutionProvider({
+            provider,
+            cfg: params.runtimeConfig,
+            agentId: turn.followupRun.run.agentId,
+            modelId: model,
+            authProfileId: selectedAuthProfile.authProfileId,
+          }) ?? provider));
+    return {
+      candidateRun,
+      sessionRuntimeOverride,
+      cliExecutionProvider,
+      useCliExecution:
+        pinnedCliRuntime !== undefined ||
+        (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, params.runtimeConfig)),
+    };
+  };
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       selection: {
@@ -64,6 +106,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        userLockedAuthProfileId:
+          turn.followupRun.run.authProfileIdSource === "user"
+            ? turn.followupRun.run.authProfileId
+            : undefined,
       },
       identity: {
         runId: params.runId,
@@ -85,6 +131,23 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
             cfg: params.runtimeConfig,
           }),
+        resolveContextEngineHost: (provider, model) => {
+          const runtime = resolveCandidateRuntime(provider, model);
+          if (!runtime.useCliExecution) {
+            return undefined;
+          }
+          const backend = resolveCliBackendConfig(
+            runtime.cliExecutionProvider,
+            params.runtimeConfig,
+            { agentId: turn.followupRun.run.agentId },
+          );
+          return buildGenericCliContextEngineHostSupport({
+            backendId: backend?.id ?? runtime.cliExecutionProvider,
+            ...(backend?.contextEngineHostCapabilities
+              ? { capabilities: backend.contextEngineHostCapabilities }
+              : {}),
+          });
+        },
       },
       behavior: {
         kind: "channel-delivery",
@@ -106,7 +169,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       runCandidate: async (provider, model, runOptions) => {
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
-        const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
+        const runtime = params.timing.measureSync("fallback_resolve_runtime", () =>
+          resolveCandidateRuntime(provider, model),
+        );
+        const candidateRun = runtime.candidateRun;
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.runtimeConfig,
           provider,
@@ -129,45 +195,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
         turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
-        const runtime = params.timing.measureSync("fallback_resolve_runtime", () => {
-          const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-          const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-            provider,
-            entry: activeEntry,
-            cfg: params.runtimeConfig,
-          });
-          const locksPersistedHarness =
-            activeEntry?.modelSelectionLocked === true &&
-            normalizeLowercaseStringOrEmpty(activeEntry.agentHarnessId) === sessionRuntimeOverride;
-          const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
-            config: params.runtimeConfig,
-          });
-          const pinnedCliRuntime =
-            !locksPersistedHarness &&
-            sessionRuntimeOverride &&
-            isCliProvider(sessionRuntimeOverride, params.runtimeConfig)
-              ? sessionRuntimeOverride
-              : undefined;
-          const cliExecutionProvider =
-            pinnedCliRuntime ??
-            (sessionRuntimeOverride
-              ? provider
-              : (resolveCliRuntimeExecutionProvider({
-                  provider,
-                  cfg: params.runtimeConfig,
-                  agentId: turn.followupRun.run.agentId,
-                  modelId: model,
-                  authProfileId: selectedAuthProfile.authProfileId,
-                }) ?? provider));
-          return {
-            sessionRuntimeOverride,
-            cliExecutionProvider,
-            useCliExecution:
-              pinnedCliRuntime !== undefined ||
-              (!sessionRuntimeOverride &&
-                isCliProvider(cliExecutionProvider, params.runtimeConfig)),
-          };
-        });
         const common = {
           turn,
           candidateRun,
@@ -183,6 +210,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
             queuedUserMessagePersistedAcrossFallback,
           userTurnTranscriptRecorder,
+          contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           notifyUserMessagePersisted: () => {
             queuedUserMessagePersistedAcrossFallback = true;
           },
@@ -204,10 +233,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
-            getLifecycleGeneration: () => params.state.lifecycleGeneration,
-            onLifecycleGeneration: (generation) => {
-              params.state.lifecycleGeneration = generation;
-            },
+            lifecycleGeneration: params.state.lifecycleGeneration,
             runLane,
           });
           params.state.bootstrapPromptWarningSignaturesSeen =

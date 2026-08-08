@@ -16324,46 +16324,6 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
-      "id": "native.apple.9dcd64ab340a6c15",
-      "source": "Allow access",
-      "translated": "اجازه دسترسی"
-    },
-    {
-      "id": "native.apple.933a2ac28d1d2aec",
-      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
-      "translated": "انتخاب کنید عامل شما در این iPhone به چه چیزهایی دسترسی داشته باشد. تا زمانی که اجازه ندهید، هیچ‌چیز فعال نیست."
-    },
-    {
-      "id": "native.apple.47114a39f7a71c3b",
-      "source": "You can change any of these later in Settings.",
-      "translated": "بعداً می‌توانید هرکدام از این موارد را در تنظیمات تغییر دهید."
-    },
-    {
-      "id": "native.apple.eabf54e2b640a4a1",
-      "source": "Continue",
-      "translated": "ادامه"
-    },
-    {
-      "id": "native.apple.5f425282ece878eb",
-      "source": "Limited",
-      "translated": "محدود"
-    },
-    {
-      "id": "native.apple.c5db9e6eae115f7a",
-      "source": "Allow",
-      "translated": "اجازه دادن"
-    },
-    {
-      "id": "native.apple.f591e16105268e99",
-      "source": "Open Settings",
-      "translated": "باز کردن تنظیمات"
-    },
-    {
-      "id": "native.apple.12ed416835c36555",
-      "source": "Manage",
-      "translated": "مدیریت"
-    },
-    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "شبکهٔ خانگی"
@@ -16844,21 +16804,6 @@
       "translated": "در تنظیمات غیرفعال است"
     },
     {
-      "id": "native.apple.96d65a5563690719",
-      "source": "Notifications",
-      "translated": "اعلان‌ها"
-    },
-    {
-      "id": "native.apple.d290a46515add091",
-      "source": "Camera",
-      "translated": "دوربین"
-    },
-    {
-      "id": "native.apple.0eeedbc8aaafcd2c",
-      "source": "Microphone",
-      "translated": "میکروفون"
-    },
-    {
       "id": "native.apple.14fadad23dd36e44",
       "source": "Photos",
       "translated": "عکس‌ها"
@@ -16877,51 +16822,6 @@
       "id": "native.apple.9ed5c19cf1e84490",
       "source": "Reminders",
       "translated": "یادآوری‌ها"
-    },
-    {
-      "id": "native.apple.866b9df8afcadf07",
-      "source": "Location",
-      "translated": "موقعیت مکانی"
-    },
-    {
-      "id": "native.apple.f205ac6778705a7d",
-      "source": "Pairing approvals and replies from your agent.",
-      "translated": "تأیید درخواست‌های جفت‌سازی و پاسخ‌های عامل شما."
-    },
-    {
-      "id": "native.apple.061a17077ee3be94",
-      "source": "Scan setup codes and take photos on request.",
-      "translated": "اسکن کدهای راه‌اندازی و گرفتن عکس در صورت درخواست."
-    },
-    {
-      "id": "native.apple.c735ac6b282765f9",
-      "source": "Talk with your agent using voice.",
-      "translated": "گفت‌وگوی صوتی با عامل شما."
-    },
-    {
-      "id": "native.apple.ebe8aadcf512ecdb",
-      "source": "Share recent photos when you ask.",
-      "translated": "اشتراک‌گذاری عکس‌های اخیر در صورت درخواست شما."
-    },
-    {
-      "id": "native.apple.4c4bc12c0787383c",
-      "source": "Look up and add people you mention.",
-      "translated": "جست‌وجو و افزودن افرادی که نام می‌برید."
-    },
-    {
-      "id": "native.apple.5a4006fbb9b23db1",
-      "source": "Check and add calendar events.",
-      "translated": "بررسی و افزودن رویدادهای تقویم."
-    },
-    {
-      "id": "native.apple.2b2a4f1aab6a12ec",
-      "source": "List, add, and complete reminders.",
-      "translated": "فهرست‌کردن، افزودن و تکمیل یادآورها."
-    },
-    {
-      "id": "native.apple.3854ae1f0606bafe",
-      "source": "Answer location and nearby questions.",
-      "translated": "پاسخ به پرسش‌های مربوط به موقعیت مکانی و مکان‌های اطراف."
     },
     {
       "id": "native.apple.e5f6435b9cb5a2d8",
@@ -17304,9 +17204,9 @@
       "translated": "فقط افزودن"
     },
     {
-      "id": "native.apple.0b10201d7e452dc4",
-      "source": "Allow",
-      "translated": "اجازه دادن"
+      "id": "native.apple.856d1960275796ef",
+      "source": "Continue",
+      "translated": "ادامه"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",

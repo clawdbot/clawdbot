@@ -2504,15 +2504,13 @@ function envAssignmentInsertIndex(words) {
 }
 
 function isWindowsRemoteTarget(commandArgs) {
-  return (
-    optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
-  );
+  // Mirror Crabbox's arg/env/config resolution so indirect Windows targets never receive POSIX shell.
+  return effectiveTargetContext(commandArgs).target === "windows";
 }
 
 function isNativeWindowsRemoteTarget(commandArgs) {
-  return (
-    isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2"
-  );
+  const targetContext = effectiveTargetContext(commandArgs);
+  return targetContext.target === "windows" && targetContext.windowsMode !== "wsl2";
 }
 
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
@@ -2529,7 +2527,7 @@ function isBrokeredWsl2RemoteTarget(commandArgs, providerName) {
     commandArgs[0] === "run" &&
     (canonicalProvider === "aws" || canonicalProvider === "azure") &&
     isWindowsRemoteTarget(commandArgs) &&
-    optionValue(commandArgs, "--windows-mode") === "wsl2"
+    effectiveTargetContext(commandArgs).windowsMode === "wsl2"
   );
 }
 
@@ -2550,6 +2548,12 @@ function remoteWindowsHydratedNodeModulesBootstrap() {
   ].join("; ");
 }
 
+function remotePosixHydratedNodeModulesBootstrap() {
+  // Knip and other non-pnpm tools walk node_modules, while hydrated boxes keep it external.
+  // Without this link, dead-code scans silently lose consumer edges and report false positives.
+  return 'if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ] && [ -d "$PNPM_CONFIG_MODULES_DIR" ] && [ ! -e node_modules ]; then ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules; fi;';
+}
+
 function injectRemoteWindowsHydratedNodeModulesBootstrap(invocation, facts, providerName) {
   if (
     invocation.args[0] !== "run" ||
@@ -2568,6 +2572,23 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(invocation, facts, prov
   return replaceRunCommandWithShell(
     invocation,
     `${remoteWindowsHydratedNodeModulesBootstrap()}; ${renderRunShellCommand(invocation, powershellJoin)}`,
+  );
+}
+
+function injectRemotePosixHydratedNodeModulesBootstrap(invocation) {
+  if (
+    invocation.args[0] !== "run" ||
+    isWindowsRemoteTarget(invocation.args) ||
+    invocation.options.has("script") ||
+    invocation.options.has("script-stdin") ||
+    invocation.start < 0
+  ) {
+    return invocation.args;
+  }
+
+  return replaceRunCommandWithShell(
+    invocation,
+    `${remotePosixHydratedNodeModulesBootstrap()} ${renderRunShellCommand(invocation)}`,
   );
 }
 
@@ -3636,6 +3657,8 @@ function applyRunTransforms(initialInvocation, initialFacts, options) {
       options.changedGateAlias,
     );
   }
+  invocation = parseRunInvocation(help.text, transformedArgs);
+  transformedArgs = injectRemotePosixHydratedNodeModulesBootstrap(invocation);
   return {
     args: injectRemoteTestboxCi(transformedArgs, options.provider),
     wsl2ScriptBootstrap,

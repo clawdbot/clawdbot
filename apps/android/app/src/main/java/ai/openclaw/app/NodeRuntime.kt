@@ -84,7 +84,6 @@ import ai.openclaw.app.node.LocationCaptureManager
 import ai.openclaw.app.node.LocationHandler
 import ai.openclaw.app.node.MobileUiHandler
 import ai.openclaw.app.node.MotionHandler
-import ai.openclaw.app.node.NodeInvokeSessionKeyEnvelope
 import ai.openclaw.app.node.NodePresenceAliveBeacon
 import ai.openclaw.app.node.NotificationsHandler
 import ai.openclaw.app.node.PhotosHandler
@@ -95,7 +94,6 @@ import ai.openclaw.app.node.SystemHandler
 import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
-import ai.openclaw.app.node.currentNodeInvokeSessionKeyEnvelope
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
@@ -111,7 +109,6 @@ import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
-import ai.openclaw.app.voice.TalkSessionKeyEnvelope
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
 import ai.openclaw.app.voice.VoiceWakeManager
@@ -185,12 +182,6 @@ private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGE
 private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
-
-private fun NodeInvokeSessionKeyEnvelope.toTalkSessionKeyEnvelope(): TalkSessionKeyEnvelope =
-  when (this) {
-    NodeInvokeSessionKeyEnvelope.Legacy -> TalkSessionKeyEnvelope.Legacy
-    is NodeInvokeSessionKeyEnvelope.Authoritative -> TalkSessionKeyEnvelope.Authoritative(sessionKey)
-  }
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
 
@@ -1058,13 +1049,13 @@ class NodeRuntime private constructor(
       systemHandler = systemHandler,
       talkHandler =
         object : TalkHandler {
-          override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart(currentNodeInvokeSessionKeyEnvelope().toTalkSessionKeyEnvelope())
+          override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
 
           override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop()
 
           override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttCancel()
 
-          override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce(currentNodeInvokeSessionKeyEnvelope().toTalkSessionKeyEnvelope())
+          override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
         },
       photosHandler = photosHandler,
       contactsHandler = contactsHandler,
@@ -1523,6 +1514,7 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+      hasOperatorAdminScope = { OperatorAdminScope in _operatorScopes.value },
       activeAgentId = {
         resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
       },
@@ -1761,7 +1753,7 @@ class NodeRuntime private constructor(
       },
       onEvent = ::handleNodeGatewayEvent,
       onInvoke = { req ->
-        invokeDispatcher.handleInvoke(req)
+        invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
       onTlsFingerprint = { stableId, fingerprint ->
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
@@ -3557,7 +3549,7 @@ class NodeRuntime private constructor(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
 
-  private suspend fun handleTalkPttStart(sessionKeyEnvelope: TalkSessionKeyEnvelope): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
       talkMode.finishingPushToTalkCaptureId?.let {
         return@runTalkPttCommand GatewaySession.InvokeResult.error(
@@ -3576,7 +3568,6 @@ class NodeRuntime private constructor(
           val started =
             talkMode.beginPushToTalk(
               allowNewCapture = true,
-              sessionKeyEnvelope = sessionKeyEnvelope,
               canStartCapture = {
                 _isForeground.value &&
                   voiceLifecycleEpoch.get() == lifecycleEpoch &&
@@ -3602,7 +3593,7 @@ class NodeRuntime private constructor(
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
-  private suspend fun handleTalkPttOnce(sessionKeyEnvelope: TalkSessionKeyEnvelope): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
     runTalkPttCommand {
       currentTalkPttOnceBusy()?.let { busy ->
         return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
@@ -3617,7 +3608,6 @@ class NodeRuntime private constructor(
         ) { ownershipEpoch ->
           val started =
             talkMode.beginPushToTalkOnce(
-              sessionKeyEnvelope = sessionKeyEnvelope,
               canStartCapture = {
                 _isForeground.value &&
                   voiceLifecycleEpoch.get() == lifecycleEpoch &&

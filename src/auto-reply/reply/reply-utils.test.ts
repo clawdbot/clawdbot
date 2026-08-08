@@ -7,6 +7,7 @@ import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { parseReplyDirectives } from "./reply-directives.js";
+import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
@@ -470,6 +471,41 @@ describe("typing controller", () => {
     await typing.startTypingOnText("late tool result");
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps execution typing alive past its base TTL until the dispatcher settles", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn(async () => undefined);
+    const onCleanup = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      onCleanup,
+      typingIntervalSeconds: 121,
+    });
+    const lifecycle = createReplyDispatcherWithTyping({
+      deliver: async () => undefined,
+    });
+    lifecycle.replyOptions.onTypingController?.(typing);
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalExecutionActivity?.();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(243_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(3);
+    expect(onCleanup).not.toHaveBeenCalled();
+
+    lifecycle.markRunComplete();
+    lifecycle.dispatcher.markComplete();
+    await lifecycle.dispatcher.waitForIdle();
+    expect(onCleanup).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(243_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(3);
   });
 
   it("can send the first typing signal without periodic keepalive refreshes", async () => {

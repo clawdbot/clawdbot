@@ -101,13 +101,6 @@ export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailab
     : null;
 }
 
-export function resolveControlUiRefreshRequiredBanner(): ApplicationStatusBanner {
-  return {
-    tone: "info",
-    text: t("updates.refreshRequired"),
-  };
-}
-
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;

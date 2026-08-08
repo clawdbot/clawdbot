@@ -406,9 +406,6 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
-vi.mock("../embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: runEmbeddedAgentMock,
-}));
 
 vi.mock("../session-write-lock.js", async () => {
   const actual = await vi.importActual<typeof import("../session-write-lock.js")>(
@@ -432,6 +429,13 @@ function makeCliResult(text: string): EmbeddedAgentRunResult {
         provider: "claude-cli",
         model: "opus",
         usage: {
+          input: 12,
+          output: 4,
+          cacheRead: 3,
+          cacheWrite: 0,
+          total: 19,
+        },
+        lastCallUsage: {
           input: 12,
           output: 4,
           cacheRead: 3,
@@ -472,7 +476,13 @@ async function readSessionMessages(target: TranscriptReadTarget) {
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
-        entry.message as { role?: string; content?: unknown; provider?: string; model?: string },
+        entry.message as {
+          role?: string;
+          content?: unknown;
+          provider?: string;
+          model?: string;
+          usage?: unknown;
+        },
     );
 }
 
@@ -1987,9 +1997,15 @@ describe("CLI attempt execution", () => {
     });
     let updatedEntry: SessionEntry | undefined;
     try {
+      const result = makeCliResult("hello from cli");
+      if (!result.meta.agentMeta) {
+        throw new Error("expected agent metadata");
+      }
+      result.meta.agentMeta.usage = { input: 12, output: 4, cacheRead: 3, total: 19 };
+      result.meta.agentMeta.lastCallUsage = { input: 7, output: 4, cacheRead: 2, total: 13 };
       updatedEntry = await persistCliTranscriptEntry({
         body: "persist this",
-        result: makeCliResult("hello from cli"),
+        result,
         sessionId: sessionEntry.sessionId,
         sessionKey,
         sessionEntry,
@@ -2037,12 +2053,57 @@ describe("CLI attempt execution", () => {
       model: "opus",
       content: [{ type: "text", text: "hello from cli" }],
     });
+    expectRecordFields(requireRecord(messages[1]?.usage, "assistant usage"), {
+      input: 7,
+      output: 4,
+      cacheRead: 2,
+      totalTokens: 13,
+      contextUsage: { state: "available", promptTokens: 9, totalTokens: 13 },
+    });
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
+  });
+
+  it("marks CLI transcript context unavailable when only cumulative usage exists", async () => {
+    const sessionKey = "agent:main:subagent:cli-cumulative-only";
+    const sessionEntry = makeSessionEntry("session-cli-cumulative-only");
+    const result = makeCliResult("cumulative reply");
+    if (!result.meta.agentMeta) {
+      throw new Error("expected agent metadata");
+    }
+    result.meta.agentMeta.lastCallUsage = undefined;
+
+    await persistCliTurnTranscript({
+      body: "run tools",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    const assistant = requireRecord(messages.at(-1), "assistant message");
+    expectRecordFields(requireRecord(assistant.usage, "assistant usage"), {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    });
   });
 
   it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
@@ -3610,6 +3671,22 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("replaces a legacy marker-backed automatic profile with the configured model profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "configured-auth-replaces-legacy-auto",
+      configuredAuthProfileId: "openai:verified",
+      sessionEntry: {
+        authProfileOverride: "openai:legacy-auto",
+        authProfileOverrideCompactionCount: 0,
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:verified",
+      authProfileIdSource: "user",
+    });
+  });
+
   it("preserves an explicit session profile over the configured model profile", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       runId: "session-auth-over-configured",
@@ -3622,6 +3699,21 @@ describe("CLI attempt execution", () => {
 
     expectRecordFields(embeddedArg, {
       authProfileId: "openai:session-choice",
+      authProfileIdSource: "user",
+    });
+  });
+
+  it("preserves a legacy source-less user profile over the configured model profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "legacy-session-auth-over-configured",
+      configuredAuthProfileId: "openai:verified",
+      sessionEntry: {
+        authProfileOverride: "openai:legacy-user",
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:legacy-user",
       authProfileIdSource: "user",
     });
   });

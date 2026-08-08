@@ -1,6 +1,5 @@
 // Covers agent event sequencing and run context cleanup.
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createAgentExecutionAttribution } from "../agents/agent-execution-attribution.js";
 import {
   type AgentEventPayload,
   captureAgentRunLifecycleGeneration,
@@ -898,45 +897,6 @@ describe("agent-events sequencing", () => {
     expect(context?.lastActiveAt).toBe(12_345);
   });
 
-  test("keeps the first same-generation attribution private and immutable", () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-ctx",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      sessionKey: "agent:main:main",
-      sessionId: "session-1",
-      agentId: "main",
-    });
-    const replacement = createAgentExecutionAttribution({
-      runId: "run-ctx",
-      lifecycleGeneration: attribution.lifecycleGeneration,
-      sessionKey: "agent:main:other",
-      sessionId: "session-2",
-      agentId: "main",
-    });
-    registerAgentRunContext("run-ctx", {
-      attribution,
-      lifecycleGeneration: attribution.lifecycleGeneration,
-    });
-    registerAgentRunContext("run-ctx", {
-      attribution: replacement,
-      lifecycleGeneration: attribution.lifecycleGeneration,
-      verboseLevel: "full",
-    });
-
-    expect(getAgentRunContext("run-ctx")?.attribution).toBe(attribution);
-    expect(getAgentRunContext("run-ctx")?.verboseLevel).toBe("full");
-    expect(Reflect.set(getAgentRunContext("run-ctx")!, "attribution", replacement)).toBe(false);
-
-    let received: AgentEventPayload | undefined;
-    const stop = onAgentEvent((event) => {
-      received = event;
-    });
-    emitAgentEvent({ runId: "run-ctx", stream: "lifecycle", data: { phase: "end" } });
-    stop();
-
-    expect(JSON.stringify(received)).not.toContain("attribution");
-  });
-
   test("falls back to registered sessionKey when event sessionKey is blank", () => {
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
@@ -1156,4 +1116,28 @@ describe("agent-events sequencing", () => {
     first.events.resetAgentEventsForTest();
     clock.mockRestore();
   });
+});
+
+test("clearAgentRunContext also cleans up seqByRun to prevent memory leak (#63643)", () => {
+  // Regression test: seqByRun entries were never deleted when a run ended,
+  // causing unbounded growth over time.
+  registerAgentRunContext("run-leak", { sessionKey: "main" });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+
+  // After clearing run context, the sequence counter should also be removed.
+  clearAgentRunContext("run-leak");
+
+  // Emitting a new event on the same runId should start seq from 1 again,
+  // proving the old entry was deleted.
+  const seqs: number[] = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.runId === "run-leak") {
+      seqs.push(evt.seq);
+    }
+  });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  stop();
+
+  expect(seqs).toEqual([1]);
 });

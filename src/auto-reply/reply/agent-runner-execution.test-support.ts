@@ -62,9 +62,6 @@ export function makeTestModel(id: string, contextTokens: number): ModelDefinitio
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: (params: unknown) => state.runEmbeddedAgentMock(params),
-}));
 
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
   const actual = await vi.importActual<
@@ -86,7 +83,43 @@ vi.mock("../../agents/cli-runner.js", () => ({
 }));
 
 vi.mock("../../agents/model-fallback-runner.js", () => ({
-  runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+  runWithModelFallback: async (params: unknown) => {
+    const input = params as {
+      classifyResult?: (classification: { result: unknown; [key: string]: unknown }) => unknown;
+      [key: string]: unknown;
+    };
+    const adapted = input.classifyResult
+      ? {
+          ...input,
+          classifyResult: (classification: { result: unknown; [key: string]: unknown }) => {
+            const candidate = classification.result;
+            const wrappedCandidate =
+              candidate && typeof candidate === "object" && "result" in candidate
+                ? candidate
+                : { result: candidate };
+            return input.classifyResult?.({
+              ...classification,
+              result: wrappedCandidate,
+            });
+          },
+        }
+      : input;
+    const resolved = (await state.runWithModelFallbackMock(adapted)) as {
+      outcome?: "completed" | "exhausted";
+      result?: unknown;
+      [key: string]: unknown;
+    };
+    const candidate = resolved?.result;
+    const wrappedCandidate =
+      candidate && typeof candidate === "object" && "result" in candidate
+        ? candidate
+        : { result: candidate };
+    return {
+      ...resolved,
+      outcome: resolved.outcome ?? "completed",
+      result: wrappedCandidate,
+    };
+  },
 }));
 
 vi.mock("../../agents/model-fallback-attempt.js", () => ({
@@ -328,14 +361,13 @@ export type FallbackRunnerParams = {
 };
 
 export type EmbeddedAgentParams = {
+  runId: string;
+  sessionId?: string;
+  sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
-  onExecutionAttributionChanged?: (info: {
-    lifecycleGeneration?: string;
-    attribution?: import("../../agents/agent-execution-attribution.js").AgentExecutionAttribution;
-  }) => void;
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"
