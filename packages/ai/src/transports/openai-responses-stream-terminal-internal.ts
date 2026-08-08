@@ -104,7 +104,10 @@ export function resolveCompletedResponsesToolCall(
   );
   // Keep the provider identity while discarding invalid raw JSON. Agent-core
   // turns the undefined sentinel into invalid_tool_arguments before execution.
-  return { name, arguments: argumentsValue as ToolCall["arguments"] };
+  return {
+    name,
+    arguments: (argumentsValue ?? undefined) as ToolCall["arguments"],
+  };
 }
 
 export function createResponsesTerminalController(params: {

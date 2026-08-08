@@ -357,8 +357,12 @@ export async function createInvalidToolArgumentsRecovery(params: {
 
   const beforeToolBatch: InternalBeforeToolBatchHook = async (context, signal) => {
     const batchRejections = context.rejections ?? [];
+    const sourceToolCalls = context.assistantMessage.content.filter(
+      (item) => item.type === "toolCall",
+    );
     if (replayIndeterminate) {
-      const target = context.calls[0]?.toolCall ?? batchRejections[0]?.toolCall;
+      const target =
+        sourceToolCalls[0] ?? context.calls[0]?.toolCall ?? batchRejections[0]?.toolCall;
       if (target) {
         return {
           intervention: {
@@ -372,10 +376,26 @@ export async function createInvalidToolArgumentsRecovery(params: {
       }
     }
 
-    const all = [
+    const preflightCandidates = [
       ...context.calls.map((item) => ({ ...item, rejected: false as const })),
       ...batchRejections.map((item) => ({ ...item, rejected: true as const })),
     ];
+    const callsByIdentity = new Map(context.calls.map((item) => [item.toolCall, item]));
+    const rejectionsByIdentity = new Map(batchRejections.map((item) => [item.toolCall, item]));
+    const all =
+      sourceToolCalls.length > 0
+        ? sourceToolCalls.map((toolCall) => {
+            const rejected = rejectionsByIdentity.get(toolCall);
+            if (rejected) {
+              return { ...rejected, rejected: true as const };
+            }
+            const admitted = callsByIdentity.get(toolCall);
+            return {
+              ...(admitted ?? { toolCall, args: toolCall.arguments }),
+              rejected: false as const,
+            };
+          })
+        : preflightCandidates;
     if (pending) {
       const candidate = all[0];
       const matched =

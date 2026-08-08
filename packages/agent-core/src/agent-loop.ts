@@ -650,7 +650,10 @@ async function executeToolCalls(
         ? [{ toolCall, validation: validation.outcome.validationEvidence }]
         : [];
     });
-    if ((calls.length > 0 || rejections.length > 0) && !signal?.aborted) {
+    // Admission owns whole-batch recovery semantics, including calls that
+    // could not be resolved or prepared. Always surface a non-empty provider
+    // batch even when preflight produced no validated call or schema rejection.
+    if (toolCalls.length > 0 && !signal?.aborted) {
       const admission = await config.beforeToolBatch(
         { assistantMessage, calls, rejections, context: currentContext },
         signal,

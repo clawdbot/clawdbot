@@ -162,6 +162,9 @@ type HookRunnerOptions = {
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
   channel_pairing_requested: 2_000,
+  // Recovery awaits this read-only observer on session-critical paths. Bound
+  // it so a hung plugin cannot stall startup or consume the correction turn.
+  tool_call_rejected: 5_000,
   // Defensive default for the compaction lifecycle hooks. Without a budget an
   // unresponsive handler runs fully unbounded, and in the codex agent harness
   // these hooks fire on the serialized notification queue

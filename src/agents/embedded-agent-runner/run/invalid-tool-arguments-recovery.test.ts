@@ -216,6 +216,54 @@ describe("invalid tool argument recovery", () => {
     });
   });
 
+  it("claims a same-tool correction even when preflight cannot resolve it", async () => {
+    const fixture = harness();
+    const controller = await createController(fixture);
+    const agent = fakeAgent();
+    controller.install(agent);
+    const original = assistant("turn-original", [{ id: "original", name: "edit" }]);
+    await agent.afterToolOutcome?.(invalidOutcome(original, "original"));
+    const correction = assistant("turn-correction", [
+      { id: "unresolved-correction", name: "EDIT" },
+    ]);
+
+    await expect(
+      controller.beforeToolBatch({
+        assistantMessage: correction,
+        calls: [],
+        rejections: [],
+        context: { systemPrompt: "", messages: [] },
+      }),
+    ).resolves.toBeUndefined();
+    expect((fixture.entries.at(-1)?.data as { state?: string }).state).toBe("retry_claimed");
+  });
+
+  it("closes a different unresolved correction without another provider turn", async () => {
+    const fixture = harness();
+    const controller = await createController(fixture);
+    const agent = fakeAgent();
+    controller.install(agent);
+    const original = assistant("turn-original", [{ id: "original", name: "edit" }]);
+    await agent.afterToolOutcome?.(invalidOutcome(original, "original"));
+    const correction = assistant("turn-correction", [
+      { id: "unresolved-other", name: "missing_tool" },
+    ]);
+
+    const admission = await controller.beforeToolBatch({
+      assistantMessage: correction,
+      calls: [],
+      rejections: [],
+      context: { systemPrompt: "", messages: [] },
+    });
+
+    expect(admission?.intervention).toMatchObject({
+      kind: "invalid-tool-arguments-recovery",
+      toolCallId: "unresolved-other",
+      rejection: { reason: "retry_not_matched" },
+    });
+    expect((fixture.entries.at(-1)?.data as { state?: string }).state).toBe("retry_not_matched");
+  });
+
   it("fails closed after restart when a claim has no receipt", async () => {
     const first = harness();
     const controller = await createController(first);

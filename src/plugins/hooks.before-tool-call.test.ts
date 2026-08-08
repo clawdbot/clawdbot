@@ -621,4 +621,57 @@ describe("tool_call_rejected observation", () => {
     expect(handler).toHaveBeenCalledOnce();
     expect(event.recovery.state).toBe("retry_available");
   });
+
+  it("times out a never-settling observer by default", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createEmptyPluginRegistry();
+      addTestHook({
+        registry,
+        pluginId: "failure-observer",
+        hookName: "tool_call_rejected",
+        handler: vi.fn(() => new Promise<void>(() => {})) as never,
+      });
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const runner = createHookRunner(registry, { logger });
+      const run = runner.runToolCallRejected(
+        {
+          classification: "invalid_tool_arguments",
+          executionStarted: false,
+          reason: "schema_validation_failed",
+          correlation: {
+            turnId: "turn-1",
+            intendedTool: "edit",
+            providerToolCallId: "call-1",
+            providerToolCallIdOrigin: "provider",
+            provider: "openai",
+            transport: "openai-responses",
+          },
+          recovery: {
+            recoveryId: "recovery-1",
+            attempt: 1,
+            maxAttempts: 2,
+            remainingAttempts: 1,
+            state: "retry_available",
+          },
+          validation: {
+            argumentShape: "object",
+            issueCount: 1,
+            issues: [{ code: "required", path: "path" }],
+            truncated: false,
+          },
+        },
+        { ...stubCtx, toolName: "edit" },
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] tool_call_rejected handler from failure-observer failed: timed out after 5000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

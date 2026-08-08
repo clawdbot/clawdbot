@@ -2117,6 +2117,58 @@ describe("agentLoop tool termination", () => {
     );
   });
 
+  it("routes unresolved source batches through whole-batch admission", async () => {
+    const beforeToolBatch = vi.fn(async () => undefined);
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-missing", name: "missing_tool", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [] },
+        { ...config, beforeToolBatch },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(beforeToolBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        calls: [],
+        rejections: [],
+        assistantMessage: expect.objectContaining({
+          content: [expect.objectContaining({ id: "call-missing", name: "missing_tool" })],
+        }),
+      }),
+      undefined,
+    );
+    expect(
+      events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      ),
+    ).toMatchObject({ executionStarted: false, isError: true });
+  });
+
   it("runs the finalized-outcome hook after the executed-only hook", async () => {
     const executed: string[] = [];
     const order: string[] = [];
