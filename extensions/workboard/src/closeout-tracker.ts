@@ -200,6 +200,11 @@ function deliveryRequestError(): string {
   return "gateway_request_failed";
 }
 
+function withoutLastError(record: CloseoutRecord): Omit<CloseoutRecord, "lastError"> {
+  const { lastError: _lastError, ...rest } = record;
+  return rest;
+}
+
 export function summarizeCloseoutRecord(record: CloseoutRecord) {
   return {
     closeoutId: record.closeoutId,
@@ -273,8 +278,9 @@ export function createCloseoutTracker(params: {
 
     const attemptCount = record.attemptCount + 1;
     const updatedAt = now();
+    let result: ConversationSendResult;
     try {
-      const result = normalizeGatewayResult(
+      result = normalizeGatewayResult(
         await params.send({
           agentId: record.agentId,
           ...(record.sourceSessionKey ? { sourceSessionKey: record.sourceSessionKey } : {}),
@@ -284,51 +290,6 @@ export function createCloseoutTracker(params: {
         }),
         record.conversationRef,
       );
-      if (
-        result.status === "sent" &&
-        result.messageId?.trim() &&
-        result.messageIdSource === "platform"
-      ) {
-        return await persist({
-          ...record,
-          status: "confirmed",
-          attemptCount,
-          channel: result.channel,
-          messageId: result.messageId,
-          messageIdSource: result.messageIdSource,
-          ...(result.queueId ? { queueId: result.queueId } : {}),
-          lastError: undefined,
-          updatedAt,
-        });
-      }
-      if (result.status === "queued") {
-        return await persist({
-          ...record,
-          status: "queued",
-          attemptCount,
-          channel: result.channel,
-          ...(result.messageId ? { messageId: result.messageId } : {}),
-          ...(result.messageIdSource ? { messageIdSource: result.messageIdSource } : {}),
-          ...(result.queueId ? { queueId: result.queueId } : {}),
-          lastError: undefined,
-          updatedAt,
-        });
-      }
-      const lastError =
-        result.status === "sent"
-          ? "delivery reported sent without a platform receipt"
-          : `delivery status is ${result.status}`;
-      return await persist({
-        ...record,
-        status: "uncertain",
-        attemptCount,
-        channel: result.channel,
-        ...(result.messageId ? { messageId: result.messageId } : {}),
-        ...(result.messageIdSource ? { messageIdSource: result.messageIdSource } : {}),
-        ...(result.queueId ? { queueId: result.queueId } : {}),
-        lastError,
-        updatedAt,
-      });
     } catch (error) {
       return await persist({
         ...record,
@@ -341,6 +302,50 @@ export function createCloseoutTracker(params: {
         updatedAt,
       });
     }
+
+    if (
+      result.status === "sent" &&
+      result.messageId?.trim() &&
+      result.messageIdSource === "platform"
+    ) {
+      return await persist({
+        ...withoutLastError(record),
+        status: "confirmed",
+        attemptCount,
+        channel: result.channel,
+        messageId: result.messageId,
+        messageIdSource: result.messageIdSource,
+        ...(result.queueId ? { queueId: result.queueId } : {}),
+        updatedAt,
+      });
+    }
+    if (result.status === "queued") {
+      return await persist({
+        ...withoutLastError(record),
+        status: "queued",
+        attemptCount,
+        channel: result.channel,
+        ...(result.messageId ? { messageId: result.messageId } : {}),
+        ...(result.messageIdSource ? { messageIdSource: result.messageIdSource } : {}),
+        ...(result.queueId ? { queueId: result.queueId } : {}),
+        updatedAt,
+      });
+    }
+    const lastError =
+      result.status === "sent"
+        ? "delivery reported sent without a platform receipt"
+        : `delivery status is ${result.status}`;
+    return await persist({
+      ...record,
+      status: "uncertain",
+      attemptCount,
+      channel: result.channel,
+      ...(result.messageId ? { messageId: result.messageId } : {}),
+      ...(result.messageIdSource ? { messageIdSource: result.messageIdSource } : {}),
+      ...(result.queueId ? { queueId: result.queueId } : {}),
+      lastError,
+      updatedAt,
+    });
   }
 
   return {
@@ -395,12 +400,11 @@ export function createCloseoutTracker(params: {
         }
         const manualConfirmedAt = now();
         return await persist({
-          ...record,
+          ...withoutLastError(record),
           status: "manually_confirmed",
           manualEvidence,
           manualConfirmedBy,
           manualConfirmedAt,
-          lastError: undefined,
           updatedAt: manualConfirmedAt,
         });
       });
