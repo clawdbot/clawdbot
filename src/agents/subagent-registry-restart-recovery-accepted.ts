@@ -55,7 +55,7 @@ export async function reconcileAcceptedRecovery(params: {
           }),
           task: params.entry.task,
           restartRecovery: params.receipt,
-          requirePersistence: true,
+          persistenceFailure: "return-false",
         });
     } catch (error) {
       remapError = error;

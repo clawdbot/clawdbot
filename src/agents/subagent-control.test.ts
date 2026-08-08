@@ -2016,7 +2016,7 @@ describe("killControlledSubagentRun", () => {
         nextRunId: recoveryRunId,
         expected: source,
         restartRecovery: receipt,
-        requirePersistence: true,
+        persistenceFailure: "return-false",
       }),
     ).toBe(true);
     addSubagentRunForTests({

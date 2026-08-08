@@ -947,7 +947,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/fish-audio:
+  extensions/fish-audio-speech:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

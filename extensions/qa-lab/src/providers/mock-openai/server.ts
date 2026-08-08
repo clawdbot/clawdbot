@@ -67,12 +67,15 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
+  QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_SELF_YIELD_MARKER,
   QA_SUBAGENT_TERMINAL_MARKERS,
   QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
@@ -1136,6 +1139,18 @@ async function buildResponsesPayload(
   }
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
+  }
+  // A child that pauses itself and finishes only when a later follow-up arrives
+  // on the same session. Both turns are matched on the current prompt so the
+  // yielded kickoff, still present in the shared transcript, cannot make the
+  // follow-up turn yield a second time.
+  if (QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE.test(prompt)) {
+    return buildAssistantEvents(QA_SUBAGENT_SELF_YIELD_MARKER);
+  }
+  if (QA_SUBAGENT_SELF_YIELD_WORKER_RE.test(prompt) && canCallSessionsYield) {
+    return buildToolCallEventsWithArgs("sessions_yield", {
+      message: "Waiting for the remote job to report back.",
+    });
   }
   const terminalCompletionCase = extractLastMatchingUserTurn(
     input,

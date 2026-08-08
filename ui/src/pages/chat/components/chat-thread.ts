@@ -72,6 +72,7 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import {
+  CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   getChatSessionScrollPosition,
   saveChatSessionScrollPosition,
   type ChatSessionScrollPosition,
@@ -209,7 +210,6 @@ type ChatTranscriptAnnouncement = {
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
-const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
 const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
 // Initial virtual rows can correct their estimates for several frames. Hold a
 // restored offset for ~200ms so those corrections cannot reapply the end anchor.
@@ -1604,6 +1604,29 @@ function renderChatThreadContents(
     { parts: StreamGroupPart[]; options: StreamGroupOptions }
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
+  const sharedMessageRenderOptions = {
+    onOpenSidebar: props.onOpenSidebar,
+    sessionKey: props.sessionKey,
+    boardProvider: props.boardProvider,
+    agentId: props.fullMessageAgentId,
+    runActive: props.runActive,
+    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onRequestUpdate: requestUpdate,
+    basePath: props.basePath,
+    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+    resolveArtifactDownload: props.resolveArtifactDownload,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+    onRequestOpenImage: props.onRequestOpenImage,
+    onOpenImage: props.onOpenImage,
+    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+    embedSandboxMode: props.embedSandboxMode ?? "scripts",
+    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+  } satisfies StreamGroupOptions;
+  const streamGroupOptions = {
+    ...sharedMessageRenderOptions,
+    assistant: assistantIdentity,
+  } satisfies StreamGroupOptions;
   const renderGroupOptions = (item: MessageGroup, onDelete: () => void) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
@@ -1611,14 +1634,9 @@ function renderChatThreadContents(
         ? persistedMessageEntryId(lastMessage)
         : null;
     return {
-      onOpenSidebar: props.onOpenSidebar,
-      onOpenWorkspaceFile: props.onOpenWorkspaceFile,
-      sessionKey: props.sessionKey,
-      boardProvider: props.boardProvider,
-      agentId: props.fullMessageAgentId,
+      ...sharedMessageRenderOptions,
       showReasoning,
       showToolCalls: props.showToolCalls,
-      runActive: props.runActive,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
@@ -1639,23 +1657,12 @@ function renderChatThreadContents(
       onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
-      onRequestUpdate: requestUpdate,
-      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-      onRequestOpenImage: props.onRequestOpenImage,
-      onOpenImage: props.onOpenImage,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       showAvatarGutter: !isDirectThread,
-      basePath: props.basePath,
-      localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-      assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-      resolveArtifactDownload: props.resolveArtifactDownload,
-      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-      embedSandboxMode: props.embedSandboxMode ?? "scripts",
-      allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply,
       onDelete: props.readOnly ? undefined : onDelete,
@@ -1716,16 +1723,13 @@ function renderChatThreadContents(
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
+        ...streamGroupOptions,
         questionPrompts,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
-        onOpenSidebar: props.onOpenSidebar,
-        assistant: assistantIdentity,
-        basePath: props.basePath,
-        authToken: props.assistantAttachmentAuthToken ?? null,
       });
     }
     if (item.kind === "work-group") {
@@ -1804,6 +1808,7 @@ function renderChatThreadContents(
     activeContinuationByGroupKey.set(previous.key, {
       parts: item.parts,
       options: {
+        ...streamGroupOptions,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,

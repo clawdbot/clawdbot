@@ -5367,12 +5367,8 @@ describe("createTelegramBot", () => {
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     // Isolate this bot's session store: the retry path lets the SECOND middleware
-    // chain run through the REAL patchSessionEntry, persisting modelOverride to disk.
-    // Without an explicit store this resolves to the process-shared default path
-    // (pid+pool keyed) and leaks the override into later files in the sequential
-    // shard (e.g. bot.test.ts "renders model callback lists"). A dedicated temp
-    // store keeps the real write contained to this test. Keep the default DM
-    // policy so the callback stays authorized.
+    // chain run through the real session writer, which must not leak into later
+    // files in the sequential Telegram shard.
     const storePath = path.join(createTelegramBotTestStateDir(), "session-store.json");
     const config = {
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
@@ -5419,12 +5415,15 @@ describe("createTelegramBot", () => {
   it("shows a permanent rejection when model selection is locked", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const applySessionModelSelectionSpy = vi
-      .spyOn(modelSessionRuntime, "applySessionModelSelection")
-      .mockResolvedValueOnce({
-        status: "rejected",
-        reason: "locked",
-        message: "Model selection is locked for this session.",
+    const getSessionEntrySpy = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntry")
+      .mockImplementationOnce(() => {
+        const entry = {
+          sessionId: "locked-session",
+          updatedAt: Date.now(),
+          modelSelectionLocked: true,
+        };
+        return entry;
       });
     const ctx = makeCallbackRetryContext({
       id: "cbq-model-select-locked-1",
@@ -5435,7 +5434,7 @@ describe("createTelegramBot", () => {
     try {
       await expect(callbackHandler(ctx)).resolves.toBeUndefined();
     } finally {
-      applySessionModelSelectionSpy.mockRestore();
+      getSessionEntrySpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

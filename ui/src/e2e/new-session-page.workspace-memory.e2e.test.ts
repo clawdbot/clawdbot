@@ -149,22 +149,16 @@ suite.define(() => {
           (element) => element.closest("details")?.hasAttribute("open") ?? false,
         );
       const modelTriggerBox = await modelSelect.boundingBox();
-      const modelMenuBox = await page
-        .locator(".chat-controls__inline-select-menu--combined")
-        .boundingBox();
+      const modelMenuBox = await page.locator(".chat-controls__model-menu").boundingBox();
       expect(modelTriggerBox).not.toBeNull();
       expect(modelMenuBox).not.toBeNull();
-      expect(modelMenuBox?.x ?? 0).toBeLessThan(modelTriggerBox?.x ?? 0);
-      expect((modelMenuBox?.x ?? 0) + (modelMenuBox?.width ?? 0)).toBeCloseTo(
-        (modelTriggerBox?.x ?? 0) + (modelTriggerBox?.width ?? 0),
-        0,
+      expect(modelMenuBox?.x ?? 0).toBeLessThanOrEqual(modelTriggerBox?.x ?? 0);
+      expect((modelMenuBox?.x ?? 0) + (modelMenuBox?.width ?? 0)).toBeLessThanOrEqual(
+        await page.evaluate(() => window.innerWidth),
       );
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await expect.poll(pickerOpen).toBe(true);
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      // Inside changes stay grouped; only explicit light-dismissal closes the picker.
-      await expect.poll(pickerOpen).toBe(true);
-      await page.keyboard.press("Escape");
+      // Model selection commits immediately and closes the model popover.
       await expect.poll(pickerOpen).toBe(false);
       await expect
         .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
@@ -204,11 +198,12 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const effortSelect = page.locator('[data-chat-thinking-select="true"]');
+      await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
       await thinkingSlider.press("End");
-      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
       await page.goto(`${suite.server.baseUrl}new`);
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
@@ -218,7 +213,7 @@ suite.define(() => {
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
-      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
       await captureUiProof(page, "new-session-preferences-restored.png");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
@@ -272,7 +267,6 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
 
       await navigateInApp(page, "chat");
@@ -358,7 +352,6 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({

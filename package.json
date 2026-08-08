@@ -270,7 +270,7 @@
     "!dist/extensions/featherless/**",
     "!dist/extensions/firecrawl/**",
     "!dist/extensions/fireworks/**",
-    "!dist/extensions/fish-audio/**",
+    "!dist/extensions/fish-audio-speech/**",
     "!dist/extensions/google-meet/**",
     "!dist/extensions/googlechat/**",
     "!dist/extensions/gmi/**",

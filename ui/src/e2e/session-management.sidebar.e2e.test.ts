@@ -434,8 +434,8 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(3);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
-      await gateway.closeLatest(1006, "disconnect proof");
       await gateway.deferNext("sessions.list");
+      await gateway.closeLatest(1006, "disconnect proof");
       await sidebarRow.waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
 

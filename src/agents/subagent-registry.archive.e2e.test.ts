@@ -870,14 +870,16 @@ describe("subagent registry archive behavior", () => {
     });
 
     const firstSweep = mod.testing.sweepOnceForTests();
-    await flushSweepMicrotasks();
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.filter(
-          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
-        ),
-    ).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.filter(
+            ([request]) =>
+              (request as { method?: string } | undefined)?.method === "sessions.delete",
+          ),
+      ).toHaveLength(1);
+    });
     expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {

@@ -1470,6 +1470,24 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("skips frozen-result refill for a sessions_yield-paused run", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      pauseReason: "sessions_yield",
+    });
+    const captureSubagentCompletionReply = vi.fn(async () => "text from the next turn");
+    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
+
+    expect(await controller.refreshFrozenResultFromSession(entry.childSessionKey)).toBe(false);
+
+    // The yield cleared this row's result on purpose. Whatever the session holds
+    // now belongs to the turn that runs next, so refreezing it would announce a
+    // stranger's output as the paused run's completion.
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(entry.completion?.resultText).toBeUndefined();
+  });
+
   it("keeps success canonical while a killed callback waits behind reply capture", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     let releaseCapture: ((value: string) => void) | undefined;
