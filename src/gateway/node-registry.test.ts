@@ -444,6 +444,53 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("still reports dispatch when the envelope send outlives the invoke budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const socket = createTestNodeSocket(frames);
+      const rawSend = socket.send;
+      // Everything after the final budget read - building the outbound envelope
+      // and handing it to the socket - is one synchronous block, so charging the
+      // whole remaining budget to the send covers the serialization inside it.
+      socket.send = vi.fn((frame: unknown) => {
+        vi.advanceTimersByTime(40);
+        return rawSend(frame);
+      });
+      const registry = createNodeRegistry();
+      const client = makeClient("conn-dispatched", "node-dispatched", frames, {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      });
+      registerNodeSession(registry, client);
+      const onDispatchReady = vi.fn();
+
+      const invocation = registry.invoke({
+        nodeId: "node-dispatched",
+        expectedConnId: "conn-dispatched",
+        command: "system.run",
+        params: { cmd: ["echo"] },
+        timeoutMs: 20,
+        onDispatchReady,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      // The node has the command, so the caller must not be told it is safe to
+      // retry: dispatch provenance is reported from the send, not from the clock.
+      expect(frames).toHaveLength(1);
+      expect(JSON.parse(frames[0] as string)).toMatchObject({
+        type: "event",
+        event: "node.invoke.request",
+      });
+      expect(onDispatchReady).toHaveBeenCalledOnce();
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("revalidates persistent generation ownership for inbound node RPCs", async () => {
     const resolveCurrentPairingState = vi.fn().mockResolvedValue({
       identity: "identity-a",
