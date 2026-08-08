@@ -31,15 +31,22 @@ async function directoryExists(directoryPath: string): Promise<boolean> {
 }
 
 async function withTempRootEnv<T>(tempRoot: string, run: () => Promise<T>): Promise<T> {
-  const previous = process.env.TMPDIR;
-  process.env.TMPDIR = tempRoot;
+  // os.tmpdir() reads TMPDIR on POSIX but TEMP/TMP on Windows, so override all
+  // three — otherwise this sweep test never redirects the temp root on Windows.
+  const names = ["TMPDIR", "TEMP", "TMP"] as const;
+  const previous = names.map((name) => [name, process.env[name]] as const);
+  for (const name of names) {
+    process.env[name] = tempRoot;
+  }
   try {
     return await run();
   } finally {
-    if (previous === undefined) {
-      delete process.env.TMPDIR;
-    } else {
-      process.env.TMPDIR = previous;
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
     }
   }
 }
