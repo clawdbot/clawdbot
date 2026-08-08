@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
   loadSessionEntry,
@@ -319,13 +319,13 @@ async function applyWorkerTranscriptCommit(params: {
   const redactedMessages = params.messages.map(
     (message) => redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
   );
-  const applied = await withTranscriptWriteTransaction(params.target, ({ sessionFile }) => {
+  const applied = await withTranscriptWriteTransaction(params.target, (transcriptTarget) => {
     const currentEntry = loadSessionEntry(params.target);
     if (!currentEntry || currentEntry.sessionId !== params.sessionId) {
       return { ok: false as const, reason: "session-not-attached" as const };
     }
 
-    const manager = SessionManager.open(sessionFile);
+    const manager = SessionManager.open(transcriptTarget);
     if (params.recoverPersistedBatch) {
       // Only a pending ledger row may prove an off-branch batch: the agent DB
       // can commit before the shared replay ledger records its terminal result.
@@ -375,7 +375,6 @@ async function applyWorkerTranscriptCommit(params: {
     const appendedCount = messages.filter((message) => message.appended).length;
     const nextEntry = {
       ...freshEntry,
-      sessionFile,
       ...(appendedCount > 0 ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) } : {}),
     };
     replaceSessionEntrySync(params.target, nextEntry);

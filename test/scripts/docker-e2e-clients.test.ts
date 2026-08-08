@@ -11,8 +11,8 @@ describe("Docker E2E client scripts", () => {
     const source = readScript("scripts/e2e/commitments-safety-docker-client.ts");
 
     expect(source).toContain("../../dist/commitments/runtime.js");
-    expect(source).toContain("../../dist/commitments/runtime.test-support.js");
     expect(source).toContain("../../dist/commitments/store.js");
+    expect(source).toContain("resetCommitmentExtractionRuntimeForTests");
     expect(source).toContain("verifyExtractionRemainsRetired()");
     expect(source).toContain("verifyDoctorImportAndRuntimeIsolation()");
     expect(source).toContain("verifyExpiryTransition()");
@@ -27,7 +27,8 @@ describe("Docker E2E client scripts", () => {
     expect(source).toContain(
       "../../dist/agents/embedded-agent-runner/run/runtime-context-prompt.js",
     );
-    expect(source).toContain("verifyRuntimeContextTranscriptShape(root)");
+    expect(source).toContain("SessionManager.inMemory()");
+    expect(source).toContain("verifyRuntimeContextTranscriptShape()");
     expect(source).toContain("verifyDoctorRepair(root)");
     expect(source).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
     expect(source).toContain("openclaw.runtime-context");

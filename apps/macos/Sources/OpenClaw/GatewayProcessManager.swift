@@ -346,6 +346,15 @@ final class GatewayProcessManager {
             self.status = .stopped
             return
         }
+        guard OpenClawConfigFile.migrateRetiredAppMetadataForGatewayStart() else {
+            let message =
+                "Could not repair retired macOS config metadata. Run `openclaw doctor --fix`, then retry."
+            self.status = .failed(message)
+            self.lastFailureReason = message
+            self.appendLog("[gateway] \(message)\n")
+            self.logger.error("gateway config metadata migration failed")
+            return
+        }
         // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
         // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
         switch self.status {
@@ -435,9 +444,7 @@ final class GatewayProcessManager {
         }
         self.lastEnvironmentRefresh = now
         self.environmentRefreshTask = Task { [weak self] in
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status = await GatewayEnvironment.check()
             await MainActor.run {
                 guard let self else { return }
                 self.environmentStatus = status
@@ -617,9 +624,7 @@ extension GatewayProcessManager {
     private func prepareLaunchdGatewayStart(startGeneration: UInt64) async -> LaunchAgentStartupContext? {
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         self.existingGatewayDetails = nil
-        let resolution = await Task.detached(priority: .utility) {
-            GatewayEnvironment.resolveGatewayCommand()
-        }.value
+        let resolution = await GatewayEnvironment.resolveGatewayCommand()
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         await MainActor.run { self.environmentStatus = resolution.status }
         guard resolution.command != nil else {

@@ -3,7 +3,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type ModelsProbeParams,
   type ModelsProbeResult,
   validateModelsProbeParams,
@@ -20,6 +19,7 @@ import {
   unknownModelAuthAgentIdError,
 } from "./model-auth-agent-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MIN_TIMEOUT_MS = 5_000;
@@ -96,15 +96,7 @@ function mapProbeResult(provider: string, results: AuthProbeResult[]): ModelsPro
 
 export const modelsProbeHandlers: GatewayRequestHandlers = {
   "models.probe": async ({ params, respond, context }) => {
-    if (!validateModelsProbeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid models.probe params: ${formatValidationErrors(validateModelsProbeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;
     }
     const request = params as ModelsProbeParams;

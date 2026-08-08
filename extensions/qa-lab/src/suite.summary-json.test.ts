@@ -1,4 +1,4 @@
-// Qa Lab tests cover suite.summary json plugin behavior.
+// QA Lab tests cover suite.summary json plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import { buildQaSuiteSummaryJson } from "./suite.js";
@@ -44,6 +44,7 @@ describe("buildQaSuiteSummaryJson", () => {
   it("records Crabline channel-driver metadata when selected", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
+      channelDriver: "crabline",
       channelDriverSelection: {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
@@ -58,14 +59,15 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
   });
 
-  it("records declarative non-Crabline channel-driver metadata", () => {
+  it("records realized non-Crabline channel metadata", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
+      channel: "telegram",
       channelDriver: "live",
     });
 
     expect(json.run.channelDriver).toBe("live");
-    expect(json.run.channel).toBeNull();
+    expect(json.run.channel).toBe("telegram");
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
     expect(json.run.channelDriverSmokePath).toBeNull();
   });
@@ -202,6 +204,7 @@ describe("buildQaSuiteSummaryJson", () => {
             cells: {
               openclaw: {
                 runtime: "openclaw" as const,
+                status: "pass" as const,
                 transcriptBytes: "",
                 toolCalls: [],
                 finalText: "done",
@@ -211,6 +214,7 @@ describe("buildQaSuiteSummaryJson", () => {
               },
               codex: {
                 runtime: "codex" as const,
+                status: "pass" as const,
                 transcriptBytes: "",
                 toolCalls: [],
                 finalText: "done",
@@ -227,6 +231,10 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.scenarios[0]).toMatchObject({
       runtimeParity: {
         scenarioId: "scenario-a",
+        cells: {
+          openclaw: { status: "pass" },
+          codex: { status: "pass" },
+        },
         runtimeParityUsage: {
           expectation: "not-applicable",
           reason: "Local fixture only; no assistant turn runs.",

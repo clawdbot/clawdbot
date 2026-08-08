@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
@@ -15,13 +15,18 @@ import {
   navigateBrowser,
   openBrowserTab,
   pressBrowserKey,
-  readBrowserPageMetrics,
   scrollBrowserBy,
   startBrowser,
   type BrowserInspectedNode,
-  type BrowserPageMetrics,
   type BrowserPanelTab,
 } from "./browser-client.ts";
+import {
+  BrowserPanelOperationOwnership,
+  readBrowserPanelOwnedMetrics,
+  type BrowserPanelControllerHost,
+  type BrowserPanelSnapshotOutcome,
+} from "./browser-panel-operation-ownership.ts";
+import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
@@ -39,16 +44,7 @@ const ACTION_REFRESH_DELAY_MS = 350;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
-export interface BrowserPanelControllerHost extends ReactiveControllerHost {
-  readonly client: GatewayBrowserClient | null;
-  readonly available: boolean;
-  readonly basePath: string;
-  readonly authToken: string | null;
-  readonly isConnected: boolean;
-  readonly renderRoot: HTMLElement | DocumentFragment;
-  readonly updateComplete: Promise<boolean>;
-  browserPanelIsOpen(): boolean;
-}
+export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 
 /** Browser session, navigation, capture, and input lifecycle for the docked surface. */
 export class BrowserPanelController implements ReactiveController {
@@ -68,27 +64,21 @@ export class BrowserPanelController implements ReactiveController {
   urlDraft = "";
   pendingNewTab = false;
 
-  /** Rejects stale async results after the client, tab, or panel state moves on. */
-  private viewEpoch = 0;
-  private refreshTimer: number | null = null;
+  private readonly operations: BrowserPanelOperationOwnership;
+  private readonly pendingInput = new BrowserPanelPendingInput();
   private activeClient: GatewayBrowserClient | null = null;
   private drawingStroke: AnnotationStroke | null = null;
   private suppressStageClick = false;
   private urlDraftEditing = false;
-  private wheelDeltaX = 0;
-  private wheelDeltaY = 0;
-  private wheelTimer: number | null = null;
-  private lastInspectAt = 0;
-  private inspectTimer: number | null = null;
 
   constructor(private readonly host: BrowserPanelControllerHost) {
+    this.operations = new BrowserPanelOperationOwnership(host);
     host.addController(this);
   }
 
-  hostConnected(): void {}
-
   hostDisconnected(): void {
-    this.clearTimers();
+    this.invalidateViewOperations();
+    this.setState("loading", false);
   }
 
   private setState<Key extends keyof this>(key: Key, value: this[Key]): void {
@@ -112,24 +102,13 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  private clearTimers(): void {
-    if (this.refreshTimer !== null) {
-      clearTimeout(this.refreshTimer);
-      this.refreshTimer = null;
-    }
-    if (this.wheelTimer !== null) {
-      clearTimeout(this.wheelTimer);
-      this.wheelTimer = null;
-    }
-    if (this.inspectTimer !== null) {
-      clearTimeout(this.inspectTimer);
-      this.inspectTimer = null;
-    }
+  private invalidateViewOperations(): void {
+    this.operations.invalidate();
+    this.pendingInput.clear();
   }
 
   resetBrowserState(): void {
-    this.viewEpoch += 1;
-    this.clearTimers();
+    this.invalidateViewOperations();
     this.setState("running", null);
     this.setState("tabs", []);
     this.setState("activeTargetId", null);
@@ -147,70 +126,76 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("evaluateUnavailable", false);
   }
 
-  private currentEpoch(): number {
-    return this.viewEpoch;
-  }
-
-  private isCurrent(epoch: number): boolean {
-    return this.host.isConnected && this.host.browserPanelIsOpen() && this.viewEpoch === epoch;
-  }
-
-  private captureClient(): GatewayBrowserClient | null {
-    return this.host.available && this.host.client ? this.host.client : null;
-  }
-
   private reportError(error: unknown): void {
-    this.setState("errorText", error instanceof Error ? error.message : String(error));
+    const detail = error instanceof Error ? error.message : String(error);
+    this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
   async refreshAll(): Promise<void> {
-    const client = this.captureClient();
+    const client = this.operations.captureClient();
     if (!client) {
       return;
     }
-    const epoch = this.currentEpoch();
+    const invocation = this.operations.beginSnapshot(client);
     this.setState("errorText", null);
     this.setState("loading", true);
     try {
       const snapshot = await listBrowserTabs(client);
-      if (!this.isCurrent(epoch)) {
+      const active =
+        snapshot.tabs.find((tab) => tab.id === this.activeTargetId) ?? snapshot.tabs[0];
+      if (!this.operations.acceptSnapshot(invocation, this.activeTargetId, active?.id ?? null)) {
         return;
       }
       this.setState("running", snapshot.running);
       this.setState("tabs", snapshot.tabs);
+      // A mutation may adopt the same tab while this snapshot is pending.
+      // Reconcile its tab strip, but never let it own document or loading state.
+      if (!this.operations.canCaptureSnapshot(invocation)) {
+        return;
+      }
       if (!snapshot.running) {
         this.setState("view", null);
       }
-      const active =
-        snapshot.tabs.find((tab) => tab.id === this.activeTargetId) ?? snapshot.tabs[0];
+      if (this.activeTargetId !== null && active?.id !== this.activeTargetId) {
+        this.invalidateViewOperations();
+        invocation.epoch = this.operations.epoch;
+        this.setState("view", null);
+        this.exitCaptureModes();
+      }
       this.setState("activeTargetId", active?.id ?? null);
       if (!this.urlDraftEditing) {
         this.setState("urlDraft", active?.url ?? "");
       }
       if (active) {
-        await this.refreshView(active.id, epoch);
+        await this.refreshView(active.id, invocation.epoch);
       } else {
         this.setState("view", null);
       }
     } catch (error) {
-      if (this.isCurrent(epoch)) {
+      if (invocation.isCurrent()) {
         this.reportError(error);
       }
     } finally {
-      if (this.isCurrent(epoch)) {
+      if (invocation.isCurrent()) {
         this.setState("loading", false);
       }
     }
   }
 
-  private async refreshView(targetId: string, epoch = this.currentEpoch()): Promise<void> {
-    const client = this.captureClient();
+  private async refreshView(targetId: string, epoch = this.operations.epoch): Promise<void> {
+    const client = this.operations.captureClient();
     if (!client) {
       return;
     }
-    // A slow capture for one tab must never overwrite the view after the user
-    // switched tabs; the epoch alone does not move on tab selection.
-    const current = () => this.isCurrent(epoch) && this.activeTargetId === targetId;
+    const current = this.operations.beginCapture(
+      client,
+      targetId,
+      () => this.activeTargetId,
+      epoch,
+    );
+    if (!current) {
+      return;
+    }
     this.setState("loading", true);
     try {
       const shot = await captureBrowserScreenshot(client, targetId);
@@ -223,10 +208,21 @@ export class BrowserPanelController implements ReactiveController {
         path: shot.path,
       });
       const image = await loadBrowserPanelImage(dataUrl);
-      const metrics = await this.readMetrics(client, targetId);
+      const observedMetrics = await readBrowserPanelOwnedMetrics(
+        client,
+        targetId,
+        this.evaluateUnavailable,
+        current,
+        () => this.setState("evaluateUnavailable", true),
+      );
       if (!current()) {
         return;
       }
+      // A navigation between screenshot and evaluation changes the coordinate document.
+      const metrics =
+        shot.url && observedMetrics?.url && shot.url !== observedMetrics.url
+          ? null
+          : observedMetrics;
       this.setState("view", { targetId, dataUrl, image, url: shot.url, metrics });
       if (!this.urlDraftEditing && shot.url) {
         this.setState("urlDraft", shot.url);
@@ -236,131 +232,177 @@ export class BrowserPanelController implements ReactiveController {
         this.reportError(error);
       }
     } finally {
-      if (this.isCurrent(epoch)) {
+      if (current()) {
+        this.operations.completeCapture();
         this.setState("loading", false);
       }
     }
   }
 
-  private async readMetrics(
-    client: GatewayBrowserClient,
-    targetId: string,
-  ): Promise<BrowserPageMetrics | null> {
-    if (this.evaluateUnavailable) {
-      return null;
-    }
-    try {
-      return await readBrowserPageMetrics(client, targetId);
-    } catch (error) {
-      if (isBrowserEvaluateDisabledError(error)) {
-        // Coordinate mapping falls back to the capture resolution; inspect and
-        // wheel scrolling degrade with a visible hint instead of failing.
-        this.setState("evaluateUnavailable", true);
-        return null;
-      }
-      return null;
-    }
-  }
-
-  private scheduleViewRefresh(delayMs = ACTION_REFRESH_DELAY_MS): void {
-    if (this.refreshTimer !== null) {
-      clearTimeout(this.refreshTimer);
-    }
-    const epoch = this.currentEpoch();
-    this.refreshTimer = window.setTimeout(() => {
-      this.refreshTimer = null;
-      if (this.isCurrent(epoch) && this.activeTargetId) {
-        void this.refreshView(this.activeTargetId, epoch);
-      }
-    }, delayMs);
-  }
-
-  private async runAction(action: (client: GatewayBrowserClient) => Promise<void>): Promise<void> {
-    const client = this.captureClient();
+  private async runAction(
+    action: (client: GatewayBrowserClient) => Promise<void>,
+    refreshView = true,
+  ): Promise<boolean> {
+    const client = this.operations.captureClient();
     if (!client) {
-      return;
+      return false;
     }
+    const epoch = this.operations.epoch;
+    const current = () => this.operations.isLive(epoch, client);
     try {
       this.setState("errorText", null);
       await action(client);
-      this.scheduleViewRefresh();
+      if (current() && refreshView) {
+        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
+          if (current() && this.activeTargetId) {
+            void this.refreshView(this.activeTargetId, epoch);
+          }
+        });
+      }
+      return current();
     } catch (error) {
+      if (!current()) {
+        return false;
+      }
       if (isBrowserEvaluateDisabledError(error)) {
         this.setState("evaluateUnavailable", true);
       }
       this.reportError(error);
+      if (!this.operations.hasPendingCapture) {
+        this.setState("loading", false);
+      }
+      return false;
     }
   }
 
   async startBrowserNow(): Promise<void> {
-    const client = this.captureClient();
-    if (!client) {
+    if (!this.operations.captureClient()) {
       return;
     }
-    const epoch = this.currentEpoch();
+    const epoch = this.operations.epoch;
     this.setState("loading", true);
-    this.setState("errorText", null);
-    try {
-      await startBrowser(client);
-      if (this.isCurrent(epoch)) {
+    await this.runAction(async (actionClient) => {
+      await startBrowser(actionClient);
+      if (this.operations.isLive(epoch, actionClient)) {
         await this.refreshAll();
       }
-    } catch (error) {
-      if (this.isCurrent(epoch)) {
-        this.reportError(error);
-        this.setState("loading", false);
-      }
-    }
+    }, false);
   }
 
   async openUrl(url: string, options: { newTab: boolean }): Promise<void> {
-    const client = this.captureClient();
+    const client = this.operations.captureClient();
     if (!client) {
       return;
     }
-    const epoch = this.currentEpoch();
+    const invocation = this.operations.beginMutation(client);
     this.setState("loading", true);
     this.setState("errorText", null);
     this.setState("pendingNewTab", false);
+    let previousNavigationQueued = false;
     try {
       if (options.newTab || !this.activeTargetId) {
         const tab = await openBrowserTab(client, url);
-        if (!this.isCurrent(epoch)) {
+        if (!invocation.isCurrent()) {
+          // An already-created stale tab still belongs in the surviving tab strip.
+          await this.refreshTabsOnly(
+            client,
+            this.operations.survivingInvocation(invocation, client),
+          );
           return;
         }
-        this.setState("activeTargetId", tab?.id ?? this.activeTargetId);
+        const nextTargetId = tab?.id ?? this.activeTargetId;
+        if (nextTargetId !== this.activeTargetId) {
+          this.invalidateViewOperations();
+          invocation.epoch = this.operations.epoch;
+          this.setState("view", null);
+          this.exitCaptureModes();
+        }
+        this.setState("activeTargetId", nextTargetId);
       } else {
         // Keep the stable alias as the active handle; navigate may swap the
         // raw target underneath and the alias migrates server-side.
-        await navigateBrowser(client, { url, targetId: this.activeTargetId });
-        if (!this.isCurrent(epoch)) {
+        this.invalidateViewOperations();
+        invocation.epoch = this.operations.epoch;
+        this.exitCaptureModes();
+        const targetId = this.activeTargetId;
+        previousNavigationQueued =
+          this.operations.hasQueuedNavigation(client, targetId) ||
+          this.operations.hasUnreconciledNavigation(client, targetId);
+        await this.operations.queueNavigation(client, targetId, async () => {
+          if (invocation.isCurrent()) {
+            await navigateBrowser(client, { url, targetId });
+            this.operations.markNavigationCommitted(client, targetId);
+          }
+        });
+        if (!invocation.isCurrent()) {
           return;
         }
+        this.setState("view", null);
       }
-      await this.refreshTabsOnly(client, epoch);
-      if (this.activeTargetId) {
-        await this.refreshView(this.activeTargetId, epoch);
+      const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
+      if (refreshed !== "rejected" && invocation.isCurrent() && this.activeTargetId) {
+        const targetId = this.activeTargetId;
+        await this.refreshView(targetId, invocation.epoch);
+        if (!options.newTab && invocation.isCurrent() && this.view?.targetId === targetId) {
+          this.operations.markNavigationReconciled(client, targetId);
+        }
       }
     } catch (error) {
-      if (this.isCurrent(epoch)) {
+      if (invocation.isCurrent()) {
         this.reportError(error);
+        if (previousNavigationQueued && this.activeTargetId) {
+          const targetId = this.activeTargetId;
+          const navigationErrorText = this.errorText;
+          // An earlier queued navigation may already have committed remotely.
+          // Recover its actual document without replacing an unchanged view.
+          try {
+            const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
+            const active = this.tabs.find((tab) => tab.id === targetId);
+            if (refreshed === "accepted" && invocation.isCurrent() && active) {
+              await this.refreshView(targetId, invocation.epoch);
+              if (
+                invocation.isCurrent() &&
+                this.view?.targetId === targetId &&
+                this.errorText === navigationErrorText
+              ) {
+                this.operations.markNavigationReconciled(client, targetId);
+              }
+            }
+          } catch {
+            // Recovery is best-effort; retain the original navigation failure.
+          }
+          if (invocation.isCurrent()) {
+            this.reportError(error);
+          }
+        }
       }
     } finally {
-      if (this.isCurrent(epoch)) {
+      if (invocation.isCurrent()) {
         this.setState("loading", false);
       }
     }
   }
 
-  private async refreshTabsOnly(client: GatewayBrowserClient, epoch: number): Promise<void> {
+  private async refreshTabsOnly(
+    client: GatewayBrowserClient,
+    current: () => boolean,
+  ): Promise<BrowserPanelSnapshotOutcome> {
+    const invocation = this.operations.beginSnapshot(client);
     try {
       const snapshot = await listBrowserTabs(client);
-      if (this.isCurrent(epoch)) {
+      if (
+        current() &&
+        this.operations.acceptSnapshot(invocation, this.activeTargetId, this.activeTargetId)
+      ) {
         this.setState("running", snapshot.running);
         this.setState("tabs", snapshot.tabs);
+        return "accepted";
       }
+      return "rejected";
     } catch {
-      // Tab strip staleness is tolerable; the next full refresh reconciles it.
+      // Best-effort tab reconciliation must not let an older failure settle
+      // loading or advance a document owned by a newer operation.
+      return current() && invocation.isCurrent() ? "failed" : "rejected";
     }
   }
 
@@ -368,44 +410,61 @@ export class BrowserPanelController implements ReactiveController {
     if (targetId === this.activeTargetId) {
       return;
     }
+    const previous = { targetId: this.activeTargetId, view: this.view };
+    this.invalidateViewOperations();
+    const epoch = this.operations.epoch;
     this.setState("activeTargetId", targetId);
     this.setState("view", null);
     this.exitCaptureModes();
-    await this.runActionImmediate(async (client) => {
+    const focused = await this.runAction(async (client) => {
       await focusBrowserTab(client, targetId);
       await this.refreshView(targetId);
-    });
+    }, false);
+    if (!focused && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
+      this.setState("activeTargetId", previous.targetId);
+      this.setState("view", previous.view);
+    }
   }
 
   async closeTab(targetId: string): Promise<void> {
-    await this.runActionImmediate(async (client) => {
+    await this.runAction(async (client) => {
+      const epoch = this.operations.epoch;
       await closeBrowserTab(client, targetId);
-      const epoch = this.currentEpoch();
-      await this.refreshTabsOnly(client, epoch);
-      if (this.activeTargetId === targetId) {
-        const next = this.tabs[0] ?? null;
-        this.setState("activeTargetId", next?.id ?? null);
-        this.setState("view", null);
-        if (next) {
-          await this.refreshView(next.id, epoch);
+      if (!this.operations.isLive(epoch, client)) {
+        if (this.operations.isLive(this.operations.epoch, client)) {
+          await this.refreshAll();
         }
+        return;
       }
-    });
-  }
-
-  private async runActionImmediate(
-    action: (client: GatewayBrowserClient) => Promise<void>,
-  ): Promise<void> {
-    const client = this.captureClient();
-    if (!client) {
-      return;
-    }
-    try {
-      this.setState("errorText", null);
-      await action(client);
-    } catch (error) {
-      this.reportError(error);
-    }
+      // DELETE already committed; a failed tab snapshot must not resurrect its
+      // target or make the next screenshot address a tab that no longer exists.
+      this.setState(
+        "tabs",
+        this.tabs.filter((tab) => tab.id !== targetId),
+      );
+      const snapshot = await this.refreshTabsOnly(client, () =>
+        this.operations.isLive(epoch, client),
+      );
+      if (!this.operations.isLive(epoch, client)) {
+        return;
+      }
+      if (this.activeTargetId !== targetId) {
+        if (snapshot !== "rejected" && !this.operations.hasPendingCapture) {
+          this.setState("loading", false);
+        }
+        return;
+      }
+      const next = this.tabs[0] ?? null;
+      this.invalidateViewOperations();
+      this.setState("activeTargetId", next?.id ?? null);
+      this.setState("view", null);
+      this.exitCaptureModes();
+      if (next) {
+        await this.refreshView(next.id);
+      } else {
+        this.setState("loading", false);
+      }
+    }, false);
   }
 
   /** Real page reload: re-navigate to the current URL, then re-capture. A bare
@@ -460,6 +519,8 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   exitCaptureModes(): void {
+    this.operations.invalidateInspection();
+    this.pendingInput.clearInput();
     this.setState("mode", "interact");
     this.setState("strokes", []);
     this.drawingStroke = null;
@@ -483,10 +544,6 @@ export class BrowserPanelController implements ReactiveController {
 
   private stageElement(): HTMLElement | null {
     return this.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-  }
-
-  private overlayCanvas(): HTMLCanvasElement | null {
-    return this.host.renderRoot.querySelector<HTMLCanvasElement>(".bp-overlay");
   }
 
   private remotePoint(event: MouseEvent): { x: number; y: number } | null {
@@ -524,34 +581,33 @@ export class BrowserPanelController implements ReactiveController {
     if (this.mode !== "interact" || !this.view) {
       return;
     }
-    event.preventDefault();
-    this.wheelDeltaX += event.deltaX;
-    this.wheelDeltaY += event.deltaY;
-    if (this.wheelTimer !== null) {
+    const client = this.operations.captureClient();
+    const targetId = this.activeTargetId;
+    if (!client || !targetId) {
       return;
     }
-    this.wheelTimer = window.setTimeout(() => {
-      this.wheelTimer = null;
-      const deltaX = this.wheelDeltaX;
-      const deltaY = this.wheelDeltaY;
-      this.wheelDeltaX = 0;
-      this.wheelDeltaY = 0;
-      const targetId = this.activeTargetId;
-      if (!targetId || (deltaX === 0 && deltaY === 0)) {
+    event.preventDefault();
+    const epoch = this.operations.epoch;
+    this.pendingInput.queueWheel(event.deltaX, event.deltaY, 150, (deltaX, deltaY) => {
+      if (
+        !this.operations.isLive(epoch, client) ||
+        this.activeTargetId !== targetId ||
+        this.mode !== "interact"
+      ) {
         return;
       }
-      void this.runAction(async (client) => {
+      void this.runAction(async (actionClient) => {
         if (this.evaluateUnavailable) {
           // No page JS allowed: fall back to a coarse keyboard scroll.
-          await pressBrowserKey(client, {
+          await pressBrowserKey(actionClient, {
             targetId,
             key: deltaY >= 0 ? "PageDown" : "PageUp",
           });
           return;
         }
-        await scrollBrowserBy(client, { targetId, deltaX, deltaY });
+        await scrollBrowserBy(actionClient, { targetId, deltaX, deltaY });
       });
-    }, 150);
+    });
   }
 
   handleViewportKeydown(event: KeyboardEvent): void {
@@ -611,46 +667,37 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private queueInspect(event: PointerEvent): void {
-    const client = this.captureClient();
+    const client = this.operations.captureClient();
     const point = this.remotePoint(event);
     const stagePoint = browserPanelNormalizedPoint(this.stageElement(), event);
     const targetId = this.activeTargetId;
     if (!client || !point || !stagePoint || !targetId || this.evaluateUnavailable) {
       return;
     }
+    const current = this.operations.beginInspection(
+      client,
+      () =>
+        this.activeTargetId === targetId &&
+        this.view?.targetId === targetId &&
+        this.mode === "inspect",
+    );
     this.setState("inspectPointer", stagePoint);
-    const now = Date.now();
-    const run = () => {
-      this.lastInspectAt = Date.now();
-      const epoch = this.currentEpoch();
+    this.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
       void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
         .then((node) => {
-          if (this.isCurrent(epoch) && this.mode === "inspect") {
+          if (current()) {
             this.setState("inspected", node);
             this.paintOverlay();
           }
         })
         .catch((error: unknown) => {
-          if (isBrowserEvaluateDisabledError(error)) {
+          if (current() && isBrowserEvaluateDisabledError(error)) {
             this.setState("evaluateUnavailable", true);
             this.setState("errorText", t("browser.inspectUnavailable"));
             this.setState("mode", "interact");
           }
         });
-    };
-    if (now - this.lastInspectAt >= INSPECT_THROTTLE_MS) {
-      run();
-      return;
-    }
-    if (this.inspectTimer !== null) {
-      clearTimeout(this.inspectTimer);
-    }
-    this.inspectTimer = window.setTimeout(() => {
-      this.inspectTimer = null;
-      if (this.mode === "inspect" && this.captureClient()) {
-        run();
-      }
-    }, INSPECT_THROTTLE_MS);
+    });
   }
 
   undoStroke(): void {
@@ -691,7 +738,7 @@ export class BrowserPanelController implements ReactiveController {
   /** Repaints the live stroke/highlight overlay; cheap, runs after render. */
   paintOverlay(): void {
     paintBrowserPanelOverlay(
-      this.overlayCanvas(),
+      this.host.renderRoot.querySelector<HTMLCanvasElement>(".bp-overlay"),
       this.stageElement(),
       this.strokes,
       this.mode === "inspect" ? this.inspectHighlightRegion() : null,

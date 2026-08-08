@@ -38,6 +38,30 @@ describe("persistBrowserProxyFiles", () => {
     await expect(fs.readFile(savedPath ?? "", "utf8")).resolves.toBe("hello from browser proxy");
   });
 
+  it("persists legitimate empty browser proxy downloads", async () => {
+    const sourcePath = "/tmp/empty-browser-download.bin";
+    const mapping = await persistBrowserProxyFiles([
+      { path: sourcePath, base64: "", mimeType: "application/octet-stream" },
+    ]);
+
+    const savedPath = mapping.get(sourcePath);
+    expect(typeof savedPath).toBe("string");
+    await expect(fs.stat(savedPath ?? "")).resolves.toMatchObject({ size: 0 });
+    await expect(fs.readFile(savedPath ?? "")).resolves.toHaveLength(0);
+  });
+
+  it.each([
+    { name: "valid unpadded base64", base64: "aGVsbG8" },
+    { name: "valid whitespace-separated base64", base64: " aG Vs bG8= \n" },
+  ])("persists $name without corrupting the download", async ({ base64 }) => {
+    const sourcePath = "/tmp/normalized-browser-download.txt";
+    const mapping = await persistBrowserProxyFiles([
+      { path: sourcePath, base64, mimeType: "text/plain" },
+    ]);
+
+    await expect(fs.readFile(mapping.get(sourcePath) ?? "", "utf8")).resolves.toBe("hello");
+  });
+
   it("persists a file at the proxy limit above the shared media default", async () => {
     const sourcePath = "/tmp/above-default.bin";
     const buffer = Buffer.alloc(BROWSER_PROXY_MAX_FILE_BYTES, 0x41);
@@ -98,6 +122,64 @@ describe("persistBrowserProxyFiles", () => {
     );
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("browser proxy file exceeds 10 MiB limit");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("rejects malformed base64 before persisting files", async () => {
+    const error = await persistBrowserProxyFiles([
+      {
+        path: "/tmp/malformed.bin",
+        base64: "aGVsbG8$",
+        mimeType: "application/octet-stream",
+      },
+    ]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("browser proxy file contains malformed base64 data");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it.each([
+    { name: "invalid alphabet", base64: "aGVsbG8$" },
+    { name: "invalid padding", base64: "aGVsbG8===" },
+    { name: "nonzero padding bits", base64: "ZE==" },
+    { name: "impossible unpadded length", base64: "S" },
+    { name: "whitespace without encoded data", base64: " \n\t" },
+  ])("rejects $name before creating the media directory", async ({ base64 }) => {
+    await expect(
+      persistBrowserProxyFiles([
+        {
+          path: "/tmp/malformed-browser-download.bin",
+          base64,
+          mimeType: "application/octet-stream",
+        },
+      ]),
+    ).rejects.toThrow("browser proxy file contains malformed base64 data");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("rejects a later malformed file without persisting an earlier valid file", async () => {
+    await expect(
+      persistBrowserProxyFiles([
+        {
+          path: "/tmp/valid-browser-download.txt",
+          base64: Buffer.from("valid browser download").toString("base64"),
+          mimeType: "text/plain",
+        },
+        { path: "/tmp/malformed-browser-download.bin", base64: "ZE==" },
+      ]),
+    ).rejects.toThrow("browser proxy file contains malformed base64 data");
 
     await expect(
       fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),

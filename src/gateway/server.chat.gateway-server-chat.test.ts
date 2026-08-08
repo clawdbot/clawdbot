@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -970,6 +971,77 @@ describe("gateway server chat", () => {
     });
   });
 
+  test.each([
+    {
+      name: "structured context-overflow code",
+      fields: {
+        errorCode: "context_overflow",
+        errorMessage: "private upstream body: 203557 tokens sent",
+      },
+      overflow: true,
+    },
+    {
+      name: "provider request-too-large code",
+      fields: {
+        errorCode: "request_too_large",
+        errorMessage: "private upstream body: 196607 tokens sent",
+      },
+      overflow: true,
+    },
+    {
+      name: "provider context-window message",
+      fields: {
+        errorType: "invalid_request_error",
+        errorMessage: "Request size exceeds model context window: 203557 tokens",
+      },
+      overflow: true,
+    },
+    {
+      name: "embedded context-overflow message",
+      fields: { errorMessage: "Unhandled stop reason: context_overflow" },
+      overflow: true,
+    },
+    {
+      name: "token-per-minute rate limit",
+      fields: {
+        errorCode: "rate_limit_exceeded",
+        errorMessage: "413 request too large: 203557 tokens per minute (TPM)",
+      },
+      overflow: false,
+    },
+    {
+      name: "private upstream failure",
+      fields: { errorMessage: "private upstream at secret.internal.example failed" },
+      overflow: false,
+    },
+  ])(
+    "chat.history safely displays $name over authenticated WebSocket",
+    async ({ fields, overflow }) => {
+      const historyMessages = await loadChatHistoryWithMessages([
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          ...fields,
+          timestamp: 1,
+        },
+      ]);
+
+      expect(collectHistoryTextValues(historyMessages)).toEqual([
+        overflow
+          ? "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit."
+          : "The agent run failed before producing a reply.",
+      ]);
+      const wirePayload = JSON.stringify(historyMessages);
+      expect(wirePayload).not.toContain("203557");
+      expect(wirePayload).not.toContain("196607");
+      expect(wirePayload).not.toContain("secret.internal.example");
+      expect(historyMessages[0]).not.toHaveProperty("errorCode");
+      expect(historyMessages[0]).not.toHaveProperty("errorType");
+      expect(historyMessages[0]).not.toHaveProperty("errorMessage");
+    },
+  );
+
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
     const textValues = collectHistoryTextValues(historyMessages);
@@ -1737,6 +1809,53 @@ describe("gateway server chat", () => {
 
     expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
   });
+  test("preserves split fenced-code indentation in chat.send events and history", async () => {
+    await withMainSessionStore(async () => {
+      const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "```yaml\nroot:\n" });
+        params.dispatcher.sendFinalReply({ text: "  nested:\n    value: true\n```" });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+      const finalPromise = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === "idem-fenced-code-indentation",
+        8_000,
+      );
+
+      const result = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "show the YAML",
+        idempotencyKey: "idem-fenced-code-indentation",
+      });
+      expect(result.ok).toBe(true);
+      const finalEvent = await finalPromise;
+      expect(extractFirstTextBlock(finalEvent.payload?.message)).toBe(expected);
+
+      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(history.ok).toBe(true);
+      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(expected);
+    });
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);
@@ -1844,6 +1963,56 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(["main thread context"]);
+    });
+  });
+
+  test("preserves split fenced-code indentation in /btw side-result events", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendBlockReply({
+          text: "```yaml\nroot:\n",
+          btw: { question: "show YAML" },
+        });
+        params.dispatcher.sendBlockReply({
+          text: "  nested:\n    value: true\n```",
+          btw: { question: "show YAML" },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: false, counts: params.dispatcher.getQueuedCounts() };
+      });
+      const sideResultPromise = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat.side_result" &&
+          event.payload?.kind === "btw" &&
+          event.payload?.runId === "idem-btw-fenced-code-indentation",
+        8_000,
+      );
+
+      const result = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/btw show YAML",
+        idempotencyKey: "idem-btw-fenced-code-indentation",
+      });
+      expect(result.ok).toBe(true);
+      expectRecordFields((await sideResultPromise).payload, {
+        kind: "btw",
+        runId: "idem-btw-fenced-code-indentation",
+        question: "show YAML",
+        text: "```yaml\nroot:\n  nested:\n    value: true\n```",
+      });
     });
   });
 

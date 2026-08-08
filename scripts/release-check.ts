@@ -31,6 +31,7 @@ import {
   collectRootPackageExcludedExtensionDirs,
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -84,7 +85,6 @@ const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDir
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
 const requiredPathGroups = [
-  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
@@ -108,11 +108,13 @@ const requiredPathGroups = [
   "scripts/lib/official-external-plugin-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/recommended-tool-installs.json",
+  "scripts/lib/guard-inventory-utils.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/audit/audit-event-writer.worker.js",
+  "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
   "dist/system-agent/setup-inference-detection.worker.js",
@@ -397,7 +399,7 @@ function runPackDry(): PackResult[] {
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 1024 * 1024 * 100,
   });
-  return JSON.parse(raw) as PackResult[];
+  return resolveNpmJsonEntries(JSON.parse(raw)) as PackResult[];
 }
 
 function runPack(packDestination: string, cwd?: string): PackResult[] {
@@ -410,8 +412,7 @@ function runPack(packDestination: string, cwd?: string): PackResult[] {
       maxBuffer: 1024 * 1024 * 100,
     },
   );
-  const parsed = JSON.parse(raw) as PackResult | PackResult[];
-  return Array.isArray(parsed) ? parsed : [parsed];
+  return resolveNpmJsonEntries(JSON.parse(raw)) as PackResult[];
 }
 
 export function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {

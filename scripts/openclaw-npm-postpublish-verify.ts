@@ -27,7 +27,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
@@ -60,8 +60,15 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
+// Package verification always covers the complete published inventory, even
+// when the invoking build inherited a plugin-selection filter.
+const PACKAGED_BUNDLED_PLUGIN_ARTIFACTS = new Set(
+  listBundledPluginPackArtifacts({
+    env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined },
+  }),
+);
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
+  (relativePath) => PACKAGED_BUNDLED_PLUGIN_ARTIFACTS.has(relativePath),
 );
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -946,7 +953,7 @@ export function resolveInstalledBinaryCommandInvocation(
 
 function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   const ids = new Set<string>();
-  for (const relativePath of listBundledPluginPackArtifacts()) {
+  for (const relativePath of PACKAGED_BUNDLED_PLUGIN_ARTIFACTS) {
     const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
     if (match) {
       ids.add(expectDefined(match[1], "bundled package extension id"));
@@ -960,13 +967,22 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   errors: string[];
 } {
   const extensionsDir = join(packageRoot, "dist", "extensions");
-  if (!existsSync(extensionsDir)) {
-    return { manifests: [], errors: [] };
-  }
-
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
   const expectedPackageIds = collectExpectedBundledExtensionPackageIds();
+
+  // Scan the package contract first: absent bundled directories are invisible
+  // when verification only walks the installed extension root.
+  for (const expectedPackageId of expectedPackageIds) {
+    const packageJsonPath = join(extensionsDir, expectedPackageId, "package.json");
+    if (!existsSync(packageJsonPath)) {
+      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
+    }
+  }
+
+  if (!existsSync(extensionsDir)) {
+    return { manifests, errors };
+  }
 
   for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
@@ -976,9 +992,6 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
-      if (expectedPackageIds.has(entry.name)) {
-        errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
-      }
       continue;
     }
 

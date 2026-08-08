@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
-import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
+import {
+  generateNpmPackageLock,
+  packageJsonForNpmLock,
+  readNpmLockOverrides,
+} from "../generate-npm-package-lock.mjs";
 import { resolveNpmRunner } from "../npm-runner.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
@@ -111,6 +115,59 @@ function assertPluginNpmRuntimeBuildExists(plan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
+function resolvePackagedChannelStateMetadata(metadata, metadataKey, plan) {
+  if (
+    !metadata ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata) ||
+    typeof metadata.specifier !== "string" ||
+    !metadata.specifier.trim()
+  ) {
+    return metadata;
+  }
+
+  const normalizedSpecifier = normalizePackPath(metadata.specifier);
+  const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
+  const runtimeSpecifier = plan.runtimeBuildOutputs.find((runtimePath) => {
+    const normalizedRuntimePath = normalizePackPath(runtimePath);
+    return (
+      normalizedRuntimePath === normalizedSpecifier ||
+      normalizedRuntimePath.replace(/^dist\//u, "").replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
+    );
+  });
+  if (!runtimeSpecifier) {
+    throw new Error(
+      `channel ${metadataKey} specifier '${metadata.specifier}' has no package-local runtime output for ${plan.pluginDir}`,
+    );
+  }
+
+  // Published plugins omit source files; installed channel probes must load
+  // the exact ESM or CommonJS sidecar emitted by the package runtime build.
+  return {
+    ...metadata,
+    specifier: runtimeSpecifier,
+  };
+}
+
+function resolvePackagedChannelMetadata(plan) {
+  const channel = plan.packageJson.openclaw?.channel;
+  if (!channel || typeof channel !== "object" || Array.isArray(channel)) {
+    return channel;
+  }
+
+  const packagedChannel = { ...channel };
+  for (const metadataKey of ["configuredState", "persistedAuthState"]) {
+    if (Object.hasOwn(channel, metadataKey)) {
+      packagedChannel[metadataKey] = resolvePackagedChannelStateMetadata(
+        channel[metadataKey],
+        metadataKey,
+        plan,
+      );
+    }
+  }
+  return packagedChannel;
+}
+
 function hasPackageRuntimeDependencies(packageJson) {
   return (
     Object.keys(packageJson.dependencies ?? {}).length > 0 ||
@@ -170,6 +227,63 @@ function spawnCommandSync(command, args, options) {
     return spawnNpmSync(args, options);
   }
   return spawnSync(command, args, options);
+}
+
+/** @internal Directly tested release-script implementation detail. */
+export function runPluginNpmCiWithRetry(args, options, params = {}) {
+  const attempts = params.attempts ?? 3;
+  const timeoutMs = params.timeoutMs ?? 180_000;
+  const spawn = params.spawn ?? spawnNpmSync;
+  const cleanupAttempt = params.cleanupAttempt ?? (() => {});
+  const pluginDir = params.pluginDir ?? "plugin";
+
+  let result;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = spawn(args, { ...options, timeout: timeoutMs });
+    if (result.error?.code !== "ETIMEDOUT") {
+      return result;
+    }
+
+    // A timed-out npm process can leave a partial tree that makes the next
+    // package attempt nondeterministic. Restore the staging invariant even
+    // when the retry budget is exhausted.
+    cleanupAttempt();
+    if (attempt === attempts) {
+      return result;
+    }
+    console.error(
+      `[plugin-npm-publish] bundled dependency install timed out for ${pluginDir} ` +
+        `(attempt ${attempt}/${attempts}); retrying`,
+    );
+  }
+  return result;
+}
+
+/** @internal Directly tested release-script implementation detail. */
+export function generatePluginNpmPackageLockWithRetry(packageDir, options = {}, params = {}) {
+  const attempts = params.attempts ?? 3;
+  const timeoutMs = params.timeoutMs ?? 180_000;
+  const generate = params.generate ?? generateNpmPackageLock;
+  const pluginDir = params.pluginDir ?? "plugin";
+  const env = {
+    ...(options.env ?? process.env),
+    OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: String(timeoutMs),
+  };
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return generate(packageDir, { ...options, env });
+    } catch (error) {
+      if (error?.code !== "ETIMEDOUT" || attempt === attempts) {
+        throw error;
+      }
+      console.error(
+        `[plugin-npm-publish] package-lock generation timed out for ${pluginDir} ` +
+          `(attempt ${attempt}/${attempts}); retrying`,
+      );
+    }
+  }
+  throw new Error(`package-lock generation retry loop exhausted for ${pluginDir}`);
 }
 
 function resolveInstalledPackageDir(packageDir, packageName) {
@@ -341,10 +455,10 @@ function installPackageLocalBundledDependencies(params) {
     return () => {};
   }
 
-  const shrinkwrapPath = path.join(params.packageDir, "npm-shrinkwrap.json");
-  if (!fs.existsSync(shrinkwrapPath)) {
+  const packageLockPath = path.join(params.packageDir, "package-lock.json");
+  if (fs.existsSync(packageLockPath)) {
     throw new Error(
-      `package-local bundled dependency install requires npm-shrinkwrap.json for ${params.pluginDir}`,
+      `package-local bundled dependency install refuses to replace existing package-lock.json for ${params.pluginDir}`,
     );
   }
 
@@ -363,18 +477,24 @@ function installPackageLocalBundledDependencies(params) {
   };
   delete installPackageJsonBase.peerDependencies;
   delete installPackageJsonBase.peerDependenciesMeta;
-  const installPackageJson = packageJsonForShrinkwrap(
-    installPackageJsonBase,
-    readShrinkwrapOverrides(),
-  );
+  const installPackageJson = packageJsonForNpmLock(installPackageJsonBase, readNpmLockOverrides());
   const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
   if (installPackageJsonText !== packedPackageJsonText) {
-    // npm validates peer edges against the shrinkwrap during ci even when peers are omitted.
+    // npm validates peer edges against the package lock during ci even when peers are omitted.
     // The peer metadata belongs in the packed plugin, not in this temporary dependency install.
     fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
   }
   try {
-    const result = spawnNpmSync(
+    fs.writeFileSync(
+      packageLockPath,
+      generatePluginNpmPackageLockWithRetry(
+        params.packageDir,
+        { installStrategy: "shallow" },
+        { pluginDir: params.pluginDir },
+      ),
+      "utf8",
+    );
+    const result = runPluginNpmCiWithRetry(
       [
         "ci",
         "--install-strategy=shallow",
@@ -392,6 +512,10 @@ function installPackageLocalBundledDependencies(params) {
         env: process.env,
         stdio: ["ignore", "ignore", "inherit"],
       },
+      {
+        cleanupAttempt: () => fs.rmSync(nodeModulesPath, { recursive: true, force: true }),
+        pluginDir: params.pluginDir,
+      },
     );
     if (result.error) {
       throw result.error;
@@ -404,6 +528,7 @@ function installPackageLocalBundledDependencies(params) {
     installMissingOptionalBundledDependencies(params);
   } finally {
     fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
+    fs.rmSync(packageLockPath, { force: true });
   }
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });
@@ -442,6 +567,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   }
   assertPluginNpmRuntimeBuildExists(plan);
 
+  const packagedChannel = resolvePackagedChannelMetadata(plan);
   const packageJson = {
     ...plan.packageJson,
     files: plan.packageFiles,
@@ -449,6 +575,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     peerDependenciesMeta: plan.packagePeerMetadata.peerDependenciesMeta,
     openclaw: {
       ...plan.packageJson.openclaw,
+      ...(packagedChannel ? { channel: packagedChannel } : {}),
       runtimeExtensions: plan.runtimeExtensions,
       ...(plan.runtimeSetupEntry
         ? {

@@ -14,90 +14,10 @@ import {
   type SidebarLifecycleState,
   successfulSessionPatch,
   type TestSessionMenu,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
-
-describe("AppSidebar session indicators", () => {
-  it("keeps one leading slot across neutral, running, open, and merged states", async () => {
-    const keys = [
-      "agent:main:plain",
-      "agent:main:status-running",
-      "agent:main:open-pr",
-      "agent:main:merged-pr",
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
-    for (const row of result.sessions) {
-      if (row.key === keys[1]) {
-        row.status = "running";
-      } else if (row.key === keys[2] || row.key === keys[3]) {
-        row.worktree = {
-          id: `wt-${row.key}`,
-          branch: row.key.endsWith("open-pr") ? "feature/open" : "feature/merged",
-          repoRoot: "/repo",
-        };
-      }
-    }
-    const request = vi.fn((_method: string, params: { sessionKey: string }) =>
-      Promise.resolve({
-        pullRequests: [
-          {
-            number: 1,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature/test",
-            title: "Test",
-            url: "https://example.test/pr/1",
-            state: params.sessionKey.endsWith("open-pr") ? "open" : "merged",
-          },
-        ],
-        rateLimited: false,
-      }),
-    );
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    gatewayHarness.publish({
-      hello: {
-        features: { methods: ["controlUi.sessionPullRequests"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    await waitForFast(() => {
-      expect(sidebar.querySelector('[data-session-pr-state="open"]')).not.toBeNull();
-      expect(sidebar.querySelector('[data-session-pr-state="merged"]')).not.toBeNull();
-    });
-    for (const key of keys) {
-      expect(
-        sidebar.querySelector(`[data-session-key="${key}"] .sidebar-session-indicator`),
-      ).not.toBeNull();
-    }
-    expect(
-      sidebar.querySelector(`[data-session-key="${keys[0]}"] .sidebar-session-indicator__dot`),
-    ).not.toBeNull();
-    expect(
-      sidebar.querySelector(`[data-session-key="${keys[1]}"] .session-run-spinner`),
-    ).not.toBeNull();
-
-    const openPullRequestRow = result.sessions.find((row) => row.key === keys[2]);
-    if (!openPullRequestRow) {
-      throw new Error("expected open PR session");
-    }
-    openPullRequestRow.worktree = undefined;
-    sessions.publishList({ result });
-    await waitForFast(() => {
-      expect(sidebar.querySelector('[data-session-pr-state="open"]')).toBeNull();
-      expect(
-        sidebar.querySelector(`[data-session-key="${keys[2]}"] .sidebar-session-indicator__dot`),
-      ).not.toBeNull();
-    });
-  });
-});
+import "./session-pagination.ts";
 
 describe("AppSidebar session pagination", () => {
   it("does not show pagination controls at the ten-session boundary", async () => {
@@ -376,14 +296,17 @@ describe("AppSidebar session accessibility", () => {
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
-    expect(link?.firstElementChild?.classList.contains("sidebar-session-indicator")).toBe(true);
-    expect(link?.children[1]?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(link?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(link?.firstElementChild?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(row?.querySelector(".session-row-state .session-unread-dot")).not.toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
-    expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now");
-    expect(link?.hasAttribute("aria-describedby")).toBe(false);
-    expect(row?.querySelector(".session-row-trail")?.textContent?.trim()).toBe("");
+    expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now · Unread");
+    expect(link?.getAttribute("aria-describedby")).toBe(
+      `sidebar-session-state-${encodeURIComponent(key)}`,
+    );
+    expect(row?.querySelector(".session-row-trail")).toBeNull();
   });
 
   it("renders no chat rows when only the main session exists", async () => {
@@ -395,6 +318,27 @@ describe("AppSidebar session accessibility", () => {
     // The identity card is the main-session entry; the list stays empty.
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
     expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
+  });
+});
+
+describe("AppSidebar session navigation", () => {
+  it("selects a literal session's agent before changing the active session", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:research:work"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const calls: string[] = [];
+    context.agentSelection.set = vi.fn((agentId) => calls.push(`agent:${agentId}`));
+    gateway.setSessionKey = vi.fn((sessionKey) => calls.push(`session:${sessionKey}`));
+
+    (sidebar as unknown as { selectSession: (sessionKey: string) => void }).selectSession(
+      "agent:research:work",
+    );
+
+    expect(calls).toEqual(["agent:research", "session:agent:research:work"]);
   });
 });
 
@@ -450,8 +394,9 @@ describe("AppSidebar session mutation feedback", () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
-    const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
-    const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
+    const archivedKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
+    const state = createSessionState("main", ["agent:main:main", archivedKey, "agent:main:b"]);
+    const archivedRow = state.result?.sessions.find((row) => row.key === archivedKey);
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
@@ -479,16 +424,14 @@ describe("AppSidebar session mutation feedback", () => {
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    expect(setSessionKey).not.toHaveBeenCalled();
     // Undo restores through the batch helper, which refreshes once at the end.
     expect(harness.patch).toHaveBeenLastCalledWith(
       archivedRow.key,
       { archived: false, pinned: true },
       { agentId: "main", deferListRefresh: true },
     );
-    expect(navigate).toHaveBeenLastCalledWith("chat", {
-      search: "?session=agent%3Amain%3Aa",
-    });
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("patches a session icon from the picker", async () => {

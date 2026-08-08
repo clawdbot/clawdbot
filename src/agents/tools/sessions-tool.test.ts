@@ -45,8 +45,17 @@ describe("sessions tool", () => {
       properties: {
         action: {
           type: "string",
-          enum: ["patch", "group_list", "group_set", "group_rename", "group_delete"],
+          enum: [
+            "patch",
+            "reset",
+            "delete",
+            "group_list",
+            "group_set",
+            "group_rename",
+            "group_delete",
+          ],
         },
+        deleteTranscript: { type: "boolean" },
         label: { type: "string", description: expect.stringContaining("Empty string clears") },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
@@ -57,6 +66,135 @@ describe("sessions tool", () => {
         archived: { type: "boolean", description: expect.stringContaining("without deleting") },
       },
     });
+    expect(tool.parameters).not.toHaveProperty("properties.message");
+  });
+
+  it("does not expose direct session creation outside controlled spawning", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway,
+    });
+
+    await expect(tool.execute("create-uncontrolled-session", { action: "create" })).rejects.toThrow(
+      "Unknown action: create",
+    );
+    expect(tool.parameters).not.toHaveProperty("properties.parentSessionKey");
+    expect(tool.parameters).not.toHaveProperty("properties.agentId");
+    expect(tool.parameters).not.toHaveProperty("properties.fork");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("archives a visible target before write-scoped session deletion", async () => {
+    const sessionKey = "agent:main:dashboard:finished";
+    const sessionId = "finished-session";
+    const lifecycleRevision = "finished-revision";
+    const callGateway = vi.fn(async (method: string) =>
+      method === "sessions.patch"
+        ? { ok: true, entry: { sessionId, lifecycleRevision } }
+        : { ok: true, deleted: true },
+    );
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "agent" } } },
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("delete-session", { action: "delete", sessionKey });
+
+    expect(callGateway.mock.calls).toEqual([
+      ["sessions.patch", { key: sessionKey, archived: true }],
+      [
+        "sessions.delete",
+        {
+          key: sessionKey,
+          archivedOnly: true,
+          expectedSessionId: sessionId,
+          expectedLifecycleRevision: lifecycleRevision,
+          deleteTranscript: true,
+        },
+      ],
+    ]);
+  });
+
+  it("forwards an explicit transcript-preservation choice on deletion", async () => {
+    const sessionKey = "agent:main:dashboard:finished";
+    const sessionId = "finished-session";
+    const callGateway = vi.fn(async (method: string) =>
+      method === "sessions.patch"
+        ? { ok: true, entry: { sessionId } }
+        : { ok: true, deleted: true },
+    );
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "agent" } } },
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("delete-preserve", {
+      action: "delete",
+      sessionKey,
+      deleteTranscript: false,
+    });
+
+    expect(callGateway).toHaveBeenLastCalledWith("sessions.delete", {
+      key: sessionKey,
+      archivedOnly: true,
+      expectedSessionId: sessionId,
+      deleteTranscript: false,
+    });
+  });
+
+  it("does not delete a session when archive cannot identify its generation", async () => {
+    const sessionKey = "agent:main:dashboard:finished";
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "agent" } } },
+      callGateway: callGateway as never,
+    });
+
+    await expect(
+      tool.execute("delete-missing-generation", { action: "delete", sessionKey }),
+    ).rejects.toThrow("archive did not return its session identity");
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
+      key: sessionKey,
+      archived: true,
+    });
+  });
+
+  it("resets another visible session through the canonical gateway method", async () => {
+    const sessionKey = "agent:main:dashboard:reset-me";
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "agent" } } },
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("reset-session", { action: "reset", sessionKey });
+
+    expect(callGateway).toHaveBeenCalledWith("sessions.reset", {
+      key: sessionKey,
+      reason: "reset",
+    });
+  });
+
+  it.each(["delete", "reset"])("refuses to %s its currently running session", async (action) => {
+    const callGateway = vi.fn();
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway,
+    });
+
+    await expect(
+      tool.execute(`self-${action}`, { action, sessionKey: "agent:main:main" }),
+    ).rejects.toThrow(`Cannot ${action} the session running this tool`);
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("patches its session, then reverts a failed agent-selected model", async () => {

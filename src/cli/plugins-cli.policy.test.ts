@@ -5,9 +5,11 @@ import {
   buildPluginRegistrySnapshotReport,
   enablePluginInConfig,
   loadConfig,
+  replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeErrors,
+  runtimeLogs,
   runPluginsCommand,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
@@ -84,6 +86,13 @@ describe("plugins cli policy mutations", () => {
     expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, "alpha", {
       updateChannelConfig: false,
     });
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: enabledConfig,
+      baseHash: "mock",
+      writeOptions: {
+        explicitSetPaths: [["plugins", "entries", "alpha"]],
+      },
+    });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
@@ -91,6 +100,42 @@ describe("plugins cli policy mutations", () => {
       policyPluginIds: ["alpha"],
       reason: "policy-changed",
     });
+  });
+
+  it.each([
+    {
+      policy: "globally disabled plugins",
+      plugins: { enabled: false },
+      reason: "plugins disabled",
+    },
+    {
+      policy: "a plugin denylist",
+      plugins: { deny: ["alpha"] },
+      reason: "blocked by denylist",
+    },
+    {
+      policy: "a restrictive plugin allowlist",
+      plugins: { allow: ["other-plugin"] },
+      reason: "blocked by allowlist",
+    },
+  ])("fails without mutations when $policy blocks enablement", async ({ plugins, reason }) => {
+    const sourceConfig = { plugins } as OpenClawConfig;
+    loadConfig.mockReturnValue(sourceConfig);
+    enablePluginInConfig.mockReturnValue({
+      config: sourceConfig,
+      enabled: false,
+      pluginId: "alpha",
+      reason,
+    });
+    mockPluginRegistry(["alpha"]);
+
+    await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
+    expect(runtimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
   });
 
   it("refuses plugin enablement in Nix mode before config mutation", async () => {
@@ -127,6 +172,13 @@ describe("plugins cli policy mutations", () => {
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
     expect(entries.alpha).toEqual({ enabled: false });
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig,
+      baseHash: "mock",
+      writeOptions: {
+        explicitSetPaths: [["plugins", "entries", "alpha"]],
+      },
+    });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -150,6 +202,7 @@ describe("plugins cli policy mutations", () => {
       enablePluginInConfig.mockReturnValue({
         config: enabledConfig,
         enabled: true,
+        pluginId,
       });
       mockPluginRegistry([pluginId]);
 
@@ -157,6 +210,13 @@ describe("plugins cli policy mutations", () => {
 
       expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, pluginId, {
         updateChannelConfig: false,
+      });
+      expect(replaceConfigFile).toHaveBeenCalledWith({
+        nextConfig: enabledConfig,
+        baseHash: "mock",
+        writeOptions: {
+          explicitSetPaths: [["plugins", "entries", pluginId]],
+        },
       });
       expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     },
@@ -180,6 +240,13 @@ describe("plugins cli policy mutations", () => {
       const entries = requirePluginEntries(nextConfig);
       expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
+      expect(replaceConfigFile).toHaveBeenCalledWith({
+        nextConfig,
+        baseHash: "mock",
+        writeOptions: {
+          explicitSetPaths: [["plugins", "entries", pluginId]],
+        },
+      });
     },
   );
 

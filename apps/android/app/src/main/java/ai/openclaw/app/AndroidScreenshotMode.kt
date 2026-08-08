@@ -13,6 +13,7 @@ enum class AndroidScreenshotScene(
 ) {
   Home("home", HomeDestination.Connect),
   Chat("chat", HomeDestination.Chat),
+  Swarm("swarm", HomeDestination.Chat),
   Settings("settings", HomeDestination.Settings),
   Gateway("gateway", HomeDestination.Settings, SettingsRoute.Gateway),
   OpenClaw("openclaw", HomeDestination.Settings, SettingsRoute.SystemAgent),

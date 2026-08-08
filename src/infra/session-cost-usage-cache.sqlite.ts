@@ -10,7 +10,8 @@ import { isTransientSqliteError } from "./unhandled-rejections.js";
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
 const REFRESH_LOCK_KEY = "refresh-lock";
-const ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
+const RETIRED_ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
+const ROLLUP_SCOPE = "session-cost-usage-rollup-v2";
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -177,20 +178,21 @@ export function deleteSessionCostUsageRollupsExcept(params: {
   agentId?: string;
   databasePath?: string;
   liveKeys: ReadonlySet<string>;
+  rows: readonly SessionCostUsageRollupRow[];
 }): void {
-  const existing = readSessionCostUsageRollupRows(params.agentId, params.databasePath)
-    .map((row) => row.key)
-    .filter((key) => !params.liveKeys.has(key));
+  const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
   runOpenClawAgentWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-      for (const key of existing) {
+      for (const row of existing) {
         executeSqliteQuerySync(
           database.db,
           kysely
             .deleteFrom("cache_entries")
             .where("scope", "=", ROLLUP_SCOPE)
-            .where("key", "=", key),
+            .where("key", "=", row.key)
+            .where("value_json", "=", row.valueJson)
+            .where("updated_at", "=", row.updatedAt),
         );
       }
       executeSqliteQuerySync(
@@ -199,6 +201,12 @@ export function deleteSessionCostUsageRollupsExcept(params: {
           .deleteFrom("cache_entries")
           .where("scope", "=", LEGACY_CACHE_SCOPE)
           .where("key", "=", LEGACY_CACHE_KEY),
+      );
+      // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
+      // Delete by scope so those values are never materialized during cleanup.
+      executeSqliteQuerySync(
+        database.db,
+        kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
       );
     },
     {

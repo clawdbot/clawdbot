@@ -125,4 +125,63 @@ describe("runtime parity session selection", () => {
 
     expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "web_fetch" })]);
   });
+
+  it("retains parent sessions_spawn evidence when the spawned child is newer", async () => {
+    const now = Date.now();
+    const parentSessionKey = "agent:qa:runtime-tool:sessions_spawn:happy";
+    const tempRoot = await seedSession({
+      sessionId: "sessions-spawn-parent",
+      sessionKey: parentSessionKey,
+      messages: [{ role: "user", content: "tool search qa check target=sessions_spawn" }],
+      updatedAt: now - 1_000,
+      trajectoryEvents: [
+        {
+          type: "tool.call",
+          data: {
+            toolCallId: "sessions-spawn-1",
+            name: "sessions_spawn",
+            arguments: { task: "reply exactly RUNTIME-TOOL-FIXTURE", mode: "run" },
+          },
+        },
+        {
+          type: "tool.result",
+          data: {
+            toolCallId: "sessions-spawn-1",
+            name: "sessions_spawn",
+            status: "completed",
+            success: true,
+            result: { status: "accepted", childSessionKey: "agent:qa:subagent:child" },
+          },
+        },
+      ],
+    });
+    await seedSession({
+      tempRoot,
+      sessionId: "sessions-spawn-child",
+      sessionKey: "agent:qa:subagent:child",
+      parentSessionKey,
+      messages: [{ role: "assistant", content: "RUNTIME-TOOL-FIXTURE" }],
+      updatedAt: now,
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: {
+        status: "pass",
+        details: `RUNTIME_PARITY_SESSION_KEY=${parentSessionKey}`,
+      },
+      wallClockMs: 10,
+    });
+
+    expect(cell.transcriptBytes).toContain("target=sessions_spawn");
+    expect(cell.transcriptBytes).not.toContain("RUNTIME-TOOL-FIXTURE");
+    expect(cell.toolCalls).toEqual([
+      expect.objectContaining({
+        tool: "sessions_spawn",
+      }),
+    ]);
+    expect(cell.toolCalls[0]).not.toHaveProperty("errorClass");
+    expect(cell.toolCalls[0]?.resultHash).not.toBe("");
+  });
 });

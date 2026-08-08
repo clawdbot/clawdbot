@@ -32,6 +32,15 @@ private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
+    @Test func `discovered gateway summary uses localized runtime strings`() {
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
+                "1 gateway found on your network — click to choose it.")
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 2) ==
+                "2 gateways found on your network — click to choose one.")
+    }
+
     @Test func `onboarding view builds body`() {
         let state = AppState(preview: true)
         let view = OnboardingView(
@@ -92,97 +101,27 @@ struct OnboardingViewSmokeTests {
         #expect(scrollView.documentView != nil)
     }
 
-    @Test func `local page order includes memory import only while eligible`() {
-        let configuredOrder = OnboardingView.pageOrder(
+    @Test func `configured flows end at AI setup and hand off to the dashboard`() {
+        // Everything after working inference (memory import, permissions,
+        // channels, hatch) belongs to the dashboard custodian onboarding.
+        #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: false,
-            memoryImportEligible: true)
-        let freshOrder = OnboardingView.pageOrder(
+            requiresCLIInstall: true) == [0, 1, 2, 3])
+        #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: true,
-            memoryImportEligible: true)
-        let resolvedEmptyOrder = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false,
-            memoryImportEligible: false)
-
-        #expect(configuredOrder == [0, 1, 3, 4, 5, 9])
-        #expect(freshOrder == [0, 1, 2, 3, 4, 5, 9])
-        #expect(resolvedEmptyOrder == [0, 1, 3, 5, 9])
-        #expect(!configuredOrder.contains(7))
-        #expect(!configuredOrder.contains(8))
+            requiresCLIInstall: false) == [0, 1, 3])
+        #expect(OnboardingView.pageOrder(
+            for: .remote,
+            requiresCLIInstall: true) == [0, 1, 2, 3])
+        #expect(OnboardingView.pageOrder(
+            for: .remote,
+            requiresCLIInstall: false) == [0, 1, 3])
     }
 
-    @Test func `remote and unconfigured page orders never include memory import`() {
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true,
-            memoryImportEligible: true) == [0, 1, 2, 3, 5, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: false,
-            memoryImportEligible: true) == [0, 1, 3, 5, 9])
+    @Test func `set up later keeps the native ready page`() {
         #expect(OnboardingView.pageOrder(
             for: .unconfigured,
-            requiresCLIInstall: false,
-            memoryImportEligible: true) == [0, 1, 9])
-    }
-
-    @Test func `memory page inclusion follows local model eligibility`() {
-        let withMemory = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false,
-            memoryImportEligible: true)
-
-        #expect(OnboardingView.shouldIncludeMemoryImportPage(
-            for: .local,
-            modelEligible: true))
-        #expect(!OnboardingView.shouldIncludeMemoryImportPage(
-            for: .local,
-            modelEligible: false))
-        #expect(!OnboardingView.shouldIncludeMemoryImportPage(
-            for: .remote,
-            modelEligible: true))
-        let withoutMemory = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false,
-            memoryImportEligible: false)
-        #expect(withMemory.prefix(3) == withoutMemory.prefix(3))
-        #expect(!withoutMemory.contains(4))
-    }
-
-    @Test func `memory page removal preserves the active logical page`() throws {
-        let previousOrder = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false,
-            memoryImportEligible: true)
-        let newOrder = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false,
-            memoryImportEligible: false)
-        let aiCursor = try #require(previousOrder.firstIndex(of: 3))
-        let memoryCursor = try #require(previousOrder.firstIndex(of: 4))
-        let permissionsCursor = try #require(previousOrder.firstIndex(of: 5))
-        let readyCursor = try #require(previousOrder.firstIndex(of: 9))
-        let newPermissionsCursor = try #require(newOrder.firstIndex(of: 5))
-        let newReadyCursor = try #require(newOrder.firstIndex(of: 9))
-
-        #expect(OnboardingView.reconciledPageCursor(
-            currentPage: aiCursor,
-            previousOrder: previousOrder,
-            newOrder: newOrder) == aiCursor)
-        #expect(OnboardingView.reconciledPageCursor(
-            currentPage: memoryCursor,
-            previousOrder: previousOrder,
-            newOrder: newOrder) == newPermissionsCursor)
-        #expect(OnboardingView.reconciledPageCursor(
-            currentPage: permissionsCursor,
-            previousOrder: previousOrder,
-            newOrder: newOrder) == newPermissionsCursor)
-        #expect(OnboardingView.reconciledPageCursor(
-            currentPage: readyCursor,
-            previousOrder: previousOrder,
-            newOrder: newOrder) == newReadyCursor)
+            requiresCLIInstall: false) == [0, 1, 9])
     }
 
     @Test func `fresh local setup installs CLI before inference setup`() {
@@ -313,14 +252,13 @@ struct OnboardingViewSmokeTests {
         #expect(monitoredPage == view.activePageIndex)
     }
 
-    @Test func `gateway route reset returns later pages to inference setup`() throws {
+    @Test func `gateway route reset keeps the AI page blocking until inference verifies`() throws {
         let order = OnboardingView.pageOrder(
             for: .remote,
             requiresCLIInstall: false)
-        let permissionsCursor = try #require(order.firstIndex(of: 5))
         let aiCursor = try #require(order.firstIndex(of: 3))
         let resetCursor = OnboardingView.pageCursorAfterGatewayReset(
-            currentPage: permissionsCursor,
+            currentPage: order.count - 1,
             pageOrder: order,
             aiPageIndex: 3)
 
@@ -450,7 +388,9 @@ struct OnboardingViewSmokeTests {
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
         let priorChat = view.systemAgentState.chat
         view.systemAgentState.isPresented = true
-        view.remoteProbeState = .ok(RemoteGatewayProbeSuccess(authSource: .sharedToken))
+        view.remoteProbeState = .ok(
+            view.remoteGatewayProbeInput,
+            RemoteGatewayProbeSuccess(authSource: .sharedToken))
         view.remoteAuthIssue = .tokenMismatch
 
         view.updateManualRemoteURL("wss://gateway-b.example.test")

@@ -9,6 +9,7 @@ export type SlackInstallationIdentity =
       kind: "workspace";
       apiAppId?: string;
       teamId: string;
+      teamName?: string;
       enterpriseId?: string;
     }
   | {
@@ -23,16 +24,17 @@ export type SlackInstallationIdentity =
 
 export type SlackIdentityHealth =
   | {
-      healthState: "healthy";
+      lifecycle: "ready";
       lastError: null;
     }
   | {
-      healthState: "degraded";
+      lifecycle: "blocked";
       lastError: string;
     };
 
 export type SlackAuthTestIdentity = {
   app_id?: unknown;
+  team?: unknown;
   team_id?: unknown;
   enterprise_id?: unknown;
   is_enterprise_install?: unknown;
@@ -244,9 +246,11 @@ export function resolveSlackInstallationIdentity(params: {
   if (!teamId) {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
+  const teamName = normalizeOptionalString(auth.team);
   return {
     kind: "workspace",
     teamId,
+    ...(teamName ? { teamName } : {}),
     ...(apiAppId ? { apiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
@@ -262,7 +266,7 @@ export function resolveSlackIdentityHealth(params: {
   // enterprise identity is sufficient; applying the workspace gate would
   // report every healthy org install as degraded.
   if (params.installationIdentity.kind === "enterprise") {
-    return { healthState: "healthy", lastError: null };
+    return { lifecycle: "ready", lastError: null };
   }
 
   const lastError =
@@ -271,7 +275,5 @@ export function resolveSlackIdentityHealth(params: {
     (params.installationIdentity.kind === "degraded" || !params.botUserId.trim()
       ? "slack bot identity unavailable"
       : undefined);
-  return lastError
-    ? { healthState: "degraded", lastError }
-    : { healthState: "healthy", lastError: null };
+  return lastError ? { lifecycle: "blocked", lastError } : { lifecycle: "ready", lastError: null };
 }

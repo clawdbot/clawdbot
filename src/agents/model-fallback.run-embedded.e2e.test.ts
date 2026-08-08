@@ -63,13 +63,13 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let runWithModelFallback: typeof import("./model-fallback.js").runWithModelFallback;
+let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ runWithModelFallback } = await import("./model-fallback.js"));
+  ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
 });
 
 beforeEach(() => {
@@ -101,6 +101,7 @@ function makeConfig(primaryProvider = "openai"): OpenClawConfig {
           fallbacks: ["groq/mock-2"],
         },
       },
+      list: [{ id: "test" }],
     },
     models: {
       providers: {
@@ -265,7 +266,6 @@ async function runEmbeddedFallback(params: {
       runEmbeddedAgent({
         sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         config: cfg,
@@ -443,7 +443,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       const result = await runEmbeddedAgent({
         sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
-        sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -630,7 +629,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         runEmbeddedAgent({
           sessionId,
           sessionKey: "agent:test:direct-embedded-suspension",
-          sessionFile: path.join(workspaceDir, "direct-embedded-suspension.jsonl"),
           workspaceDir,
           agentDir,
           config: {

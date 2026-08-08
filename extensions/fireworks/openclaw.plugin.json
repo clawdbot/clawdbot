@@ -34,7 +34,22 @@
       "fireworks": {
         "baseUrl": "https://api.fireworks.ai/inference/v1",
         "api": "openai-completions",
+        "defaultModel": "accounts/fireworks/routers/glm-5p2-fast",
         "models": [
+          {
+            "id": "accounts/fireworks/routers/glm-5p2-fast",
+            "name": "GLM 5.2 Fast",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 2.1,
+              "output": 6.6,
+              "cacheRead": 0.21,
+              "cacheWrite": 0
+            }
+          },
           {
             "id": "accounts/fireworks/models/kimi-k2p6",
             "name": "Kimi K2.6",

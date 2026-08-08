@@ -6,6 +6,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -14,18 +15,19 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
+  | "acp_parent_stream_events"
   | "board_tabs"
   | "board_widgets"
   | "conversation_deliveries"
@@ -35,6 +37,8 @@ type SessionSqliteDatabase = Pick<
   | "session_members"
   | "session_nodes"
   | "session_suggestions"
+  | "session_transcript_active_events"
+  | "session_transcript_index_state"
   | "session_windows"
   | "transcript_rewrite_watermarks"
   | "trajectory_runtime_events"
@@ -67,6 +71,11 @@ export type ResolvedTranscriptScope = ResolvedSqliteScope & {
 type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
+
+export type SessionSqliteTargetResolutionCache = Map<
+  NodeJS.ProcessEnv | undefined,
+  Map<string, ReturnType<typeof resolveSqliteTargetFromSessionStorePath>>
+>;
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
@@ -140,12 +149,20 @@ export function resolveSqliteScope(
   if (!agentId) {
     throw new Error("Cannot resolve SQLite session scope without an agent id");
   }
+  const normalizedSessionKey = normalizeSqliteSessionKey(scope.sessionKey);
+  const sessionKey =
+    !normalizedSessionKey ||
+    normalizedSessionKey === "global" ||
+    normalizedSessionKey === "unknown" ||
+    parseAgentSessionKey(normalizedSessionKey)
+      ? normalizedSessionKey
+      : toAgentStoreSessionKey({ agentId, requestKey: normalizedSessionKey });
   return {
     agentId,
     ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
-    sessionKey: normalizeSqliteSessionKey(scope.sessionKey),
+    sessionKey,
   };
 }
 
@@ -154,6 +171,7 @@ export function resolveSqliteReadScope(
     SessionTranscriptReadScope,
     "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
   >,
+  targetCache?: SessionSqliteTargetResolutionCache,
 ): ResolvedSqliteReadScope {
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -166,11 +184,15 @@ export function resolveSqliteReadScope(
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
   const storeTarget = effectiveStorePath
-    ? resolveSqliteTargetFromSessionStorePath(effectiveStorePath, {
-        agentId: effectiveAgentId,
-        defaultAgentId: scope.defaultAgentId,
-        ...(scope.env ? { env: scope.env } : {}),
-      })
+    ? resolveCachedSqliteStoreTarget(
+        {
+          agentId: effectiveAgentId,
+          defaultAgentId: scope.defaultAgentId,
+          env: scope.env,
+          storePath: effectiveStorePath,
+        },
+        targetCache,
+      )
     : undefined;
   const agentId = resolveSqliteAgentId({
     scopedAgentId: effectiveAgentId,
@@ -188,6 +210,40 @@ export function resolveSqliteReadScope(
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+function resolveCachedSqliteStoreTarget(
+  params: {
+    agentId?: string;
+    defaultAgentId?: string;
+    env?: NodeJS.ProcessEnv;
+    storePath: string;
+  },
+  targetCache: SessionSqliteTargetResolutionCache | undefined,
+): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
+  if (!targetCache) {
+    return resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+      ...(params.env ? { env: params.env } : {}),
+    });
+  }
+  // Store ownership is stable for this batch. Scope the cache to the caller so later requests
+  // still observe owner changes after migration, install, or doctor flows.
+  const envCache = targetCache.get(params.env) ?? new Map();
+  targetCache.set(params.env, envCache);
+  const cacheKey = JSON.stringify([params.storePath, params.agentId, params.defaultAgentId]);
+  const cached = envCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    ...(params.env ? { env: params.env } : {}),
+  });
+  envCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 export function resolveSqliteStoreScope(
@@ -262,9 +318,10 @@ export function resolveSqliteTranscriptReadScope(
     SessionTranscriptReadScope,
     "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
   >,
+  targetCache?: SessionSqliteTargetResolutionCache,
 ): ResolvedTranscriptReadScope {
   return {
-    ...resolveSqliteReadScope(scope),
+    ...resolveSqliteReadScope(scope, targetCache),
     sessionId: scope.sessionId,
   };
 }
@@ -287,7 +344,12 @@ export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return structuredClone(entry);
 }
 
-export function formatSqliteSessionMarkerForScope(scope: ResolvedTranscriptScope): string {
+export function formatSqliteSessionReferenceForScope(scope: ResolvedTranscriptScope): string {
+  return scope.sessionKey;
+}
+
+/** Legacy identity string retained only for transcript artifact metadata and plugin contracts. */
+export function formatLegacySqliteSessionMarkerForScope(scope: ResolvedTranscriptScope): string {
   return formatSqliteSessionFileMarker({
     agentId: scope.agentId,
     sessionId: scope.sessionId,

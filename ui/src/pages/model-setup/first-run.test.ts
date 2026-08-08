@@ -3,13 +3,22 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { areUiSessionKeysEquivalentForHost } from "../../lib/sessions/session-key.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
-import {
-  isDefaultChatLanding,
-  locationsMatch,
-  startModelSetupFirstRunRedirect,
-} from "./first-run.ts";
+import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } from "./first-run.ts";
+
+const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
+
+async function startRedirect(
+  context: ApplicationContext<RouteId>,
+  currentLocation = defaultLanding,
+): Promise<() => void> {
+  return startModelSetupFirstRunRedirectAfterLocation({
+    context,
+    enabled: true,
+    history: { location: () => currentLocation, replace: () => undefined },
+    initialLocationReady: Promise.resolve(defaultLanding),
+  });
+}
 
 describe("model setup first-run redirect", () => {
   it("recognizes only the implicit chat landing without a session deep link", () => {
@@ -21,55 +30,79 @@ describe("model setup first-run redirect", () => {
     ).toBe(true);
     expect(
       isDefaultChatLanding(
-        { pathname: "/chat", search: "?session=main", hash: "" },
+        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
         "",
         routeIdFromPath,
       ),
     ).toBe(false);
     expect(
       isDefaultChatLanding(
-        { pathname: "/chat", search: "", hash: "#session=main" },
+        { pathname: "/chat", search: "", hash: "#session=agent%3Amain%3Amain" },
+        "",
+        routeIdFromPath,
+      ),
+    ).toBe(false);
+    expect(
+      isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
+    ).toBe(false);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/dashboard/main", search: "", hash: "" },
         "",
         routeIdFromPath,
       ),
     ).toBe(false);
     expect(
       isDefaultChatLanding(
-        { pathname: "/settings/general", search: "", hash: "" },
+        { pathname: "/settings/appearance", search: "", hash: "" },
         "",
         routeIdFromPath,
       ),
     ).toBe(false);
   });
 
-  it("keeps the default landing eligible when the gateway canonicalizes its session key", () => {
-    const expected = { pathname: "/chat", search: "?session=main", hash: "" };
-    const host = {
-      hello: {
+  it("installs a released session deep link without registering first-run detection", async () => {
+    const releasedLocation = {
+      pathname: "/chat",
+      search: "?session=agent%3Aresearch%3Atelegram%3A12345",
+      hash: "",
+    };
+    const canonicalLocation = {
+      pathname: "/chat/research/telegram/12345",
+      search: "",
+      hash: "",
+    };
+    let currentLocation = releasedLocation;
+    const replaceLocation = vi.fn((location: typeof releasedLocation) => {
+      currentLocation = location;
+    });
+    const subscribe = vi.fn(() => () => undefined);
+    const replaceRoute = vi.fn();
+    const context = {
+      gateway: {
         snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "main",
-            mainKey: "main",
-            mainSessionKey: "agent:main:main",
+          phase: "connected",
+          client: { request: vi.fn() },
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["openclaw.setup.detect"] },
           },
         },
+        subscribe,
       },
-    };
+      replace: replaceRoute,
+    } as unknown as ApplicationContext<RouteId>;
 
-    expect(
-      locationsMatch(
-        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
-        expected,
-        (left, right) => areUiSessionKeysEquivalentForHost(host, left, right),
-      ),
-    ).toBe(true);
-    expect(
-      locationsMatch(
-        { pathname: "/chat", search: "?session=agent%3Aother%3Amain", hash: "" },
-        expected,
-        (left, right) => areUiSessionKeysEquivalentForHost(host, left, right),
-      ),
-    ).toBe(false);
+    await startModelSetupFirstRunRedirectAfterLocation({
+      context,
+      enabled: isDefaultChatLanding(releasedLocation, "", routeIdFromPath),
+      history: { location: () => currentLocation, replace: replaceLocation },
+      initialLocationReady: Promise.resolve(canonicalLocation),
+    });
+
+    expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(replaceRoute).not.toHaveBeenCalled();
   });
 
   it("detects once, caches the result, and redirects once", async () => {
@@ -87,6 +120,8 @@ describe("model setup first-run redirect", () => {
       phase: "connected",
       client,
       hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
@@ -103,7 +138,7 @@ describe("model setup first-run redirect", () => {
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
-    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    await startRedirect(context);
     expect(listener).not.toBeNull();
     listener!(snapshot as Parameters<GatewayListener>[0]);
     listener!(snapshot as Parameters<GatewayListener>[0]);
@@ -116,7 +151,7 @@ describe("model setup first-run redirect", () => {
       expect.objectContaining({ timeoutMs: 20_000 }),
     );
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    expect(consumeCachedModelSetupDetection(client)).toEqual(result);
+    expect(consumeCachedModelSetupDetection({ client, hello: snapshot.hello })).toEqual(result);
   });
 
   it("does not redirect after the operator leaves the default landing", async () => {
@@ -134,6 +169,8 @@ describe("model setup first-run redirect", () => {
       phase: "connected",
       client,
       hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
@@ -150,15 +187,72 @@ describe("model setup first-run redirect", () => {
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
-    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => false });
+    await startRedirect(context, { pathname: "/chat/other", search: "", hash: "" });
     listener!(snapshot as Parameters<GatewayListener>[0]);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
     expect(replace).not.toHaveBeenCalled();
-    expect(consumeCachedModelSetupDetection(client)).toEqual(result);
+    expect(consumeCachedModelSetupDetection({ client, hello: snapshot.hello })).toEqual(result);
   });
 
-  it("does not detect without admin scope or an advertised setup method", () => {
+  it("rejects stale detection and retries first-run guidance after a same-client reconnect", async () => {
+    const stale = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/stale-workspace",
+      setupComplete: false,
+    };
+    const current = {
+      ...stale,
+      workspace: "/tmp/current-workspace",
+    };
+    let resolveStale!: (result: typeof stale) => void;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<typeof stale>((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(current);
+    const client = { request } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const firstHello = {
+      type: "hello-ok" as const,
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["openclaw.setup.detect"] },
+    };
+    const gateway = {
+      snapshot: { phase: "connected", client, hello: firstHello as typeof firstHello | null },
+      subscribe: (next: GatewayListener) => {
+        listener = next;
+        return () => undefined;
+      },
+    };
+    const replace = vi.fn();
+    const context = { gateway, replace } as unknown as ApplicationContext<RouteId>;
+    await startRedirect(context);
+    expect(request).toHaveBeenCalledOnce();
+
+    gateway.snapshot = { phase: "reconnecting", client, hello: null };
+    listener!(gateway.snapshot as Parameters<GatewayListener>[0]);
+    const nextHello = { ...firstHello };
+    gateway.snapshot = { phase: "connected", client, hello: nextHello };
+    listener!(gateway.snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+    resolveStale(stale);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(consumeCachedModelSetupDetection({ client, hello: nextHello })).toEqual(current);
+    expect(consumeCachedModelSetupDetection({ client, hello: firstHello })).toBeNull();
+    expect(replace).toHaveBeenCalledOnce();
+  });
+
+  it("does not detect without admin scope or an advertised setup method", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
@@ -174,7 +268,7 @@ describe("model setup first-run redirect", () => {
       replace: vi.fn(),
     } as unknown as ApplicationContext<RouteId>;
 
-    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    await startRedirect(context);
     listener!({
       phase: "connected" as const,
       client,

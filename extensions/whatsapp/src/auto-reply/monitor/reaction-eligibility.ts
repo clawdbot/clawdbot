@@ -73,7 +73,7 @@ export async function resolveWhatsAppReactionEligibility(params: {
     emoji,
     reactionOptions: {
       verbose: params.verbose,
-      fromMe: false,
+      fromMe: params.msg.platform.fromMe === true,
       ...(participant ? { participant } : {}),
       accountId,
       cfg: params.cfg,

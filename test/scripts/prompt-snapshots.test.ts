@@ -4,7 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createFormattedPromptSnapshotFiles } from "../../scripts/generate-prompt-snapshots.js";
+import {
+  createFormattedPromptSnapshotFiles,
+  materializeCodexDynamicToolSnapshot,
+} from "../../scripts/generate-prompt-snapshots.js";
 import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -133,6 +136,47 @@ describe("happy path prompt snapshots", () => {
     ]);
   });
 
+  it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
+    const generated = await createHappyPathPromptSnapshotFiles();
+    const scenarios = [
+      { name: "telegram-direct", replacements: [] },
+      { name: "discord-group", replacements: ["sessions_spawn"] },
+      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+    ];
+
+    for (const { name, replacements } of scenarios) {
+      const fileName = `codex-dynamic-tools.${name}.json`;
+      const expected = generated.find((file) => path.basename(file.path) === fileName);
+      expect(expected, `missing complete generated tool catalog for ${name}`).toBeDefined();
+
+      const committed = JSON.parse(readCommittedSnapshot(fileName)) as
+        | unknown[]
+        | {
+            base: string;
+            replace: Record<string, { name: string; inputSchema?: unknown; tools?: unknown[] }>;
+          };
+      if (Array.isArray(committed)) {
+        expect(replacements).toEqual([]);
+      } else {
+        expect(committed.base).toBe("codex-dynamic-tools.telegram-direct.json");
+        expect(Object.keys(committed.replace)).toEqual(replacements);
+        for (const [toolName, tool] of Object.entries(committed.replace)) {
+          expect(tool.name).toBe(toolName);
+          expect(tool.inputSchema !== undefined || Array.isArray(tool.tools)).toBe(true);
+        }
+      }
+
+      const materialized = await materializeCodexDynamicToolSnapshot(name);
+      expect(JSON.parse(materialized)).toEqual(JSON.parse(expected!.content));
+    }
+  });
+
+  it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
+    await expect(materializeCodexDynamicToolSnapshot("../outside")).rejects.toThrow(
+      "Invalid Codex dynamic-tool snapshot scenario",
+    );
+  });
+
   it("generates snapshots without jiti plugin-loader fallbacks", async () => {
     // Perf contract for the check-prompt-snapshots CI lane: scenario channel
     // plugins are preloaded through the ambient module graph. A jiti
@@ -188,7 +232,6 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
-    expect(telegram).toContain("<TOOLS.md contents will be here>");
     expect(telegram).toContain("<USER.md contents will be here>");
     expect(telegram).toContain("<MEMORY.md contents will be here>");
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");

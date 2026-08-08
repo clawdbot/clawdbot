@@ -31,6 +31,7 @@ const TSDOWN_SOURCE_EXTENSIONS = [
   ".json5",
   ".mjs",
   ".mts",
+  ".sql",
   ".ts",
   ".tsx",
   ".yaml",
@@ -43,7 +44,6 @@ const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
 const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
   "tsconfig.json",
   "scripts/tsdown-build.mjs",
   "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -97,7 +97,6 @@ const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
   ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
   "package.json",
   "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
   "tsconfig.json",
   "tsconfig.plugin-sdk.dts.json",
   {
@@ -231,19 +230,6 @@ export const BUILD_ALL_STEPS = [
     args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
   },
   {
-    label: "copy-export-html-templates",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
-    cache: {
-      inputs: [
-        "scripts/copy-export-html-templates.ts",
-        "scripts/lib/copy-assets.ts",
-        "src/auto-reply/reply/export-html",
-      ],
-      outputs: ["dist/export-html"],
-    },
-  },
-  {
     label: "ui:build",
     kind: "pnpm",
     pnpmArgs: ["ui:build"],
@@ -288,7 +274,6 @@ export const BUILD_ALL_PROFILES = {
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
     "copy-hook-metadata",
-    "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
@@ -304,7 +289,6 @@ export const BUILD_ALL_PROFILES = {
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
     "copy-hook-metadata",
-    "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
@@ -333,6 +317,7 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+    "write-build-info",
     "write-cli-startup-metadata",
   ],
   cliStartup: [
@@ -637,9 +622,21 @@ function normalizePortablePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 
-function resolveCachePaths(rootDir, step) {
+function resolveBuildCacheRoot(rootDir, env) {
+  // Dev update preflight and final builds run in separate worktrees. A shared
+  // root lets content signatures decide reuse without relocating built trees.
+  const configuredRoot = env?.BUILD_ALL_CACHE_ROOT?.trim();
+  if (!configuredRoot) {
+    return path.resolve(rootDir, ".artifacts/build-all-cache");
+  }
+  return path.isAbsolute(configuredRoot)
+    ? path.normalize(configuredRoot)
+    : path.resolve(rootDir, configuredRoot);
+}
+
+function resolveCachePaths(rootDir, step, env) {
   const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
-  const cacheDir = path.resolve(rootDir, ".artifacts/build-all-cache", safeLabel);
+  const cacheDir = path.join(resolveBuildCacheRoot(rootDir, env), safeLabel);
   return {
     cacheDir,
     outputRoot: path.join(cacheDir, "outputs"),
@@ -705,7 +702,7 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
     step.cache.env ?? [],
     params.env ?? process.env,
   );
-  const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
+  const { outputRoot, stampPath } = resolveCachePaths(rootDir, step, params.env ?? process.env);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
   const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));

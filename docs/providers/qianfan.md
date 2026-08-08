@@ -14,7 +14,7 @@ Qianfan is Baidu's MaaS platform: a unified, OpenAI-compatible API that routes r
 | Auth          | `QIANFAN_API_KEY`                        |
 | API           | OpenAI-compatible (`openai-completions`) |
 | Base URL      | `https://qianfan.baidubce.com/v2`        |
-| Default model | `qianfan/deepseek-v3.2`                  |
+| Default model | `qianfan/deepseek-v4-pro`                |
 
 ## Install plugin
 
@@ -41,7 +41,7 @@ openclaw gateway restart
 
     Non-interactive runs read the key from `--qianfan-api-key <key>` or
     `QIANFAN_API_KEY`. Onboarding writes the provider config, adds the
-    `QIANFAN` alias for the default model, and sets `qianfan/deepseek-v3.2`
+    `QIANFAN` alias for the default model, and sets `qianfan/deepseek-v4-pro`
     as the default model when none is configured.
 
   </Step>

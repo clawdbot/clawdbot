@@ -93,6 +93,9 @@ jobs:
             build-essential \
             curl \
             file \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-good \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
@@ -107,7 +110,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
@@ -163,7 +165,10 @@ jobs:
     name: Build unsigned macOS test bundles
     if: ${{ inputs['desktop-test-bundles'] }}
     needs: validate_release
-    runs-on: macos-14
+    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
+    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
+    # image still ships Swift 5.x, so this job could not build the plugin.
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout selected tag
@@ -179,7 +184,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
@@ -247,7 +251,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          install-deps: "false"
 
       - name: Build Windows test bundle
         working-directory: apps/linux/src-tauri

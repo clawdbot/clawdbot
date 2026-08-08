@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -81,6 +81,48 @@ describe("user turn transcript persistence", () => {
           typeof message === "object" && message !== null,
       );
   }
+
+  describe("trusted human transcript ownership", () => {
+    it.each([
+      [undefined, undefined, undefined],
+      [undefined, "external_user", undefined],
+      [undefined, "inter_session", undefined],
+      [undefined, "internal_system", undefined],
+      [false, undefined, false],
+      [false, "external_user", false],
+      [false, "inter_session", false],
+      [false, "internal_system", false],
+      [true, undefined, true],
+      [true, "external_user", true],
+      [true, "inter_session", false],
+      [true, "internal_system", false],
+    ] as const)("normalizes owner %s for %s input", (senderIsOwner, kind, expected) => {
+      const provenance = kind ? { kind, sourceTool: "test" } : undefined;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "remember", senderIsOwner, ...(provenance ? { provenance } : {}) },
+        target: unusedRecorderTarget,
+      });
+      const message = recorder.message as
+        | { __openclaw?: { senderIsOwner?: boolean }; provenance?: unknown }
+        | undefined;
+      expect(message?.["__openclaw"]?.senderIsOwner).toBe(expected);
+      expect(message?.provenance).toEqual(provenance);
+    });
+
+    it("normalizes synthetic owner facts after asynchronous input resolution", async () => {
+      const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "owner prompt", senderIsOwner: true },
+        resolveInput: async () => ({ text: "synthetic handoff", senderIsOwner: true, provenance }),
+        target: unusedRecorderTarget,
+      });
+      expect(recorder.message).toMatchObject({ __openclaw: { senderIsOwner: true } });
+      await expect(recorder.resolveMessage()).resolves.toMatchObject({
+        provenance,
+        __openclaw: { senderIsOwner: false },
+      });
+    });
+  });
 
   describe("mergePreparedUserTurnMessageForRuntime", () => {
     it("adds prepared transcript metadata to runtime user messages", () => {
@@ -241,7 +283,7 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      expect(persisted?.sessionFile).toBe(target.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(target.sessionKey);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -437,11 +479,13 @@ describe("user turn transcript persistence", () => {
       });
       const persistence = recorder.persistFallback();
       await resolverStarted;
-      await persistUserTurnTranscript({
+      const admitted = await persistUserTurnTranscript({
         ...target,
         input: admittedInput,
       });
-      recorder.markRuntimePersisted(recorder.message);
+      expect(admitted).toBeDefined();
+      recorder.markRuntimePersisted(recorder.message, admitted?.admission);
+      const admissionReceipt = recorder.getAdmissionReceipt();
       recorder.markSentToProvider?.();
       resolveMedia({
         ...admittedInput,
@@ -450,6 +494,11 @@ describe("user turn transcript persistence", () => {
 
       await persistence;
 
+      expect(recorder.getAdmissionReceipt()).toEqual(admissionReceipt);
+      expect(recorder.getPersistedMessage?.()).toMatchObject({
+        content: "describe this",
+        idempotencyKey: "chat-run-late:user",
+      });
       const messages = await readTranscriptMessages(target);
       expect(messages).toEqual([
         expect.objectContaining({
@@ -475,6 +524,32 @@ describe("user turn transcript persistence", () => {
           kind: "image",
         }),
       ]);
+    });
+
+    it("records the exact self-persisted admission identity", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-receipt-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "admit exactly once",
+          idempotencyKey: "receipt:user",
+        },
+        target,
+      });
+
+      const persisted = await recorder.persistApproved();
+
+      expect(persisted).toBeDefined();
+      expect(recorder.getAdmissionReceipt()).toBe(persisted?.admission);
+      expect(recorder.getAdmissionReceipt()).toMatchObject({
+        entryId: persisted?.messageId,
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        idempotencyKey: "receipt:user",
+        logicalTurnId: expect.any(String),
+        role: "user",
+      });
     });
 
     it("preserves distinct text supplied with late-resolved media", async () => {
@@ -722,7 +797,7 @@ describe("user turn transcript persistence", () => {
         },
       });
 
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(staleTarget)).resolves.toEqual([]);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
@@ -752,7 +827,7 @@ describe("user turn transcript persistence", () => {
       const persisted = await recorder.persistApproved({ retryIfUnpersisted: true });
 
       expect(targetResolutionCount).toBe(2);
-      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
@@ -784,8 +859,8 @@ describe("user turn transcript persistence", () => {
       ]);
 
       expect(targetResolutionCount).toBe(2);
-      expect(first?.sessionFile).toBe(admittedTarget.sqliteMarker);
-      expect(second?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(first?.sessionFile).toBe(admittedTarget.sessionKey);
+      expect(second?.sessionFile).toBe(admittedTarget.sessionKey);
       await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
         expect.objectContaining({
           role: "user",

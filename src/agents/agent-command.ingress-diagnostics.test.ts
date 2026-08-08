@@ -235,6 +235,47 @@ describe("emitIngressModelUsageDiagnostic", () => {
     });
   });
 
+  it("uses terminal cumulative usage only for the diagnostic event and cost", () => {
+    const result = makeResult({
+      agentMeta: {
+        diagnosticUsage: {
+          input: 900,
+          output: 300,
+          cacheRead: 70,
+          cacheWrite: 30,
+          total: 1300,
+        },
+      },
+    });
+
+    testing.emitIngressModelUsageDiagnostic(result, makeOpts());
+
+    expect(mocks.estimateUsageCost).toHaveBeenCalledWith({
+      usage: {
+        input: 900,
+        output: 300,
+        cacheRead: 70,
+        cacheWrite: 30,
+        total: 1300,
+      },
+      cost: {},
+    });
+    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usage: {
+          input: 900,
+          output: 300,
+          cacheRead: 70,
+          cacheWrite: 30,
+          promptTokens: 1000,
+          total: 1300,
+        },
+        lastCallUsage: { input: 500, output: 200 },
+        context: { limit: 128000, used: 1200 },
+      }),
+    );
+  });
+
   it("does not emit when diagnostics are disabled", () => {
     mocks.isDiagnosticsEnabled.mockReturnValue(false);
     const result = makeResult();

@@ -3,7 +3,7 @@ import { fetchWithSsrFGuard } from "../../../api.js";
 import {
   cancelProviderResponseBody,
   readProviderErrorResponseSnippet,
-  readProviderJsonResponseText,
+  readVoiceCallProviderJsonResponse,
 } from "../shared/response-body.js";
 import { requireSupportedTwilioApiHostname } from "../twilio-region.js";
 
@@ -100,15 +100,10 @@ export async function twilioApiRequest<T = unknown>(params: {
       throw new TwilioApiError(response.status, errorText);
     }
 
-    const text = await readProviderJsonResponseText(response);
-    if (!text) {
-      return undefined as T;
-    }
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error("Twilio API returned malformed JSON.");
-    }
+    return (await readVoiceCallProviderJsonResponse<T>(
+      response,
+      "Twilio API returned malformed JSON.",
+    )) as T;
   } finally {
     await release();
   }

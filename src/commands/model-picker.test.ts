@@ -1,6 +1,7 @@
-// Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
 import path from "node:path";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
+// Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -233,16 +234,8 @@ vi.mock("../commands/model-picker.runtime.js", () => ({
 }));
 
 const OPENROUTER_CATALOG = [
-  {
-    provider: "openrouter",
-    id: "auto",
-    name: "OpenRouter Auto",
-  },
-  {
-    provider: "openrouter",
-    id: "meta-llama/llama-3.3-70b:free",
-    name: "Llama 3.3 70B",
-  },
+  catalogModel("openrouter", "auto", "OpenRouter Auto"),
+  catalogModel("openrouter", "meta-llama/llama-3.3-70b:free", "Llama 3.3 70B"),
 ] as const;
 
 function expectRouterModelFiltering(options: Array<{ value: string }>) {
@@ -254,6 +247,19 @@ function expectRouterModelFiltering(options: Array<{ value: string }>) {
 
 function createSelectAllMultiselect() {
   return vi.fn(async (params) => params.options.map((option: { value: string }) => option.value));
+}
+
+function promptDefaultPicker(params: Parameters<typeof promptDefaultModel>[0]) {
+  return promptDefaultModel({
+    allowKeep: false,
+    includeManual: false,
+    ignoreAllowlist: true,
+    ...params,
+  });
+}
+
+function catalogModel(provider: string, id: string, name: string): ModelCatalogEntry {
+  return { provider, id, name };
 }
 
 function configuredTextModel(id: string, name: string) {
@@ -297,12 +303,7 @@ type PickerOption = Record<string, unknown> & {
   value: string;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
@@ -428,12 +429,9 @@ describe("promptDefaultModel", () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const options = pickerOptions(select as MockCallSource);
@@ -462,12 +460,9 @@ describe("promptDefaultModel", () => {
       ]);
       const select = vi.fn(async (params) => params.initialValue as never);
 
-      await promptDefaultModel({
+      await promptDefaultPicker({
         config: { agents: { defaults } } as OpenClawConfig,
         prompter: makePrompter({ select }),
-        allowKeep: false,
-        includeManual: false,
-        ignoreAllowlist: true,
       });
 
       const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
@@ -493,12 +488,9 @@ describe("promptDefaultModel", () => {
     } as OpenClawConfig;
     const select = vi.fn(async (params) => params.initialValue as never);
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config,
       prompter: makePrompter({ select }),
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
@@ -537,12 +529,9 @@ describe("promptDefaultModel", () => {
     modelCatalogRouteVariants.value = [platform, chatGPT];
     const select = vi.fn(async (params) => params.initialValue as never);
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter: makePrompter({ select }),
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
@@ -562,12 +551,9 @@ describe("promptDefaultModel", () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } },
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
@@ -587,14 +573,11 @@ describe("promptDefaultModel", () => {
     ]);
     const select = vi.fn(async (params) => params.initialValue as never);
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: {
         agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
       },
       prompter: makePrompter({ select }),
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
@@ -618,12 +601,9 @@ describe("promptDefaultModel", () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
@@ -659,12 +639,9 @@ describe("promptDefaultModel", () => {
     ]);
     const select = vi.fn(async (params) => params.initialValue as never);
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter: makePrompter({ select }),
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
@@ -699,12 +676,9 @@ describe("promptDefaultModel", () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
@@ -723,12 +697,9 @@ describe("promptDefaultModel", () => {
     const select = vi.fn(async (params) => params.options[0]?.value as never);
     const prompter = makePrompter({ select });
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     expect(result.model).toBe("google/gemini-3.1-pro-preview");
@@ -764,12 +735,9 @@ describe("promptDefaultModel", () => {
       agents: { defaults: {} },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
@@ -783,16 +751,8 @@ describe("promptDefaultModel", () => {
 
   it("treats byteplus plan models as preferred-provider matches", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-      {
-        provider: "byteplus-plan",
-        id: "ark-code-latest",
-        name: "Ark Coding Plan",
-      },
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+      catalogModel("byteplus-plan", "ark-code-latest", "Ark Coding Plan"),
     ]);
 
     const select = vi.fn(async (params) => params.initialValue as never);
@@ -805,12 +765,10 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
-      includeManual: false,
-      ignoreAllowlist: true,
       preferredProvider: "byteplus",
     });
 
@@ -828,11 +786,7 @@ describe("promptDefaultModel", () => {
 
   it("shows literal double-prefix labels for providers that preserve literal prefixes", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "Nemotron",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron"),
     ]);
     resolvePluginProviders.mockReturnValue([
       {
@@ -851,12 +805,10 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
 
     const options = pickerOptions(select as MockCallSource);
@@ -870,21 +822,9 @@ describe("promptDefaultModel", () => {
 
   it("does not double-prefix non-literal NVIDIA vendor model labels", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "Nemotron",
-      },
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.7",
-        name: "MiniMax M2.7",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron"),
+      catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
     resolvePluginProviders.mockReturnValue([
       {
@@ -896,12 +836,9 @@ describe("promptDefaultModel", () => {
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
     });
 
@@ -933,12 +870,11 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
     });
@@ -966,12 +902,11 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       preferredProvider: "openai",
       browseCatalogOnDemand: true,
     });
@@ -999,12 +934,11 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       browseCatalogOnDemand: true,
       loadCatalog: true,
     });
@@ -1023,16 +957,8 @@ describe("promptDefaultModel", () => {
 
   it("loads the full model catalog when browsing without a preferred provider", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.5-pro",
-        name: "GPT-5.5 Pro",
-      },
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+      catalogModel("openai", "gpt-5.5-pro", "GPT-5.5 Pro"),
     ]);
     const select = vi
       .fn()
@@ -1052,12 +978,11 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       browseCatalogOnDemand: true,
     });
 
@@ -1070,16 +995,8 @@ describe("promptDefaultModel", () => {
 
   it("loads the preferred provider catalog when the user chooses to browse", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.5-pro",
-        name: "GPT-5.5 Pro",
-      },
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+      catalogModel("openai", "gpt-5.5-pro", "GPT-5.5 Pro"),
     ]);
     const select = vi
       .fn()
@@ -1099,12 +1016,11 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       preferredProvider: "openai",
       browseCatalogOnDemand: true,
     });
@@ -1122,16 +1038,8 @@ describe("promptDefaultModel", () => {
 
   it("scopes on-demand preferred-provider loads before the first model prompt", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "NVIDIA Nemotron 3 Super 120B",
-      },
-      {
-        provider: "nvidia",
-        id: "moonshotai/kimi-k2.5",
-        name: "Kimi K2.5",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
+      catalogModel("nvidia", "moonshotai/kimi-k2.5", "Kimi K2.5"),
     ]);
     const select = vi.fn(async (params) => params.options[0]?.value as never);
     const prompter = makePrompter({ select });
@@ -1143,12 +1051,9 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
     });
@@ -1168,16 +1073,8 @@ describe("promptDefaultModel", () => {
 
   it("preselects the first live provider row when keep-current is disabled", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "NVIDIA Nemotron 3 Super 120B",
-      },
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
     ]);
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
@@ -1189,12 +1086,9 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
     });
@@ -1214,21 +1108,9 @@ describe("promptDefaultModel", () => {
 
   it("keeps on-demand NVIDIA vendor labels single-prefixed after browsing", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "NVIDIA Nemotron 3 Super 120B",
-      },
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.7",
-        name: "MiniMax M2.7",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
+      catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
     resolvePluginProviders.mockReturnValue([
       {
@@ -1242,7 +1124,7 @@ describe("promptDefaultModel", () => {
       .mockResolvedValueOnce("nvidia/nemotron-3-super-120b-a12b");
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: {
         agents: {
           defaults: {
@@ -1253,7 +1135,6 @@ describe("promptDefaultModel", () => {
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
     });
@@ -1270,21 +1151,9 @@ describe("promptDefaultModel", () => {
 
   it("omits local NVIDIA static fallback rows when browsing live provider rows", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "NVIDIA Nemotron 3 Super 120B",
-      },
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.7",
-        name: "MiniMax M2.7",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA Nemotron 3 Super 120B"),
+      catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
     loadStaticManifestCatalogRowsForList.mockReturnValue([
       manifestTextRow("nvidia", "minimaxai/minimax-m2.5", "MiniMax M2.5", "deprecated"),
@@ -1302,7 +1171,7 @@ describe("promptDefaultModel", () => {
       .mockResolvedValueOnce("nvidia/nemotron-3-super-120b-a12b");
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: {
         agents: {
           defaults: {
@@ -1313,7 +1182,6 @@ describe("promptDefaultModel", () => {
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
     });
@@ -1329,11 +1197,7 @@ describe("promptDefaultModel", () => {
 
   it("uses the configured default agent dir for provider-scoped catalog auth", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
     const select = vi.fn(async (params) => params.options[0]?.value as never);
     const prompter = makePrompter({ select });
@@ -1350,12 +1214,9 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config,
       prompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
       preferredProvider: "nvidia",
       browseCatalogOnDemand: true,
       env,
@@ -1371,11 +1232,7 @@ describe("promptDefaultModel", () => {
 
   it("supports configuring vLLM during setup", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.5",
-      },
+      catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.5"),
     ]);
     resolveProviderModelPickerEntries.mockReturnValue([
       { value: "vllm", label: "vLLM (custom)", hint: "Enter vLLM URL + API key + model" },
@@ -1413,13 +1270,10 @@ describe("promptDefaultModel", () => {
     const prompter = makePrompter({ select });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
-      allowKeep: false,
-      includeManual: false,
       includeProviderPluginSetups: true,
-      ignoreAllowlist: true,
       agentDir: "/tmp/openclaw-agent",
       runtime: {} as never,
     });
@@ -1443,13 +1297,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("prefers provider model-picker contributions when the runtime exposes them", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.5", "GPT-5.5")]);
     providerModelPickerContributionRuntime.enabled = true;
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
@@ -1477,13 +1325,10 @@ describe("promptDefaultModel", () => {
     });
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
       includeProviderPluginSetups: true,
-      ignoreAllowlist: true,
       agentDir: "/tmp/openclaw-agent",
       runtime: {} as never,
     });
@@ -1505,12 +1350,11 @@ describe("promptDefaultModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = await promptDefaultModel({
+    const result = await promptDefaultPicker({
       config,
       prompter,
       allowKeep: true,
       includeManual: true,
-      ignoreAllowlist: true,
       includeProviderPluginSetups: true,
       loadCatalog: false,
       agentDir: "/tmp/openclaw-agent",
@@ -1529,13 +1373,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("surfaces NVIDIA provider model-picker contributions", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.4", "GPT-5.4")]);
     providerModelPickerContributionRuntime.enabled = true;
     providerModelPickerContributionRuntime.resolve.mockReturnValue([
       {
@@ -1558,13 +1396,10 @@ describe("promptDefaultModel", () => {
     });
     const prompter = makePrompter({ select });
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config: { agents: { defaults: {} } } as OpenClawConfig,
       prompter,
-      allowKeep: false,
-      includeManual: false,
       includeProviderPluginSetups: true,
-      ignoreAllowlist: true,
       agentDir: "/tmp/openclaw-agent",
       runtime: {} as never,
     });
@@ -1579,21 +1414,9 @@ describe("promptDefaultModel", () => {
 describe("promptModelAllowlist", () => {
   it("filters to allowed keys when provided", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "anthropic",
-        id: "claude-opus-4-6",
-        name: "Claude Opus 4.5",
-      },
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.5",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
+      catalogModel("anthropic", "claude-opus-4-6", "Claude Opus 4.5"),
+      catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.5"),
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
     ]);
 
     const multiselect = createSelectAllMultiselect();
@@ -1613,13 +1436,7 @@ describe("promptModelAllowlist", () => {
 
   it("localizes the model allowlist picker", async () => {
     process.env.OPENCLAW_LOCALE = "zh-CN";
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.5", "GPT-5.5")]);
 
     const multiselect = createSelectAllMultiselect();
     const prompter = makePrompter({ multiselect });
@@ -1743,13 +1560,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("uses configured provider models for allowlist picker without loading the full catalog in replace mode", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.5", "GPT-5.5")]);
 
     const multiselect = createSelectAllMultiselect();
     const prompter = makePrompter({ multiselect });
@@ -1782,21 +1593,9 @@ describe("promptModelAllowlist", () => {
 
   it("scopes the initial allowlist picker to the preferred provider", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.5",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
-      },
+      catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.5"),
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+      catalogModel("openai", "gpt-5.4-mini", "GPT-5.4 Mini"),
     ]);
 
     const multiselect = createSelectAllMultiselect();
@@ -1815,16 +1614,8 @@ describe("promptModelAllowlist", () => {
 
   it("includes stale configured preferred provider models in the scoped cleanup", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openrouter",
-        id: "meta-llama/llama-3.3-70b:free",
-        name: "Llama 3.3 70B",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
+      catalogModel("openrouter", "meta-llama/llama-3.3-70b:free", "Llama 3.3 70B"),
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
     ]);
 
     const activeModel = "openrouter/meta-llama/llama-3.3-70b:free";
@@ -1918,16 +1709,8 @@ describe("promptModelAllowlist", () => {
 
   it("keeps live preferred-provider rows before configured fallback supplements", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.7",
-        name: "MiniMax M2.7",
-      },
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "Nemotron 3 Super",
-      },
+      catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
     ]);
 
     const multiselect = createSelectAllMultiselect();
@@ -1969,36 +1752,12 @@ describe("promptModelAllowlist", () => {
 
   it("keeps provider-scoped live rows authoritative over configured provider supplements", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "Nemotron 3 Super",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.7",
-        name: "MiniMax M2.7",
-      },
-      {
-        provider: "nvidia",
-        id: "moonshotai/kimi-k2.5",
-        name: "Kimi K2.5",
-      },
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.5",
-        name: "MiniMax M2.5",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm5",
-        name: "GLM5",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
+      catalogModel("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7"),
+      catalogModel("nvidia", "moonshotai/kimi-k2.5", "Kimi K2.5"),
+      catalogModel("nvidia", "minimaxai/minimax-m2.5", "MiniMax M2.5"),
+      catalogModel("nvidia", "z-ai/glm5", "GLM5"),
     ]);
     loadStaticManifestCatalogRowsForList.mockReturnValue([
       manifestTextRow("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Bundled Nemotron 3 Super"),
@@ -2052,16 +1811,8 @@ describe("promptModelAllowlist", () => {
 
   it("keeps custom configured rows after provider-scoped live rows", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "nvidia/nemotron-3-super-120b-a12b",
-        name: "Nemotron 3 Super",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm-5.1",
-        name: "GLM 5.1",
-      },
+      catalogModel("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super"),
+      catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
     ]);
     loadStaticManifestCatalogRowsForList.mockReturnValue([
       manifestTextRow("nvidia", "nvidia/nemotron-3-super-120b-a12b", "Bundled Nemotron 3 Super"),
@@ -2107,16 +1858,8 @@ describe("promptModelAllowlist", () => {
 
   it("does not re-add configured static rows after filtering deprecated live rows", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
-      {
-        provider: "nvidia",
-        id: "minimaxai/minimax-m2.5",
-        name: "MiniMax M2.5",
-      },
-      {
-        provider: "nvidia",
-        id: "z-ai/glm5",
-        name: "GLM5",
-      },
+      catalogModel("nvidia", "minimaxai/minimax-m2.5", "MiniMax M2.5"),
+      catalogModel("nvidia", "z-ai/glm5", "GLM5"),
     ]);
     loadStaticManifestCatalogRowsForList.mockReturnValue([
       manifestTextRow("nvidia", "minimaxai/minimax-m2.5", "Bundled MiniMax M2.5", "deprecated"),
@@ -2196,16 +1939,8 @@ describe("promptModelAllowlist", () => {
   it("keeps local no-key provider models visible in allowlist choices", async () => {
     resolveEnvApiKey.mockReturnValue(null);
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "vllm",
-        id: "meta-llama/Meta-Llama-3-8B-Instruct",
-        name: "Meta Llama",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
+      catalogModel("vllm", "meta-llama/Meta-Llama-3-8B-Instruct", "Meta Llama"),
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
     ]);
 
     const multiselect = createSelectAllMultiselect();
@@ -2232,13 +1967,7 @@ describe("promptModelAllowlist", () => {
   });
 
   it("seeds existing model fallbacks into unscoped allowlist selections", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-    ]);
+    loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.5", "GPT-5.5")]);
 
     const multiselect = vi.fn(async (params) => params.initialValues ?? []);
     const prompter = makePrompter({ multiselect });
@@ -2268,21 +1997,9 @@ describe("promptModelAllowlist", () => {
 
   it("resolves bare fallback seeds against the primary model provider", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "anthropic",
-        id: "claude-opus-4-6",
-        name: "Claude Opus 4.5",
-      },
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.5",
-      },
-      {
-        provider: "openai",
-        id: "claude-sonnet-4-6",
-        name: "Wrong provider",
-      },
+      catalogModel("anthropic", "claude-opus-4-6", "Claude Opus 4.5"),
+      catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.5"),
+      catalogModel("openai", "claude-sonnet-4-6", "Wrong provider"),
     ]);
 
     const multiselect = vi.fn(async (params) => params.initialValues ?? []);
@@ -2356,21 +2073,9 @@ describe("promptModelAllowlist", () => {
 
   it("keeps provider-scoped fallback supplements within scope", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
-      {
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      },
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.5",
-      },
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+      catalogModel("openai", "gpt-5.4", "GPT-5.4"),
+      catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.5"),
     ]);
 
     const multiselect = vi.fn(async (params) => params.initialValues ?? []);
@@ -2515,12 +2220,9 @@ describe("router model filtering", () => {
     const allowlistPrompter = makePrompter({ multiselect });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 
-    await promptDefaultModel({
+    await promptDefaultPicker({
       config,
       prompter: defaultPrompter,
-      allowKeep: false,
-      includeManual: false,
-      ignoreAllowlist: true,
     });
     await promptModelAllowlist({ config, prompter: allowlistPrompter });
 

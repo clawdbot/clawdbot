@@ -257,6 +257,7 @@ export function buildTelegramQaConfig(
     sutToken: string;
     driverBotId: number;
     sutAccountId: string;
+    requireMention: boolean;
   },
 ): OpenClawConfig {
   return {
@@ -305,7 +306,7 @@ export function buildTelegramQaConfig(
               [params.groupId]: {
                 groupPolicy: "allowlist",
                 allowFrom: [String(params.driverBotId)],
-                requireMention: true,
+                requireMention: params.requireMention,
               },
             },
           },

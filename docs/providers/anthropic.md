@@ -91,10 +91,21 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        Verify with:
+        OpenClaw's streamed session correlation requires the
+        `msg_lifecycle_v1` capability. Claude Code 2.1.206 is the first
+        published build known to advertise it. Verify the installed version:
 
         ```bash
         claude --version
+        ```
+
+        A lower-version compatible backport or wrapper remains selectable;
+        OpenClaw verifies the capability at runtime. If the runtime rejects the
+        installed build, update Claude Code and restart OpenClaw so the gateway
+        launches the new binary:
+
+        ```bash
+        claude update
         ```
       </Step>
       <Step title="Run onboarding">
@@ -114,6 +125,8 @@ OpenClaw release:
 
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
+    `openclaw doctor` also reports advisory guidance for an installed Claude
+    Code version below the first-known compatible release.
     </Note>
 
     <Warning>
@@ -280,6 +293,20 @@ remain read-only even on a continuation-enabled node.
 
 See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
 for the node command and security boundary.
+
+## Live model discovery
+
+With an Anthropic API key configured, OpenClaw refreshes the Claude catalog from
+Anthropic's models endpoint, so newly published snapshots of supported model
+families appear without an OpenClaw release. Models the shipped catalog already
+describes always keep their published metadata and pricing.
+
+A newly discovered model is only offered when Anthropic's advertised
+capabilities match the request shaping OpenClaw would apply to it. A brand-new
+model generation therefore stays hidden until OpenClaw adds support for it,
+rather than appearing in the picker and failing every request. Discovery is
+advisory: without an API key, or if the endpoint is unreachable, the shipped
+catalog is used unchanged.
 
 ## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
 

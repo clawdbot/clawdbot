@@ -577,7 +577,7 @@ describe("createReplyToModeFilterForChannel", () => {
         expectedReplyToId: undefined,
       },
       {
-        filter: createReplyToModeFilterForChannel("off", "slack"),
+        filter: createReplyToModeFilterForChannel("off", "telegram"),
         input: { text: "hi", replyToId: "1", replyToTag: true },
         expectedReplyToId: "1",
       },

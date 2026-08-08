@@ -64,6 +64,7 @@
       "chutes": {
         "baseUrl": "https://llm.chutes.ai/v1",
         "api": "openai-completions",
+        "defaultModel": "zai-org/GLM-5.2-TEE",
         "models": [
           {
             "id": "deepseek-ai/DeepSeek-V3.2-TEE",

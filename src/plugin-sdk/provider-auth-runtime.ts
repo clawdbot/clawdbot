@@ -8,6 +8,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { escapeHtml } from "../shared/html-escape.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
@@ -176,7 +177,7 @@ export async function waitForLocalOAuthCallback(params: {
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const escapedSuccessTitle = escapeHtmlText(params.successTitle);
+  const escapedSuccessTitle = escapeHtml(params.successTitle);
   const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
   const hasCorsOriginAllowlist =
     params.corsOriginAllowlist?.some((host) => host.trim().length > 0) ?? false;
@@ -186,12 +187,15 @@ export async function waitForLocalOAuthCallback(params: {
     let timeout: NodeJS.Timeout | null = null;
     const server = createServer((req, res) => {
       try {
+        // A browser may reuse loopback HTTP/1.1 connections. Closing each
+        // response prevents an accepted socket from pinning the CLI process.
+        res.setHeader("Connection", "close");
         applyOAuthCallbackCorsHeaders(
           req,
           res,
           hasCorsOriginAllowlist ? resolveOAuthCallbackOrigin : undefined,
         );
-        const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${params.port}`);
+        const requestUrl = new URL(req.url ?? "/", params.redirectUri);
         if (req.method === "OPTIONS") {
           res.statusCode = 204;
           res.end();
@@ -211,49 +215,54 @@ export async function waitForLocalOAuthCallback(params: {
           return;
         }
 
-        const error = requestUrl.searchParams.get("error");
-        const code = requestUrl.searchParams.get("code")?.trim();
         const state = requestUrl.searchParams.get("state")?.trim();
-
-        if (error) {
+        if (!state) {
           res.statusCode = 400;
           res.setHeader("Content-Type", "text/plain");
-          res.end(`Authentication failed: ${error}`);
-          finish(new Error(`OAuth error: ${error}`));
+          res.once("finish", () => finish(new Error("Missing OAuth state"), undefined, true));
+          res.end("Missing state");
           return;
         }
-
-        if (!code || !state) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Missing code or state");
-          finish(new Error("Missing OAuth code or state"));
-          return;
-        }
-
         if (state !== params.expectedState) {
           res.statusCode = 400;
           res.setHeader("Content-Type", "text/plain");
+          res.once("finish", () => finish(new Error("OAuth state mismatch"), undefined, true));
           res.end("Invalid state");
-          finish(new Error("OAuth state mismatch"));
+          return;
+        }
+
+        const error = requestUrl.searchParams.get("error");
+        if (error) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.once("finish", () => finish(new Error(`OAuth error: ${error}`), undefined, true));
+          res.end(`Authentication failed: ${error}`);
+          return;
+        }
+
+        const code = requestUrl.searchParams.get("code")?.trim();
+        if (!code) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "text/plain");
+          res.once("finish", () => finish(new Error("Missing OAuth code"), undefined, true));
+          res.end("Missing code");
           return;
         }
 
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.once("finish", () => finish(undefined, { code, state }, true));
         res.end(
           "<!doctype html><html><head><meta charset='utf-8'/></head>" +
             `<body><h2>${escapedSuccessTitle}</h2>` +
             "<p>You can close this window and return to OpenClaw.</p></body></html>",
         );
-
-        finish(undefined, { code, state });
       } catch (err) {
-        finish(err instanceof Error ? err : new Error("OAuth callback failed"));
+        finish(err instanceof Error ? err : new Error("OAuth callback failed"), undefined, true);
       }
     });
 
-    const finish = (err?: Error, result?: OAuthCallbackResult) => {
+    const finish = (err?: Error, result?: OAuthCallbackResult, forceClose = false) => {
       if (settled) {
         return;
       }
@@ -264,6 +273,9 @@ export async function waitForLocalOAuthCallback(params: {
       params.signal?.removeEventListener("abort", onAbort);
       try {
         server.close();
+        if (forceClose) {
+          server.closeAllConnections();
+        }
       } catch {
         // ignore close errors
       }
@@ -274,7 +286,7 @@ export async function waitForLocalOAuthCallback(params: {
       }
     };
 
-    const onAbort = () => finish(new Error("OAuth callback cancelled"));
+    const onAbort = () => finish(new Error("OAuth callback cancelled"), undefined, true);
     params.signal?.addEventListener("abort", onAbort, { once: true });
     if (params.signal?.aborted) {
       onAbort();
@@ -282,7 +294,11 @@ export async function waitForLocalOAuthCallback(params: {
     }
 
     server.once("error", (err) => {
-      finish(err instanceof Error ? err : new Error("OAuth callback server error"));
+      finish(
+        err instanceof Error ? err : new Error("OAuth callback server error"),
+        undefined,
+        true,
+      );
     });
 
     server.listen(params.port, hostname, () => {
@@ -292,7 +308,7 @@ export async function waitForLocalOAuthCallback(params: {
     });
 
     timeout = setTimeout(() => {
-      finish(new Error("OAuth callback timeout"));
+      finish(new Error("OAuth callback timeout"), undefined, true);
     }, timeoutMs);
   });
 }
@@ -337,15 +353,6 @@ function isHttpOrigin(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function escapeHtmlText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;

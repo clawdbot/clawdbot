@@ -1,5 +1,4 @@
 // Google Meet helper module supports config behavior.
-import { buildMeetingSoxAudioCommands } from "openclaw/plugin-sdk/meeting-runtime";
 import {
   addTimerTimeoutGraceMs,
   resolvePositiveTimerTimeoutMs,
@@ -111,28 +110,29 @@ const DEFAULT_GOOGLE_MEET_AUDIO_BUFFER_BYTES = SOX_DEFAULT_BUFFER_BYTES / 2;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function buildGoogleMeetSoxAudioCommands(format: GoogleMeetChromeAudioFormat, bufferBytes: number) {
-  return format === "g711-ulaw-8khz"
-    ? buildMeetingSoxAudioCommands({
-        bufferBytes,
-        format: {
-          sampleRate: 8_000,
-          channels: 1,
-          encoding: "mu-law",
-          bits: 8,
-        },
-      })
-    : buildMeetingSoxAudioCommands({
-        bufferBytes,
-        device: "BlackHole 2ch",
-        deviceType: "coreaudio",
-        format: {
-          sampleRate: 24_000,
-          channels: 1,
-          encoding: "signed-integer",
-          bits: 16,
-          endian: "little",
-        },
-      });
+  // Config parsing runs during registration; command construction must not load
+  // the full meeting runtime before a Google Meet action needs it.
+  const wire =
+    format === "g711-ulaw-8khz"
+      ? ["-t", "raw", "-r", "8000", "-c", "1", "-e", "mu-law", "-b", "8", "-"]
+      : ["-t", "raw", "-r", "24000", "-c", "1", "-e", "signed-integer", "-b", "16", "-L", "-"];
+  const withBuffer = (executable: string, args: string[]) => [
+    executable,
+    "-q",
+    "--buffer",
+    String(bufferBytes),
+    ...args,
+  ];
+  if (format === "g711-ulaw-8khz") {
+    return {
+      inputCommand: withBuffer("rec", wire),
+      outputCommand: withBuffer("play", wire),
+    };
+  }
+  return {
+    inputCommand: withBuffer("sox", ["-t", "coreaudio", "BlackHole 2ch", ...wire]),
+    outputCommand: withBuffer("sox", [...wire, "-t", "coreaudio", "BlackHole 2ch"]),
+  };
 }
 
 const DEFAULT_GOOGLE_MEET_SOX_COMMANDS = buildGoogleMeetSoxAudioCommands(

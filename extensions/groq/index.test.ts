@@ -5,9 +5,11 @@ import {
 } from "openclaw/plugin-sdk/llm";
 // Groq tests cover index plugin behavior.
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { describe, expect, it } from "vitest";
 import { resolveGroqReasoningCompatPatch } from "./api.js";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("groq provider compat", () => {
   it("recovers only matching implicit-budget rejections without changing normal tools", async () => {
@@ -329,7 +331,7 @@ describe("groq provider compat", () => {
     });
   });
 
-  it("registers Groq model and media providers", () => {
+  it("registers Groq model and media providers", async () => {
     const captured = capturePluginRegistration(plugin);
     const [provider] = captured.providers;
     if (!provider) {
@@ -343,15 +345,22 @@ describe("groq provider compat", () => {
     });
     expect(provider.auth).toHaveLength(1);
     expect(provider.auth[0]).toMatchObject({
-      defaultModel: "groq/openai/gpt-oss-120b",
       id: "api-key",
       kind: "api_key",
       label: "Groq API key",
+      starterModel: `groq/${manifest.modelCatalog.providers.groq.defaultModel}`,
       wizard: {
         choiceId: "groq-api-key",
         groupId: "groq",
       },
     });
+    expect(await provider.staticCatalog?.run({} as never)).toEqual({
+      provider: buildManifestModelProviderConfig({
+        providerId: "groq",
+        catalog: manifest.modelCatalog.providers.groq,
+      }),
+    });
+    expect(captured.modelCatalogProviders.map((entry) => entry.kinds)).toEqual([["text"]]);
     expect(captured.mediaUnderstandingProviders).toHaveLength(1);
     const [mediaProvider] = captured.mediaUnderstandingProviders;
     if (!mediaProvider) {

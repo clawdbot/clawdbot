@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
+import { findClawExtensionPackageCollisions, planClawExtensions } from "./application-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -21,8 +23,10 @@ import {
   type ClawManifest,
   type ClawLocalPrerequisite,
   type ClawOpenClawProfile,
-  type ClawPackage,
+  type ClawPackagePreflight,
+  type ClawPackagePreflightResult,
   type ClawSourceIdentity,
+  type ClawWorkspaceSourceSnapshot,
 } from "./types.js";
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -46,19 +50,7 @@ export type ClawAddPlanContext = {
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
   existingMcpServers?: Record<string, Record<string, unknown>>;
-  packagePreflight?: (
-    pkg: ClawPackage,
-    workspace: string,
-  ) => Promise<{
-    ok: boolean;
-    action?: "install" | "reuse";
-    integrity?: string;
-    installId?: string;
-    warning?: string;
-    installedVersion?: string;
-    code?: string;
-    message?: string;
-  }>;
+  packagePreflight?: ClawPackagePreflight;
 };
 
 function canonicalWorkspacePath(value: string): string {
@@ -74,6 +66,7 @@ type PendingWorkspaceFileAction = {
   sourcePath: string;
   manifestPath: string;
   byteLength: number;
+  content?: Buffer;
 };
 
 function blockedWorkspaceFileAction(params: {
@@ -190,6 +183,9 @@ async function inspectWorkspaceFileAction(params: {
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
+  clawMarkdownBody?: Buffer;
+  packageBootstrap?: ClawWorkspaceSourceSnapshot;
+  includePackageBootstrap?: boolean;
   openClawProfile?: ClawOpenClawProfile;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
@@ -203,7 +199,8 @@ export async function buildClawAddPlan(params: {
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
   );
-  const source = { ...params.source, packageRoot };
+  const manifestPath = resolvePathViaExistingAncestorSync(resolve(params.source.manifestPath));
+  const source = { ...params.source, packageRoot, manifestPath };
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
   const actions: ClawAddPlanAction[] = [];
@@ -298,6 +295,27 @@ export async function buildClawAddPlan(params: {
       : {}),
   });
 
+  if (params.packageBootstrap && params.includePackageBootstrap !== false) {
+    actions.push({
+      kind: "bootstrap",
+      id: "BOOTSTRAP.md",
+      action: "write",
+      target: resolve(workspace, "BOOTSTRAP.md"),
+      source: params.packageBootstrap.realPath,
+      digest: params.packageBootstrap.digest,
+      details: {
+        sourcePath: params.packageBootstrap.sourcePath,
+        byteLength: params.packageBootstrap.byteLength,
+        expectedState: "absent-or-native-consumed",
+        lifecycle: "native-seed-once",
+      },
+      blocked: workspaceBlocked,
+      ...(workspaceBlocked
+        ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
+        : {}),
+    });
+  }
+
   const pendingWorkspaceFiles: PendingWorkspaceFileAction[] = [];
   async function addWorkspaceFileInspection(fileParams: {
     sourcePath: string;
@@ -328,6 +346,46 @@ export async function buildClawAddPlan(params: {
     }
     if (result.blocker) {
       blockers.push(result.blocker);
+    }
+  }
+
+  if (params.clawMarkdownBody && params.clawMarkdownBody.toString("utf8").trim().length > 0) {
+    if (clawManifestWorkspaceConflictsWithPath(params.manifest, "SOUL.md")) {
+      const diagnostic = blocker(
+        "claw_body_soul_conflict",
+        "$.workspace",
+        "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+      );
+      blockers.push(diagnostic);
+      actions.push({
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "write",
+        target: resolve(workspace, "SOUL.md"),
+        source: source.manifestPath,
+        sourceKind: "clawMarkdownBody",
+        blocked: true,
+        reason: diagnostic.message,
+      });
+    } else {
+      const pending: PendingWorkspaceFileAction = {
+        sourcePath: source.manifestPath,
+        manifestPath: "$body",
+        byteLength: params.clawMarkdownBody.byteLength,
+        content: params.clawMarkdownBody,
+        action: {
+          kind: "workspaceFile",
+          id: "SOUL.md",
+          action: "write",
+          target: resolve(workspace, "SOUL.md"),
+          source: source.manifestPath,
+          sourceKind: "clawMarkdownBody",
+          details: { expectedState: "absent" },
+          blocked: false,
+        },
+      };
+      pendingWorkspaceFiles.push(pending);
+      actions.push(pending.action);
     }
   }
 
@@ -369,6 +427,10 @@ export async function buildClawAddPlan(params: {
     }
   } else {
     for (const pending of pendingWorkspaceFiles) {
+      if (pending.content) {
+        pending.action.digest = `sha256:${createHash("sha256").update(pending.content).digest("hex")}`;
+        continue;
+      }
       try {
         await assertNoSymlinkParents({
           rootDir: source.packageRoot,
@@ -395,7 +457,7 @@ export async function buildClawAddPlan(params: {
   }
 
   for (const pkg of params.manifest.packages) {
-    const preflight = context.packagePreflight
+    const preflight: ClawPackagePreflightResult = context.packagePreflight
       ? await context.packagePreflight(pkg, workspace)
       : {
           ok: false,
@@ -412,10 +474,13 @@ export async function buildClawAddPlan(params: {
     if (diagnostic) {
       blockers.push(diagnostic);
     }
+    if (preflight.ok && preflight.requirements) {
+      readinessRequirements.push(...preflight.requirements);
+    }
     actions.push({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
-      action: "install",
+      action: preflight.ok && preflight.action === "reuse" ? "reuse" : "install",
       target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
       digest: preflight.integrity,
       details: {
@@ -423,12 +488,20 @@ export async function buildClawAddPlan(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+        ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: !preflight.ok
           ? "unresolved"
           : preflight.action === "reuse"
             ? "present-exact"
             : "absent",
         ownerAction: preflight.action,
+        requirementState: !preflight.ok
+          ? "conflicting"
+          : preflight.action === "install"
+            ? "missing-installable"
+            : preflight.requirements && preflight.requirements.length > 0
+              ? "setup-required"
+              : "satisfied",
       },
       blocked: !preflight.ok,
       ...(diagnostic ? { reason: diagnostic.message } : {}),
@@ -438,8 +511,11 @@ export async function buildClawAddPlan(params: {
         kind: "package",
         id: `${pkg.kind}:${pkg.ref}`,
         path: `packages.${pkg.kind}.${pkg.ref}`,
-        action: "install",
-        reason: "The Claw declares downloadable package content or executable code.",
+        action: preflight.ok && preflight.action === "reuse" ? "reuse" : "install",
+        reason:
+          preflight.ok && preflight.action === "reuse"
+            ? "The Claw requires access to an existing package capability."
+            : "The Claw requires downloadable package content or executable code.",
         effect: {
           kind: pkg.kind,
           source: pkg.source,
@@ -452,6 +528,28 @@ export async function buildClawAddPlan(params: {
       }),
     );
   }
+
+  const extensionPlan = await planClawExtensions({
+    extensions: params.openClawProfile?.extensions ?? [],
+    workspace,
+    packagePreflight: context.packagePreflight,
+  });
+  const extensions = extensionPlan.extensions;
+  const extensionCollisions = findClawExtensionPackageCollisions({
+    packages: params.manifest.packages,
+    extensions: params.openClawProfile?.extensions ?? [],
+  });
+  const collisionIndexes = new Set(extensionCollisions.map(({ index }) => index));
+  blockers.push(...extensionCollisions.map(({ diagnostic }) => diagnostic));
+  for (const [index, action] of extensionPlan.actions.entries()) {
+    if (collisionIndexes.has(index)) {
+      continue;
+    }
+    actions.push(action);
+  }
+  capabilityChanges.push(...extensionPlan.capabilityChanges);
+  readinessRequirements.push(...extensionPlan.requirements);
+  blockers.push(...extensionPlan.blockers);
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
   for (const [name, server] of Object.entries(params.manifest.mcpServers)) {
@@ -491,7 +589,7 @@ export async function buildClawAddPlan(params: {
         ...server,
         expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
-          (requirement) => requirement.mcpServer === name,
+          (requirement) => requirement.kind !== "plugin-setup" && requirement.mcpServer === name,
         ),
       },
       blocked,
@@ -554,6 +652,7 @@ export async function buildClawAddPlan(params: {
         actions,
         capabilityChanges,
         blockers,
+        extensions,
       }),
     )
     .digest("hex")}`;
@@ -576,7 +675,10 @@ export async function buildClawAddPlan(params: {
       totalActions: actions.length,
       agentActions: actions.filter((action) => action.kind === "agent").length,
       workspaceActions: actions.filter(
-        (action) => action.kind === "workspace" || action.kind === "workspaceFile",
+        (action) =>
+          action.kind === "workspace" ||
+          action.kind === "bootstrap" ||
+          action.kind === "workspaceFile",
       ).length,
       packageActions: actions.filter((action) => action.kind === "package").length,
       mcpServerActions: actions.filter((action) => action.kind === "mcpServer").length,
@@ -590,6 +692,7 @@ export async function buildClawAddPlan(params: {
       ready: readinessRequirements.length === 0,
       requirements: readinessRequirements,
     },
+    extensions,
     blockers,
     diagnostics: params.diagnostics ?? [],
   };

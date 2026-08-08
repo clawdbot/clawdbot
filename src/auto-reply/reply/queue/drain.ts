@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
-import { stableStringify } from "../../../agents/stable-stringify.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -574,7 +574,6 @@ function collectRuntimeMetadata(
 
 type FollowupQueueSummaryState = {
   cap: number;
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
@@ -583,6 +582,7 @@ type FollowupQueueSummaryState = {
     contextKey: string;
     count: number;
     sources: FollowupRun[];
+    summaryLines: string[];
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
   evictedSummaryCount: number;
@@ -593,6 +593,16 @@ type QueueSummaryDelivery = {
   droppedCount: number;
   sources: FollowupRun[];
 };
+
+function resolveQueueSummaryLines(
+  queue: Pick<FollowupQueueSummaryState, "summaryLines" | "summarySources">,
+  sources: FollowupRun[],
+): string[] {
+  return sources.map((source) => {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    return expectDefined(queue.summaryLines[sourceIndex], "summary line for retained source");
+  });
+}
 
 function createQueueSummaryDelivery(params: {
   queue: FollowupQueueSummaryState;
@@ -607,11 +617,10 @@ function createQueueSummaryDelivery(params: {
   }
   const droppedCount = params.sources ? sources.length : params.queue.droppedCount;
   const summaryLines = params.sources
-    ? params.queue.summaryLines.slice(0, sources.length)
+    ? resolveQueueSummaryLines(params.queue, sources)
     : [...params.queue.summaryLines];
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -649,7 +658,10 @@ function consumeQueueSummaryDelivery(
           "summary elisions entry at elision index",
         );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
-        entry.sources.splice(elidedSourceIndex, 1);
+        if (elidedSourceIndex >= 0) {
+          entry.sources.splice(elidedSourceIndex, 1);
+          entry.summaryLines.splice(elidedSourceIndex, 1);
+        }
         entry.count = entry.sources.length;
         consumedCount += 1;
         if (entry.sources.length === 0) {
@@ -947,6 +959,7 @@ async function runSyntheticOverflowSummary(params: {
     input: {
       text: params.prompt,
       idempotencyKey: `followup-overflow:${params.source.run.sessionId}:${routeHash}:${params.source.messageId ?? params.source.enqueuedAt}:${promptHash}`,
+      senderIsOwner: params.source.run.senderIsOwner,
       provenance: params.source.run.inputProvenance,
     },
     target: () => resolveFollowupTranscriptTarget(params.source),
@@ -1009,6 +1022,7 @@ async function drainElidedOverflowSummary(params: {
       continue;
     }
     entry.sources.splice(index, 1);
+    entry.summaryLines.splice(index, 1);
     entry.count = Math.max(0, entry.count - 1);
     params.queue.droppedCount = Math.max(0, params.queue.droppedCount - 1);
     completeFollowupRunLifecycle(source);
@@ -1024,10 +1038,10 @@ async function drainElidedOverflowSummary(params: {
   const elidedCount = entry.sources.length;
   const elidedSources = [...entry.sources];
   const droppedCount = elidedCount + retainedSources.length;
-  const summaryLines = params.queue.summaryLines.slice(0, retainedSources.length);
+  const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
+  const summaryLines = [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap);
   const prompt = previewQueueSummaryPrompt({
     state: {
-      dropPolicy: params.queue.dropPolicy,
       droppedCount,
       summaryLines,
     },
@@ -1064,6 +1078,7 @@ async function drainElidedOverflowSummary(params: {
   }
   const consumedCount = Math.min(elidedCount, entry.sources.length);
   const consumedSources = entry.sources.splice(0, consumedCount);
+  entry.summaryLines.splice(0, consumedCount);
   entry.count = entry.sources.length;
   for (const consumedSource of consumedSources) {
     completeFollowupRunLifecycle(consumedSource);
@@ -1148,6 +1163,7 @@ export function scheduleFollowupDrain(
   // Give the detached chain its own root so inherited request admission cannot go stale.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     let retryDeferred = false;
+    let waitingForSteer = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1155,12 +1171,26 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (queue.items.some((item) => item.steerPending)) {
+          waitingForSteer = true;
+          break;
+        }
         await waitForQueueDebounce(queue, queue.abortController.signal);
         await dropAbortedFollowups(queue.items, effectiveRunFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (queue.items.some((item) => item.steerPending)) {
+          waitingForSteer = true;
+          break;
+        }
         if (await drainProtectedPriorityFollowup(queue.items, effectiveRunFollowup)) {
+          continue;
+        }
+        if (queue.droppedCount > 0 && queue.items.some((item) => item.steerAnchor)) {
+          if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
+            break;
+          }
           continue;
         }
         if (
@@ -1371,7 +1401,11 @@ export function scheduleFollowupDrain(
     } finally {
       queue.draining = false;
       const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
-      if (retryDeferred && hasPendingQueueWork) {
+      if (waitingForSteer && hasPendingQueueWork) {
+        if (!queue.items.some((item) => item.steerPending)) {
+          scheduleFollowupDrain(key, effectiveRunFollowup);
+        }
+      } else if (retryDeferred && hasPendingQueueWork) {
         scheduleFollowupDrain(key, effectiveRunFollowup);
       } else if (!hasPendingQueueWork) {
         // Only remove the map entry if it still points to this queue instance.

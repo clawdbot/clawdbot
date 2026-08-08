@@ -83,6 +83,9 @@ export function createTelegramProgressController(params: {
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     updateOnLineChange: true,
+    // renderTelegramProgressDraftPreview draws the work lines from `lines` in
+    // headline/checklist mode, so they must not also arrive inside the text.
+    rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();
@@ -205,7 +208,7 @@ export function createTelegramProgressController(params: {
     if (payload.phase === "start") {
       const windowRendersTool =
         canPushToolProgress() &&
-        resolveChannelStreamingPreviewToolProgress(params.telegramCfg) &&
+        resolveChannelStreamingPreviewToolProgress(params.telegramCfg, true, params.streamMode) &&
         isChannelProgressDraftWorkToolName(toolName);
       if (windowRendersTool) {
         summary.noteToolCall();
@@ -232,15 +235,18 @@ export function createTelegramProgressController(params: {
     if (params.statusReactionController && toolName) {
       await params.statusReactionController.setTool(toolName);
     }
-    await progressPromise;
+    return await progressPromise;
   };
   const handleItemEvent = async (payload: CallbackPayload<"onItemEvent">) => {
     if (payload.kind === "preamble") {
       if (verboseProgressActive()) {
-        return;
+        return false;
       }
+      let rendered = false;
       if (params.streamMode === "progress") {
-        await compositor.pushPreambleHeadline(payload.progressText, { itemId: payload.itemId });
+        rendered = await compositor.pushPreambleHeadline(payload.progressText, {
+          itemId: payload.itemId,
+        });
       }
       if (params.streamMode === "progress" && compositor.commentaryProgressEnabled) {
         const accepted = await compositor.pushCommentaryProgress(payload.progressText, {
@@ -249,10 +255,11 @@ export function createTelegramProgressController(params: {
         if (accepted) {
           summary.noteCommentary(payload.itemId, payload.progressText);
         }
+        rendered ||= accepted;
       }
-      return;
+      return rendered;
     }
-    await pushToolProgress(
+    return await pushToolProgress(
       buildChannelProgressDraftLineForEntry(params.telegramCfg, {
         event: "item",
         itemId: payload.itemId,
@@ -270,14 +277,15 @@ export function createTelegramProgressController(params: {
   };
   const handlePlanUpdate = async (payload: CallbackPayload<"onPlanUpdate">) => {
     if (payload.phase === "update" && canPushToolProgress()) {
-      await compositor.pushPlanProgress(payload.steps, {
+      return await compositor.pushPlanProgress(payload.steps, {
         explanation: payload.explanation,
       });
     }
+    return false;
   };
   const handleApprovalEvent = async (payload: CallbackPayload<"onApprovalEvent">) => {
     if (payload.phase === "requested") {
-      await pushToolProgress(
+      return await pushToolProgress(
         buildChannelProgressDraftLine({
           event: "approval",
           phase: payload.phase,
@@ -288,10 +296,11 @@ export function createTelegramProgressController(params: {
         }),
       );
     }
+    return false;
   };
   const handleCommandOutput = async (payload: CallbackPayload<"onCommandOutput">) => {
     if (payload.phase === "end") {
-      await pushToolProgress(
+      return await pushToolProgress(
         buildChannelProgressDraftLineForEntry(params.telegramCfg, {
           event: "command-output",
           itemId: payload.itemId,
@@ -304,10 +313,11 @@ export function createTelegramProgressController(params: {
         }),
       );
     }
+    return false;
   };
   const handlePatchSummary = async (payload: CallbackPayload<"onPatchSummary">) => {
     if (payload.phase === "end") {
-      await pushToolProgress(
+      return await pushToolProgress(
         buildChannelProgressDraftLine({
           event: "patch",
           itemId: payload.itemId,
@@ -322,10 +332,17 @@ export function createTelegramProgressController(params: {
         }),
       );
     }
+    return false;
   };
 
   return {
     applyCollapseSummary,
+    beginQueuedFollowup: () => {
+      finalAnswerDeliveryStarted = false;
+      finalAnswerDelivered = false;
+      sawProgressFinal = false;
+      compositor.beginNewTurn({ force: true });
+    },
     canPushToolProgress,
     cancel: () => compositor.cancel(),
     closeReasoningBurst: () => summary.closeReasoningBurst(),

@@ -11,6 +11,8 @@ import {
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
   type ReplyBackendQueueMessageOptions,
+  type ReplyBackendQueueMessageResult,
+  type ReplyBackendMessageInjection,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -27,7 +29,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
-  queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
+  queueMessage: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<void | EmbeddedAgentQueueMessageResult>;
+  messageInjection?: ReplyBackendMessageInjection;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
@@ -44,6 +50,8 @@ export type EmbeddedAgentQueueHandle = {
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
+
+export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
@@ -86,7 +94,7 @@ export const ACTIVE_EMBEDDED_RUNS =
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
   embeddedRunState.activeRunsByRunId ??
   (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
-export const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
+const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
   embeddedRunState.activeRunLifecycleGenerations ??
   (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
     EmbeddedAgentQueueHandle,

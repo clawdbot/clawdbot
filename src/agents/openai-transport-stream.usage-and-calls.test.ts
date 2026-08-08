@@ -12,6 +12,122 @@ import {
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 
+function emptyContext(systemPrompt: string | undefined = "system") {
+  return { systemPrompt, messages: [], tools: [] } as never;
+}
+
+function weatherToolContext(systemPrompt = "system") {
+  return {
+    systemPrompt,
+    messages: [],
+    tools: [
+      {
+        name: "get_weather",
+        description: "Get weather information",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+  } as never;
+}
+
+function toolHistoryContext(systemPrompt = "You are a helpful assistant") {
+  return {
+    systemPrompt,
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_abc",
+            name: "get_weather",
+            arguments: "{}",
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: "sunny" }],
+        toolCallId: "call_abc",
+      },
+    ],
+  } as never;
+}
+
+function toolChoiceModel(native: boolean) {
+  return makeCompletionsModel(
+    native
+      ? {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          reasoning: false,
+          contextWindow: 4096,
+          maxTokens: 2048,
+        }
+      : {
+          id: "test-model",
+          name: "Test Model",
+          provider: "vllm",
+          baseUrl: "http://localhost:8000/v1",
+          reasoning: false,
+          contextWindow: 4096,
+          maxTokens: 2048,
+        },
+  );
+}
+
+function geminiToolReplayContext(
+  model: Model<"openai-completions">,
+  options: {
+    sourceApi?: string;
+    thoughtSignature?: string;
+    arguments?: unknown;
+    includeUserAndResult?: boolean;
+  } = {},
+) {
+  const assistant = {
+    role: "assistant",
+    api: options.sourceApi ?? model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+    content: [
+      {
+        type: "toolCall",
+        id: "call_abc",
+        name: "echo_value",
+        arguments: options.arguments ?? {},
+        ...(options.thoughtSignature ? { thoughtSignature: options.thoughtSignature } : {}),
+      },
+    ],
+  };
+  return {
+    messages: options.includeUserAndResult
+      ? [
+          { role: "user", content: "echo" },
+          assistant,
+          {
+            role: "toolResult",
+            toolCallId: "call_abc",
+            toolName: "echo_value",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+          },
+        ]
+      : [assistant],
+    tools: [],
+  } as never;
+}
+
 describe("openai transport stream", () => {
   it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
     const params = buildOpenAICompletionsParams(
@@ -30,11 +146,7 @@ describe("openai transport stream", () => {
           max_completion_tokens: 64_000,
         },
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     );
 
@@ -59,11 +171,7 @@ describe("openai transport stream", () => {
           max_completion_tokens: 64_000,
         },
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       { maxTokens: 16_000 } as never,
     );
 
@@ -80,11 +188,7 @@ describe("openai transport stream", () => {
         baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
         maxTokens: 32_000,
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       { maxTokens: 200_000 } as never,
     );
 
@@ -109,11 +213,7 @@ describe("openai transport stream", () => {
           max_completion_tokens: 64_000,
         },
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       { maxTokens: 0 } as never,
     );
 
@@ -134,11 +234,7 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 65_536,
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     );
 
@@ -162,11 +258,7 @@ describe("openai transport stream", () => {
         contextWindow: 262_144,
         maxTokens: 262_144,
       }),
-      {
-        systemPrompt,
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(systemPrompt),
       undefined,
     );
 
@@ -284,11 +376,7 @@ describe("openai transport stream", () => {
         contextTokens: 4_096,
         maxTokens: 200_000,
       } as unknown as Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     );
 
@@ -308,11 +396,7 @@ describe("openai transport stream", () => {
         contextWindow: 131_072,
         maxTokens: 200_000,
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     );
 
@@ -333,11 +417,7 @@ describe("openai transport stream", () => {
         reasoning: false,
         contextWindow: 131_072,
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     );
 
@@ -353,11 +433,7 @@ describe("openai transport stream", () => {
         contextWindow: 100_000,
         maxTokens: 200_000,
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       undefined,
     );
 
@@ -661,28 +737,8 @@ describe("openai transport stream", () => {
       contextWindow: 1_000_000,
     });
 
-    function makeAssistantOutput(model: Model<"openai-completions">) {
-      return {
-        role: "assistant" as const,
-        content: [] as Array<Record<string, unknown>>,
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
-    }
-
     it("captures thought_signature from streamed Google tool_calls", async () => {
-      const output = makeAssistantOutput(geminiModel);
+      const output = createAssistantOutput(geminiModel);
       const chunks = [
         makeCompletionsChunk({
           tool_calls: [
@@ -721,47 +777,56 @@ describe("openai transport stream", () => {
       });
     });
 
+    it("captures a top-level thought_signature from streamed OpenAI-compatible tool_calls", async () => {
+      const veniceGeminiModel = makeCompletionsModel({
+        id: "gemini-3-6-flash",
+        name: "Gemini 3.6 Flash",
+        provider: "venice",
+        baseUrl: "https://api.venice.ai/api/v1",
+        contextWindow: 1_000_000,
+      });
+      const output = createAssistantOutput(veniceGeminiModel);
+      const chunks = [
+        makeCompletionsChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_abc",
+              type: "function",
+              function: { name: "echo_value", arguments: '{"value":"repro"}' },
+              thought_signature: "SIG-VENICE-OPAQUE-ABC==",
+            },
+          ],
+        }),
+        makeCompletionsChunk({}, "tool_calls" as const),
+      ] as const;
+      async function* mockStream() {
+        for (const chunk of chunks) {
+          yield chunk as never;
+        }
+      }
+
+      await testing.processOpenAICompletionsStream(mockStream(), output, veniceGeminiModel, {
+        push() {},
+      });
+
+      expectRecordFields(output.content[0], {
+        type: "toolCall",
+        id: "call_abc",
+        name: "echo_value",
+        arguments: { value: "repro" },
+        thoughtSignature: "SIG-VENICE-OPAQUE-ABC==",
+      });
+    });
+
     it("re-emits captured thought_signature for same Google route tool-call replay", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
-        {
-          messages: [
-            { role: "user", content: "echo" },
-            {
-              role: "assistant",
-              api: geminiModel.api,
-              provider: geminiModel.provider,
-              model: geminiModel.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 1,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_abc",
-                  name: "echo_value",
-                  arguments: { value: "repro" },
-                  thoughtSignature: "SIG-OPAQUE-ABC==",
-                },
-              ],
-            },
-            {
-              role: "toolResult",
-              toolCallId: "call_abc",
-              toolName: "echo_value",
-              content: [{ type: "text", text: "ok" }],
-              isError: false,
-            },
-          ],
-          tools: [],
-        } as never,
+        geminiToolReplayContext(geminiModel, {
+          thoughtSignature: "SIG-OPAQUE-ABC==",
+          arguments: { value: "repro" },
+          includeUserAndResult: true,
+        }),
         undefined,
       ) as { messages: Array<Record<string, unknown>> };
 
@@ -776,36 +841,11 @@ describe("openai transport stream", () => {
     it("uses the Gemini skip-validator signature across a different API surface", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
-        {
-          messages: [
-            {
-              role: "assistant",
-              api: "google-generative-ai",
-              provider: geminiModel.provider,
-              model: geminiModel.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 1,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_abc",
-                  name: "echo_value",
-                  arguments: { value: "repro" },
-                  thoughtSignature: "SIG-OPAQUE-ABC==",
-                },
-              ],
-            },
-          ],
-          tools: [],
-        } as never,
+        geminiToolReplayContext(geminiModel, {
+          sourceApi: "google-generative-ai",
+          thoughtSignature: "SIG-OPAQUE-ABC==",
+          arguments: { value: "repro" },
+        }),
         undefined,
       ) as { messages: Array<Record<string, unknown>> };
 
@@ -820,28 +860,7 @@ describe("openai transport stream", () => {
     it("uses the Gemini skip-validator signature when no thought_signature was captured", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
-        {
-          messages: [
-            {
-              role: "assistant",
-              api: geminiModel.api,
-              provider: geminiModel.provider,
-              model: geminiModel.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 1,
-              content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
-            },
-          ],
-          tools: [],
-        } as never,
+        geminiToolReplayContext(geminiModel),
         undefined,
       ) as { messages: Array<Record<string, unknown>> };
 
@@ -859,37 +878,11 @@ describe("openai transport stream", () => {
       // The guard should fall back to the sentinel instead of dropping the field.
       const params = buildOpenAICompletionsParams(
         geminiModel,
-        {
-          messages: [
-            {
-              role: "assistant",
-              api: geminiModel.api,
-              provider: geminiModel.provider,
-              model: geminiModel.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 1,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_abc",
-                  name: "echo_value",
-                  arguments: { value: "repro" },
-                  thoughtSignature:
-                    "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
-                },
-              ],
-            },
-          ],
-          tools: [],
-        } as never,
+        geminiToolReplayContext(geminiModel, {
+          arguments: { value: "repro" },
+          thoughtSignature:
+            "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
+        }),
         undefined,
       ) as { messages: Array<Record<string, unknown>> };
 
@@ -912,37 +905,11 @@ describe("openai transport stream", () => {
       };
       const params = buildOpenAICompletionsParams(
         nonGemini3Model,
-        {
-          messages: [
-            {
-              role: "assistant",
-              api: nonGemini3Model.api,
-              provider: nonGemini3Model.provider,
-              model: nonGemini3Model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 1,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_abc",
-                  name: "echo_value",
-                  arguments: { value: "repro" },
-                  thoughtSignature:
-                    "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
-                },
-              ],
-            },
-          ],
-          tools: [],
-        } as never,
+        geminiToolReplayContext(nonGemini3Model, {
+          arguments: { value: "repro" },
+          thoughtSignature:
+            "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
+        }),
         undefined,
       ) as { messages: Array<Record<string, unknown>> };
 
@@ -960,36 +927,11 @@ describe("openai transport stream", () => {
       };
       const params = buildOpenAICompletionsParams(
         nonGemini3Model,
-        {
-          messages: [
-            {
-              role: "assistant",
-              api: "google-generative-ai",
-              provider: nonGemini3Model.provider,
-              model: nonGemini3Model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 1,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_abc",
-                  name: "echo_value",
-                  arguments: { value: "repro" },
-                  thoughtSignature: "SIG-OPAQUE-ABC==",
-                },
-              ],
-            },
-          ],
-          tools: [],
-        } as never,
+        geminiToolReplayContext(nonGemini3Model, {
+          sourceApi: "google-generative-ai",
+          thoughtSignature: "SIG-OPAQUE-ABC==",
+          arguments: { value: "repro" },
+        }),
         undefined,
       ) as { messages: Array<Record<string, unknown>> };
 
@@ -1009,28 +951,7 @@ describe("openai transport stream", () => {
         const latestModel = { ...geminiModel, id: modelId, name: modelName };
         const params = buildOpenAICompletionsParams(
           latestModel,
-          {
-            messages: [
-              {
-                role: "assistant",
-                api: latestModel.api,
-                provider: latestModel.provider,
-                model: latestModel.id,
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
-                stopReason: "toolUse",
-                timestamp: 1,
-                content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
-              },
-            ],
-            tools: [],
-          } as never,
+          geminiToolReplayContext(latestModel),
           undefined,
         ) as { messages: Array<Record<string, unknown>> };
 
@@ -1057,11 +978,7 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         maxTokens: 2048,
         reasoningEffort: "high",
@@ -1088,11 +1005,7 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } as never,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
+      emptyContext(),
       {
         maxTokens: 2048,
         reasoningEffort: "high",
@@ -1155,26 +1068,8 @@ describe("openai transport stream", () => {
 
   it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "test-model",
-        name: "Test Model",
-        provider: "vllm",
-        baseUrl: "http://localhost:8000/v1",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [],
-        tools: [
-          {
-            name: "get_weather",
-            description: "Get weather information",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      toolChoiceModel(false),
+      weatherToolContext("You are a helpful assistant"),
       undefined,
     );
 
@@ -1184,24 +1079,8 @@ describe("openai transport stream", () => {
 
   it("does not send tool_choice by default for native openai-completions endpoints", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [],
-        tools: [
-          {
-            name: "get_weather",
-            description: "Get weather information",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      toolChoiceModel(true),
+      weatherToolContext("You are a helpful assistant"),
       undefined,
     );
 
@@ -1211,26 +1090,8 @@ describe("openai transport stream", () => {
 
   it("sends tool_choice when explicitly configured", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "test-model",
-        name: "Test Model",
-        provider: "vllm",
-        baseUrl: "http://localhost:8000/v1",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [],
-        tools: [
-          {
-            name: "get_weather",
-            description: "Get weather information",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      toolChoiceModel(false),
+      weatherToolContext("You are a helpful assistant"),
       {
         toolChoice: "required",
       },
@@ -1242,20 +1103,8 @@ describe("openai transport stream", () => {
 
   it("omits empty tools and tool_choice for proxy-like openai-completions endpoints when context.tools is []", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "test-model",
-        name: "Test Model",
-        provider: "vllm",
-        baseUrl: "http://localhost:8000/v1",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [],
-        tools: [],
-      } as never,
+      toolChoiceModel(false),
+      emptyContext("You are a helpful assistant"),
       undefined,
     );
 
@@ -1265,36 +1114,8 @@ describe("openai transport stream", () => {
 
   it("omits tools for proxy-like openai-completions endpoints when only prior tool history is present", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "test-model",
-        name: "Test Model",
-        provider: "vllm",
-        baseUrl: "http://localhost:8000/v1",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "get_weather",
-                arguments: "{}",
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            content: [{ type: "text", text: "sunny" }],
-            toolCallId: "call_abc",
-          },
-        ],
-      } as never,
+      toolChoiceModel(false),
+      toolHistoryContext(),
       undefined,
     );
 
@@ -1304,18 +1125,8 @@ describe("openai transport stream", () => {
 
   it("preserves empty tools array for native openai-completions endpoints (existing behavior)", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [],
-        tools: [],
-      } as never,
+      toolChoiceModel(true),
+      emptyContext("You are a helpful assistant"),
       undefined,
     );
 
@@ -1325,34 +1136,8 @@ describe("openai transport stream", () => {
 
   it("preserves tools: [] fallback for native openai-completions endpoints when only prior tool history is present (existing behavior)", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 2048,
-      }),
-      {
-        systemPrompt: "You are a helpful assistant",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "get_weather",
-                arguments: "{}",
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            content: [{ type: "text", text: "sunny" }],
-            toolCallId: "call_abc",
-          },
-        ],
-      } as never,
+      toolChoiceModel(true),
+      toolHistoryContext(),
       undefined,
     );
 

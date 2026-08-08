@@ -72,7 +72,7 @@ export function migrateLegacyNotifyFallback(params: {
     if (configuredLegacyWebhook && !legacyWebhook) {
       // Keep the marker so doctor can retry after the operator fixes the target.
       warnings.push(
-        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`,
+        `Automation "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`,
       );
       continue;
     }

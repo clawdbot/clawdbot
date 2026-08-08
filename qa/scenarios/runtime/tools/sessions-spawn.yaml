@@ -7,12 +7,12 @@ scenario:
   coverage:
     primary:
       - agent-runtime.subagent-turns-sessions-spawn
-  objective: Verify sessions_spawn exposure and provider planning across OpenClaw and Codex.
+  objective: Verify sessions_spawn executes successfully across OpenClaw and Codex.
   successCriteria:
     - Effective tools expose sessions_spawn.
-    - The mock provider plans exactly one happy-path sessions_spawn call.
-    - The mock provider plans one denied-input failure-path sessions_spawn call.
-    - Runtime parity reports provider-plan evidence separately while transcript execution coverage remains tracked.
+    - The happy path retains a linked successful sessions_spawn call and result.
+    - The denied-input path retains a linked sessions_spawn failure result.
+    - Runtime parity hard-fails missing call/result evidence in either runtime.
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
@@ -30,14 +30,10 @@ scenario:
         expectedLayer: openclaw-dynamic
         capabilityLayer: openclaw-dynamic-direct
         required: true
-        tracking: "#80319"
         codexDefaultImpact: P4
         qaImpact: P1
-        action: report-only until the core runtime-pair lane captures transcript-backed sessions_spawn execution
-        reason: The fixture proves exposure and provider planning, but its parity cell does not retain transcript-backed parent execution after subagent spawning.
-      knownHarnessGap:
-        issue: "#80319"
-        reason: The parity cell currently retains provider-plan evidence but not transcript-backed parent execution after subagent spawning.
+        action: hard gate in the core runtime-pair lane
+        reason: Canonical fixture session-key capture retains the parent call/result when spawning creates a newer child session, so this OpenClaw integration tool must hard-gate both runtimes.
       promptSnippet: "target=sessions_spawn"
       failurePromptSnippet: "failure target=sessions_spawn"
 

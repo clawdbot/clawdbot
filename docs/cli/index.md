@@ -48,12 +48,21 @@ Setup commands by intent:
 | `--update`              | Shorthand for [`openclaw update`](/cli/update); works for both source checkouts and package installs    |
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
+A named `--profile` replaces canonical state and config paths inherited from
+another profile, including a running Gateway service. Explicitly customized
+state directories and config paths remain unchanged.
+
 ## Output modes
 
 - ANSI colors and progress indicators render only in TTY sessions.
 - OSC-8 hyperlinks render as clickable links where supported; otherwise the
   CLI falls back to plain URLs.
-- `--json` (and `--plain` where supported) disables styling for clean output.
+- On bounded reporting commands, `--json` reserves stdout for one JSON document;
+  styling and progress output are suppressed, and warnings and diagnostics stay on
+  stderr.
+- Interactive UIs and wizards, long-running servers and streams, shell integration,
+  and pure side-effect commands may omit `--json` when they have no meaningful
+  report to return.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
 ## Color palette

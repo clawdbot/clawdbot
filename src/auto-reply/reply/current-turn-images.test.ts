@@ -9,6 +9,13 @@ import type { MsgContext } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 
 const originalStateDirEnv = process.env.OPENCLAW_STATE_DIR;
+const PNG_IMAGE_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+  "base64",
+);
+const JPEG_IMAGE_BYTES = Buffer.from("ffd8ffe000104a46494600010100000100010000ffd9", "hex");
+const PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
+const ZIP_BYTES = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
 
 function restoreProcessState() {
   if (originalStateDirEnv === undefined) {
@@ -55,6 +62,182 @@ describe("resolveCurrentTurnImages", () => {
         ],
         imageOrder: ["inline"],
       });
+    });
+  });
+
+  it.each([
+    {
+      name: "generic Telegram image bytes under a .bin path",
+      fileName: "upload.bin",
+      contentType: "application/octet-stream",
+      kind: "image" as const,
+      imageBytes: PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
+    {
+      name: "an extensionless image without transport MIME",
+      fileName: "upload",
+      contentType: undefined,
+      kind: "image" as const,
+      imageBytes: JPEG_IMAGE_BYTES,
+      expectedMime: "image/jpeg",
+    },
+    {
+      name: "a sticker with generic transport MIME",
+      fileName: "sticker.bin",
+      contentType: "application/octet-stream",
+      kind: "sticker" as const,
+      imageBytes: PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
+  ])("hydrates $name using the verified byte MIME", async (testCase) => {
+    await withTempDir({ prefix: "openclaw-current-turn-canonical-kind-" }, async (base) => {
+      const imagePath = path.join(base, testCase.fileName);
+      await fs.writeFile(imagePath, testCase.imageBytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "describe this image",
+          media: [
+            {
+              path: imagePath,
+              contentType: testCase.contentType,
+              kind: testCase.kind,
+              workspaceDir: base,
+            },
+          ],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result).toEqual({
+        images: [
+          {
+            type: "image",
+            data: testCase.imageBytes.toString("base64"),
+            mimeType: testCase.expectedMime,
+          },
+        ],
+        imageOrder: ["inline"],
+      });
+    });
+  });
+
+  it.each([undefined, "application/pdf", "application/octet-stream", "image/png"] as const)(
+    "never hydrates valid image bytes when the authoritative document MIME is %s",
+    async (contentType) => {
+      await withTempDir({ prefix: "openclaw-current-turn-document-image-" }, async (base) => {
+        const documentPath = path.join(base, "report.png");
+        await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
+
+        const result = await resolveCurrentTurnImages({
+          ctx: {
+            Body: "summarize this document",
+            media: [{ path: documentPath, contentType, kind: "document", workspaceDir: base }],
+          } satisfies MsgContext,
+          cfg: {} as OpenClawConfig,
+        });
+
+        expect(result.images).toBeUndefined();
+      });
+    },
+  );
+
+  it.each([undefined, "application/octet-stream", "binary/octet-stream"] as const)(
+    "hydrates unknown-kind filename images when MIME %s has no concrete category",
+    async (contentType) => {
+      await withTempDir({ prefix: "openclaw-current-turn-unknown-image-" }, async (base) => {
+        const imagePath = path.join(base, "upload.png");
+        await fs.writeFile(imagePath, PNG_IMAGE_BYTES);
+
+        const result = await resolveCurrentTurnImages({
+          ctx: {
+            Body: "describe this upload",
+            media: [{ path: imagePath, contentType, kind: "unknown", workspaceDir: base }],
+          } satisfies MsgContext,
+          cfg: {} as OpenClawConfig,
+        });
+
+        expect(result.images).toEqual([
+          {
+            type: "image",
+            data: PNG_IMAGE_BYTES.toString("base64"),
+            mimeType: "image/png",
+          },
+        ]);
+      });
+    },
+  );
+
+  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
+    "never hydrates valid PNG bytes when unknown-kind MIME %s declares a document",
+    async (contentType) => {
+      await withTempDir({ prefix: "openclaw-current-turn-unknown-document-" }, async (base) => {
+        const documentPath = path.join(base, "report.png");
+        await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
+
+        const result = await resolveCurrentTurnImages({
+          ctx: {
+            Body: "summarize this upload",
+            media: [{ path: documentPath, contentType, kind: "unknown", workspaceDir: base }],
+          } satisfies MsgContext,
+          cfg: {} as OpenClawConfig,
+        });
+
+        expect(result.images).toBeUndefined();
+      });
+    },
+  );
+
+  it.each([
+    { name: "PDF", bytes: PDF_BYTES },
+    { name: "ZIP", bytes: ZIP_BYTES },
+  ])("rejects $name bytes despite a spoofed image kind, MIME, and filename", async (testCase) => {
+    await withTempDir({ prefix: "openclaw-current-turn-spoofed-image-" }, async (base) => {
+      const imagePath = path.join(base, "spoofed.png");
+      await fs.writeFile(imagePath, testCase.bytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "describe this image",
+          media: [
+            {
+              path: imagePath,
+              contentType: "image/png",
+              kind: "image",
+              workspaceDir: base,
+            },
+          ],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toBeUndefined();
+    });
+  });
+
+  it("hydrates AVIF attachments when transport metadata only declares generic bytes", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-avif-" }, async (base) => {
+      const imagePath = path.join(base, "photo.avif");
+      const imageBytes = Buffer.from("avif-image");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          media: [{ path: imagePath, contentType: "application/octet-stream", workspaceDir: base }],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/avif",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
     });
   });
 

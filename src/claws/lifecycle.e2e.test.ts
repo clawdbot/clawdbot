@@ -301,7 +301,6 @@ describe("claws lifecycle cli e2e", () => {
         agent: { id: "workspace-agent" },
         workspace: {
           bootstrapFiles: {
-            "SOUL.md": { source: "workspace/SOUL.md" },
             "HEARTBEAT.md": { source: "workspace/HEARTBEAT.md" },
           },
           files: [
@@ -319,6 +318,9 @@ describe("claws lifecycle cli e2e", () => {
         version: expect.stringMatching(/^0\.0\.0-export\.[0-9a-f]{64}$/),
         type: "module",
       },
+    );
+    await expect(readFile(join(outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
+      "Incident Response",
     );
     const inspected = await runOpenClaw(["claws", "inspect", outputDirectory, "--json"]);
     expect(parseJson(inspected.stdout)).toMatchObject({

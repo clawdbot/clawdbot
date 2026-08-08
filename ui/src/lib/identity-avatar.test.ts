@@ -1,9 +1,17 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveAvatar, resolveIdentityHue, setAvatarGatewayOrigin } from "./identity-avatar.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveAvatar,
+  resolveAvatarImageUrl,
+  resolveIdentityHue,
+  setAvatarGatewayOrigin,
+  settleAvatarImageUrl,
+} from "./identity-avatar.ts";
 
 afterEach(() => {
   setAvatarGatewayOrigin(null);
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("resolveAvatar", () => {
@@ -41,12 +49,6 @@ describe("resolveAvatar", () => {
     if (resolved.kind === "initials") {
       expect(first).toBe(resolved.colorSeed % 360);
     }
-  });
-
-  it("lets an already-resolved profile avatar win", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
   });
 });
 
@@ -96,10 +98,45 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
-  it("keeps relative avatar paths relative when no gateway origin is set", () => {
+  it("applies an explicit base path for a same-origin gateway", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar?v=2" }),
+    ).toEqual({
+      kind: "profile",
+      url: "https://gw.example.com/wilfred/api/users/p1/avatar?v=2",
+    });
+  });
+
+  it("never infers a base path from the WebSocket pathname", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(
       resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
+  });
+
+  it("does not apply the page base path to a cross-origin gateway", () => {
+    vi.stubGlobal("location", { origin: "https://ui.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
+  });
+
+  it("rejects non-exact avatar routes under a same-origin mount", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    for (const profileAvatarUrl of [
+      "https://gw.example.com/wilfred/api/users/p1/avatar/extra",
+      "https://gw.example.com/wilfred/api/users/p1/avatar/other",
+      "https://gw.example.com/wilfred/api/secrets",
+    ]) {
+      expect(resolveAvatar({ id: "alice@example.com", profileAvatarUrl })).toMatchObject({
+        kind: "initials",
+      });
+    }
   });
 
   it("resolves relative paths against the configured gateway origin", () => {
@@ -168,5 +205,173 @@ describe("resolveAvatar profile-id senders", () => {
         profileAvatarUrl: "/api/users/other-profile/avatar?v=9",
       }),
     ).toEqual({ kind: "profile", url: "/api/users/other-profile/avatar?v=9" });
+  });
+});
+
+describe("authenticated profile avatar cache", () => {
+  it("shares one authenticated image fetch and blob across avatar surfaces", async () => {
+    setAvatarGatewayOrigin("wss://gateway.example.test/ws", "Bearer profile-token");
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-ada");
+
+    const first = resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7");
+    const second = resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7");
+
+    expect(first).toBe(second);
+    await expect(first).resolves.toBe("blob:profile-ada");
+    await expect(second).resolves.toBe("blob:profile-ada");
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer profile-token" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(createObjectURL).toHaveBeenCalledOnce();
+  });
+
+  it("refetches when the gateway publishes a newer avatar revision", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:profile-v7")
+      .mockReturnValueOnce("blob:profile-v8");
+
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).resolves.toBe(
+      "blob:profile-v7",
+    );
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=8")).resolves.toBe(
+      "blob:profile-v8",
+    );
+
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache a missing avatar or a transient image failure", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-uploaded");
+
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).resolves.toBeNull();
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).resolves.toBe(
+      "blob:profile-uploaded",
+    );
+
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps active avatar requests valid when a roster exceeds the cache limit", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    const finishRequests: Array<(response: Response) => void> = [];
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        await new Promise<Response>((resolve) => {
+          finishRequests.push(resolve);
+        }),
+    );
+    let blobIndex = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:profile-${blobIndex++}`);
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+
+    const pending = Array.from({ length: 130 }, (_, index) =>
+      Promise.resolve(resolveAvatarImageUrl(`/api/users/profile-${index}/avatar?v=1`)),
+    );
+    expect(fetchAvatar).toHaveBeenCalledTimes(130);
+    for (const finishRequest of finishRequests) {
+      finishRequest(
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+    }
+
+    const imageUrls = await Promise.all(pending);
+    expect(imageUrls).toHaveLength(130);
+    expect(imageUrls.every((url) => url?.startsWith("blob:profile-"))).toBe(true);
+    expect(new Set(imageUrls).size).toBe(130);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    settleAvatarImageUrl(imageUrls[0] ?? null);
+    settleAvatarImageUrl(imageUrls[1] ?? null);
+
+    expect(revokeObjectURL).toHaveBeenCalledTimes(2);
+    expect(revokeObjectURL).toHaveBeenNthCalledWith(1, imageUrls[0]);
+    expect(revokeObjectURL).toHaveBeenNthCalledWith(2, imageUrls[1]);
+  });
+
+  it("rejects non-image responses from the authenticated avatar endpoint", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not an image", { headers: { "content-type": "text/html" } }),
+    );
+    const createObjectURL = vi.spyOn(URL, "createObjectURL");
+
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).resolves.toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("revokes cached blobs and refetches after a gateway credential changes", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer first-token");
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:first-profile")
+      .mockReturnValueOnce("blob:second-profile");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).resolves.toBe(
+      "blob:first-profile",
+    );
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer second-token");
+    await expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).resolves.toBe(
+      "blob:second-profile",
+    );
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:first-profile");
+    expect(fetchAvatar).toHaveBeenLastCalledWith(
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      expect.objectContaining({ headers: { Authorization: "Bearer second-token" } }),
+    );
+  });
+
+  it("never forwards gateway credentials to a sender-controlled avatar origin", () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    const fetchAvatar = vi.spyOn(globalThis, "fetch");
+
+    for (const avatarUrl of [
+      "https://evil.example/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test.evil.example/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test@evil.example/api/users/profile-ada/avatar?v=7",
+      "//evil.example/api/users/profile-ada/avatar?v=7",
+      "/api/secrets",
+    ]) {
+      expect(resolveAvatarImageUrl(avatarUrl)).toBeNull();
+      expect(resolveAvatar({ id: "profile-ada", profileAvatarUrl: avatarUrl })).toMatchObject({
+        kind: "initials",
+      });
+    }
+    expect(fetchAvatar).not.toHaveBeenCalled();
   });
 });

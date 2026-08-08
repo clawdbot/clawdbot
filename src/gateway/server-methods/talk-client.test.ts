@@ -11,7 +11,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   authorizeClientVoiceConfirmation,
-  resolveClientVoiceToolConfirmationPolicy,
+  checkClientVoiceToolConfirmationPolicy,
 } from "../../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import {
@@ -153,7 +153,7 @@ describe("talk.client.transcript", () => {
       text: "yes",
       timestamp: 10_000,
     });
-    const policy = resolveClientVoiceToolConfirmationPolicy({
+    const policy = checkClientVoiceToolConfirmationPolicy({
       agentId: "main",
       voiceSessionId,
       runId: "run-later",

@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
+  hasNonEmptyString as nonEmptyString,
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -169,10 +170,6 @@ function canonicalRoutingPeer(value: unknown): object | undefined | null {
 
 function normalizeRoutingId(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
-}
-
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
 }
 
 function isPolicyOrderedStringAtLeastAsStrict(

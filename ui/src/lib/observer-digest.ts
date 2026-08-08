@@ -10,8 +10,30 @@ const OBSERVER_DIGEST_HISTORY_LIMIT = 50;
 
 type ProjectedObserverDigest = Pick<
   SessionObserverDigest,
-  "runId" | "headline" | "health" | "updatedAt" | "revision"
+  "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
 >;
+
+export function projectSessionObserverDigest(
+  sessionKey: string,
+  digest: ProjectedObserverDigest | null | undefined,
+): SessionObserverDigest | null {
+  if (!digest) {
+    return null;
+  }
+  return {
+    sessionKey,
+    ...(digest.agentId ? { agentId: digest.agentId } : {}),
+    runId: digest.runId,
+    revision: digest.revision,
+    updatedAt: digest.updatedAt,
+    headline: digest.headline,
+    health: digest.health,
+  };
+}
+
+export function isCriticalObserverHealth(health: unknown): health is "stuck" | "waiting-on-user" {
+  return health === "stuck" || health === "waiting-on-user";
+}
 
 /** Local live run id wins; otherwise the row's server-reported active runs
  * identify the run, preferring the one the digest belongs to. */
@@ -69,6 +91,7 @@ function compareObserverDigestFreshness(
 function observerDigestsEqual(left: SessionObserverDigest, right: SessionObserverDigest): boolean {
   return (
     left.sessionKey === right.sessionKey &&
+    left.agentId === right.agentId &&
     left.runId === right.runId &&
     left.revision === right.revision &&
     left.updatedAt === right.updatedAt &&

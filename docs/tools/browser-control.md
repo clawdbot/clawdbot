@@ -84,8 +84,8 @@ Other runtime failures may still return `{ "error": "<message>" }` without a
 
 ### Playwright requirement
 
-Some features (navigate/act/AI snapshot/role snapshot, element screenshots,
-PDF) require Playwright. If Playwright isn't installed, those endpoints return
+Some features (navigate/act/AI snapshot/role snapshot, element
+screenshots, PDF) require Playwright. If Playwright isn't installed, those endpoints return
 a clear 501 error.
 
 What still works without Playwright:
@@ -125,17 +125,11 @@ For custom images, bake Chromium into the image:
 OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
 ```
 
-For an existing image, install through the bundled CLI instead:
-
-```bash
-docker compose run --rm openclaw-cli \
-  node /app/node_modules/playwright-core/cli.js install chromium
-```
-
-To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
-`/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
-`OPENCLAW_HOME_VOLUME` or a bind mount. OpenClaw auto-detects the persisted
-Chromium on Linux. See [Docker](/install/docker).
+The browser also needs system libraries, so installing Chromium in a one-off
+Compose container is not durable. Rebuild the image with
+`OPENCLAW_INSTALL_BROWSER=1` instead. To persist browser downloads and other
+caches, persist `/home/node` with `OPENCLAW_HOME_VOLUME` or a bind mount. See
+[Docker](/install/docker).
 
 ## How it works (internal)
 
@@ -328,6 +322,13 @@ OpenClaw supports two "snapshot" styles:
 - If Playwright is unavailable, ARIA snapshots can still be useful for
   inspection, but refs may not be actionable. Re-snapshot with `--format ai`
   or `--interactive` when you need action refs.
+- When the driver exposes stable document identity, consecutive AI and role
+  snapshots for the same profile, tab, document, and option family append
+  `[new]` to ref-bearing lines absent from the previous snapshot. Navigation
+  starts a fresh unmarked baseline; existing-session snapshots omit deltas.
+  The first snapshot establishes the baseline without markers; later responses
+  also expose `newElements`, and add a count footer when the value is nonzero.
+  Structured `--format aria` snapshots with `axN` refs do not use delta markers.
 - Docker proof for the raw-CDP fallback path: `pnpm test:docker:browser-cdp-snapshot`
   starts Chromium with CDP, runs `browser doctor --deep`, and verifies role
   snapshots include link URLs, cursor-promoted clickables, and iframe metadata.
@@ -335,6 +336,10 @@ OpenClaw supports two "snapshot" styles:
 Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
+- A batch stops after a committed main-frame navigation—including a same-URL
+  reload—or after the page closes. Its `aborted` summary reports the action
+  number and skipped count; take a fresh snapshot before issuing dependent
+  actions, or use separate act calls when navigation is expected.
 - `/act` returns the current raw `targetId` after action-triggered replacement
   when it can prove the replacement tab. Keep using stable tab ids/labels for
   follow-up commands.

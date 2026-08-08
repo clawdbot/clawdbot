@@ -118,12 +118,12 @@ sync the current checkout on every run, and stop it before handoff.
   static checks with ready dependencies. Untrusted repository tooling never
   runs locally. Full suites and computationally intensive commands run remotely.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
-- Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
+- Use standard Git commands when committing; stage only your files.
 - If dependencies are missing on the selected remote box, run `pnpm install` there, retry
   once, then report the first actionable error. Do not reconcile or reinstall a
   local Codex worktree merely to run validation.
 - In a Codex worktree or linked/sparse checkout, do not run direct local
-  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer`. Use
+  `pnpm test*`, `pnpm check*`, or `pnpm crabbox:run`. Use
   `node scripts/crabbox-wrapper.mjs` for remote proof and
   `node scripts/check-changed.mjs` for classify-first changed checks. Use
   `node scripts/run-vitest.mjs` for bounded focused local proof when the
@@ -215,11 +215,12 @@ official trust.
   must depend on packages declared in the plugin package `dependencies` or
   `optionalDependencies`; do not make a final proof depend on manually running
   `npm install` inside `~/.openclaw/npm/projects/...`.
-- If the plugin ships `npm-shrinkwrap.json`, regenerate or check it after
-  moving dependencies between dev and runtime sections.
+- After moving dependencies between dev and runtime sections, run the transient
+  npm package-lock check and inspect the bundled runtime payload when enabled.
 - Inspect the packed tarball when dependency ownership or generated `dist/`
-  matters: verify `package/package.json`, the expected runtime files, and any
-  package-local shrinkwrap before installing it on a live host.
+  matters: verify `package/package.json`, the expected runtime files, the
+  bundled `node_modules` payload when enabled, and the absence of npm lockfiles
+  before installing it on a live host.
 - After installing the package, restart the Gateway when the touched surface is
   plugin registration, runtime dependency loading, privileged helpers, provider
   routing, or generated dist.
@@ -450,20 +451,6 @@ jobs, followed by a report job that downloads both artifacts and runs
 `pnpm openclaw qa parity-report`. For parity failures, inspect the failed lane
 first; inspect the report job when both lane summaries exist but the comparison
 fails.
-
-### QA Lab Matrix Profiles
-
-`pnpm openclaw qa matrix` defaults to `--profile all`. Do not assume the CLI
-default is the fast release path. Use explicit profiles:
-
-- `--profile fast|release`: focused release-critical scenarios
-- `--profile transport|all`: broad Matrix proof
-- repeated `--scenario <id>` flags: explicit scenario selection
-
-`QA-Lab - All Lanes` and `OpenClaw Release Checks` use the same QA Lab selector
-and standard artifacts. Manual dispatch keeps `matrix_profile=all` as the
-default and fans it across the transport, media, and E2EE profiles; focused
-dispatches select `fast`, `release`, or `transport`.
 
 ### Reusable Live/E2E Checks
 

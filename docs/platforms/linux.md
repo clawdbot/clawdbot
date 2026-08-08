@@ -29,6 +29,11 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
+Realtime voice Talk inside the companion's embedded WebView is not validated:
+the shell does not grant microphone capture to the WebKitGTK WebView, so
+`getUserMedia` is expected to fail there. Until that lands, open the Gateway's
+Control UI in a regular browser for [Talk mode](/nodes/talk).
+
 Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
 [GitHub release](https://github.com/openclaw/openclaw/releases) for the tag,
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
@@ -37,6 +42,23 @@ with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
 or mark the AppImage executable and run it directly. The AppImage runtime
 needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
 without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+### Media codecs
+
+The companion uses GStreamer plugins for audio and video playback.
+WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
+H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
+The `.deb` uses the host's plugins and declares all three packages as
+dependencies. The AppImage bundles the GStreamer media framework and the
+plugins available on its Ubuntu build host. For a source build or when
+rebuilding either Linux bundle, install the packages explicitly:
+
+```bash
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+```
+
+The released AppImage therefore carries the codecs installed by the release
+workflow instead of relying on GStreamer packages from the user's system.
 
 You can also build the same bundles from a source checkout:
 
@@ -99,7 +121,7 @@ Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI a
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
-1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
+1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -257,6 +279,7 @@ resource controls (systemd `MemoryMax=`, container memory limits).
 
 - [Install overview](/install)
 - [Linux server](/vps)
+- [ChromeOS (Crostini)](/platforms/chromeos)
 - [Raspberry Pi](/platforms/raspberry-pi)
 - [Gateway runbook](/gateway)
 - [Gateway configuration](/gateway/configuration)

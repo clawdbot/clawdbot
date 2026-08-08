@@ -2,6 +2,8 @@
 
 export {
   loadExecApprovals,
+  readExecApprovalsSnapshot,
+  resolveExecApprovalsDisplayPath,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
   type ExecApprovalsFile,

@@ -5,13 +5,14 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
-  stripSystemPromptCacheBoundary,
-} from "../internal/shared.js";
+} from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./host-policy.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
@@ -25,8 +26,9 @@ import {
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
-import { log, type BaseOpenAIStreamOptions } from "./openai-transport-shared.js";
+import { log } from "./openai-transport-shared.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
@@ -220,12 +222,17 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   request: OpenAIResponsesRequestParams;
   requestOptions: unknown;
   model: Model;
-}): Promise<AsyncIterable<unknown>> {
+  observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
+}): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
   try {
-    return (await params.client.responses.create(
-      params.request as never,
-      params.requestOptions as never,
-    )) as unknown as AsyncIterable<unknown>;
+    params.observePrompt?.(params.request, {
+      egress: "responses-sdk",
+      payloadVariant: "initial",
+    });
+    const { data, response } = await params.client.responses
+      .create(params.request as never, params.requestOptions as never)
+      .withResponse();
+    return { stream: data as unknown as AsyncIterable<unknown>, response };
   } catch (error) {
     const retryRequest = stripResponsesRequestEncryptedContent(params.request);
     if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
@@ -235,10 +242,14 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
         `api=${params.model.api} model=${params.model.id}`,
     );
-    return (await params.client.responses.create(
-      retryRequest as never,
-      params.requestOptions as never,
-    )) as unknown as AsyncIterable<unknown>;
+    params.observePrompt?.(retryRequest, {
+      egress: "responses-sdk",
+      payloadVariant: "encrypted-content-retry",
+    });
+    const { data, response } = await params.client.responses
+      .create(retryRequest as never, params.requestOptions as never)
+      .withResponse();
+    return { stream: data as unknown as AsyncIterable<unknown>, response };
   }
 }
 

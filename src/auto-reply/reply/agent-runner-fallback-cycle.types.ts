@@ -3,7 +3,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import type {
-  AgentRunLoopResult,
+  AgentTurnInternalResult,
   AgentTurnParams,
   EmbeddedAgentRunResult,
   RuntimeFallbackAttempt,
@@ -37,7 +37,7 @@ type CompletedFallbackCycle = {
 
 export type AgentFallbackCycleResult =
   | CompletedFallbackCycle
-  | Extract<AgentRunLoopResult, { kind: "final" }>;
+  | Extract<AgentTurnInternalResult, { kind: "final" }>;
 
 type AgentFallbackModelPatch = {
   captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;

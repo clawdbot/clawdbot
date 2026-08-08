@@ -371,10 +371,10 @@ export function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["
     writeStdoutLine("captioning: %s", formatBoolean(health?.captioning));
     writeStdoutLine("transcript lines: %s", health?.transcriptLines ?? 0);
     writeStdoutLine("last caption: %s", formatOptional(health?.lastCaptionAt));
-    writeStdoutLine("manual action: %s", formatBoolean(health?.manualActionRequired));
-    if (health?.manualActionRequired) {
-      writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
-      writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
+    writeStdoutLine("manual action: %s", formatBoolean(Boolean(health?.manualAction)));
+    if (health?.manualAction) {
+      writeStdoutLine("manual reason: %s", formatOptional(health.manualAction.reason));
+      writeStdoutLine("manual message: %s", formatOptional(health.manualAction.message));
     }
     writeStdoutLine("speech ready: %s", formatBoolean(health?.speechReady));
     if (health?.speechReady === false) {

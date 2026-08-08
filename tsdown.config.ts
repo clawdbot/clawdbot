@@ -10,10 +10,16 @@ import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  createStateSchemaInlinePlugin,
+  STATE_SCHEMA_INLINE_PLUGIN_NAME,
+} from "./scripts/lib/state-schema-inline-plugin.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mjs";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
@@ -45,6 +51,7 @@ const env = {
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
+export { createStateSchemaInlinePlugin, STATE_SCHEMA_INLINE_PLUGIN_NAME };
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -138,10 +145,13 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   };
 }
 
-function nodeBuildConfig(config: UserConfig): UserConfig {
+function nodeBuildConfig(
+  config: UserConfig,
+  declarations: UserConfig["dts"] = TSDOWN_DECLARATIONS,
+): UserConfig {
   return {
     ...config,
-    dts: TSDOWN_DECLARATIONS,
+    dts: declarations,
     env,
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
@@ -233,7 +243,11 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
+    [
+      "@openclaw/acp-core",
+      "@openclaw/session-url-contract",
+      "@openclaw/workboard-contract",
+    ].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -264,6 +278,7 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
@@ -275,6 +290,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-accessor.sqlite-archive.worker":
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
@@ -294,7 +311,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
     "commands/doctor/shared/plugin-registry-migration":
       "src/commands/doctor/shared/plugin-registry-migration.ts",
-    "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "commands/status.summary.runtime": "src/status/summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
@@ -396,14 +413,6 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
   return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
-function buildSpeechCoreDistEntries(): Record<string, string> {
-  return {
-    "runtime-api": "packages/speech-core/runtime-api.ts",
-    speaker: "packages/speech-core/speaker.ts",
-    "voice-models": "packages/speech-core/voice-models.ts",
-  };
-}
-
 function buildLlmCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/llm-core/src/index.ts",
@@ -442,10 +451,6 @@ function shouldExternalizeGatewayClientDependency(id: string): boolean {
 
 function shouldExternalizeNetPolicyDependency(id: string): boolean {
   return id === "ipaddr.js" || id.startsWith("ipaddr.js/");
-}
-
-function shouldExternalizeSpeechCoreDependency(id: string): boolean {
-  return id === "openclaw" || id.startsWith("openclaw/");
 }
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
@@ -503,6 +508,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ),
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
+    // Private bundled Codex helper for app-server transcript mirroring.
+    "plugin-sdk/codex-session-transcript-runtime":
+      "src/plugin-sdk/codex-session-transcript-runtime.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources(selectedPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
@@ -520,6 +528,96 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...bundledHookEntries,
   };
 }
+
+type UnifiedEntry = [name: string, source: string];
+
+function partitionUnifiedEntryGroups(
+  entryGroups: UnifiedEntry[][],
+  partitionCount: number,
+): UnifiedEntry[][] {
+  const partitions = Array.from({ length: partitionCount }, () => [] as UnifiedEntry[]);
+  for (const entryGroup of entryGroups) {
+    let targetIndex = 0;
+    for (let index = 1; index < partitions.length; index += 1) {
+      const candidate = partitions[index];
+      const target = partitions[targetIndex];
+      if (candidate && target && candidate.length < target.length) {
+        targetIndex = index;
+      }
+    }
+    const target = partitions[targetIndex];
+    if (!target) {
+      throw new Error("unified declaration partition count must be positive");
+    }
+    target.push(...entryGroup);
+  }
+  return partitions;
+}
+
+function normalizeDeclarationEntrySource(source: string): string {
+  const relativeSource = path.isAbsolute(source) ? path.relative(process.cwd(), source) : source;
+  return relativeSource.replaceAll(path.sep, "/");
+}
+
+function buildUnifiedDeclarationPartitions(
+  entries: Record<string, string>,
+): Array<{ name: string; sources: string[] }> {
+  const sortedEntries = Object.entries(entries).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const baseEntries = sortedEntries.filter(
+    ([name]) => !name.startsWith("plugin-sdk/") && !name.startsWith("extensions/"),
+  );
+  const pluginSdkEntries = sortedEntries.filter(([name]) => name.startsWith("plugin-sdk/"));
+  const extensionEntriesById = new Map<string, UnifiedEntry[]>();
+  for (const entry of sortedEntries) {
+    const [name] = entry;
+    if (!name.startsWith("extensions/")) {
+      continue;
+    }
+    const extensionId = name.split("/", 3)[1];
+    if (!extensionId) {
+      continue;
+    }
+    const extensionEntries = extensionEntriesById.get(extensionId) ?? [];
+    extensionEntries.push(entry);
+    extensionEntriesById.set(extensionId, extensionEntries);
+  }
+
+  const publicPluginSdkEntryNames = new Set(
+    publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`),
+  );
+  const pluginSdkPartitions = [
+    pluginSdkEntries.filter(([name]) => publicPluginSdkEntryNames.has(name)),
+    pluginSdkEntries.filter(([name]) => !publicPluginSdkEntryNames.has(name)),
+  ];
+  const extensionPartitions = partitionUnifiedEntryGroups(
+    [...extensionEntriesById.entries()]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([, extensionEntries]) => extensionEntries),
+    5,
+  );
+  const partitions = [baseEntries, ...pluginSdkPartitions, ...extensionPartitions];
+
+  return TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((name, index) => {
+    const partition = partitions[index];
+    if (!partition) {
+      throw new Error(`missing unified declaration partition for ${name}`);
+    }
+    return {
+      name,
+      sources: partition.map(([, source]) => normalizeDeclarationEntrySource(source)),
+    };
+  });
+}
+
+const unifiedDistEntries = buildUnifiedDistEntries();
+const unifiedDeps = {
+  alwaysBundle: shouldAlwaysBundleDependency,
+  neverBundle: shouldNeverBundleDependency,
+  // Keep dts generation from inlining externalized package types.
+  dts: { neverBundle: shouldNeverBundleDependency },
+};
 
 const configs = [
   nodeBuildConfig({
@@ -561,15 +659,6 @@ const configs = [
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("web-content-core", {
-    outDir: "packages/web-content-core/dist",
-  }),
-  nodeWorkspacePackageBuildConfig("speech-core", {
-    entry: buildSpeechCoreDistEntries(),
-    deps: {
-      neverBundle: shouldExternalizeSpeechCoreDependency,
-    },
-  }),
   nodeWorkspacePackageBuildConfig("llm-core", {
     entry: buildLlmCoreDistEntries(),
     deps: {
@@ -577,18 +666,29 @@ const configs = [
     },
   }),
   nodeWorkspacePackageBuildConfig("model-catalog-core"),
-  nodeBuildConfig({
-    name: TSDOWN_UNIFIED_CONFIG_GROUP,
-    // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
-    // and bundled hooks in one graph so runtime singletons are emitted once.
-    entry: buildUnifiedDistEntries(),
-    deps: {
-      alwaysBundle: shouldAlwaysBundleDependency,
-      neverBundle: shouldNeverBundleDependency,
-      // Keep dts generation from inlining externalized package types.
-      dts: { neverBundle: shouldNeverBundleDependency },
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
+      // and bundled hooks in one graph so runtime singletons are emitted once.
+      entry: unifiedDistEntries,
+      deps: unifiedDeps,
+      plugins: [createStateSchemaInlinePlugin()],
     },
-  }),
+    false,
+  ),
+  ...(TSDOWN_DECLARATIONS
+    ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
+        nodeBuildConfig(
+          {
+            name,
+            entry: unifiedDistEntries,
+            deps: unifiedDeps,
+          },
+          { emitDtsOnly: true, entry: sources },
+        ),
+      )
+    : []),
 ] satisfies UserConfig[];
 
 export default configs;

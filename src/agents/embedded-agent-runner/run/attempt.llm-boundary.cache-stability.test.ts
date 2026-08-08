@@ -22,6 +22,7 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
  * Self-contained: no gateway, no provider, no live session.
  */
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -349,8 +350,7 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     // Historical user turns get their inbound-metadata blocks stripped (same as
     // the original boundary behaviour), then stamped. The current turn keeps its
     // metadata. We only assert the historical strip+stamp here.
-    const metaBlock =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\n';
+    const metaBlock = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\n`;
     const userText = "What is 2+2?";
     const stored = `${metaBlock}${userText}`;
 
@@ -524,7 +524,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
       normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
     ) as unknown as Array<Record<string, unknown>>;
 
-  const META = "Conversation info (untrusted metadata):\nsender=Bob";
+  const META = "Conversation info:\nsender=Bob";
 
   it("keeps the active user turn bare, tail-places the carrier, and drops it from replayed history", () => {
     // The runner installs the carrier immediately BEFORE the active user turn;

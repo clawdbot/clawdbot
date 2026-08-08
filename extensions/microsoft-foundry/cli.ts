@@ -144,7 +144,8 @@ export async function getAccessTokenResultAsync(
   ) as AzAccessToken;
 }
 
-const AZ_LOGIN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+// Entra device codes default to 15 minutes; keep five minutes for az to finish.
+const AZ_LOGIN_TIMEOUT_MS = 20 * 60 * 1000;
 
 export async function azLoginDeviceCode(): Promise<void> {
   return azLoginDeviceCodeWithOptions({});
@@ -188,7 +189,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
   appendOutput("stdout", decoders.stdout.end());
   appendOutput("stderr", decoders.stderr.end());
   if (result.termination === "timeout") {
-    throw new Error("az login timed out after 5 minutes");
+    throw new Error("az login timed out after 20 minutes");
   }
   if (result.code === 0) {
     return;

@@ -68,6 +68,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         error: null,
         deletedSessions: [],
         groups: [],
+        sectionOrder: [],
       },
     },
     toolsCatalogLoading: false,
@@ -114,8 +115,8 @@ function createSaveState(): {
   const { state, request } = createState();
   const configState = {
     configFormDirty: true,
-    configForm: { agents: { list: [{ id: "main" }] } },
-    configFormOriginal: { agents: { list: [{ id: "main" }] } },
+    configForm: { agents: { entries: { main: {} } } },
+    configFormOriginal: { agents: { entries: { main: {} } } },
   };
   const config = {
     state: configState,
@@ -185,6 +186,54 @@ describe("createAgentCapability lifecycle", () => {
     await currentLoad;
     expect(agents.files("main").list).toEqual(current);
     expect(agents.files("main").loading).toBe(false);
+    agents.dispose();
+  });
+
+  it("retires existing file loading state before dropping disconnected owners", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const load = agents.refreshFiles("main");
+    const status = agents.files("main");
+    expect(status.loading).toBe(true);
+
+    harness.publish(false);
+
+    expect(status.loading).toBe(false);
+    expect(agents.files("main").loading).toBe(false);
+
+    pending.resolve({ agentId: "main", workspace: "stale", files: [] });
+    await load;
+    agents.dispose();
+  });
+
+  it("keeps a replacement list request owned while its predecessor completes", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const staleLoad = agents.refreshList();
+    const currentLoad = agents.refreshList();
+
+    first.resolve({ defaultId: "old", agents: [{ id: "old" }] });
+    await staleLoad;
+    expect(agents.state.agentsList).toBeNull();
+    expect(agents.state.agentsLoading).toBe(true);
+
+    const current = { defaultId: "main", agents: [{ id: "main" }] };
+    second.resolve(current);
+    await currentLoad;
+    expect(agents.state.agentsList).toEqual(current);
+    expect(agents.state.agentsLoading).toBe(false);
     agents.dispose();
   });
 
@@ -497,8 +546,8 @@ describe("setDefaultAgent", () => {
   it("stages the default agent and persists a clean draft", async () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
-    config.state.configForm = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
-    config.state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configForm = { agents: { entries: { main: {}, kimi: {} } } };
+    config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
     config.state.configFormDirty = false;
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
       config.state.configFormDirty = true;
@@ -514,7 +563,7 @@ describe("setDefaultAgent", () => {
   it("does not persist when the agent is absent from the config list", async () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
-    config.state.configForm = { agents: { list: [{ id: "main" }] } };
+    config.state.configForm = { agents: { entries: { main: {} } } };
     vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
 
     await setDefaultAgent(config, "ghost", refreshAgents);
@@ -528,19 +577,19 @@ describe("setDefaultAgent", () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configFormDirty = true;
-    config.state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
     config.state.configForm = {
       agents: {
-        list: [{ id: "main", model: "gpt-5.5" }, { id: "kimi" }],
+        entries: { main: { model: "gpt-5.5" }, kimi: {} },
       },
     };
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
       config.state.configForm = {
         agents: {
-          list: [
-            { id: "main", model: "gpt-5.5" },
-            { id: "kimi", default: true },
-          ],
+          entries: {
+            main: { model: "gpt-5.5" },
+            kimi: { default: true },
+          },
         },
       };
       config.state.configFormDirty = true;
@@ -554,10 +603,10 @@ describe("setDefaultAgent", () => {
     expect(refreshAgents).not.toHaveBeenCalled();
     expect(config.state.configForm).toEqual({
       agents: {
-        list: [
-          { id: "main", model: "gpt-5.5" },
-          { id: "kimi", default: true },
-        ],
+        entries: {
+          main: { model: "gpt-5.5" },
+          kimi: { default: true },
+        },
       },
     });
     expect(config.state.configFormDirty).toBe(true);
@@ -575,6 +624,26 @@ describe("setDefaultAgent", () => {
 
     await setDefaultAgent(config, "kimi", refreshAgents);
 
+    expect(refreshAgents).not.toHaveBeenCalled();
+  });
+
+  it("passes the originating action guard through the queued config save", async () => {
+    const { config } = createSaveState();
+    const refreshAgents = vi.fn(async () => null);
+    let canDispatch = true;
+    config.state.configFormDirty = false;
+    vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
+      config.state.configFormDirty = true;
+      return true;
+    });
+    vi.mocked(config.save).mockImplementation(async (options) => {
+      canDispatch = false;
+      return options?.canDispatch?.() ?? true;
+    });
+
+    await setDefaultAgent(config, "kimi", refreshAgents, () => canDispatch);
+
+    expect(config.save).toHaveBeenCalledOnce();
     expect(refreshAgents).not.toHaveBeenCalled();
   });
 });

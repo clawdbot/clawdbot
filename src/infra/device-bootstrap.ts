@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
@@ -404,10 +405,17 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const allowedProfile = resolvePersistedBootstrapProfile(record);
+    const requestedProfile = resolveRequestedBootstrapProfile({
+      role,
+      scopes: params.scopes,
+      purpose: allowedProfile.purpose,
+    });
     // Fail closed for any attempt to redeem the token outside the issued
     // role/scope allowlist before binding it to a concrete device identity.
     if (
       allowedProfile.roles.length === 0 ||
+      (deviceBootstrapProfilesEqual(allowedProfile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE) &&
+        !deviceBootstrapProfilesEqual(requestedProfile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE)) ||
       !bootstrapProfileAllowsRequest({
         allowedProfile,
         requestedRole: role,
@@ -416,11 +424,6 @@ export async function verifyDeviceBootstrapToken(params: {
     ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const requestedProfile = resolveRequestedBootstrapProfile({
-      role,
-      scopes: params.scopes,
-      purpose: allowedProfile.purpose,
-    });
 
     const boundDeviceId = record.deviceId?.trim();
     const boundPublicKey =

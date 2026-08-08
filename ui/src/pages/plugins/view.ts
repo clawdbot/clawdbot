@@ -148,6 +148,7 @@ function matchesPlugin(plugin: PluginCatalogItem, query: string): boolean {
   return [
     plugin.name,
     plugin.id,
+    plugin.packageName,
     plugin.description,
     plugin.origin,
     plugin.category,
@@ -280,15 +281,16 @@ function renderArtTile(
   name: string,
   iconUrl?: string,
   onIconError?: () => void,
+  className = "plugins-tile",
 ): TemplateResult {
   const art = pluginArtPath(slug);
   if (art) {
-    return html`<span class="plugins-tile">
+    return html`<span class=${className}>
       <img src=${art} alt="" loading="lazy" decoding="async" />
     </span>`;
   }
   if (iconUrl) {
-    return html`<span class="plugins-tile">
+    return html`<span class=${className}>
       <img
         class="plugins-icon"
         src=${iconUrl}
@@ -302,7 +304,7 @@ function renderArtTile(
   const [from, to] = pluginFallbackGradient(slug);
   const monogram = pluginMonogram(name);
   return html`<span
-    class="plugins-tile plugins-tile--fallback"
+    class=${`${className} ${className}--fallback`}
     style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
     aria-hidden="true"
   >
@@ -572,7 +574,37 @@ function renderInstalledFilter(props: PluginsViewProps) {
   });
 }
 
-function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
+function renderPluginHeading(params: {
+  name: string;
+  content: TemplateResult;
+  onShowDetails?: () => void;
+}): TemplateResult {
+  return html`
+    <h3 class="settings-row__title">
+      ${params.onShowDetails
+        ? html`
+            <button
+              type="button"
+              class="plugins-item__detail-button"
+              aria-label=${params.name}
+              @click=${(event: Event) => {
+                event.stopPropagation();
+                params.onShowDetails?.();
+              }}
+            >
+              ${params.content}
+            </button>
+          `
+        : params.content}
+    </h3>
+  `;
+}
+
+function renderPluginRow(
+  plugin: PluginCatalogItem,
+  props: PluginsViewProps,
+  includePackageName = false,
+): TemplateResult {
   const key = pluginRowKey(plugin.id);
   const busy = props.busy[key] ?? false;
   return html`
@@ -592,24 +624,31 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         props.onIconError(plugin.id),
       )}
       <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${plugin.name}
-          ${plugin.version
-            ? html`<span class="plugins-version">v${plugin.version}</span>`
-            : nothing}
-        </h3>
+        ${renderPluginHeading({
+          name: plugin.name,
+          content: html`
+            ${plugin.name}
+            ${plugin.version
+              ? includePackageName
+                ? html`<span class="plugins-version">v${plugin.version}</span>`
+                : html`<span class="plugins-version">v${plugin.version}</span>`
+              : nothing}
+          `,
+          onShowDetails: () => props.onShowDetails(plugin.id),
+        })}
         <span class="settings-row__desc">
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
         ${renderMetaLine([
           plugin.origin ? originLabel(plugin.origin) : nothing,
-          plugin.packageName
+          includePackageName && plugin.packageName
             ? html`<span class="plugins-meta__mono">${plugin.packageName}</span>`
             : nothing,
         ])}
       </div>
       <div class="settings-row__control">
-        ${rowStateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
+        ${plugin.installed ? rowStateStatus(plugin) : nothing}
+        ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -731,7 +770,7 @@ function renderInstalled(props: PluginsViewProps) {
             repeat(
               group.plugins,
               (plugin) => plugin.id,
-              (plugin) => renderInstalledRow(plugin, props),
+              (plugin) => renderPluginRow(plugin, props, true),
             ),
           ),
         )}
@@ -740,51 +779,6 @@ function renderInstalled(props: PluginsViewProps) {
 }
 
 /* ---------------------------------- discover tab ---------------------------------- */
-
-function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
-  const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key] ?? false;
-  return html`
-    <article
-      class="settings-row plugins-item plugins-item--clickable"
-      data-plugin-id=${plugin.id}
-      data-plugin-source=${plugin.origin ?? "unknown"}
-      data-plugin-status=${plugin.state}
-      aria-busy=${busy ? "true" : "false"}
-      @click=${(event: Event) => {
-        if (!fromInteractiveChild(event)) {
-          props.onShowDetails(plugin.id);
-        }
-      }}
-    >
-      ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
-        props.onIconError(plugin.id),
-      )}
-      <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${plugin.name}
-          ${plugin.version
-            ? html`<span class="plugins-version">v${plugin.version}</span>`
-            : nothing}
-        </h3>
-        <span class="settings-row__desc">
-          ${plugin.description || t("pluginsPage.optionalCapability")}
-        </span>
-        ${renderMetaLine([plugin.origin ? originLabel(plugin.origin) : nothing])}
-      </div>
-      <div class="settings-row__control">
-        ${plugin.installed ? rowStateStatus(plugin) : nothing}
-        ${renderCatalogActions(plugin, props, busy, key)}
-      </div>
-      ${plugin.error
-        ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-            ${plugin.error}
-          </div>`
-        : nothing}
-      ${renderRowMessage(key, props.messages[key], busy, props)}
-    </article>
-  `;
-}
 
 function renderConnectorRow(
   connector: ConnectorSuggestion,
@@ -895,12 +889,16 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
     >
       ${renderArtTile(artSlug, pkg.displayName)}
       <div class="settings-row__text">
-        <h3 class="settings-row__title">
-          ${pkg.displayName}
-          ${pkg.latestVersion
-            ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
-            : nothing}
-        </h3>
+        ${renderPluginHeading({
+          name: pkg.displayName,
+          content: html`
+            ${pkg.displayName}
+            ${pkg.latestVersion
+              ? html`<span class="plugins-version">v${pkg.latestVersion}</span>`
+              : nothing}
+          `,
+          onShowDetails: installed ? () => props.onShowDetails(installed.id) : undefined,
+        })}
         <span class="settings-row__desc">${pkg.summary || pkg.name}</span>
         ${renderMetaLine([
           pkg.isOfficial ? t("pluginsPage.official") : nothing,
@@ -977,8 +975,8 @@ function renderClawHubGroup(props: PluginsViewProps) {
 
 function renderDiscover(props: PluginsViewProps) {
   const shelves = discoverShelves(props.result?.plugins ?? [], props.query);
-  const featuredRows = shelves.featured.map((plugin) => renderCatalogRow(plugin, props));
-  const officialRows = shelves.official.map((plugin) => renderCatalogRow(plugin, props));
+  const featuredRows = shelves.featured.map((plugin) => renderPluginRow(plugin, props));
+  const officialRows = shelves.official.map((plugin) => renderPluginRow(plugin, props));
   const clawHub = renderClawHubGroup(props);
   if (!featuredRows.length && !officialRows.length && !shelves.connectors.length) {
     return html`
@@ -1063,8 +1061,12 @@ function renderDetailOverlay(props: PluginsViewProps) {
         >
           ${icons.x}
         </button>
-        ${renderDetailCover(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
-          props.onIconError(plugin.id),
+        ${renderArtTile(
+          plugin.id,
+          plugin.name,
+          props.iconUrls[plugin.id],
+          () => props.onIconError(plugin.id),
+          "plugins-cover",
         )}
         <div class="plugins-detail__body">
           <div class="plugins-detail__title">
@@ -1141,41 +1143,6 @@ function renderDetailOverlay(props: PluginsViewProps) {
       </section>
     </openclaw-modal-dialog>
   `;
-}
-
-function renderDetailCover(
-  slug: string,
-  name: string,
-  iconUrl?: string,
-  onIconError?: () => void,
-): TemplateResult {
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class="plugins-cover">
-      <img src=${art} alt="" loading="lazy" decoding="async" />
-    </span>`;
-  }
-  if (iconUrl) {
-    return html`<span class="plugins-cover">
-      <img
-        class="plugins-icon"
-        src=${iconUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        @error=${onIconError}
-      />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class="plugins-cover plugins-cover--fallback"
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.puzzle}
-  </span>`;
 }
 
 /* ---------------------------------- page shell ---------------------------------- */

@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -18,6 +18,7 @@ import {
   runDatabaseVerifyWorker,
 } from "./openclaw-database-verify.impl.js";
 import {
+  type OpenClawDatabaseVerifyResult,
   type OpenClawDatabaseVerifyTarget,
   verifyOpenClawDatabases,
 } from "./openclaw-database-verify.worker.js";
@@ -33,14 +34,19 @@ import {
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    try {
+      closeOpenClawAgentDatabasesForTest();
+    } finally {
+      try {
+        closeOpenClawStateDatabaseForTest();
+      } finally {
+        cleanup();
+      }
+    }
+  });
 });
-
-afterAll(() => cleanupTempDirs(tempDirs));
 
 function createUnsafeIndexDrift(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
@@ -102,9 +108,95 @@ function quarantineStorePath(stateDir: string): string {
   return path.join(stateDir, "state", "openclaw-quarantine.sqlite");
 }
 
+function terminalVerificationResult(pathname: string): OpenClawDatabaseVerifyResult {
+  return {
+    path: pathname,
+    ok: false,
+    error: "prepared terminal integrity failure",
+    terminal: true,
+  };
+}
+
+function preparedVerificationResults(
+  targets: readonly OpenClawDatabaseVerifyTarget[],
+): OpenClawDatabaseVerifyResult[] {
+  return targets.map((target) => terminalVerificationResult(target.path));
+}
+
+function readLinuxPosixLocksForPath(pathname: string): string[] {
+  if (process.platform !== "linux") {
+    return [];
+  }
+  const inode = fs.statSync(pathname, { bigint: true }).ino;
+  const lockInode = new RegExp(`\\b[0-9a-f]+:[0-9a-f]+:${inode}\\b`, "u");
+  return fs
+    .readFileSync("/proc/locks", "utf8")
+    .split("\n")
+    .filter((line) => line.includes(" POSIX ") && lockInode.test(line));
+}
+
 describe("OpenClaw database integrity verifier", () => {
+  it.skipIf(process.platform === "win32")(
+    "preserves live WAL ownership while snapshotting an open database",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-database-verify-live-locks-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+      agent.db
+        .prepare(
+          "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
+        )
+        .run("verifier-lock-owner", JSON.stringify({ preserved: true }), 1);
+      const walBefore = fs.statSync(`${agent.path}-wal`);
+      const shmBefore = fs.statSync(`${agent.path}-shm`);
+      const baseLocksBefore = readLinuxPosixLocksForPath(agent.path);
+      if (process.platform === "linux") {
+        expect(baseLocksBefore.length).toBeGreaterThan(0);
+      }
+      const targets: OpenClawDatabaseVerifyTarget[] = [
+        { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
+      ];
+
+      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
+        { path: agent.path, ok: true },
+      ]);
+      if (process.platform === "linux") {
+        // SQLite 3.51 can preserve visible WAL files after a lock is lost, so
+        // assert the kernel lock itself rather than relying on that symptom.
+        expect(readLinuxPosixLocksForPath(agent.path).length).toBeGreaterThan(0);
+      }
+      const reader = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+            import { DatabaseSync } from "node:sqlite";
+            const database = new DatabaseSync(process.env.OPENCLAW_VERIFY_TEST_PATH);
+            database.prepare("PRAGMA schema_version;").get();
+            database.close();
+          `,
+        ],
+        {
+          env: { ...process.env, OPENCLAW_VERIFY_TEST_PATH: agent.path },
+          encoding: "utf8",
+        },
+      );
+
+      expect(reader.stderr).toBe("");
+      expect(reader.status).toBe(0);
+      expect(fs.statSync(`${agent.path}-wal`).ino).toBe(walBefore.ino);
+      expect(fs.statSync(`${agent.path}-shm`).ino).toBe(shmBefore.ino);
+      expect(() =>
+        agent.db
+          .prepare("UPDATE auth_profile_state SET updated_at = ? WHERE state_key = ?")
+          .run(2, "verifier-lock-owner"),
+      ).not.toThrow();
+    },
+  );
+
   it("detects corruption off-thread, quarantines it, and latches later opens", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-");
+    const stateDir = tempDirs.make("openclaw-database-verify-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     createUnsafeIndexDrift(agentPath);
@@ -112,8 +204,8 @@ describe("OpenClaw database integrity verifier", () => {
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
 
-    const directResults = await verifyOpenClawDatabases(targets);
-    expect(directResults).toEqual([
+    const results = await runDatabaseVerifyWorker(targets);
+    expect(results).toEqual([
       {
         path: agentPath,
         ok: false,
@@ -121,11 +213,10 @@ describe("OpenClaw database integrity verifier", () => {
         terminal: true,
       },
     ]);
-    await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual(directResults);
 
     applyOpenClawDatabaseVerificationResults({
       env,
-      results: directResults,
+      results,
       targets,
     });
     const quarantine = readOpenClawDatabaseQuarantine(agentPath, { env });
@@ -154,7 +245,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("does not quarantine a healthy database that replaced the verified file", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-replacement-");
+    const stateDir = tempDirs.make("openclaw-database-verify-replacement-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -167,14 +258,7 @@ describe("OpenClaw database integrity verifier", () => {
     const targets: OpenClawDatabaseVerifyTarget[] = [
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
-    const results = await verifyOpenClawDatabases(targets);
-    expect(results).toEqual([
-      expect.objectContaining({
-        path: agentPath,
-        ok: false,
-        terminal: true,
-      }),
-    ]);
+    const results = preparedVerificationResults(targets);
 
     fs.renameSync(agentPath, corruptArchivePath);
     fs.renameSync(healthyReplacementPath, agentPath);
@@ -187,7 +271,7 @@ describe("OpenClaw database integrity verifier", () => {
   it.skipIf(process.platform === "win32")(
     "does not quarantine a healthy replacement while the corrupt agent inode is cached",
     async () => {
-      const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-live-agent-replace-");
+      const stateDir = tempDirs.make("openclaw-database-verify-live-agent-replace-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
       const healthyReplacementPath = `${agent.path}.healthy`;
@@ -197,7 +281,7 @@ describe("OpenClaw database integrity verifier", () => {
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
       ];
-      const results = await verifyOpenClawDatabases(targets);
+      const results = preparedVerificationResults(targets);
 
       fs.renameSync(agent.path, corruptArchivePath);
       fs.renameSync(healthyReplacementPath, agent.path);
@@ -212,7 +296,7 @@ describe("OpenClaw database integrity verifier", () => {
   it.skipIf(process.platform === "win32")(
     "does not quarantine a healthy replacement while the corrupt state inode is cached",
     async () => {
-      const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-live-state-replace-");
+      const stateDir = tempDirs.make("openclaw-database-verify-live-state-replace-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const state = openOpenClawStateDatabase({ env });
       const healthyReplacementPath = `${state.path}.healthy`;
@@ -222,7 +306,7 @@ describe("OpenClaw database integrity verifier", () => {
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "state", label: "OpenClaw state database", path: state.path },
       ];
-      const results = await verifyOpenClawDatabases(targets);
+      const results = preparedVerificationResults(targets);
 
       fs.renameSync(state.path, corruptArchivePath);
       fs.renameSync(healthyReplacementPath, state.path);
@@ -235,7 +319,7 @@ describe("OpenClaw database integrity verifier", () => {
   );
 
   it("reconfirms and quarantines a corrupt closed database", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-closed-");
+    const stateDir = tempDirs.make("openclaw-database-verify-closed-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -244,7 +328,7 @@ describe("OpenClaw database integrity verifier", () => {
     const targets: OpenClawDatabaseVerifyTarget[] = [
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
-    const results = await verifyOpenClawDatabases(targets);
+    const results = preparedVerificationResults(targets);
 
     applyOpenClawDatabaseVerificationResults({ env, results, targets });
 
@@ -257,7 +341,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("does not quarantine a repaired database after same-inode mutation", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-repair-race-");
+    const stateDir = tempDirs.make("openclaw-database-verify-repair-race-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -266,8 +350,7 @@ describe("OpenClaw database integrity verifier", () => {
     const targets: OpenClawDatabaseVerifyTarget[] = [
       { kind: "agent", label: "OpenClaw agent database worker-1", path: agentPath },
     ];
-    const results = await verifyOpenClawDatabases(targets);
-    expect(results[0]).toEqual(expect.objectContaining({ ok: false, terminal: true }));
+    const results = preparedVerificationResults(targets);
 
     repairUnsafeIndexDrift(agentPath);
     await expect(verifyOpenClawDatabases(targets)).resolves.toEqual([
@@ -280,7 +363,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("rejects stale terminal results after draining healthy owners", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-live-stale-");
+    const stateDir = tempDirs.make("openclaw-database-verify-live-stale-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const state = openOpenClawStateDatabase({ env });
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -309,7 +392,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("revalidates agent schema ownership after confirmation drains a pathname", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-agent-revalidate-");
+    const stateDir = tempDirs.make("openclaw-database-verify-agent-revalidate-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     const replacementPath = `${agent.path}.replacement`;
@@ -338,7 +421,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("expires a generation-bound process latch after the database changes", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-latch-generation-");
+    const stateDir = tempDirs.make("openclaw-database-verify-latch-generation-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -359,7 +442,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("reports an uncleared quarantine row instead of claiming repair success", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-clear-failure-");
+    const stateDir = tempDirs.make("openclaw-database-verify-clear-failure-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     openOpenClawStateDatabase({ env });
@@ -400,7 +483,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("keeps healthy opens on the missing-store fast path", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-clean-");
+    const stateDir = tempDirs.make("openclaw-database-verify-clean-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
 
     openOpenClawStateDatabase({ env });
@@ -410,7 +493,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("records and clears dedicated quarantine rows with rollback journaling", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-store-");
+    const stateDir = tempDirs.make("openclaw-database-verify-store-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(stateDir, "agent.sqlite");
     const storePath = quarantineStorePath(stateDir);
@@ -449,7 +532,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("expires a persisted quarantine when the verified database generation changes", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-store-generation-");
+    const stateDir = tempDirs.make("openclaw-database-verify-store-generation-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(stateDir, "agent.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
@@ -484,7 +567,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("reads schema-v1 quarantine rows and migrates them on the next write", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-store-v1-");
+    const stateDir = tempDirs.make("openclaw-database-verify-store-v1-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(stateDir, "agent.sqlite");
     const storePath = quarantineStorePath(stateDir);
@@ -539,7 +622,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("recovers an interrupted empty quarantine-store initialization", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-empty-store-");
+    const stateDir = tempDirs.make("openclaw-database-verify-empty-store-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(stateDir, "agent.sqlite");
     const storePath = quarantineStorePath(stateDir);
@@ -561,7 +644,7 @@ describe("OpenClaw database integrity verifier", () => {
   it.skipIf(process.platform === "win32")(
     "recovers a hot rollback journal before reading quarantine",
     () => {
-      const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-hot-journal-");
+      const stateDir = tempDirs.make("openclaw-database-verify-hot-journal-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const databasePath = path.join(stateDir, "agent.sqlite");
       const storePath = quarantineStorePath(stateDir);
@@ -600,7 +683,7 @@ describe("OpenClaw database integrity verifier", () => {
   );
 
   it("does not latch transient verifier errors", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-transient-");
+    const stateDir = tempDirs.make("openclaw-database-verify-transient-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -619,7 +702,7 @@ describe("OpenClaw database integrity verifier", () => {
   });
 
   it("persists state failure quarantine across restart until doctor repair", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-database-verify-state-failure-");
+    const stateDir = tempDirs.make("openclaw-database-verify-state-failure-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const statePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();

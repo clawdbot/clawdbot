@@ -1,29 +1,27 @@
 // Volcengine plugin module implements models behavior.
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildManifestProviderCatalogFamily } from "openclaw/plugin-sdk/provider-catalog-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const DOUBAO_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: "volcengine",
-  catalog: manifest.modelCatalog.providers.volcengine,
+export const VOLCENGINE_PROVIDER_CATALOG = buildManifestProviderCatalogFamily({
+  surfaces: [
+    {
+      id: "volcengine",
+      label: "Volcengine",
+      catalog: manifest.modelCatalog.providers.volcengine,
+    },
+    {
+      id: "volcengine-plan",
+      label: "Volcengine Plan",
+      catalog: manifest.modelCatalog.providers["volcengine-plan"],
+    },
+  ],
 });
 
-const DOUBAO_CODING_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: "volcengine-plan",
-  catalog: manifest.modelCatalog.providers["volcengine-plan"],
-});
+const DOUBAO_PROVIDER = VOLCENGINE_PROVIDER_CATALOG.entries[0]!;
+const DOUBAO_CODING_PROVIDER = VOLCENGINE_PROVIDER_CATALOG.entries[1]!;
 
-export const DOUBAO_BASE_URL = DOUBAO_MANIFEST_PROVIDER.baseUrl;
-export const DOUBAO_CODING_BASE_URL = DOUBAO_CODING_MANIFEST_PROVIDER.baseUrl;
+export const DOUBAO_BASE_URL = DOUBAO_PROVIDER.baseUrl;
+export const DOUBAO_CODING_BASE_URL = DOUBAO_CODING_PROVIDER.baseUrl;
 
-export const DOUBAO_MODEL_CATALOG: ModelDefinitionConfig[] = DOUBAO_MANIFEST_PROVIDER.models;
-export const DOUBAO_CODING_MODEL_CATALOG: ModelDefinitionConfig[] =
-  DOUBAO_CODING_MANIFEST_PROVIDER.models;
-
-export function buildDoubaoModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
-  return {
-    ...entry,
-    input: [...entry.input],
-    cost: { ...entry.cost },
-  };
-}
+export const DOUBAO_MODEL_CATALOG = DOUBAO_PROVIDER.models;
+export const DOUBAO_CODING_MODEL_CATALOG = DOUBAO_CODING_PROVIDER.models;

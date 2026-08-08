@@ -168,6 +168,49 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toEqual(hits);
   });
 
+  it("keeps memory but hides an unrelated same-agent session from a voice requester", async () => {
+    combinedSessionStore = {
+      "agent:main:voice:15550001111": {
+        sessionId: "voice",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/voice.jsonl",
+        chatType: "direct",
+      },
+      "agent:main:telegram:direct:owner": {
+        sessionId: "private",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/private.jsonl",
+        chatType: "direct",
+      },
+    };
+    const memoryHit: MemorySearchResult = {
+      path: "memory/allowed.md",
+      source: "memory",
+      score: 1,
+      snippet: "Visible memory",
+      startLine: 1,
+      endLine: 2,
+    };
+    const sessionHit: MemorySearchResult = {
+      path: "sessions/private.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "Private session secret",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({}),
+      agentId: "main",
+      requesterSessionKey: "agent:main:voice:15550001111",
+      sandboxed: false,
+      hits: [memoryHit, sessionHit],
+    });
+
+    expect(filtered).toEqual([memoryHit]);
+  });
+
   it("allows another same-agent private transcript through trusted conversation recall", async () => {
     combinedSessionStore = {
       "agent:main:telegram:direct:owner": {

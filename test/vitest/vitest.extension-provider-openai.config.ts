@@ -1,29 +1,16 @@
 // Vitest extension provider openai config wires the extension provider openai test shard.
 import path from "node:path";
+import { createExtensionVitestConfig } from "./vitest.extension-config.ts";
 import { providerOpenAiExtensionTestRoots } from "./vitest.extension-provider-paths.mjs";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { repoRoot } from "./vitest.shared.config.ts";
-
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
 
 export function createExtensionProviderOpenAiVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  const config = createScopedVitestConfig(
-    loadIncludePatternsFromEnv(env) ??
-      providerOpenAiExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
-    {
-      dir: "extensions",
-      env,
-      name: "extension-provider-openai",
-      passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
-    },
+  const config = createExtensionVitestConfig(
+    "provider-openai",
+    providerOpenAiExtensionTestRoots,
+    env,
   );
   return {
     ...config,

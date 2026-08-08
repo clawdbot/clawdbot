@@ -5,6 +5,7 @@ export const CHECK_IDS = {
   policyHashMismatch: "policy/policy-hash-mismatch",
   policyInvalidFile: "policy/policy-jsonc-invalid",
   policyMissingFile: "policy/policy-jsonc-missing",
+  policyUnmigratedToolsFile: "policy/tools-md-migration-required",
   policyDeniedMcpServer: "policy/mcp-denied-server",
   policyUnapprovedMcpServer: "policy/mcp-unapproved-server",
   policyDeniedModelProvider: "policy/models-denied-provider",
@@ -47,7 +48,6 @@ export const CHECK_IDS = {
   policySandboxContainerRuntimeSocketMount: "policy/sandbox-container-runtime-socket-mount",
   policySandboxContainerUnconfinedProfile: "policy/sandbox-container-unconfined-profile",
   policySandboxBrowserCdpSourceRangeMissing: "policy/sandbox-browser-cdp-source-range-missing",
-  policyDataHandlingRedactionDisabled: "policy/data-handling-redaction-disabled",
   policyDataHandlingTelemetryContentCapture: "policy/data-handling-telemetry-content-capture",
   policyDataHandlingSessionRetentionNotEnforced:
     "policy/data-handling-session-retention-not-enforced",
@@ -75,6 +75,7 @@ export const CHECK_IDS = {
 export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyMissingFile,
   CHECK_IDS.policyInvalidFile,
+  CHECK_IDS.policyUnmigratedToolsFile,
   CHECK_IDS.policyHashMismatch,
   CHECK_IDS.policyAttestationMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
@@ -120,7 +121,6 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policySandboxContainerRuntimeSocketMount,
   CHECK_IDS.policySandboxContainerUnconfinedProfile,
   CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-  CHECK_IDS.policyDataHandlingRedactionDisabled,
   CHECK_IDS.policyDataHandlingTelemetryContentCapture,
   CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
   CHECK_IDS.policyDataHandlingSessionTranscriptMemory,

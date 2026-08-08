@@ -157,7 +157,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
+  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: runtimeWorkspaceDir,
@@ -200,8 +200,7 @@ export function buildCliAgentSystemPrompt(params: {
     toolNames: params.tools.map((tool) => tool.name),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
   });
@@ -407,7 +406,7 @@ export async function writeCliSystemPromptFile(params: {
   );
   return {
     filePath,
-    cleanup: async () => await workspace.cleanup(),
+    cleanup: () => workspace.cleanup().then(() => undefined),
   };
 }
 
@@ -487,6 +486,7 @@ export function buildCliArgs(params: {
   promptArg?: string;
   useResume: boolean;
   forkResume?: boolean;
+  resumeAt?: string;
   sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
@@ -532,6 +532,12 @@ export function buildCliArgs(params: {
       throw new Error("CLI backend does not support forked session resume");
     }
     args.push(params.backend.forkArg);
+  }
+  if (params.resumeAt) {
+    if (!params.useResume || !params.backend.resumeAtArg) {
+      throw new Error("CLI backend does not support checkpointed session resume");
+    }
+    args.push(params.backend.resumeAtArg, params.resumeAt);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

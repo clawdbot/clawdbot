@@ -12,6 +12,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
@@ -60,7 +61,7 @@ const defaultRuntime: PolicyCommandRuntime = {
     process.stdout.write(value);
   },
   error(value) {
-    process.stderr.write(`${value}\n`);
+    cliRuntime.error(value);
   },
   sleep(ms) {
     return sleep(ms);

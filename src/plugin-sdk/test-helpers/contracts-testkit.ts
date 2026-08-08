@@ -47,6 +47,7 @@ export function registerTestPlugin(params: {
   params.register(
     params.registry.createApi(params.record, {
       config: params.config,
+      hookPolicy: params.config.plugins?.entries?.[params.record.id]?.hooks,
     }),
   );
 }

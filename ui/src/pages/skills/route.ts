@@ -1,12 +1,10 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsRouteData> {
   const gateway = context.gateway;
@@ -31,12 +29,12 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   try {
     agentsList = await agents.ensureList();
   } catch (err) {
-    error = errorMessage(err);
+    error = formatUiError(err);
   }
   try {
     report = (await loadSkillStatusReport(client, null)) ?? null;
   } catch (err) {
-    error ??= errorMessage(err);
+    error ??= formatUiError(err);
   }
   return {
     gateway,
@@ -50,8 +48,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
 }
 
 export const page = definePage({
-  id: "skills",
-  path: "/skills",
+  ...routePageSpec("skills"),
   loader: loadSkillsRouteData,
   component: () =>
     import("./skills-page.ts").then(() => ({

@@ -37,6 +37,12 @@ const browserConfigMocks = vi.hoisted(() => ({
   })),
 }));
 
+const uploadMocks = vi.hoisted(() => ({
+  stageBrowserProxyUploadRequest: vi.fn(),
+  discardStagedBrowserProxyUpload: vi.fn(async () => {}),
+  ensureBrowserProxyUploadCleanup: vi.fn(async () => {}),
+}));
+
 vi.mock("../sdk-config.js", () => ({
   getRuntimeConfig: configMocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
@@ -107,6 +113,8 @@ vi.mock("../browser/config.js", () => ({
   resolveBrowserConfig: browserConfigMocks.resolveBrowserConfig,
 }));
 
+vi.mock("../browser-proxy-upload.js", () => uploadMocks);
+
 vi.mock("../browser/request-policy.js", () => ({
   isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
     if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
@@ -158,6 +166,7 @@ let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxy
 type BrowserDispatchRequest = {
   path?: string;
   query?: unknown;
+  body?: unknown;
 };
 
 function firstBrowserDispatchRequest(): BrowserDispatchRequest {
@@ -196,8 +205,313 @@ describe("runBrowserProxyCommand", () => {
       defaultProfile: "openclaw",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
+    uploadMocks.stageBrowserProxyUploadRequest
+      .mockReset()
+      .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
+    uploadMocks.discardStagedBrowserProxyUpload.mockReset().mockResolvedValue(undefined);
+    uploadMocks.ensureBrowserProxyUploadCleanup.mockReset().mockResolvedValue(undefined);
     vi.resetModules();
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
+  });
+
+  it("retries browser control startup after a rejected attempt", async () => {
+    controlServiceMocks.startBrowserControlServiceFromConfig.mockRejectedValueOnce(
+      new Error("browser startup failed"),
+    );
+    dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
+    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
+
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser startup failed");
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(
+      JSON.stringify({ result: { ok: true } }),
+    );
+
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("retries browser control startup after the service returns disabled", async () => {
+    controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(false);
+    dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
+    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
+
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(
+      JSON.stringify({ result: { ok: true } }),
+    );
+
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("shares a retried browser control startup across concurrent requests", async () => {
+    let rejectFailedStartup!: (reason?: unknown) => void;
+    const failedStartup = new Promise<boolean>((_resolve, reject) => {
+      rejectFailedStartup = reject;
+    });
+    let resolveSuccessfulStartup!: (value: boolean) => void;
+    const successfulStartup = new Promise<boolean>((resolve) => {
+      resolveSuccessfulStartup = resolve;
+    });
+    controlServiceMocks.startBrowserControlServiceFromConfig
+      .mockReturnValueOnce(failedStartup)
+      .mockReturnValueOnce(successfulStartup);
+    dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
+    const request = JSON.stringify({ method: "GET", path: "/snapshot" });
+
+    const failedRequests = Promise.allSettled([
+      runBrowserProxyCommand(request),
+      runBrowserProxyCommand(request),
+    ]);
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledOnce();
+    rejectFailedStartup(new Error("browser startup failed"));
+
+    await expect(failedRequests).resolves.toEqual([
+      { status: "rejected", reason: expect.any(Error) },
+      { status: "rejected", reason: expect.any(Error) },
+    ]);
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+
+    const retriedRequests = Promise.allSettled([
+      runBrowserProxyCommand(request),
+      runBrowserProxyCommand(request),
+    ]);
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    resolveSuccessfulStartup(true);
+
+    await expect(retriedRequests).resolves.toEqual([
+      { status: "fulfilled", value: JSON.stringify({ result: { ok: true } }) },
+      { status: "fulfilled", value: JSON.stringify({ result: { ok: true } }) },
+    ]);
+    await expect(runBrowserProxyCommand(request)).resolves.toBe(
+      JSON.stringify({ result: { ok: true } }),
+    );
+    expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledTimes(3);
+  });
+
+  it("stages upload envelopes before dispatch and retains successful copies", async () => {
+    const upload = {
+      envelope: "browser-upload-v1",
+      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+    };
+    const staged = {
+      body: { ref: "e12", paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
+      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
+    };
+    uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
+    dispatcherMocks.dispatch.mockResolvedValueOnce({ status: 200, body: { ok: true } });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: { ref: "e12" },
+          upload,
+        }),
+        "browser.proxy.upload.v1",
+      ),
+    ).resolves.toBe(JSON.stringify({ result: { ok: true } }));
+
+    expect(uploadMocks.stageBrowserProxyUploadRequest).toHaveBeenCalledWith({
+      method: "POST",
+      path: "/hooks/file-chooser",
+      body: { ref: "e12" },
+      upload,
+      signal: expect.any(AbortSignal),
+    });
+    expect(firstBrowserDispatchRequest().body).toEqual(staged.body);
+    expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
+  });
+
+  it("discards staged copies when the route rejects the upload", async () => {
+    const staged = {
+      body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
+      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
+    };
+    uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
+    dispatcherMocks.dispatch.mockResolvedValueOnce({
+      status: 400,
+      body: { error: "upload rejected" },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: {},
+          upload: {
+            envelope: "browser-upload-v1",
+            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+          },
+        }),
+        "browser.proxy.upload.v1",
+      ),
+    ).rejects.toThrow("400: upload rejected");
+
+    expect(uploadMocks.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(staged);
+  });
+
+  it("retains staged copies when dispatch fails after Browser ownership is uncertain", async () => {
+    const staged = {
+      body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
+      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
+    };
+    uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
+    dispatcherMocks.dispatch.mockRejectedValueOnce(new Error("dispatch failed"));
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: {},
+          upload: {
+            envelope: "browser-upload-v1",
+            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+          },
+        }),
+        "browser.proxy.upload.v1",
+      ),
+    ).rejects.toThrow("dispatch failed");
+
+    expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
+  });
+
+  it("retains staged copies when the timeout wins before dispatch settles", async () => {
+    const staged = {
+      body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
+      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
+    };
+    uploadMocks.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
+    dispatcherMocks.dispatch
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({
+        status: 200,
+        body: { running: true, cdpReady: true, cdpHttp: true },
+      });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: {},
+          upload: {
+            envelope: "browser-upload-v1",
+            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+          },
+          timeoutMs: 5,
+        }),
+        "browser.proxy.upload.v1",
+      ),
+    ).rejects.toThrow("browser proxy timed out");
+
+    expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
+  });
+
+  it("rejects upload envelopes sent through the legacy proxy command", async () => {
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: {},
+          upload: {
+            envelope: "browser-upload-v1",
+            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+          },
+        }),
+      ),
+    ).rejects.toThrow("browser.proxy does not accept upload envelopes");
+    expect(uploadMocks.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, false, 0, ""])(
+    "rejects a %j upload envelope sent through the upload proxy command",
+    async (upload) => {
+      await expect(
+        runBrowserProxyCommand(
+          JSON.stringify({ method: "GET", path: "/snapshot", upload }),
+          "browser.proxy.upload.v1",
+        ),
+      ).rejects.toThrow("browser.proxy.upload.v1 requires an upload envelope");
+      expect(uploadMocks.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
+      expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not dispatch after upload staging exhausts the proxy deadline", async () => {
+    const staged = {
+      body: { paths: ["/tmp/openclaw/uploads/.proxy-uploads/upload-1/0/report.txt"] },
+      directory: "/tmp/openclaw/uploads/.proxy-uploads/upload-1",
+    };
+    let nowMs = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    uploadMocks.stageBrowserProxyUploadRequest.mockImplementationOnce(async () => {
+      nowMs += 10;
+      return staged;
+    });
+
+    try {
+      await expect(
+        runBrowserProxyCommand(
+          JSON.stringify({
+            method: "POST",
+            path: "/hooks/file-chooser",
+            body: {},
+            upload: {
+              envelope: "browser-upload-v1",
+              files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+            },
+            timeoutMs: 5,
+          }),
+          "browser.proxy.upload.v1",
+        ),
+      ).rejects.toThrow("browser proxy timed out");
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+    expect(uploadMocks.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(staged);
+  });
+
+  it("aborts upload staging when it reaches the proxy deadline", async () => {
+    uploadMocks.stageBrowserProxyUploadRequest.mockImplementationOnce(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error(String(reason)));
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: {},
+          upload: {
+            envelope: "browser-upload-v1",
+            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+          },
+          timeoutMs: 5,
+        }),
+        "browser.proxy.upload.v1",
+      ),
+    ).rejects.toThrow("browser proxy timed out");
+
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
   it("serializes plural action downloads without reading nested page paths", async () => {

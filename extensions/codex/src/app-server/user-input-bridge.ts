@@ -140,6 +140,7 @@ export function createCodexUserInputBridge(params: {
           questions: requestParams.questions,
           sessionKey: params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId,
           agentId: params.paramsForRun.agentId,
+          runId: params.paramsForRun.runId,
           timeoutMs:
             requestParams.autoResolutionMs ??
             params.paramsForRun.timeoutMs ??

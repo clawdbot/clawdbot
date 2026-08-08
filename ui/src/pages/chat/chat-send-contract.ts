@@ -3,7 +3,6 @@ import type { AgentsListResult } from "../../api/types.ts";
 import type { ChatFollowUpMode } from "../../app/settings.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
-import type { ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import type { SessionCapability, SessionRefreshTarget } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
@@ -24,7 +23,6 @@ export type ChatHost = ChatInputHistoryState &
     connectionEpoch?: number;
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
-    chatQueueByScope?: Record<string, ChatQueueItem[]>;
     /** Active leaf of the history snapshot currently rendered by this pane. */
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;
@@ -54,10 +52,6 @@ export type ChatHost = ChatInputHistoryState &
       senderLabel?: string | null;
       sourceMessageId?: string | null;
     } | null;
-    /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
-    chatSideResultPending?: ChatSideResultPending | null;
-    /** Retired/handled BTW run ids whose late events must not reach the transcript. */
-    chatSideResultTerminalRuns?: Set<string>;
-    /** Side-chat panel closed via X/Escape; a new question reopens it. */
-    chatSideChatHidden?: boolean;
+    /** Control UI route for /btw and /side; server/TUI command handling remains unchanged. */
+    openSessionCompanion?: (question: string) => Promise<void> | void;
   };

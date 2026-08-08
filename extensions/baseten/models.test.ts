@@ -1,4 +1,5 @@
 import {
+  buildOpenAICompatibleLiveModelProviderConfig,
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -7,12 +8,33 @@ import {
   BASETEN_DEFAULT_MODEL_REF,
   BASETEN_MODEL_CATALOG,
   buildStaticBasetenModels,
-  discoverBasetenModels,
   projectBasetenLiveModels,
   resolveBasetenDynamicModel,
 } from "./models.js";
 
 const TEST_VALUE = "fixture";
+
+async function buildLiveBasetenModels(params: {
+  discoveryApiKey: string;
+  fetchGuard: LiveModelCatalogFetchGuard;
+}) {
+  const provider = await buildOpenAICompatibleLiveModelProviderConfig({
+    providerId: "baseten",
+    providerConfig: {
+      baseUrl: "https://inference.baseten.co/v1",
+      api: "openai-completions",
+      models: buildStaticBasetenModels(),
+    },
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    modelDiscovery: {
+      timeoutMs: 10_000,
+      ttlMs: 5 * 60 * 1000,
+      projectRows: projectBasetenLiveModels,
+    },
+  });
+  return provider.models;
+}
 
 describe("Baseten model catalog", () => {
   beforeEach(() => {
@@ -133,10 +155,6 @@ describe("Baseten model catalog", () => {
     });
   });
 
-  it("keeps discovery offline without resolved auth", async () => {
-    await expect(discoverBasetenModels()).resolves.toHaveLength(9);
-  });
-
   it("authenticates live discovery and does not cache unusable rows", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi
@@ -163,18 +181,10 @@ describe("Baseten model catalog", () => {
       }));
 
     await expect(
-      discoverBasetenModels({
-        discoveryApiKey: TEST_VALUE,
-        forceLive: true,
-        fetchGuard,
-      }),
+      buildLiveBasetenModels({ discoveryApiKey: TEST_VALUE, fetchGuard }),
     ).resolves.toHaveLength(9);
     await expect(
-      discoverBasetenModels({
-        discoveryApiKey: TEST_VALUE,
-        forceLive: true,
-        fetchGuard,
-      }),
+      buildLiveBasetenModels({ discoveryApiKey: TEST_VALUE, fetchGuard }),
     ).resolves.toEqual([
       expect.objectContaining({
         id: "thinkingmachines/inkling",

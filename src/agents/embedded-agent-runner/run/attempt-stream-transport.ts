@@ -12,7 +12,6 @@ import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
-  resolveExtraParams,
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
@@ -50,6 +49,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   providerPromptState: {
     state: ProviderPromptState;
     effectiveContextTokenBudget: number;
+    recordEvent?: (type: string, data?: Record<string, unknown>) => void;
   };
 }) {
   const attempt = input.attempt;
@@ -75,12 +75,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedTransport,
   });
-  const resolvedExtraParams = resolveExtraParams({
-    cfg: attempt.config,
-    provider: attempt.provider,
-    modelId: attempt.modelId,
-    agentId: input.sessionAgentId,
-  });
   const effectiveExtraParams =
     preparedRuntimeExtraParams ??
     resolvePreparedExtraParams({
@@ -92,7 +86,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentId: input.sessionAgentId,
       agentDir: input.agentDir,
       workspaceDir: input.workspaceDir,
-      resolvedExtraParams,
       model: attempt.model,
       resolvedTransport,
     });
@@ -145,6 +138,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
+    webSearchEnabled: attempt.disableTools !== true && attempt.toolOverrides?.webSearch !== false,
+    runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
     messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),

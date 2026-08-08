@@ -9,7 +9,7 @@ export type SlackSystemEventHandler = (args: {
 export type SlackSystemEventTestOverrides = {
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
-  channelType?: "im" | "channel";
+  channelType?: "im" | "channel" | "group" | "mpim";
   channelUsers?: string[];
   reactionMode?: "off" | "own" | "all" | "allowlist";
   reactionAllowlist?: Array<string | number>;
@@ -50,6 +50,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
     rememberSlackChannelType: () => {},
+    recallSlackChannelType: () => undefined,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,

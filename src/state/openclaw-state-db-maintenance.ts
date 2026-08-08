@@ -11,13 +11,32 @@ import {
 } from "../infra/sqlite-user-version.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+/**
+ * Additive Claw provenance columns that only a writable open can ensure. A
+ * same-version database written before them stays readable so read-only
+ * planning surfaces are not refused before they can report anything.
+ */
+export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
+  "claw_installs.bootstrap_content_digest",
+  "claw_installs.bootstrap_source_path",
+  "claw_package_refs.extension_adapter_identity",
+  "claw_package_refs.extension_detected_format",
+  "claw_package_refs.extension_format",
+  "claw_package_refs.extension_id",
+  "claw_package_refs.extension_mapped_json",
+  "claw_package_refs.extension_unavailable_json",
+] as const;
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+  allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
@@ -68,6 +87,7 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_environment_credentials",
   "worker_transcript_commit_heads",
   "worker_transcript_commits",
+  ...LAZY_ADDITIVE_STATE_TABLES,
 ] as const;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
@@ -122,7 +142,7 @@ export function assertOpenClawStateDatabaseOwner(
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
-  options: { pathname: string },
+  options: { pathname: string; allowedMissingColumns?: readonly string[] },
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -154,7 +174,12 @@ export function assertOpenClawStateDatabaseForMaintenance(
     database,
     options.pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
-    OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    options.allowedMissingColumns
+      ? {
+          ...OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+          allowedMissingColumns: options.allowedMissingColumns,
+        }
+      : OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   );
 }
 

@@ -12,14 +12,14 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { createMergePatch } from "../config/io.write-prepare.js";
+import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
-import { normalizeUpdateChannel } from "../infra/update-channels.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
@@ -35,6 +35,7 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { configReferencesNpmInstallPath } from "../plugins/installs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
@@ -183,10 +184,10 @@ type RunPluginUpdateCommandParams = {
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
   if (params.opts.dryRun) {
     return await runPluginUpdateCommandUnlocked(params);
   }
+  assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
     async () => await runPluginUpdateCommandUnlocked(params),
@@ -194,7 +195,9 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
 }
 
 async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
-  assertConfigWriteAllowedInCurrentMode();
+  if (!params.opts.dryRun) {
+    assertConfigWriteAllowedInCurrentMode();
+  }
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
     .then((prepared) => ({
@@ -222,6 +225,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     sourceCfg,
     pluginInstallRecords,
   );
+  const configuredUpdateChannel = normalizeUpdateChannel(cfg.update?.channel) ?? undefined;
+  const officialPluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: configuredUpdateChannel,
+    currentVersion: VERSION,
+  });
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
@@ -246,7 +254,11 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
       defaultRuntime.log("No tracked plugins or hook packs to update.");
       return;
     }
-    defaultRuntime.error("Provide a plugin or hook-pack id, or use --all.");
+    defaultRuntime.error(
+      params.id
+        ? `No tracked plugin or hook pack found for "${params.id}". Run "openclaw plugins list" or "openclaw hooks list" to inspect installed packages.`
+        : "Provide a plugin or hook-pack id, or use --all.",
+    );
     return defaultRuntime.exit(1);
   }
 
@@ -296,9 +308,15 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
       );
     });
+    const pluginLoadPathMayMutate = pluginSelection.pluginIds.some((pluginId) =>
+      configReferencesNpmInstallPath({
+        config: cfg,
+        install: pluginInstallRecords[pluginId],
+      }),
+    );
     // Manual update records stay in the index unless scoped-package compatibility
-    // migrates authored references from a legacy id.
-    const pluginConfigMayMutate = pluginIdMigrationMayMutate;
+    // migrates authored references or moves an explicit prior managed root.
+    const pluginConfigMayMutate = pluginIdMigrationMayMutate || pluginLoadPathMayMutate;
     const blockedReasons = new Set<string>();
     if (pluginConfigMayMutate && pluginMutation.mode === "blocked") {
       blockedReasons.add(pluginMutation.reason);
@@ -335,9 +353,8 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
-          officialPluginUpdateChannel: params.opts.all
-            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
-            : undefined,
+          updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
+          officialPluginUpdateChannel,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           coreVersion: VERSION,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
@@ -419,6 +436,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         await commitPluginInstallRecordsOnly({
           previousInstallRecords: persistedPluginInstallRecords,
           nextInstallRecords: nextPluginInstallRecords,
+          nextConfig,
           verifyConfigFresh: async () => {
             await assertRecordsOnlyUpdateConfigFresh({
               baseHash: sourceSnapshot?.snapshot.hash,

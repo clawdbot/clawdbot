@@ -101,6 +101,64 @@ function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
+function inspectAuthProfileTable(
+  db: DatabaseSync,
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection | null {
+  const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
+  const schemaObject = db
+    .prepare("SELECT type FROM sqlite_master WHERE name = ?")
+    .get(tableName) as { type?: unknown } | undefined;
+  if (!schemaObject) {
+    // Agent databases shipped before SQLite auth storage do not have these
+    // additive tables until their next writable bootstrap.
+    return { status: "missing", reason: "table" };
+  }
+  return schemaObject.type === "table" ? null : { status: "unreadable" };
+}
+
+function inspectAuthProfileJsonCell(
+  db: DatabaseSync,
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection {
+  const tableInspection = inspectAuthProfileTable(db, target);
+  if (tableInspection) {
+    return tableInspection;
+  }
+  const kysely = getAuthProfileKysely(db);
+  let raw: string;
+  if (target === "store") {
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("auth_profile_store")
+        .select("store_json")
+        .where("store_key", "=", PRIMARY_ROW_KEY),
+    );
+    if (!row) {
+      return { status: "missing", reason: "row" };
+    }
+    raw = row.store_json;
+  } else {
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("auth_profile_state")
+        .select("state_json")
+        .where("state_key", "=", PRIMARY_ROW_KEY),
+    );
+    if (!row) {
+      return { status: "missing", reason: "row" };
+    }
+    raw = row.state_json;
+  }
+  try {
+    return { status: "readable", raw: JSON.parse(raw) as unknown };
+  } catch {
+    return { status: "unreadable" };
+  }
+}
+
 function inspectAuthProfileJsonCellReadOnly(
   pathname: string,
   target: "store" | "state",
@@ -115,51 +173,7 @@ function inspectAuthProfileJsonCellReadOnly(
     if (readSqliteUserVersion(db) > OPENCLAW_AGENT_SCHEMA_VERSION) {
       return { status: "unreadable" };
     }
-    const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
-    const schemaObject = db
-      .prepare("SELECT type FROM sqlite_master WHERE name = ?")
-      .get(tableName) as { type?: unknown } | undefined;
-    if (!schemaObject) {
-      // Agent databases shipped before SQLite auth storage do not have these
-      // additive tables until their next writable bootstrap.
-      return { status: "missing", reason: "table" };
-    }
-    if (schemaObject.type !== "table") {
-      return { status: "unreadable" };
-    }
-    const kysely = getAuthProfileKysely(db);
-    if (target === "store") {
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("auth_profile_store")
-          .select("store_json")
-          .where("store_key", "=", PRIMARY_ROW_KEY),
-      );
-      if (!row) {
-        return { status: "missing", reason: "row" };
-      }
-      try {
-        return { status: "readable", raw: JSON.parse(row.store_json) as unknown };
-      } catch {
-        return { status: "unreadable" };
-      }
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("auth_profile_state")
-        .select("state_json")
-        .where("state_key", "=", PRIMARY_ROW_KEY),
-    );
-    if (!row) {
-      return { status: "missing", reason: "row" };
-    }
-    try {
-      return { status: "readable", raw: JSON.parse(row.state_json) as unknown };
-    } catch {
-      return { status: "unreadable" };
-    }
+    return inspectAuthProfileJsonCell(db, target);
   } catch {
     return { status: "unreadable" };
   } finally {
@@ -178,7 +192,11 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
 /** Distinguishes an absent auth row from a present store that could not be read. */
 export function inspectPersistedAuthProfileStoreRaw(
   agentDir?: string,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
+  if (database) {
+    return inspectAuthProfileJsonCell(database.db, "store");
+  }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   if (!fs.existsSync(databasePath)) {
     return { status: "missing", reason: "database" };
@@ -189,7 +207,11 @@ export function inspectPersistedAuthProfileStoreRaw(
 /** Distinguishes an absent auth-state row from state that could not be read. */
 export function inspectPersistedAuthProfileStateRaw(
   agentDir?: string,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
+  if (database) {
+    return inspectAuthProfileJsonCell(database.db, "state");
+  }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   if (!fs.existsSync(databasePath)) {
     return { status: "missing", reason: "database" };

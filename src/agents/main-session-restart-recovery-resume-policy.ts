@@ -3,9 +3,14 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
+  isIntermediateAssistantTranscriptMessage,
   isMeaningfulTranscriptMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "./embedded-agent-runner/message-visibility.js";
+import {
+  AGENT_RUN_RESTART_ABORT_ERROR,
+  AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+} from "./run-termination.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 
 function readDeliveredTerminalSourceReplyToolCallId(
@@ -229,27 +234,46 @@ export function hasReplaySafeCodeModeCheckpointInCurrentTurn(
   return false;
 }
 
-// Generic fetch/undici abort strings plus the gateway's own restart abort
-// reason (run-termination.ts); which one lands depends on whether the provider
-// stream throws or surfaces the abort as an error event.
-const RESTART_ABORT_ERROR_MESSAGES = new Set([
+// Upgrade-window compat: tails persisted before transports preserved the abort
+// reason carry no `errorCode`, and the old process can write one while shutting
+// down for the very upgrade that starts the new one. Read those by their abort
+// text so that run still resumes. Coded tails never consult this set, so a
+// coded non-restart abort stays excluded. Remove once no pre-`errorCode`
+// transcript can reach restart recovery.
+const LEGACY_RESTART_ABORT_ERROR_MESSAGES = new Set([
   "Request was aborted",
   "This operation was aborted",
-  "agent run aborted for restart",
+  AGENT_RUN_RESTART_ABORT_ERROR,
 ]);
+const CODE_MODE_RESTART_ABORT_ERROR = "code mode execution aborted";
 
 function isRestartAbortAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
     return false;
   }
   const stopReason = normalizeOptionalString((message as { stopReason?: unknown }).stopReason);
-  if (stopReason !== "error" && stopReason !== "aborted") {
+  // Every row that reaches restart recovery was mid-run when the process went
+  // down, so an "aborted" tail is that interruption whatever detail the
+  // transport persisted with it ("Worker inference aborted.", a provider cancel
+  // message, or nothing).
+  if (stopReason === "aborted") {
+    return true;
+  }
+  if (stopReason !== "error") {
     return false;
+  }
+  // An "error" tail only means the restart when the transport carried the
+  // gateway's own abort code through (transports copy the reason's `code` into
+  // `errorCode`). A provider failure or a first-stream-event timeout carries a
+  // different code and stays unresumable.
+  const errorCode = normalizeOptionalString((message as { errorCode?: unknown }).errorCode);
+  if (errorCode !== undefined) {
+    return errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE;
   }
   const errorMessage = normalizeOptionalString(
     (message as { errorMessage?: unknown }).errorMessage,
   );
-  return errorMessage !== undefined && RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
+  return errorMessage !== undefined && LEGACY_RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
 }
 
 export function isRestartAbortTailArtifact(message: unknown): boolean {
@@ -275,8 +299,7 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
   if (
     !details ||
     typeof details !== "object" ||
-    (details as { status?: unknown }).status !== "failed" ||
-    (details as { code?: unknown }).code !== "internal_error"
+    (details as { status?: unknown }).status !== "failed"
   ) {
     return false;
   }
@@ -293,6 +316,16 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
   const errorText =
     normalizeOptionalString((details as { error?: unknown }).error) ??
     normalizeOptionalString(contentText);
+  const code = normalizeOptionalString((details as { code?: unknown }).code);
+  if (code === "aborted") {
+    // Current Code Mode wait aborts use the runtime's explicit abort code and
+    // message. Recovery already owns the restart boundary, so this exact pair
+    // is lifecycle noise rather than a provider or tool failure.
+    return errorText === CODE_MODE_RESTART_ABORT_ERROR;
+  }
+  if (code !== "internal_error") {
+    return false;
+  }
   return /^(?:(?:Abort)?Error:\s*)?(?:The|This) operation was aborted\.?$/u.test(errorText ?? "");
 }
 
@@ -324,7 +357,11 @@ type MainSessionResumePolicy =
     }
   | { action: "complete"; reason: "handled-silent" }
   | { action: "fail"; reason: string }
-  | { action: "resume"; forceRestartSafeTools: boolean };
+  | {
+      action: "resume";
+      forceRestartSafeTools: boolean;
+      forceCodeModeTools?: true;
+    };
 
 export function resolveMainSessionResumePolicy(
   messages: unknown[],
@@ -367,7 +404,16 @@ export function resolveMainSessionResumePolicy(
   }
   // `admitted` means no optional hook started. The dispatch boundary reloads
   // the current hook set before it permits this transcript to resume.
-  const meaningfulMessages = messages.toReversed().filter(isMeaningfulTranscriptMessage);
+  // Progress can commit after the recovery mark while the old run is winding
+  // down. It is not a terminal turn boundary; preserve it in the transcript
+  // while classifying the actual user/tool/assistant boundary beneath it.
+  const meaningfulMessages = messages
+    .toReversed()
+    .filter(
+      (message) =>
+        isMeaningfulTranscriptMessage(message) &&
+        !isIntermediateAssistantTranscriptMessage(message),
+    );
   // A restart abort tail without tool calls is lifecycle noise whether or not
   // partial streamed text was persisted with it; the partial output stays in
   // the transcript for the continuation, and the message beneath decides
@@ -395,7 +441,7 @@ export function resolveMainSessionResumePolicy(
     const waitCall = readCodeModeWaitCall(meaningfulMessages[1]);
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[2]);
     return waitCall && checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : {
           action: "fail",
           reason: "failed Code Mode wait cannot be matched to a replay-safe checkpoint",
@@ -405,13 +451,13 @@ export function resolveMainSessionResumePolicy(
   if (waitCall) {
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
     return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
   }
   const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
   if (tailCheckpoint) {
     return tailCheckpoint.replaySafe
-      ? { action: "resume", forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
   }
   // A tool call interrupted mid-execution resumes like the manual re-send the
@@ -431,5 +477,12 @@ export function resolveMainSessionResumePolicy(
       reason: "transcript tail is a stale approval-pending tool result",
     };
   }
-  return { action: "resume", forceRestartSafeTools: false };
+  // A later tool result can hide the checkpoint at the transcript tail; keep
+  // the interrupted turn restricted without borrowing an earlier turn's state.
+  const forceCodeModeTools = hasReplaySafeCodeModeCheckpointInCurrentTurn(messages);
+  return {
+    action: "resume",
+    forceRestartSafeTools: forceCodeModeTools,
+    ...(forceCodeModeTools ? { forceCodeModeTools: true } : {}),
+  };
 }

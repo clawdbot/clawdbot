@@ -1,16 +1,14 @@
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI terminal runtime isolation",
+  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 type BrowserTerminalController = {
   terminal: {
@@ -29,36 +27,25 @@ type BrowserTerminalFactory = (options: {
   size: { columns: number; rows: number };
 }) => Promise<BrowserTerminalController>;
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-describeControlUiE2e("Control UI terminal runtime isolation", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("does not reuse freed terminal cells in the next tab", async () => {
-    const context = await browser.newContext({ serviceWorkers: "block" });
-    const page = await context.newPage();
-    const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", server.baseUrl).href;
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", suite.server.baseUrl)
+        .href;
 
-    try {
-      await page.goto(server.baseUrl);
+      await page.goto(suite.server.baseUrl);
+      // addScriptTag resolves before the module body runs, so the global is not
+      // observable yet; wait for the assignment instead of racing page.evaluate.
       await page.addScriptTag({
         content: `globalThis.openclawTerminalRuntimeModule = import(${JSON.stringify(moduleUrl)});`,
         type: "module",
       });
+      await page.waitForFunction(() =>
+        Boolean(
+          (globalThis as unknown as { openclawTerminalRuntimeModule?: unknown })
+            .openclawTerminalRuntimeModule,
+        ),
+      );
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
         async ({ staleText }) => {
@@ -112,8 +99,6 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
       expect(result.initialSecondLine).not.toContain(sentinel);
       expect(result.initialSecondLine.trim()).toBe("");
       expect(result.finalSecondLine).toContain("FRESH");
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

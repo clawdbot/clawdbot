@@ -33,17 +33,6 @@ const HOST_TOKEN_SOURCES = {
   "--color-border-inverse": "--bg",
   "--color-ring-primary": "--ring",
 
-  /*
-   * Only the monospace stack is published. Control UI's body font leads with a
-   * webfont, and an embedded app cannot load it: the sandbox policy allows
-   * font requests only from resource domains the app itself declares. Sending
-   * it would resolve to an arbitrary system face instead of failing visibly.
-   * The monospace stack degrades correctly because its fallbacks are system
-   * faces. Apps supply their own sans stack until Control UI adopts the
-   * carapace embed tokens, which define a sandbox-safe one.
-   */
-  "--font-mono": "--mono",
-
   "--font-text-xs-size": "--control-ui-text-xs",
   "--font-text-sm-size": "--control-ui-text-sm",
   "--font-text-md-size": "--control-ui-text-md",
@@ -61,13 +50,27 @@ const HOST_TOKEN_SOURCES = {
   "--shadow-lg": "--shadow-lg",
 } as const;
 
-/** Values with no Control UI source, fixed by the specification's own scale. */
+/**
+ * Values with no Control UI source, fixed by the specification's own scale or
+ * the carapace embed contract.
+ *
+ * The font stacks are the carapace embed stacks (`--oc-font-embed-sans` /
+ * `--oc-font-embed-mono`), sent in place of Control UI's own font tokens. The
+ * sandbox policy allows font requests only from resource domains the app
+ * itself declares, so a stack leading with a brand face would silently
+ * resolve to an arbitrary system font; every family here is system
+ * resolvable. Keep them byte-identical to carapace `candidate/embed.css`.
+ */
 const STATIC_VARIABLES = {
   "--border-width-regular": "1px",
   "--font-weight-normal": "400",
   "--font-weight-medium": "500",
   "--font-weight-semibold": "600",
   "--font-weight-bold": "700",
+  "--font-sans":
+    'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji"',
+  "--font-mono":
+    'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 } as const;
 
 type StyleVariableKey = keyof typeof HOST_TOKEN_SOURCES | keyof typeof STATIC_VARIABLES;

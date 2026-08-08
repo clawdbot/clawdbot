@@ -10,7 +10,7 @@ import {
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { markPageRefBlocked, markTargetBlocked, pageTargetId } from "./pw-session-connection.js";
+import { markPageRefBlocked, markTargetBlocked, pageTargetInfo } from "./pw-session-connection.js";
 
 type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
@@ -66,7 +66,7 @@ export async function quarantineBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   markPageRefBlocked(opts.cdpUrl, opts.page);
-  const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
+  const resolvedTargetId = (await pageTargetInfo(opts.page).catch(() => null))?.targetId ?? null;
   const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
   const targetIdToBlock = resolvedTargetId || fallbackTargetId;
   if (targetIdToBlock) {
@@ -449,28 +449,42 @@ export async function gotoPageWithNavigationGuard(
     await continueRouteSafely(route);
   };
 
-  await opts.page.route("**", handler);
   try {
-    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
-    if (blockedError) {
-      throw toErrorObject(blockedError, "Non-Error thrown");
-    }
-    return response;
+    await opts.page.route("**", handler);
   } catch (err) {
-    if (blockedError) {
-      throw toErrorObject(blockedError, "Non-Error thrown");
-    }
+    // Playwright registers the client route before browser-side setup can fail.
+    // Remove this exact handler without replacing the original setup error.
+    await removePageNavigationRequestGuard(opts.page, handler);
     throw err;
-  } finally {
-    await opts.page.unroute("**", handler).catch(() => {});
-    if (blockedError) {
-      await closeBlockedNavigationTarget({
-        cdpUrl: opts.cdpUrl,
-        page: opts.page,
-        targetId: opts.targetId,
-      });
-    }
   }
+  let response: Response | null = null;
+  let navigationFailed = false;
+  let navigationError: unknown;
+  try {
+    response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
+  } catch (err) {
+    navigationFailed = true;
+    navigationError = err;
+  }
+
+  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+  if (blockedError) {
+    await closeBlockedNavigationTarget({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      targetId: opts.targetId,
+    });
+    throw toErrorObject(blockedError, "Non-Error thrown");
+  }
+  // A live-page cleanup failure is observable, but the original navigation
+  // error owns the result and must not lose its precedence.
+  if (navigationFailed) {
+    throw navigationError;
+  }
+  if (cleanupError !== undefined) {
+    throw toErrorObject(cleanupError, "Non-Error thrown");
+  }
+  return response;
 }
 
 /** Resolve a browser snapshot ref into a Playwright locator. */

@@ -22,6 +22,7 @@ import {
   waitForGatewayReady,
   writeConfig,
 } from "../../scripts/check-memory-fd-repro.mjs";
+import { validateConfigObject } from "../../src/config/validation.js";
 import { withEnv } from "../../src/test-utils/env.js";
 
 async function listen(server: Server): Promise<number> {
@@ -202,16 +203,13 @@ describe("check-memory-fd-repro", () => {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
       const memorySearch = config.memory.search;
 
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
       expect(memorySearch.store).toEqual({ vector: { enabled: false } });
       expect(memorySearch).toMatchObject({
         provider: "none",
         model: "",
-        sync: {
-          onSearch: false,
-          onSessionStart: false,
-          watch: true,
-        },
       });
+      expect(memorySearch).not.toHaveProperty("sync");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

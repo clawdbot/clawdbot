@@ -44,6 +44,7 @@
       "together": {
         "baseUrl": "https://api.together.xyz/v1",
         "api": "openai-completions",
+        "defaultModel": "moonshotai/Kimi-K2.6",
         "models": [
           {
             "id": "moonshotai/Kimi-K2.6",
@@ -84,6 +85,9 @@
               "output": 3.48,
               "cacheRead": 0.2,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -98,6 +102,9 @@
               "output": 4.4,
               "cacheRead": 0.26,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           }
         ]

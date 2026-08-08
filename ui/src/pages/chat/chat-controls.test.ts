@@ -19,7 +19,6 @@ function createSettings(): UiSettings {
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
-    splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: ["route:workboard", "route:tasks"],
@@ -42,6 +41,7 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
       stream: null,
     },
     onboarding: false,
+    preferencesBrowserOnly: false,
     settings: createSettings(),
     viewMenuOpen: true,
     onSettingsChange: () => undefined,
@@ -99,6 +99,15 @@ describe("chat composer view menu", () => {
     select(commentary!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatPersistCommentary: false }),
+    );
+  });
+
+  it("labels read-only preference changes as browser-local", () => {
+    const container = document.createElement("div");
+    render(renderChatControls(createProps({ preferencesBrowserOnly: true })), container);
+
+    expect(container.querySelector(".chat-view-menu__provenance")?.textContent?.trim()).toBe(
+      t("quickSettings.personal.browserOnly"),
     );
   });
 

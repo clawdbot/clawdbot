@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
+import path from "node:path";
 import {
   DEFAULT_REPLAY_MAX_MESSAGES,
   replayableTranscriptRole,
@@ -101,7 +101,7 @@ function buildSessionResetBoundaryEvent(params: {
 
 async function readLegacyTranscriptEvents(sessionFile: string | undefined): Promise<unknown[]> {
   const filePath = sessionFile?.trim();
-  if (!filePath || parseSqliteSessionFileMarker(filePath)) {
+  if (!filePath || !path.isAbsolute(filePath) || !filePath.endsWith(".jsonl")) {
     return [];
   }
   try {

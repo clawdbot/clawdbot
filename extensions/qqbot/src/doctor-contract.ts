@@ -95,18 +95,31 @@ const groupToolPolicyMigration = defineKeyMoveMigration({
     `Removed unsupported ${sourcePath}=${describeToolPolicy(sourceValue)}.`,
 });
 
+const voiceDirectUploadFormatsMigration = defineKeyMoveMigration({
+  from: ["voiceDirectUploadFormats"],
+  to: ["audioFormatPolicy", "uploadDirectFormats"],
+  match: (value) => value !== undefined,
+  sourceOwn: false,
+});
+
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "qqbot"],
     message:
-      'channels.qqbot.streaming (boolean) and channels.qqbot.streaming.c2cStreamApi are legacy; use channels.qqbot.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
-    match: hasLegacyStreamingValue,
+      'channels.qqbot streaming aliases and voiceDirectUploadFormats are legacy; use streaming.{mode,nativeTransport} and audioFormatPolicy.uploadDirectFormats. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyStreamingValue(value) || voiceDirectUploadFormatsMigration.hasLegacy(value),
   },
   {
     path: ["channels", "qqbot", "accounts"],
     message:
-      'channels.qqbot.accounts.<id>.streaming (boolean) and streaming.c2cStreamApi are legacy; use channels.qqbot.accounts.<id>.streaming.{mode,nativeTransport}. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyStreamingValue),
+      'channels.qqbot account streaming aliases and voiceDirectUploadFormats are legacy; use streaming.{mode,nativeTransport} and audioFormatPolicy.uploadDirectFormats. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(
+        value,
+        (entry) =>
+          hasLegacyStreamingValue(entry) || voiceDirectUploadFormatsMigration.hasLegacy(entry),
+      ),
   },
   {
     path: ["channels", "qqbot", "groups"],
@@ -130,10 +143,16 @@ function normalizeQqbotEntry(params: {
   pathPrefix: string;
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
-  const streaming = migrateStreamingValue(params);
-  const groups = asObjectRecord(streaming.entry.groups);
+  let { entry, changed } = migrateStreamingValue(params);
+  const audioFormats = voiceDirectUploadFormatsMigration.normalize({
+    ...params,
+    entry,
+  });
+  entry = audioFormats.entry;
+  changed ||= audioFormats.changed;
+  const groups = asObjectRecord(entry.groups);
   if (!groups) {
-    return streaming;
+    return { entry, changed };
   }
   const migrated = groupToolPolicyMigration.normalize({
     entry: groups,
@@ -141,8 +160,8 @@ function normalizeQqbotEntry(params: {
     changes: params.changes,
   });
   return migrated.changed
-    ? { entry: { ...streaming.entry, groups: migrated.entry }, changed: true }
-    : streaming;
+    ? { entry: { ...entry, groups: migrated.entry }, changed: true }
+    : { entry, changed };
 }
 
 export function normalizeCompatibilityConfig({

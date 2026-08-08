@@ -81,19 +81,18 @@ enum ChatWorkingPhrase {
 }
 
 enum ChatWorkingDurationFormatter {
+    private static let compactUnits = [
+        (suffix: "d", seconds: 86400),
+        (suffix: "h", seconds: 3600),
+        (suffix: "m", seconds: 60),
+        (suffix: "s", seconds: 1),
+    ]
+
     static func compact(milliseconds: Double) -> String {
-        let finiteMilliseconds = milliseconds.isFinite ? milliseconds : 1000
-        let roundedSeconds = (max(1000, finiteMilliseconds) / 1000).rounded()
-        let totalSeconds = max(1, Int(min(roundedSeconds, Double(Int.max / 2))))
-        let units = [
-            (suffix: "d", seconds: 86400),
-            (suffix: "h", seconds: 3600),
-            (suffix: "m", seconds: 60),
-            (suffix: "s", seconds: 1),
-        ]
+        let totalSeconds = self.totalSeconds(milliseconds: milliseconds)
         var remainder = totalSeconds
         var parts: [String] = []
-        for unit in units {
+        for unit in self.compactUnits {
             let value = remainder / unit.seconds
             remainder %= unit.seconds
             if value > 0 {
@@ -104,6 +103,25 @@ enum ChatWorkingDurationFormatter {
             }
         }
         return parts.joined(separator: " ")
+    }
+
+    static func full(milliseconds: Double, locale: Locale = .current) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 2
+        formatter.zeroFormattingBehavior = .dropAll
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        formatter.calendar = calendar
+        return formatter.string(from: TimeInterval(self.totalSeconds(milliseconds: milliseconds))) ??
+            String(localized: "1 second", locale: locale)
+    }
+
+    private static func totalSeconds(milliseconds: Double) -> Int {
+        let finiteMilliseconds = milliseconds.isFinite ? milliseconds : 1000
+        let roundedSeconds = (max(1000, finiteMilliseconds) / 1000).rounded()
+        return max(1, Int(min(roundedSeconds, Double(Int.max / 2))))
     }
 }
 
@@ -134,7 +152,7 @@ enum ChatTurnRecapText {
         String(
             format: String(localized: "Done in %@", locale: locale),
             locale: locale,
-            ChatWorkingDurationFormatter.compact(milliseconds: runtimeMs))
+            ChatWorkingDurationFormatter.full(milliseconds: runtimeMs, locale: locale))
     }
 
     static func tokens(_ outputTokens: Int?, locale: Locale = .current) -> String? {

@@ -45,8 +45,17 @@ import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runti
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  estimateToolResultTextChars,
+  resolveLiveToolResultMaxChars,
+  sliceToolResultTextToBudget,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   createFailedDynamicToolResponse,
@@ -66,6 +75,10 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import {
+  prepareCodexRemoteWorkspaceMessageMedia,
+  type CodexRemoteWorkspaceFileReader,
+} from "./remote-workspace-media.js";
 import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -73,6 +86,8 @@ type CodexDynamicToolHookContext = {
   agentId?: string;
   config?: EmbeddedRunAttemptParams["config"];
   workspaceDir?: string;
+  remoteWorkspaceRoot?: string;
+  remoteWorkspaceRequestTimeoutMs?: number;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -343,6 +358,7 @@ function hasExplicitNonSourceMessageRoute(
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
+  resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -356,6 +372,8 @@ export type CodexDynamicToolBridge = {
   consumeToolExecutionSnapshot?: (
     toolCallId: string,
   ) => { executedArguments: Record<string, unknown>; executionStarted: boolean } | undefined;
+  /** Bind the authenticated app-server client once remote thread startup completes. */
+  setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
@@ -367,9 +385,23 @@ export type CodexDynamicToolBridge = {
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
+    acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
 };
+
+function normalizeAcceptedSessionSpawn(result: unknown): {
+  runId: string;
+  childSessionKey: string;
+} | null {
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
+  if (!details || details.status !== "accepted") {
+    return null;
+  }
+  const runId = normalizeOptionalString(details.runId);
+  const childSessionKey = normalizeOptionalString(details.childSessionKey);
+  return runId && childSessionKey ? { runId, childSessionKey } : null;
+}
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -377,6 +409,9 @@ const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
 // still steer normal Codex subagents to native spawn_agent.
+// sessions_yield is normally routed by its catalogMode "direct-only" before
+// this set is consulted; the name entry stays as the metadata-independent
+// contract that control-path tools remain directly callable.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "agents_list",
   "sessions_spawn",
@@ -386,29 +421,6 @@ const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
 const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
-const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
-const LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 32_000;
-const XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 64_000;
-
-function resolveCodexDynamicToolResultMaxChars(contextWindowTokens?: number): number {
-  if (
-    typeof contextWindowTokens !== "number" ||
-    !Number.isFinite(contextWindowTokens) ||
-    contextWindowTokens <= 0
-  ) {
-    return DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
-  }
-  const tokens = Math.floor(contextWindowTokens);
-  const autoCap =
-    tokens >= 200_000
-      ? XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
-      : tokens >= 100_000
-        ? LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
-        : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
-  // Match the core live-result context-share ceiling without importing core
-  // internals across the bundled-plugin boundary.
-  return Math.min(autoCap, Math.max(1, Math.floor(tokens * 0.3) * 4));
-}
 
 function computerFrameImageIdentity(
   content: AgentToolResult<unknown>["content"] | undefined,
@@ -454,9 +466,13 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(
-    params.hookContext?.contextWindowTokens,
-  );
+  const contextWindowTokens = params.hookContext?.contextWindowTokens;
+  const toolResultMaxChars =
+    typeof contextWindowTokens === "number" &&
+    Number.isFinite(contextWindowTokens) &&
+    contextWindowTokens > 0
+      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
+      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   const availableProjection = projectCodexDynamicTools(params.tools);
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
@@ -492,6 +508,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
+    acceptedSessionSpawns: [],
     quarantinedTools,
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
@@ -521,6 +538,7 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
+  let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
@@ -532,7 +550,11 @@ export function createCodexDynamicToolBridge(params: {
       loading: params.loading ?? "searchable",
       directToolNames,
     }),
+    resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     telemetry,
+    setRemoteWorkspaceFileReader: (reader) => {
+      readRemoteWorkspaceFile = reader;
+    },
     consumeToolExecutionSnapshot: (toolCallId) => {
       const state = executionSnapshotStates.get(toolCallId);
       executionSnapshotStates.delete(toolCallId);
@@ -603,7 +625,18 @@ export function createCodexDynamicToolBridge(params: {
         }
       };
       try {
-        const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const toolArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const preparedArgs =
+          toolName === "message" && isRecord(toolArgs)
+            ? await prepareCodexRemoteWorkspaceMessageMedia({
+                args: toolArgs,
+                localWorkspaceRoot: params.hookContext?.workspaceDir,
+                remoteWorkspaceRoot: params.hookContext?.remoteWorkspaceRoot,
+                readRemoteFile: readRemoteWorkspaceFile,
+                timeoutMs: params.hookContext?.remoteWorkspaceRequestTimeoutMs,
+                signal,
+              })
+            : toolArgs;
         const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
         executedArgs = structuredClone(telemetryArgs);
         const messagingContext = {
@@ -640,6 +673,14 @@ export function createCodexDynamicToolBridge(params: {
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isToolResultError(result);
+        // A successful spawn is durable before presentation middleware can rewrite details.
+        const acceptedSessionSpawn =
+          toolName === "sessions_spawn" && !rawIsError
+            ? normalizeAcceptedSessionSpawn(telemetryRawResult)
+            : null;
+        if (acceptedSessionSpawn) {
+          telemetry.acceptedSessionSpawns.push(acceptedSessionSpawn);
+        }
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
         const observerResult =
@@ -960,7 +1001,13 @@ function createCodexDynamicToolSpecs(params: {
   const specs: CodexDynamicToolSpec[] = [];
   const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
-  for (const entry of params.entries) {
+  // Codex reuses its incremental websocket request only when the complete
+  // searchable surface is unchanged. Direct mode retains its compatibility order.
+  const entries =
+    params.loading === "direct"
+      ? params.entries
+      : params.entries.toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
     if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
       // OpenClaw is ring-zero and its whole turn surface. Keep its canonical
@@ -1399,23 +1446,28 @@ function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
 function normalizeToolResultMaxChars(maxChars: number): number {
   return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
     ? Math.floor(maxChars)
-    : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+    : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 function convertToolContents(
   content: Array<TextContent | ImageContent>,
-  toolResultMaxChars = DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+  toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
     0,
   );
-  if (totalTextChars <= maxChars) {
+  const totalTextBudget = content.reduce(
+    (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
+    0,
+  );
+  if (totalTextBudget <= maxChars) {
     return content.flatMap(convertToolContent);
   }
-  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
-  const textBudget = Math.max(0, maxChars - notice.length);
+  const noticeChars = estimateToolResultTextChars(notice);
+  const textBudget = Math.max(0, maxChars - noticeChars);
   let remainingTextBudget = textBudget;
   let appendedNotice = false;
   const output: CodexDynamicToolCallOutputContentItem[] = [];
@@ -1427,15 +1479,14 @@ function convertToolContents(
     if (appendedNotice) {
       continue;
     }
-    if (notice.length >= maxChars) {
-      output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
+    if (noticeChars >= maxChars) {
+      output.push({ type: "inputText", text: sliceToolResultTextToBudget(noticeText, maxChars) });
       appendedNotice = true;
       continue;
     }
-    const sliceLength = Math.min(item.text.length, remainingTextBudget);
-    remainingTextBudget -= sliceLength;
-    const shouldAppendNotice = remainingTextBudget <= 0;
-    const text = truncateUtf16Safe(item.text, sliceLength);
+    const text = sliceToolResultTextToBudget(item.text, remainingTextBudget);
+    remainingTextBudget -= estimateToolResultTextChars(text);
+    const shouldAppendNotice = remainingTextBudget <= 0 || text.length < item.text.length;
     if (shouldAppendNotice) {
       // The notice budget is reserved before slicing text, so the combined
       // result is already bounded without another boundary-sensitive cut.
@@ -1446,7 +1497,7 @@ function convertToolContents(
     }
   }
   if (!appendedNotice) {
-    output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
+    output.push({ type: "inputText", text: sliceToolResultTextToBudget(noticeText, maxChars) });
   }
   return output;
 }

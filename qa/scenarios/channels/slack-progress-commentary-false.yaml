@@ -1,4 +1,4 @@
-title: Slack progress commentary false stays out of the progress draft
+title: Slack progress commentary false uses the status headline instead of the commentary lane
 scenario:
   id: slack-progress-commentary-false
   surface: channels
@@ -11,8 +11,9 @@ scenario:
     timeoutMs: 90000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-progress-commentary-false }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackProgressCommentaryFalseScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaProgressCommentaryFalseScenario }

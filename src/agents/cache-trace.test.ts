@@ -78,8 +78,6 @@ describe("createCacheTrace", () => {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            includePrompt: true,
-            includeSystem: true,
           },
         },
       },
@@ -118,7 +116,6 @@ describe("createCacheTrace", () => {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            includeSystem: true,
           },
         },
       },

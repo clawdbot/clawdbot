@@ -19,7 +19,6 @@ returns them.
 
 | Detail        | Value                                                      |
 | ------------- | ---------------------------------------------------------- |
-| Website       | [deepgram.com](https://deepgram.com)                       |
 | Docs          | [developers.deepgram.com](https://developers.deepgram.com) |
 | Auth          | `DEEPGRAM_API_KEY`                                         |
 | Default model | `nova-3`                                                   |

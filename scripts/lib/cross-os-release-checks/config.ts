@@ -42,7 +42,9 @@ export type LaneState = {
 export type GatewayHandle = {
   child: ChildProcess;
   closeLog: () => Promise<void>;
+  launchLogOffset: number;
   logPath: string;
+  waitForClose: () => Promise<void>;
 };
 export type CommandResult = { exitCode: number; stdout: string; stderr: string };
 export type AgentTurnResult = CommandResult | { status: number; stdout: string; stderr: string };
@@ -158,7 +160,6 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "bonjour",
   "browser",
   "device-pair",
-  "phone-control",
   "talk-voice",
 ];
 

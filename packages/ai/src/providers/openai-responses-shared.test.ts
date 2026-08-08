@@ -6,6 +6,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -13,7 +14,6 @@ import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
-  processResponsesStream,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -969,6 +969,28 @@ describe("processResponsesStream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
+  it("records the effective model from the terminal response", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_rerouted",
+            status: "completed",
+            model: "gpt-5.5-rerouted",
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.responseModel).toBe("gpt-5.5-rerouted");
+  });
+
   it("keeps interleaved reasoning items bound to their output indices", async () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1402,26 +1424,27 @@ describe("processResponsesStream", () => {
   it("preserves failed terminal response details", async () => {
     const output = createAssistantOutput();
 
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.failed",
-          response: {
-            id: "resp_failed",
-            status: "failed",
-            error: { code: "server_error", message: "provider failed" },
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed",
+              status: "failed",
+              error: { code: "server_error", message: "provider failed" },
+            },
           },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
+        ]),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("server_error: provider failed");
 
     expect(output).toMatchObject({
       responseId: "resp_failed",
-      stopReason: "error",
-      errorMessage: "server_error: provider failed",
+      stopReason: "stop",
     });
   });
 
@@ -2879,8 +2902,8 @@ describe("processResponsesStream", () => {
     expect(liveTextBlockSignatures).toEqual([
       ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
       ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, undefined],
+      ["text_delta", 1, undefined],
     ]);
   });
 

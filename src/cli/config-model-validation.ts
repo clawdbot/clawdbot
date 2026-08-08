@@ -431,6 +431,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
         authStorage: stores.authStorage,
         ...(ref.authProfileId ? { authProfileId: ref.authProfileId } : {}),
         modelRegistry: stores.modelRegistry,
+        preparedModelRuntime: prepared,
         workspaceDir,
       },
     );

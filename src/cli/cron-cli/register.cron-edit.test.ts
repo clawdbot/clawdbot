@@ -54,6 +54,58 @@ describe("cron edit command", () => {
     });
   });
 
+  it("reuses one versioned snapshot for combined pacing and tool edits", async () => {
+    const configRevision = "current-job-revision";
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          configRevision,
+          pacing: { min: "15m", max: "4h" },
+          payload: { kind: "agentTurn", message: "hello" },
+        };
+      }
+      return { ok: true };
+    });
+
+    await createCronProgram().parseAsync(
+      ["edit", "job-1", "--pacing-min", "30m", "--tools", "read"],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(
+      1,
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        pacing: { min: "30m", max: "4h" },
+        payload: { kind: "agentTurn", toolsAllow: ["read"] },
+      },
+      expectedConfigRevision: configRevision,
+    });
+  });
+
+  it.each(["read", ""])("rejects --tools %j combined with --clear-tools", async (tools) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--pacing-min", "30m", "--tools", tools, "--clear-tools"],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --tools or --clear-tools, not both"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 
@@ -208,13 +260,19 @@ describe("cron edit command", () => {
     });
   });
 
-  it("preserves command payload kind for timeout-only edits", async () => {
+  it.each([
+    {
+      kind: "agentTurn",
+      payload: { kind: "agentTurn", message: "hello" },
+    },
+    {
+      kind: "command",
+      payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+    },
+  ])("preserves $kind payload kind for timeout-only edits", async ({ kind, payload }) => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
-        return {
-          id: "job-1",
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
-        };
+        return { id: "job-1", payload };
       }
       return { ok: true };
     });
@@ -233,8 +291,130 @@ describe("cron edit command", () => {
         id: "job-1",
         patch: {
           payload: {
-            kind: "command",
+            kind,
             timeoutSeconds: 12,
+          },
+        },
+      },
+    );
+  });
+
+  it.each([
+    {
+      kind: "script",
+      payload: { kind: "script", script: "return { notify: 'hello' }", timeoutSeconds: 5 },
+      error: "Use --script-timeout-seconds for script jobs",
+    },
+    {
+      kind: "systemEvent",
+      payload: { kind: "systemEvent", text: "hello" },
+      error: "--timeout-seconds is not supported for systemEvent jobs",
+    },
+    {
+      kind: "heartbeat",
+      payload: { kind: "heartbeat" },
+      error: "--timeout-seconds is not supported for heartbeat jobs",
+    },
+  ])(
+    "rejects timeout-only edits for stored $kind payloads before cron.update",
+    async ({ payload, error }) => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return { id: "job-1", payload };
+        }
+        return { ok: true };
+      });
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(["edit", "job-1", "--timeout-seconds", "12"], {
+          from: "user",
+        });
+
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(error));
+        expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+          id: "job-1",
+        });
+        expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+          false,
+        );
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rejects generic timeout combined with an explicit systemEvent before cron.update", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--system-event", "hello", "--timeout-seconds", "12"],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("--timeout-seconds is not supported for systemEvent jobs"),
+      );
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+        false,
+      );
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["--script", "missing-script.js"],
+    ["--script-tool-budget", "3"],
+    ["--script-timeout-seconds", "20"],
+  ])(
+    "rejects generic timeout combined with script option %s before cron.update",
+    async (flag, value) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(
+          ["edit", "job-1", "--timeout-seconds", "12", flag, value],
+          { from: "user" },
+        );
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Use --script-timeout-seconds for script jobs"),
+        );
+        expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+          false,
+        );
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it("updates script timeout with the script-specific option", async () => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--script-timeout-seconds", "20"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ scriptTimeoutSeconds: "20" }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "script",
+            timeoutSeconds: 20,
           },
         },
       },
@@ -324,6 +504,12 @@ describe("cron edit command", () => {
   });
 
   it("stores an explicit wildcard with --clear-tools", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", payload: { kind: "agentTurn", message: "hello" } };
+      }
+      return { ok: true };
+    });
     const program = createCronProgram();
 
     await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
@@ -342,6 +528,175 @@ describe("cron edit command", () => {
       },
     );
   });
+
+  it.each([
+    { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
+    { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
+    { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
+    { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
+  ])("preserves $kind payloads when editing their tool allowlist", async ({ kind, payload }) => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", payload };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--tools", "read,write"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+      id: "job-1",
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { payload: { kind, toolsAllow: ["read", "write"] } },
+    });
+  });
+
+  it.each([
+    { kind: "agentTurn", payload: { kind: "agentTurn", message: "hello" } },
+    { kind: "command", payload: { kind: "command", argv: ["echo", "hello"] } },
+    { kind: "script", payload: { kind: "script", script: "return { notify: 'hello' }" } },
+    { kind: "systemEvent", payload: { kind: "systemEvent", text: "hello" } },
+  ])("preserves $kind payloads when clearing their tool allowlist", async ({ kind, payload }) => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", payload };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-tools"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { payload: { kind, toolsAllow: ["*"] } },
+    });
+  });
+
+  it.each([
+    {
+      label: "command with a restricted allowlist",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+      toolArgs: ["--tools", "read,write"],
+      toolsAllow: ["read", "write"],
+    },
+    {
+      label: "command with a cleared allowlist",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+      toolArgs: ["--clear-tools"],
+      toolsAllow: ["*"],
+    },
+    {
+      label: "agent turn with a restricted allowlist",
+      payload: { kind: "agentTurn", message: "hello" },
+      toolArgs: ["--tools", "read,write"],
+      toolsAllow: ["read", "write"],
+    },
+    {
+      label: "agent turn with a cleared allowlist",
+      payload: { kind: "agentTurn", message: "hello" },
+      toolArgs: ["--clear-tools"],
+      toolsAllow: ["*"],
+    },
+  ])(
+    "preserves the existing $label when editing its timeout",
+    async ({ payload, toolArgs, toolsAllow }) => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return { id: "job-1", payload };
+        }
+        return { ok: true };
+      });
+      const program = createCronProgram();
+
+      await program.parseAsync(["edit", "job-1", "--timeout-seconds", "12", ...toolArgs], {
+        from: "user",
+      });
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: payload.kind,
+            timeoutSeconds: 12,
+            toolsAllow,
+          },
+        },
+      });
+    },
+  );
+
+  it("keeps explicit conversational payload changes independent of existing job reads", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--message", "new message", "--timeout-seconds", "12", "--tools", "read"],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.get")).toBe(false);
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          message: "new message",
+          timeoutSeconds: 12,
+          toolsAllow: ["read"],
+        },
+      },
+    });
+  });
+
+  it.each([
+    { duration: "0", cooldownMs: 0 },
+    { duration: "0s", cooldownMs: 0 },
+    { duration: "0m", cooldownMs: 0 },
+    { duration: "30s", cooldownMs: 30_000 },
+    { duration: "1h30m", cooldownMs: 5_400_000 },
+  ])("accepts failure alert cooldown $duration", async ({ duration, cooldownMs }) => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--failure-alert-cooldown", duration], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { failureAlert: { cooldownMs } },
+    });
+  });
+
+  it.each(["-1s", "not-a-duration", "999999999999999999d"])(
+    "rejects invalid failure alert cooldown %s",
+    async (duration) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+      const program = createCronProgram();
+
+      try {
+        await program.parseAsync(["edit", "job-1", "--failure-alert-cooldown", duration], {
+          from: "user",
+        });
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Invalid --failure-alert-cooldown."),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
 
   it("clears the thinking override with --clear-thinking (CLI parity with cron.update thinking:null)", async () => {
     const program = createCronProgram();

@@ -34,7 +34,7 @@ describe("AppSidebar outbox badges", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
     );

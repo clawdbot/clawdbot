@@ -64,6 +64,7 @@ export function createMeetingStatusPreludeSource(
     node?.getAttribute?.("data-tid"),
     text(node),
   ].filter(Boolean).join(" ");
+  const manualActionFor = (reason, message) => ({ reason, message });
   const clickable = (node) => node?.matches?.("button")
     ? node
     : node?.querySelector?.("button") || node?.closest?.("button") || node;
@@ -306,9 +307,7 @@ export function createMeetingStatusPreludeSource(
     if (requestOwnsMeeting) delete window[${meetingGlobal}];
     return JSON.stringify({
       inCall: false,
-      manualActionRequired: true,
-      manualActionReason: "${options.platform.manualActionReasonPrefix}-session-conflict",
-      manualActionMessage: "The tracked ${options.platform.displayName} tab now shows a different meeting. Return to the requested meeting link, then retry.",
+      manualAction: manualActionFor("${options.platform.manualActionReasonPrefix}-session-conflict", "The tracked ${options.platform.displayName} tab now shows a different meeting. Return to the requested meeting link, then retry."),
       title: document.title,
       url: location.href,
       notes,

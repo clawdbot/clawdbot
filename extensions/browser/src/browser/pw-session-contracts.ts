@@ -1,4 +1,12 @@
-import type { Browser, BrowserContext, Dialog, Frame, Page, Request } from "playwright-core";
+import type {
+  Browser,
+  BrowserContext,
+  CDPSession,
+  Dialog,
+  Frame,
+  Page,
+  Request,
+} from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { PlaywrightDownload } from "./pw-download-capture.js";
 
@@ -80,12 +88,6 @@ export type ArmedDialogResponse = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-export type TargetInfoResponse = {
-  targetInfo?: {
-    targetId?: string;
-  };
-};
-
 export type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
@@ -119,6 +121,11 @@ export type PageState = {
   recentDialogs: BrowserObservedDialogRecord[];
   armedDialogResponse?: ArmedDialogResponse;
   dialogAbortControllers: Set<AbortController>;
+  /** Persistent session and queue for page-scoped emulation overrides. */
+  emulation?: {
+    session?: Promise<CDPSession>;
+    deviceTransitionTail?: Promise<void>;
+  };
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.

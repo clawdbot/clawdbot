@@ -124,8 +124,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 /* A session dashboard keeps the board primary on narrow shells. Every desktop
    edge becomes one bounded bottom sheet; the stored tab preference is left
    untouched and returns when the viewport widens. */
-.shell--mobile-nav .board-session-surface--dock-left,
-.shell--mobile-nav .board-session-surface--dock-right,
 .shell--mobile-nav .board-session-surface--dock-bottom {
   flex-direction: column;
 }
@@ -169,23 +167,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
   transform: translateX(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.shell--mobile-nav .shell-nav-backdrop {
-  display: block;
-  position: fixed;
-  inset: 0;
-  z-index: 65;
-  border: 0;
-  background: color-mix(in srgb, black 52%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   opacity: 1;
   pointer-events: auto;
 }
@@ -355,11 +336,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
 
   .shell--mobile-nav .nav-item {
     font-size: 12px;
-  }
-
-  /* Content */
-  .content-header {
-    display: none;
   }
 
   /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */

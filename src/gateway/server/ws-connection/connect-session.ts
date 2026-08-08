@@ -17,9 +17,15 @@ import {
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
-import { loadNodeHostConfig } from "../../../node-host/config.js";
+import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
+import {
+  adoptTailscaleProfileAvatar,
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+  getUserProfileDisplay,
+} from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -42,6 +48,7 @@ import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
@@ -59,18 +66,12 @@ type AuthenticatedNodePairingAdmission = {
   generation?: NodePairingGeneration;
 };
 
+type AuthenticatedUserProfileDisplay = NonNullable<GatewayWsClient["authenticatedUserProfile"]> & {
+  avatarRevision: string;
+};
+
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
-}
-
-/**
- * Lazily resolve the local node host's nodeId from canonical shared SQLite state.
- * Process-stable: only changes on `openclaw node install`, which requires restart.
- */
-let cachedLocalNodeId: Promise<string | null> | undefined;
-async function resolveLocalNodeId(): Promise<string | null> {
-  cachedLocalNodeId ??= loadNodeHostConfig().then((config) => config?.nodeId ?? null);
-  return await cachedLocalNodeId;
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
@@ -185,6 +186,10 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedUserIsTailscaleProvider = Boolean(
+    authResult.tailscaleIdentity &&
+    classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
+  );
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -195,19 +200,23 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
-  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
+  let authenticatedUserProfile: AuthenticatedUserProfileDisplay | undefined;
   if (authenticatedUserId) {
     try {
-      const profile = ensureProfileForEmail(authenticatedUserId);
-      // Profile metadata is a connect-time snapshot; edits become visible after reconnect.
+      const profile = authResult.tailscaleIdentity
+        ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
+        : ensureProfileForEmail(authenticatedUserId);
+      const display = getUserProfileDisplay(profile.id);
+      // User edits become visible after reconnect; detached provider-avatar adoption refreshes below.
       authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: profile.avatarMime !== null,
+        profileId: display.id,
+        displayName: display.displayName,
+        avatarRevision: display.avatarRevision,
+        hasAvatar: display.hasAvatar,
         updatedAt: profile.updatedAt,
       };
     } catch (error) {
-      // Profile storage must not block login; retain the legacy email-only identity on failure.
+      // Profile storage and best-effort provider metadata must never block login.
       logWsControl.warn(
         `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
       );
@@ -220,8 +229,14 @@ export async function attachAuthenticatedGatewayConnect(
     capability: string;
     expiresAtMs: number;
   }> = [];
+  const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
   if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
     for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+      // Node reconciliation replaces declared caps with the approved surface.
+      // Issuing a route capability for a withheld cap would bypass node.pair.approve.
+      if (effectiveNodeCaps && !effectiveNodeCaps.has(pluginCapabilitySurface.surface)) {
+        continue;
+      }
       const capability = mintPluginNodeCapabilityToken();
       const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
       if (expiresAtMs === undefined) {
@@ -313,6 +328,7 @@ export async function attachAuthenticatedGatewayConnect(
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
@@ -445,6 +461,33 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
+  const buildAuthenticatedPresenceUser = () => {
+    if (!authenticatedUserId) {
+      return undefined;
+    }
+    if (!authenticatedUserProfile) {
+      return {
+        id: authenticatedUserId,
+        ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
+      };
+    }
+    return {
+      id: authenticatedUserProfile.profileId,
+      ...(authenticatedUserIsTailscaleProvider ? {} : { email: authenticatedUserId }),
+      ...(authenticatedUserProfile.displayName
+        ? { name: authenticatedUserProfile.displayName }
+        : {}),
+      // This authenticated route resolves the uploaded avatar first, then the
+      // gateway-side Gravatar proxy, so clients never need an email-hash URL.
+      // The revision changes when the profile avatar changes, so reconnecting
+      // viewers refetch instead of reusing a stale route response.
+      avatarUrl: formatUserProfileAvatarPath(
+        authenticatedUserProfile.profileId,
+        authenticatedUserProfile.avatarRevision,
+      ),
+    };
+  };
+
   if (presenceKey) {
     upsertPresence(presenceKey, {
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
@@ -458,25 +501,7 @@ export async function attachAuthenticatedGatewayConnect(
       roles: [role],
       scopes,
       instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-      ...(authenticatedUserId
-        ? {
-            user: authenticatedUserProfile
-              ? {
-                  id: authenticatedUserProfile.profileId,
-                  email: authenticatedUserId,
-                  ...(authenticatedUserProfile.displayName
-                    ? { name: authenticatedUserProfile.displayName }
-                    : {}),
-                  // This authenticated route resolves the uploaded avatar first, then the
-                  // gateway-side Gravatar proxy, so clients never need an email-hash URL.
-                  // The ?v=<updatedAt> revision changes when the profile (avatar) is
-                  // updated, so a reconnecting viewer's <img> refetches instead of reusing
-                  // a stale cached image for the unchanged route.
-                  avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
-                }
-              : { id: authenticatedUserId, email: authenticatedUserId },
-          }
-        : {}),
+      ...(authenticatedUserId ? { user: buildAuthenticatedPresenceUser() } : {}),
       reason: "connect",
     });
     incrementPresenceVersion();
@@ -556,4 +581,38 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   await sendGatewayHello(context, state, pluginSurfaceUrls);
+
+  const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
+  const tailscaleProfileId = authenticatedUserProfile?.profileId;
+  if (tailscaleProfileId && !authenticatedUserProfile?.hasAvatar && tailscaleProfilePic) {
+    runDetachedConnectWork(
+      async () => {
+        const updated = await adoptTailscaleProfileAvatar(tailscaleProfileId, tailscaleProfilePic);
+        if (!updated.avatarMime) {
+          return;
+        }
+        const display = getUserProfileDisplay(updated.id);
+        authenticatedUserProfile = {
+          profileId: display.id,
+          displayName: display.displayName,
+          avatarRevision: display.avatarRevision,
+          hasAvatar: display.hasAvatar,
+          updatedAt: updated.updatedAt,
+        };
+        nextClient.authenticatedUserProfile = authenticatedUserProfile;
+        if (isClosed() || !presenceKey) {
+          return;
+        }
+        upsertPresence(presenceKey, { user: buildAuthenticatedPresenceUser() });
+        const requestContext = buildRequestContext();
+        broadcastPresenceSnapshot({
+          broadcast: requestContext.broadcast,
+          incrementPresenceVersion: requestContext.incrementPresenceVersion,
+          getHealthVersion: requestContext.getHealthVersion,
+        });
+      },
+      (error) =>
+        logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),
+    );
+  }
 }

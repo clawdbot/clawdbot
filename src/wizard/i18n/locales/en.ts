@@ -291,6 +291,7 @@ export const en = {
       browserHandoffTitle: "Continue in your browser",
       codingAgentQuip:
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
+      controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
       failedOptionLine: "{label}: {reason}",
       failedOptionsIntro: "These didn't work just now:",
@@ -519,6 +520,8 @@ export const en = {
         "{channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run `{listCommand}` and `{enableCommand}`, then restart the gateway.",
       pluginNotAvailable: "{channel} plugin not available.",
       removeTitle: "Remove channel",
+      resumeDisabledPluginSetup: "{channel} plugin is disabled. Enable it and continue setup now?",
+      resumeDisabledSetup: "{channel} is disabled. Enable it and continue setup now?",
       select: "Select a channel",
       selectQuickstart: "Select channel (QuickStart)",
       selectedTitle: "Selected channels",
@@ -706,8 +709,6 @@ export const en = {
       channelsLabel: "Slack channels",
       envPrompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
       examples: "Examples:",
-      interactiveRepliesPrompt:
-        "Enable Slack interactive replies (buttons/selects) for agent responses?",
       multipleEntries: "Multiple entries: comma-separated.",
       socketModeTokensTitle: "Slack socket mode tokens",
     },
@@ -898,6 +899,7 @@ export const en = {
       helpNeedsUrlCode: "You need your Urbit ship URL and login code.",
       helpPrivateNetwork:
         "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
+      loginCodeKeep: "Login code already configured. Keep it?",
       loginCodePrompt: "Login code",
       privateNetworkPrompt:
         "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
@@ -920,7 +922,7 @@ export const en = {
       helpPointWebhook: "3) Point the outgoing webhook to https://<gateway-host>{path}",
       incomingWebhookHelpReplies: "This is the URL OpenClaw uses to send replies back to Chat.",
       incomingWebhookHelpUseUrl: "Use the incoming webhook URL from Synology Chat integrations.",
-      incomingWebhookKeep: "Incoming webhook URL set ({value}). Keep it?",
+      incomingWebhookKeep: "Incoming webhook URL already configured. Keep it?",
       incomingWebhookTitle: "Synology Chat incoming webhook",
       incomingWebhookUrlPrompt: "Incoming webhook URL",
       multipleEntries: "Multiple entries: comma-separated.",
@@ -1013,6 +1015,7 @@ export const en = {
       botUsernamePrompt: "Twitch bot username",
       channelJoinPrompt: "Channel to join",
       clientIdPrompt: "Twitch Client ID",
+      clientSecretKeep: "Client secret already configured. Keep it?",
       clientSecretPrompt: "Twitch Client Secret (for token refresh)",
       envPrompt: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
       helpCopyToken: "3. Copy the token (starts with 'oauth:') and Client ID",
@@ -1023,6 +1026,7 @@ export const en = {
       helpTokenTools: "   Use https://twitchtokengenerator.com/ or https://twitchapps.com/tmi/",
       oauthTokenPrompt: "Twitch OAuth token (oauth:...)",
       refreshTokenInputPrompt: "Twitch Refresh Token",
+      refreshTokenKeep: "Refresh token already configured. Keep it?",
       refreshTokenPrompt:
         "Enable automatic token refresh (requires client secret and refresh token)?",
       setupTitle: "Twitch setup",

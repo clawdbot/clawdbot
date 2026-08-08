@@ -1,6 +1,9 @@
 // Minimax provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -27,8 +30,15 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import {
+  assertMinimaxBaseResp,
+  DEFAULT_MINIMAX_MEDIA_BASE_URL,
+  resolveMinimaxGuardedRequestOptions,
+  resolveMinimaxMediaBaseUrl,
+  type MinimaxBaseResp,
+  type MinimaxRequestPolicy,
+} from "./media-provider-runtime.js";
 
-const DEFAULT_MINIMAX_VIDEO_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
@@ -44,11 +54,6 @@ const MINIMAX_MODEL_ALLOWED_RESOLUTIONS: Readonly<Record<string, readonly string
   "MiniMax-Hailuo-02": ["768P", "1080P"],
 };
 const MINIMAX_RESOLUTION_ORDER = ["480P", "720P", "768P", "1080P"] as const;
-
-type MinimaxBaseResp = {
-  status_code?: number;
-  status_msg?: string;
-};
 
 type MinimaxCreateResponse = {
   task_id?: string;
@@ -71,39 +76,10 @@ type MinimaxFileRetrieveResponse = {
   base_resp?: MinimaxBaseResp;
 };
 
-type MinimaxRequestPolicy = Pick<
-  Parameters<typeof postJsonRequest>[0],
-  "allowPrivateNetwork" | "dispatcherPolicy"
->;
-
 type MinimaxResponseHandle = {
   response: Response;
   release: () => Promise<void>;
 };
-
-function resolveMinimaxVideoBaseUrl(
-  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
-  providerId: string,
-): string {
-  const direct = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
-  if (!direct) {
-    return DEFAULT_MINIMAX_VIDEO_BASE_URL;
-  }
-  try {
-    return new URL(direct).origin;
-  } catch {
-    return DEFAULT_MINIMAX_VIDEO_BASE_URL;
-  }
-}
-
-function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
-  if (!baseResp || typeof baseResp.status_code !== "number" || baseResp.status_code === 0) {
-    return;
-  }
-  throw new Error(
-    `${context} (${baseResp.status_code}): ${baseResp.status_msg ?? "unknown error"}`,
-  );
-}
 
 function resolveMinimaxRequestTimeoutMs(
   timeoutMs: ProviderOperationTimeoutMs | undefined,
@@ -112,18 +88,6 @@ function resolveMinimaxRequestTimeoutMs(
   return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
     ? resolved
     : undefined;
-}
-
-function resolveMinimaxGuardedRequestOptions(
-  policy: MinimaxRequestPolicy,
-): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
-  if (!policy.allowPrivateNetwork && !policy.dispatcherPolicy) {
-    return undefined;
-  }
-  return {
-    ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-    ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
-  };
 }
 
 async function fetchMinimaxResponse(params: {
@@ -297,42 +261,26 @@ async function downloadVideoFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "MiniMax generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const { response, release } = await fetchMinimaxResponse({
-    stage: "download",
+  return await downloadGeneratedVideoAsset({
     url: params.url,
-    init: { method: "GET" },
-    timeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     fetchFn: params.fetchFn,
+    provider: "minimax",
+    label: "MiniMax generated video download",
     requestFailedMessage: "MiniMax generated video download failed",
-    policy: params.policy,
+    maxBytes: params.maxBytes,
+    fetchResponse: async ({ timeoutMs }) =>
+      await fetchMinimaxResponse({
+        stage: "download",
+        url: params.url,
+        init: { method: "GET" },
+        timeoutMs,
+        fetchFn: params.fetchFn,
+        requestFailedMessage: "MiniMax generated video download failed",
+        policy: params.policy,
+      }),
   });
-  try {
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
-    });
-    return {
-      buffer,
-      mimeType,
-      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-    };
-  } finally {
-    await release();
-  }
 }
 
 async function downloadVideoFromFileId(params: {
@@ -440,11 +388,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
       "I2V-01-live",
       "I2V-01",
     ],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: providerId,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -489,8 +433,8 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxVideoBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_VIDEO_BASE_URL,
+          baseUrl: resolveMinimaxMediaBaseUrl(req.cfg, providerId),
+          defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",

@@ -8,8 +8,9 @@ import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 const SCRIPT = resolve("scripts/release-preflight.mjs");
 const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
-  "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+  "node scripts/generate-npm-package-lock.mjs --all",
   "node --import tsx scripts/sync-plugin-versions.ts --check",
+  "pnpm channels:catalog:check",
   "node scripts/generate-plugin-inventory-doc.mjs --check",
   "pnpm config:schema:check",
   "pnpm config:channels:check",
@@ -22,7 +23,7 @@ const CHECK_COMMANDS = [
 ];
 const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
-  "node scripts/generate-npm-shrinkwrap.mjs --changed",
+  "pnpm channels:catalog:gen",
   "node scripts/generate-plugin-inventory-doc.mjs --write",
   "pnpm config:schema:gen",
   "pnpm config:channels:gen",
@@ -161,7 +162,7 @@ describe("scripts/release-preflight.mjs", () => {
       env: {
         ...process.env,
         OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
-          "node scripts/generate-npm-shrinkwrap.mjs --changed",
+          "node scripts/generate-plugin-inventory-doc.mjs --write",
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
         PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
@@ -171,7 +172,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(1);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
     expect(result.stderr).toContain(
-      "- npm shrinkwraps: exit 7 (node scripts/generate-npm-shrinkwrap.mjs --changed)",
+      "- plugin inventory: exit 7 (node scripts/generate-plugin-inventory-doc.mjs --write)",
     );
   });
 
@@ -192,8 +193,8 @@ describe("scripts/release-preflight.mjs", () => {
     expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
       events.indexOf("start pnpm plugin-sdk:sync-exports"),
     );
-    expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
-      events.indexOf("start node scripts/generate-npm-shrinkwrap.mjs --changed"),
+    expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
+      events.indexOf("start pnpm channels:catalog:gen"),
     );
     expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
       events.indexOf("start node scripts/generate-plugin-inventory-doc.mjs --write"),
@@ -209,11 +210,12 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
-        "node scripts/generate-npm-shrinkwrap.mjs --changed",
+        "pnpm channels:catalog:gen",
         "node scripts/generate-plugin-inventory-doc.mjs --write",
         "pnpm ui:i18n:sync",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
-        "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+        "pnpm channels:catalog:check",
+        "node scripts/generate-npm-package-lock.mjs --all",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
         "pnpm ui:i18n:check",
         "pnpm native:i18n:check",
@@ -222,7 +224,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stdout).toContain("(version, jobs=4)");
   });
 
-  it("keeps plugin shrinkwraps aligned during plugin-only prep", () => {
+  it("validates plugin npm locks during plugin-only prep", () => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
     const result = runPreflight(["--fix", "--scope", "plugins"], fakePnpm, {}, root);
@@ -231,10 +233,11 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
-        "node scripts/generate-npm-shrinkwrap.mjs --changed",
+        "pnpm channels:catalog:gen",
         "node scripts/generate-plugin-inventory-doc.mjs --write",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
-        "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+        "pnpm channels:catalog:check",
+        "node scripts/generate-npm-package-lock.mjs --all",
         "node scripts/generate-plugin-inventory-doc.mjs --check",
       ].toSorted(),
     );

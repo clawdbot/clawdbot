@@ -33,6 +33,9 @@ describe("AppSidebar session section visibility", () => {
       "New thread",
     );
     expect(
+      list?.querySelector(".sidebar-recent-session--draft .sidebar-session-indicator"),
+    ).toBeNull();
+    expect(
       list?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
     ).toHaveLength(0);
 
@@ -105,6 +108,43 @@ describe("AppSidebar session section visibility", () => {
     expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(12);
     expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
     expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
+  });
+
+  it("keeps global thread actions when every unpinned thread has a custom group", async () => {
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:research",
+      "agent:main:operations",
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected categorized session fixtures");
+    }
+    for (const row of result.sessions) {
+      if (row.key === "agent:main:research") {
+        row.category = "Research";
+      }
+      if (row.key === "agent:main:operations") {
+        row.category = "Operations";
+      }
+    }
+    harness.publish({ groups: ["Research", "Operations"] });
+
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
+
+    expect(sidebar.querySelector('[data-session-section="category:Research"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
+    expect(threads).not.toBeNull();
+    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
+
+    const sort = threads?.querySelector<HTMLButtonElement>('[aria-label="Sort threads"]');
+    expect(sort).not.toBeNull();
+    expect(threads?.querySelector('[aria-label="New thread"]')).not.toBeNull();
+    sort?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
   });
 
   it("hides empty Threads at rest but keeps empty categories and the drag drop target", async () => {

@@ -12,6 +12,9 @@ import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 const QA_LAB_INTERNAL_PORT = 43123;
 const QA_LAB_UI_OVERLAY_DIR = "/opt/openclaw-qa-lab-ui";
+// The QA config enables ACPX. Bake the external plugin so ephemeral Gateways do
+// not block startup on a network install before their health deadline.
+const QA_DOCKER_PLUGIN_SELECTION = "acpx qa-channel qa-lab";
 
 function toPosixRelative(fromDir: string, toPath: string): string {
   return path.relative(fromDir, toPath).split(path.sep).join("/");
@@ -31,7 +34,7 @@ function renderImageBlock(params: {
     return `    image: ${params.imageName}\n`;
   }
   const context = toPosixRelative(params.outputDir, params.repoRoot) || ".";
-  return `    build:\n      context: ${yamlDoubleQuoted(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "qa-channel qa-lab"\n`;
+  return `    build:\n      context: ${yamlDoubleQuoted(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "${QA_DOCKER_PLUGIN_SELECTION}"\n`;
 }
 
 function renderCompose(params: {
@@ -46,6 +49,10 @@ function renderCompose(params: {
 }) {
   const imageBlock = renderImageBlock(params);
   const repoMount = toPosixRelative(params.outputDir, params.repoRoot) || ".";
+  const taxonomyMount = toPosixRelative(
+    params.outputDir,
+    path.join(params.repoRoot, "taxonomy.yaml"),
+  );
   const qaLabUiMount = toPosixRelative(
     params.outputDir,
     path.join(params.repoRoot, "extensions", "qa-lab", "web", "dist"),
@@ -84,6 +91,7 @@ ${imageBlock}    pull_policy: never
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
+      - ${yamlDoubleQuoted(`${taxonomyMount}:/app/taxonomy.yaml:ro`)}
 ${params.bindUiDist ? `      - ${yamlDoubleQuoted(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}    healthcheck:
       test:
         - CMD
@@ -190,7 +198,7 @@ Files:
 Suggested flow:
 
 1. Build the prebaked image once:
-   - \`docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS="qa-channel qa-lab" -f Dockerfile .\`
+   - \`docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS="${QA_DOCKER_PLUGIN_SELECTION}" -f Dockerfile .\`
 2. Start the stack:
    - \`docker compose -f docker-compose.qa.yml up${params.usePrebuiltImage ? "" : " --build"} -d\`
 3. Open the QA dashboard:
@@ -354,7 +362,7 @@ export async function buildQaDockerHarnessImage(
       "-t",
       imageName,
       "--build-arg",
-      "OPENCLAW_EXTENSIONS=qa-channel qa-lab",
+      `OPENCLAW_EXTENSIONS=${QA_DOCKER_PLUGIN_SELECTION}`,
       "-f",
       "Dockerfile",
       ".",

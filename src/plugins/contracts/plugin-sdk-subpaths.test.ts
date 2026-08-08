@@ -51,7 +51,13 @@ import type {
 } from "../../plugin-sdk/channel-plugin-common.js";
 import * as channelReplyPipelineDirectSdk from "../../plugin-sdk/channel-reply-pipeline.js";
 import * as coreDirectSdk from "../../plugin-sdk/core.js";
-import { publicPluginSdkSubpaths as pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
+import {
+  buildPluginSdkPackageExports,
+  deprecatedPublicPluginSdkEntrypoints,
+  pluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
+  publicPluginSdkSubpaths as pluginSdkSubpaths,
+} from "../../plugin-sdk/entrypoints.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
@@ -500,6 +506,32 @@ describe("plugin-sdk subpath exports", () => {
     });
   });
 
+  it("keeps the public entrypoint catalog, package exports, and support-status docs aligned", () => {
+    const docs = readFileSync(resolve(REPO_ROOT, "docs/plugins/sdk-subpaths.md"), "utf8");
+    const packageExports = buildPluginSdkPackageExports();
+    const documentedSubpaths = new Set(
+      [...docs.matchAll(/`plugin-sdk\/([a-z0-9-]+)`/gu)].map((match) => match[1]),
+    );
+
+    expect(docs).toContain("scripts/lib/plugin-sdk-entrypoints.json");
+    expect(docs).toContain("scripts/lib/plugin-sdk-private-local-only-subpaths.json");
+    expect(docs).toContain("scripts/lib/plugin-sdk-deprecated-public-subpaths.json");
+    expect(docs).toContain("private-local entries explicitly");
+
+    for (const subpath of pluginSdkSubpaths) {
+      expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`);
+    }
+    for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
+      expect(packageExports).not.toHaveProperty(`./plugin-sdk/${subpath}`);
+    }
+    for (const subpath of deprecatedPublicPluginSdkEntrypoints) {
+      expect(pluginSdkSubpaths).toContain(subpath);
+    }
+    for (const subpath of documentedSubpaths) {
+      expect(pluginSdkEntrypoints).toContain(subpath);
+    }
+  });
+
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
       "acpx",
@@ -640,6 +672,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
     expectSourceContract("channel-secret-basic-runtime", {
       mentions: [
+        "createSimpleChannelSecretContract",
         "collectSimpleChannelFieldAssignments",
         "collectConditionalChannelFieldAssignments",
         "collectSecretInputAssignment",
@@ -663,6 +696,7 @@ describe("plugin-sdk subpath exports", () => {
         "SecretTargetRegistryEntry",
       ],
       omits: [
+        "buildChannelMetadata",
         "buildUntrustedChannelMetadata",
         "evaluateSupplementalContextVisibility",
         "resolvePinnedMainDmOwnerFromAllowlist",
@@ -763,7 +797,6 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("memory-core-host-runtime-cli", {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
-      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-cli.js";'],
     });
     expectSourceContract("memory-core-host-runtime-files", {
       mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
@@ -1184,6 +1217,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceContract("provider-setup", {
       mentions: [
         "applyProviderDefaultModel",
+        "defineSelfHostedOpenAICompatibleProvider",
         "discoverOpenAICompatibleLocalModels",
         "discoverOpenAICompatibleSelfHostedProvider",
       ],
@@ -1210,7 +1244,12 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
     expectSourceContract("provider-model-shared", {
-      mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
+      mentions: [
+        "DEFAULT_CONTEXT_TOKENS",
+        "normalizeModelCompat",
+        "cloneFirstTemplateModel",
+        "resolveFamilyForwardCompatModel",
+      ],
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
@@ -1227,12 +1266,16 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
+    expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
+    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
     expectSourceOmitsSnippet("google-model-id", "./google.js");
     expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
     expectSourceOmitsSnippet("google-model-id", "../../extensions/");
+    expectSourceMentions("xiaomi", ["./facade-runtime.js"]);
+    expectSourceOmitsSnippet("xiaomi", "./facade-loader.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");
@@ -1321,8 +1364,17 @@ describe("plugin-sdk subpath exports", () => {
     >();
   });
 
-  it("keeps runtime entry subpaths importable", async () => {
+  it("keeps the supported root SDK contract importable through core", async () => {
     const coreSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core");
+
+    expect(coreSdk.definePluginEntry).toBe(coreDirectSdk.definePluginEntry);
+    expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
+    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
+      coreDirectSdk.prepareMemorySystemPromptAddition,
+    );
+  });
+
+  it("keeps focused SDK subpaths importable", async () => {
     const channelActionsSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/channel-actions",
     );
@@ -1341,11 +1393,7 @@ describe("plugin-sdk subpath exports", () => {
       representativeModules.push(await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`));
     }
 
-    expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
-    expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
-    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
-      coreDirectSdk.prepareMemorySystemPromptAddition,
-    );
+    expect(pluginEntrySdk.definePluginEntry).toBe(coreDirectSdk.definePluginEntry);
     expect(channelActionsSdk.optionalStringEnum).toBe(channelActionsDirectSdk.optionalStringEnum);
     expect(channelActionsSdk.stringEnum).toBe(channelActionsDirectSdk.stringEnum);
     expectSourceMentions("error-runtime", [
@@ -1408,6 +1456,15 @@ describe("plugin-sdk subpath exports", () => {
       const mod = representativeModules[index];
       expect(typeof mod).toBe("object");
       expect(Object.keys(mod as object).length, `subpath ${id} should resolve`).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps deprecated public SDK shims importable during migrations", async () => {
+    expect(deprecatedPublicPluginSdkEntrypoints.length).toBeGreaterThan(0);
+
+    for (const subpath of deprecatedPublicPluginSdkEntrypoints) {
+      const mod = await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${subpath}`);
+      expect(typeof mod, `deprecated subpath ${subpath} should resolve`).toBe("object");
     }
   });
 

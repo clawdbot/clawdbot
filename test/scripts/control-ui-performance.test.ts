@@ -215,7 +215,7 @@ describe("Control UI performance budgets", () => {
       ),
     ).toContain("startup JS gzip vs baseline");
     expect(formatControlUiPerformanceReport(metrics, looseBudgets, baseline)).toContain(
-      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"',
+      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
     );
   });
 
@@ -258,7 +258,7 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it("updates the baseline from exact current dist metrics without rebuilding", () => {
+  it("updates the baseline from local or explicit CI metrics", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
     tempDirs.push(rootDir);
     const scriptsDir = path.join(rootDir, "scripts");
@@ -312,6 +312,41 @@ describe("Control UI performance budgets", () => {
         fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
       ),
     ).toMatchObject({ startupJsGzipBytes: 65, reason: "fixture update" });
+
+    fs.rmSync(distDir, { recursive: true });
+    const explicitBytesResult = spawnSync(
+      process.execPath,
+      [
+        fs.realpathSync(scriptPath),
+        "--update-baseline",
+        "--startup-js-bytes",
+        "321",
+        "--reason",
+        "CI measurement",
+      ],
+      { cwd: rootDir, encoding: "utf8" },
+    );
+    expect(explicitBytesResult.status, explicitBytesResult.stderr).toBe(0);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
+      ),
+    ).toMatchObject({ startupJsGzipBytes: 321, reason: "CI measurement" });
+
+    const beyondRatchetResult = spawnSync(
+      process.execPath,
+      [fs.realpathSync(scriptPath), "--update-baseline", "--startup-js-bytes", "4418"],
+      { cwd: rootDir, encoding: "utf8" },
+    );
+    expect(beyondRatchetResult.status).toBe(1);
+    expect(beyondRatchetResult.stderr).toContain(
+      "4418 B differs from current baseline 321 B by 4097 B, exceeding the 4096 B ratchet",
+    );
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
+      ),
+    ).toMatchObject({ startupJsGzipBytes: 321, reason: "CI measurement" });
   });
 
   it("fails when a compressed sidecar is missing", () => {

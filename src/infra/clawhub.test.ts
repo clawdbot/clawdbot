@@ -420,6 +420,60 @@ describe("clawhub helpers", () => {
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
 
+  it("resolves hosted skill icons against the configured ClawHub origin", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "playwright",
+        baseUrl: "https://registry.example",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              results: [
+                {
+                  score: 1,
+                  slug: "playwright-interactive",
+                  displayName: "Playwright Interactive",
+                  icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
+                },
+              ],
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      }),
+    ).resolves.toMatchObject([
+      {
+        icon: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
+      },
+    ]);
+  });
+
+  it("rejects skill icons outside the configured hosted-icon route", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              score: 1,
+              slug: "external",
+              displayName: "External",
+              icon: `https://tracker.example/api/v1/skill-icons/${"a".repeat(64)}`,
+            },
+            {
+              score: 1,
+              slug: "wrong-path",
+              displayName: "Wrong Path",
+              icon: "https://registry.example/icon.png",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+
+    await expect(
+      searchClawHubSkills({ query: "icons", baseUrl: "https://registry.example", fetchImpl }),
+    ).resolves.toMatchObject([{ icon: undefined }, { icon: undefined }]);
+  });
+
   it("preserves the legacy telemetry opt-out when the primary env is blank", async () => {
     process.env.CLAWHUB_DISABLE_TELEMETRY = "   ";
     process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
@@ -561,6 +615,7 @@ describe("clawhub helpers", () => {
               skill: {
                 slug: "weather",
                 displayName: "Weather",
+                icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
                 createdAt: 1,
                 updatedAt: 2,
               },
@@ -569,7 +624,12 @@ describe("clawhub helpers", () => {
           );
         },
       }),
-    ).resolves.toMatchObject({ skill: { slug: "weather" } });
+    ).resolves.toMatchObject({
+      skill: {
+        slug: "weather",
+        icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+      },
+    });
 
     const url = new URL(requestedUrl);
     expect(url.pathname).toBe("/api/v1/skills/weather");
@@ -683,16 +743,20 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.has("tag")).toBe(false);
   });
 
-  it("sends owner-qualified skill verification lookups as slug plus ownerHandle", async () => {
+  it("sends owner-qualified skill verification lookups without resolved auth when requested", async () => {
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
 
     await expect(
       fetchClawHubSkillVerification({
         slug: "weather",
         ownerHandle: "demo-owner",
         version: "1.0.0",
-        fetchImpl: async (input) => {
+        skipAuth: true,
+        fetchImpl: async (input, init) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
+          requestedInit = init;
           return new Response(
             JSON.stringify({
               schema: "clawhub.skill.verify.v1",
@@ -718,6 +782,7 @@ describe("clawhub helpers", () => {
     expect(url.pathname).toBe("/api/v1/skills/weather/verify");
     expect(url.searchParams.get("ownerHandle")).toBe("demo-owner");
     expect(url.searchParams.get("version")).toBe("1.0.0");
+    expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
   });
 
   it("posts bulk skill security verdict requests", async () => {
@@ -741,7 +806,7 @@ describe("clawhub helpers", () => {
 
     await expect(
       fetchClawHubSkillSecurityVerdicts({
-        items: [{ slug: "agentreceipt", version: "1.2.3" }],
+        items: [{ slug: "agentreceipt", ownerHandle: "openclaw", version: "1.2.3" }],
         fetchImpl: async (input, init) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
           requestedInit = init;
@@ -758,7 +823,9 @@ describe("clawhub helpers", () => {
     expect(requestedInit?.method).toBe("POST");
     expect(requestedInit?.headers).toMatchObject({ "Content-Type": "application/json" });
     expect(requestedInit?.body).toBe(
-      JSON.stringify({ items: [{ slug: "agentreceipt", version: "1.2.3" }] }),
+      JSON.stringify({
+        items: [{ slug: "agentreceipt", ownerHandle: "openclaw", version: "1.2.3" }],
+      }),
     );
   });
 

@@ -76,7 +76,7 @@ export BASETEN_API_KEY=...
 }
 ```
 
-Use `/model baseten/thinkingmachines/inkling` to switch an existing chat.
+Use `/model baseten/thinkingmachines/inkling -s` to switch the current session.
 
 ## Bundled fallback catalog
 

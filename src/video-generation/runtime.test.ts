@@ -2,6 +2,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
+  DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+  DASHSCOPE_WAN_VIDEO_MODELS,
+  buildDashscopeVideoGenerationParameters,
+} from "./dashscope-compatible.js";
+import {
   generateVideo,
   listRuntimeVideoGenerationProviders,
   type GenerateVideoParams,
@@ -45,6 +51,16 @@ function runGenerateVideo(params: GenerateVideoParams) {
         }
       : params.cfg;
   return generateVideo({ ...params, cfg }, runtimeDeps);
+}
+
+function createBufferedVideoProvider(id: string, buffers: Buffer[]): VideoGenerationProvider {
+  return {
+    id,
+    capabilities: {},
+    generateVideo: async () => ({
+      videos: buffers.map((buffer) => ({ buffer, mimeType: "video/mp4" })),
+    }),
+  };
 }
 
 function requireAttempt(
@@ -272,6 +288,96 @@ describe("video-generation runtime", () => {
         error: "Your request was blocked by our moderation system.",
       },
     ]);
+  });
+
+  it("falls through when a video provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedVideoProvider("empty", [Buffer.from("partial"), Buffer.alloc(0)]),
+      createBufferedVideoProvider("valid", [Buffer.from("mp4-bytes")]),
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaModels: {
+              video: { primary: "empty/vid-v1", fallbacks: ["valid/vid-v2"] },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(result.provider).toBe("valid");
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4-bytes"));
+    expect(result.attempts).toEqual([
+      {
+        provider: "empty",
+        model: "vid-v1",
+        error: "Video generation provider returned an empty video buffer at index 1.",
+      },
+    ]);
+  });
+
+  it("fails visibly when every video provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedVideoProvider("empty-primary", [Buffer.alloc(0)]),
+      createBufferedVideoProvider("empty-fallback", [Buffer.alloc(0)]),
+    ];
+
+    await expect(
+      runGenerateVideo({
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                video: {
+                  primary: "empty-primary/vid-v1",
+                  fallbacks: ["empty-fallback/vid-v2"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "animate a cat",
+      }),
+    ).rejects.toThrow(
+      "All video generation models failed (2): empty-primary/vid-v1: Video generation provider returned an empty video buffer at index 0. | empty-fallback/vid-v2: Video generation provider returned an empty video buffer at index 0.",
+    );
+  });
+
+  it("uses a provider URL when the same video asset has an empty buffer", async () => {
+    providers = [
+      {
+        id: "url-provider",
+        capabilities: {},
+        generateVideo: async () => ({
+          videos: [
+            {
+              buffer: Buffer.alloc(0),
+              url: "https://example.com/generated.mp4",
+              mimeType: "video/mp4",
+            },
+          ],
+        }),
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: { mediaModels: { video: { primary: "url-provider/vid-v1" } } },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(result.attempts).toEqual([]);
+    expect(result.videos[0]).toEqual({
+      url: "https://example.com/generated.mp4",
+      mimeType: "video/mp4",
+    });
   });
 
   it("forwards providerOptions to providers that declare the matching schema", async () => {
@@ -680,6 +786,138 @@ describe("video-generation runtime", () => {
     const attempt = requireAttempt(result, 0);
     expect(attempt.provider).toBe("openrouter");
     expect(attempt.error).toMatch(/supports at most 1 reference image\(s\), 2 requested/);
+  });
+
+  it("falls back when the primary model catalog rejects the requested mode", async () => {
+    const seenModels: string[] = [];
+    providers = [
+      {
+        id: "qwen",
+        defaultModel: "wan2.6-t2v",
+        models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+        resolveModelCapabilities: ({ model }) =>
+          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+        isConfigured: () => true,
+        async generateVideo(req) {
+          seenModels.push(req.model);
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: req.model,
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: {
+              primary: "qwen/wan2.6-t2v",
+              fallbacks: ["qwen/wan2.6-i2v"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate the reference",
+      inputImages: [{ url: "https://example.com/reference.png" }],
+    });
+
+    expect(seenModels).toEqual(["wan2.6-i2v"]);
+    expect(result.model).toBe("wan2.6-i2v");
+    expect(result.attempts).toHaveLength(1);
+    expect(requireAttempt(result, 0).error).toMatch(/does not support image-to-video generation/u);
+  });
+
+  it("applies model-specific R2V reference limits during fallback-aware selection", async () => {
+    let seenImageCount = 0;
+    providers = [
+      {
+        id: "qwen",
+        defaultModel: "wan2.6-t2v",
+        models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+        resolveModelCapabilities: ({ model }) =>
+          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+        async generateVideo(req) {
+          seenImageCount = req.inputImages?.length ?? 0;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: req.model,
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-r2v" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate all references",
+      inputImages: Array.from({ length: 5 }, (_, index) => ({
+        url: `https://example.com/reference-${index}.png`,
+      })),
+    });
+
+    expect(seenImageCount).toBe(5);
+    expect(result.model).toBe("wan2.6-r2v");
+    expect(result.attempts).toEqual([]);
+  });
+
+  it("preserves Wan 2.6 resolution and aspect ratio until adapter mapping", async () => {
+    let seenRequest:
+      | { size?: string; resolution?: string; aspectRatio?: string; parameters?: unknown }
+      | undefined;
+    providers = [
+      {
+        id: "qwen",
+        defaultModel: "wan2.6-t2v",
+        models: [...DASHSCOPE_WAN_VIDEO_MODELS],
+        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+        resolveModelCapabilities: ({ model }) =>
+          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.capabilities,
+        async generateVideo(req) {
+          seenRequest = {
+            size: req.size,
+            resolution: req.resolution,
+            aspectRatio: req.aspectRatio,
+            parameters: buildDashscopeVideoGenerationParameters(req),
+          };
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: req.model,
+          };
+        },
+      },
+    ];
+
+    await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "portrait video",
+      resolution: "1080P",
+      aspectRatio: "9:16",
+    });
+
+    expect(seenRequest).toEqual({
+      size: undefined,
+      resolution: "1080P",
+      aspectRatio: "9:16",
+      parameters: { size: "1080*1920" },
+    });
   });
 
   it("skips providers whose live model capabilities disable video inputs", async () => {

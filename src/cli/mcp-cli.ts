@@ -39,6 +39,8 @@ import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
+import { waitForMcpOAuthAuthorizationCode } from "./mcp-oauth-loopback.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 function fail(message: string): never {
@@ -558,6 +560,30 @@ function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record
   };
 }
 
+function resolveMcpProbeIssue(params: {
+  result: ReturnType<typeof formatMcpProbeResult>;
+  servers: Record<string, Record<string, unknown>>;
+  path: string;
+}): string | undefined {
+  if (params.result.diagnostics.length > 0) {
+    const first = expectDefined(params.result.diagnostics[0], "diagnostics entry at 0");
+    return `MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`;
+  }
+  for (const [name, server] of Object.entries(params.servers)) {
+    if (server.enabled !== false && !params.result.servers[name]) {
+      return `MCP probe did not connect to "${name}" in ${params.path}.`;
+    }
+  }
+  return undefined;
+}
+
+function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]): void {
+  const probeIssue = resolveMcpProbeIssue(params);
+  if (probeIssue) {
+    fail(probeIssue);
+  }
+}
+
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
@@ -577,15 +603,7 @@ async function probeMcpServersOrFail(params: {
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
-    if (result.diagnostics.length > 0) {
-      const first = expectDefined(result.diagnostics[0], "diagnostics entry at 0");
-      fail(`MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`);
-    }
-    for (const name of Object.keys(params.servers)) {
-      if (!result.servers[name]) {
-        fail(`MCP probe did not connect to "${name}" in ${params.path}.`);
-      }
-    }
+    failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
     return result;
   } finally {
     await runtime.dispose();
@@ -782,16 +800,23 @@ export function registerMcpCli(program: Command) {
         const result = formatMcpProbeResult(await runtime.getCatalog());
         if (opts.json) {
           printJson(result);
-          return;
+        } else {
+          defaultRuntime.log(`MCP probe (${loaded.path}):`);
+          for (const [serverName, server] of Object.entries(result.servers)) {
+            defaultRuntime.log(
+              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
+            );
+          }
+          for (const diagnostic of result.diagnostics) {
+            defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+          }
         }
-        defaultRuntime.log(`MCP probe (${loaded.path}):`);
-        for (const [serverName, server] of Object.entries(result.servers)) {
-          defaultRuntime.log(
-            `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
-          );
-        }
-        for (const diagnostic of result.diagnostics) {
-          defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+        const probeIssue = resolveMcpProbeIssue({ result, servers, path: loaded.path });
+        if (probeIssue) {
+          defaultRuntime.error(probeIssue);
+          if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
+            defaultRuntime.exit(1);
+          }
         }
       } finally {
         await runtime.dispose();
@@ -1324,12 +1349,21 @@ export function registerMcpCli(program: Command) {
           headers: withoutMcpAuthorizationHeader(resolved.headers),
           resourceUrl: resolved.url,
         }),
-        onAuthorizationUrl: (url) => {
-          defaultRuntime.log(`Open this URL to authorize "${name}":`);
-          defaultRuntime.log(url.toString());
-          defaultRuntime.log(
-            `After approval, run ${formatCliCommand(`openclaw mcp login ${name} --code <code>`)}.`,
+        onAuthorizationUrl: async (url) => {
+          const manualFallbackCommand = formatCliCommand(
+            `openclaw mcp login ${name} --code <code>`,
           );
+          return await waitForMcpOAuthAuthorizationCode({
+            authorizationUrl: url,
+            manualFallbackCommand,
+            onReady: () => {
+              defaultRuntime.log(`Open this URL to authorize "${name}":`);
+              defaultRuntime.log(url.toString());
+              defaultRuntime.log(
+                `If the browser redirect cannot reach this machine, stop this command and run ${manualFallbackCommand}.`,
+              );
+            },
+          });
         },
       });
       if (result === "authorized") {

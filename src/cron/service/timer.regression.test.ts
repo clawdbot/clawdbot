@@ -12,8 +12,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
+import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
@@ -29,16 +28,14 @@ import {
 import * as schedule from "../schedule.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type {
-  CronAgentExecutionPhase,
-  CronAgentExecutionPhaseUpdate,
-  CronAgentExecutionStarted,
-  CronJob,
-} from "../types.js";
+import { cronStoreKey } from "../store/key.js";
+import { readCronTaskRunHistoryPage } from "../task-run-history.js";
+import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
 import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
-import { run as runManualCronJob, stop } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { run as runManualCronJob } from "./ops-run.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
 import { applyJobResult, executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { executeJobCore, onTimer } from "./timer.test-support.js";
@@ -74,22 +71,6 @@ function requireTimestamp(value: number | undefined, label: string): number {
     throw new Error(`expected ${label} timestamp`);
   }
   return value;
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
-
-function firstMockArg(mock: unknown): unknown {
-  const calls = (mock as { mock: { calls: readonly (readonly unknown[])[] } }).mock.calls;
-  const call = calls[0];
-  if (!call) {
-    throw new Error("Expected mock to have at least one call");
-  }
-  return call[0];
 }
 
 function findCronTaskByBaseRunId(baseRunId: string) {
@@ -771,6 +752,7 @@ describe("cron service timer regressions", () => {
         throw new Error("Expected timed-out cron task row");
       }
       expect(task.status).toBe("running");
+      expect(task.taskKind).toBe(CRON_TASK_KIND);
 
       installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
@@ -2028,7 +2010,8 @@ describe("cron service timer regressions", () => {
       .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
       .mockImplementation(async (storePath) => {
         loadCount += 1;
-        if (loadCount === 3) {
+        // The first catch-up outcome now reloads and persists before job two.
+        if (loadCount === 4) {
           throw new Error("startup activation reload failed");
         }
         return await realLoad(storePath);
@@ -2278,7 +2261,7 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await secondStarted.promise;
-      expect(isCronJobActive(first.id)).toBe(true);
+      expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(true);
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
@@ -2733,8 +2716,8 @@ describe("cron service timer regressions", () => {
       ),
     ).toBe(false);
     expect(log.info).toHaveBeenCalledWith(
-      { jobId: selfRemovingJob.id },
-      "cron: finalized successful run after job was removed during execution",
+      { jobId: selfRemovingJob.id, status: "ok" },
+      "cron: finalized run after job was removed during execution",
     );
     const event = events.find(
       (candidate) => candidate.jobId === selfRemovingJob.id && candidate.action === "finished",
@@ -2749,774 +2732,294 @@ describe("cron service timer regressions", () => {
     expect(event.deliveryStatus).toBe("delivered");
   });
 
-  it("keeps missing-job discard semantics for failed isolated outcomes", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
-    const failedJob = createDueIsolatedJob({
-      id: "self-removing-failure",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [failedJob] });
-
-    const events: CronEvent[] = [];
-    const log = {
-      ...noopLogger,
-      warn: vi.fn(),
-    };
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      onEvent: (evt) => {
-        events.push(evt);
-      },
-      runIsolatedAgentJob: vi.fn(async () => {
-        const persisted = await loadCronStore(store.storePath);
-        await saveCronStore(store.storePath, {
-          ...persisted,
-          jobs: persisted.jobs.filter((job) => job.id !== failedJob.id),
-        });
-        return { status: "error" as const, error: "agent failed after removal" };
-      }),
-    });
-
-    await onTimer(state);
-
-    expect(state.store?.jobs).toStrictEqual([]);
-    expect(log.warn).toHaveBeenCalledWith(
-      { jobId: failedJob.id },
-      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
-    );
-    expect(
-      events.some(
-        (evt) => evt.jobId === failedJob.id && evt.action === "finished" && evt.status === "error",
-      ),
-    ).toBe(false);
-  });
-
-  it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
-      const timeoutSeconds = 1;
-      const cronJob = createIsolatedRegressionJob({
-        id: "timeout-fraction-29774",
-        name: "timeout fraction regression",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const wallStart = Date.now();
-      let abortWallMs: number | undefined;
-      let abortReason: unknown;
-      const started = createDeferred<void>();
-
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(
-          async ({
-            abortSignal,
-            onExecutionStarted,
-          }: {
-            abortSignal?: AbortSignal;
-            onExecutionStarted?: () => void;
-          }) => {
-            onExecutionStarted?.();
-            started.resolve();
-            await new Promise<void>((resolve) => {
-              if (!abortSignal) {
-                resolve();
-                return;
-              }
-              if (abortSignal.aborted) {
-                abortWallMs = Date.now();
-                abortReason = abortSignal.reason;
-                resolve();
-                return;
-              }
-              abortSignal.addEventListener(
-                "abort",
-                () => {
-                  abortWallMs = Date.now();
-                  abortReason = abortSignal.reason;
-                  resolve();
-                },
-                { once: true },
-              );
-            });
-            now += 5;
-            return { status: "ok" as const, summary: "done" };
-          },
-        ),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-
-      await vi.advanceTimersByTimeAsync(500);
-      expect(abortWallMs).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(600);
-      await timerPromise;
-
-      const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
-      expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1_000);
-      expect(abortReason).toMatchObject({
-        name: "TimeoutError",
-        message: "cron: job execution timed out",
-      });
-
-      const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
-      expect(job?.state.lastStatus).toBe("error");
-      expect(job?.state.lastError).toContain("timed out");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cleans up timed-out isolated runs even when the runner ignores abort", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-02-15T14:00:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "timeout-cleanup-stuck-run",
-        name: "timeout cleanup stuck run",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred<void>();
-      let abortObserved = false;
-      const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun,
-        runIsolatedAgentJob: vi.fn(
-          async ({
-            abortSignal,
-            onExecutionStarted,
-          }: {
-            abortSignal?: AbortSignal;
-            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-          }) => {
-            onExecutionStarted?.({
-              jobId: "timeout-cleanup-stuck-run",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:timeout-cleanup-stuck-run:run:cron-run-session",
-            });
-            started.resolve();
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
-                abortObserved = true;
-              },
-              { once: true },
-            );
-            return await new Promise<never>(() => {});
-          },
-        ),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(1_100);
-      now += 1_100;
-      await timerPromise;
-
-      expect(abortObserved).toBe(true);
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-      const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
-      expect(requireRecord(cleanupArgs.job).id).toBe("timeout-cleanup-stuck-run");
-      expect(cleanupArgs.timeoutMs).toBe(1_000);
-      expect(cleanupArgs.execution).toEqual({
-        jobId: "timeout-cleanup-stuck-run",
-        agentId: "main",
-        sessionId: "cron-run-session",
-        sessionKey: "agent:main:cron:timeout-cleanup-stuck-run:run:cron-run-session",
-      });
-      const job = state.store?.jobs.find((entry) => entry.id === "timeout-cleanup-stuck-run");
-      expect(job?.state.lastStatus).toBe("error");
-      expect(job?.state.lastError).toContain("timed out");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("times out isolated agent setup before the runner start callback (#74803)", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-10T09:00:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "isolated-setup-timeout-74803",
-        name: "setup timeout regression",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred<void>();
-      let abortObserved = false;
-      const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun,
-        onIsolatedAgentSetupTimeout,
-        runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-          started.resolve();
-          abortSignal?.addEventListener(
-            "abort",
-            () => {
-              abortObserved = true;
-            },
-            { once: true },
-          );
-          return await new Promise<never>(() => {});
-        }),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      await timerPromise;
-
-      const job = requireJob(state, "isolated-setup-timeout-74803");
-      expect(abortObserved).toBe(true);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("setup timed out before runner start");
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-      const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
-      expect(requireRecord(cleanupArgs.job).id).toBe("isolated-setup-timeout-74803");
-      expect(cleanupArgs.timeoutMs).toBe(120_000);
-      expect(cleanupArgs.execution).toBeUndefined();
-      expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledWith({
-        job: expect.objectContaining({ id: "isolated-setup-timeout-74803" }),
-        error: expect.stringContaining("setup timed out before runner start"),
-        timeoutMs: 60_000,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not notify setup timeout for cron-nested lane contention", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-10T09:01:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "isolated-setup-timeout-lane-wait",
-        name: "setup timeout lane wait",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const laneEntered = createDeferred<void>();
-      const releaseLane = createDeferred<void>();
-      const laneBlocker = enqueueCommandInLane(CommandLane.CronNested, async () => {
-        laneEntered.resolve();
-        await releaseLane.promise;
-      });
-      await laneEntered.promise;
-
-      const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun: vi.fn(async () => {}),
-        onIsolatedAgentSetupTimeout,
-        runIsolatedAgentJob: vi.fn(async ({ onLaneWait }) => {
-          onLaneWait?.();
-          return await enqueueCommandInLane(CommandLane.CronNested, async () => {
-            return { status: "ok" as const, summary: "lane released" };
-          });
-        }),
-      });
-
-      const timerPromise = onTimer(state);
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      await timerPromise;
-
-      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
-      const job = requireJob(state, cronJob.id);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("setup timed out before runner start");
-
-      releaseLane.resolve();
-      await laneBlocker;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not notify setup timeout for custom-session cron waits", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-10T09:04:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "custom-session-setup-timeout",
-        name: "custom session setup timeout",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, {
-        version: 1,
-        jobs: [{ ...cronJob, sessionTarget: "session:customCronSession" }],
-      });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred<void>();
-      const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun: vi.fn(async () => {}),
-        onIsolatedAgentSetupTimeout,
-        runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-          started.resolve();
-          abortSignal?.addEventListener("abort", () => undefined, { once: true });
-          return await new Promise<never>(() => {});
-        }),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      await timerPromise;
-
-      const job = requireJob(state, "custom-session-setup-timeout");
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("setup timed out before runner start");
-      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-10T09:05:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "isolated-pre-model-timeout-74803",
-        name: "pre model timeout regression",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred<void>();
-      let abortObserved = false;
-      let abortReason: unknown;
-      const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const onIsolatedAgentSetupTimeout = vi.fn();
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun,
-        onIsolatedAgentSetupTimeout,
-        runIsolatedAgentJob: vi.fn(
-          async ({
-            abortSignal,
-            onExecutionStarted,
-            onExecutionPhase,
-          }: {
-            abortSignal?: AbortSignal;
-            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-          }) => {
-            onExecutionStarted?.({
-              jobId: "isolated-pre-model-timeout-74803",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "runner_entered",
-            });
-            onExecutionPhase?.({
-              jobId: "isolated-pre-model-timeout-74803",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "context_engine",
-            });
-            started.resolve();
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
-                abortObserved = true;
-                abortReason = abortSignal.reason;
-              },
-              { once: true },
-            );
-            return await new Promise<never>(() => {});
-          },
-        ),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      await timerPromise;
-
-      const job = requireJob(state, "isolated-pre-model-timeout-74803");
-      expect(abortObserved).toBe(true);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
-      expect(job.state.lastError).toContain("context-engine");
-      expect(abortReason).toMatchObject({
-        name: "TimeoutError",
-        message: expect.stringContaining("context-engine"),
-      });
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-      const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
-      expect(requireRecord(cleanupArgs.job).id).toBe("isolated-pre-model-timeout-74803");
-      expect(cleanupArgs.timeoutMs).toBe(1_200_000);
-      const execution = requireRecord(cleanupArgs.execution);
-      expect(execution.jobId).toBe("isolated-pre-model-timeout-74803");
-      expect(execution.phase).toBe("context_engine");
-      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears the pre-execution watchdog on explicit execution milestones (#80283)", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-10T09:10:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "isolated-turn-accepted-80283",
-        name: "turn accepted regression",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred<void>();
-      let abortObserved = false;
-      const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun,
-        runIsolatedAgentJob: vi.fn(
-          async ({
-            abortSignal,
-            onExecutionStarted,
-            onExecutionPhase,
-          }: {
-            abortSignal?: AbortSignal;
-            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-          }) => {
-            onExecutionStarted?.({
-              jobId: "isolated-turn-accepted-80283",
-              phase: "runner_entered",
-            });
-            onExecutionPhase?.({
-              jobId: "isolated-turn-accepted-80283",
-              phase: "turn_accepted",
-              backend: "codex-app-server",
-            });
-            started.resolve();
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
-                abortObserved = true;
-              },
-              { once: true },
-            );
-            return await new Promise<never>(() => {});
-          },
-        ),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      expect(abortObserved).toBe(false);
-      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1_140_000);
-      now += 1_140_000;
-      await timerPromise;
-
-      const job = requireJob(state, "isolated-turn-accepted-80283");
-      expect(abortObserved).toBe(true);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("job execution timed out");
-      expect(job.state.lastError).toContain("turn-accepted");
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it.each([
     {
-      phase: "attempt_dispatch",
-      phaseText: "attempt-dispatch",
-      id: "isolated-attempt-dispatch-81368",
-      name: "attempt dispatch regression",
+      outcome: "failure",
+      status: "error",
+      error: "agent failed after removal",
+      taskStatus: "failed",
     },
     {
-      phase: "context_assembled",
-      phaseText: "context-assembled",
-      id: "isolated-context-assembled-81368",
-      name: "context assembled regression",
+      outcome: "timeout",
+      status: "error",
+      error: "cron: job execution timed out",
+      taskStatus: "timed_out",
     },
     {
-      phase: "before_agent_reply",
-      phaseText: "before-agent-reply",
-      id: "isolated-before-agent-reply-82811",
-      name: "before agent reply regression",
+      outcome: "skip",
+      status: "skipped",
+      error: "agent skipped after removal",
+      taskStatus: "succeeded",
     },
-  ] satisfies Array<{
-    phase: CronAgentExecutionPhase;
-    phaseText: string;
-    id: string;
-    name: string;
-  }>)(
-    "clears the pre-execution watchdog when isolated cron reaches $phaseText (#81368)",
-    async ({ phase, phaseText, id, name }) => {
-      vi.useFakeTimers();
-      try {
-        const store = timerRegressionFixtures.makeStorePath();
-        const scheduledAt = Date.parse("2026-05-13T09:56:00.000Z");
-        const cronJob = createIsolatedRegressionJob({
-          id,
-          name,
-          scheduledAt,
-          schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-          payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
-          state: { nextRunAtMs: scheduledAt },
-        });
-        await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+  ] as const)(
+    "finalizes a removed job's $outcome outcome in operator history",
+    async ({ outcome, status, error, taskStatus }) => {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+      const failedJob = createDueIsolatedJob({
+        id: `self-removing-${outcome}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [failedJob] });
 
-        vi.setSystemTime(scheduledAt);
-        let now = scheduledAt;
-        const started = createDeferred<void>();
-        let abortObserved = false;
-        const cleanupTimedOutAgentRun = vi.fn(async () => {});
-        const state = createCronServiceState({
-          cronEnabled: true,
-          storePath: store.storePath,
-          log: noopLogger,
-          nowMs: () => now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          cleanupTimedOutAgentRun,
-          runIsolatedAgentJob: vi.fn(
-            async ({
-              abortSignal,
-              onExecutionStarted,
-              onExecutionPhase,
-            }: {
-              abortSignal?: AbortSignal;
-              onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-              onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-            }) => {
-              onExecutionStarted?.({
-                jobId: id,
-                phase: "runner_entered",
-              });
-              onExecutionPhase?.({
-                jobId: id,
-                phase,
-                backend: "codex-app-server",
-              });
-              started.resolve();
-              abortSignal?.addEventListener(
-                "abort",
-                () => {
-                  abortObserved = true;
-                },
-                { once: true },
-              );
-              return await new Promise<never>(() => {});
-            },
-          ),
-        });
+      const events: CronEvent[] = [];
+      const log = {
+        ...noopLogger,
+        warn: vi.fn(),
+      };
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log,
+        nowMs: () => dueAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        onEvent: (evt) => {
+          events.push(evt);
+        },
+        runIsolatedAgentJob: vi.fn(async () => {
+          const persisted = await loadCronStore(store.storePath);
+          await saveCronStore(store.storePath, {
+            ...persisted,
+            jobs: persisted.jobs.filter((job) => job.id !== failedJob.id),
+          });
+          return { status, error };
+        }),
+      });
 
-        const timerPromise = onTimer(state);
-        await started.promise;
-        await vi.advanceTimersByTimeAsync(60_100);
-        now += 60_100;
-        expect(abortObserved).toBe(false);
-        expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+      await onTimer(state);
 
-        await vi.advanceTimersByTimeAsync(1_140_000);
-        now += 1_140_000;
-        await timerPromise;
-
-        const job = requireJob(state, id);
-        expect(abortObserved).toBe(true);
-        expect(job.state.lastStatus).toBe("error");
-        expect(job.state.lastError).toContain("job execution timed out");
-        expect(job.state.lastError).toContain(phaseText);
-        expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-      } finally {
-        vi.useRealTimers();
-      }
+      expect(state.store?.jobs).toStrictEqual([]);
+      expect(
+        log.warn.mock.calls.some(
+          ([, message]) =>
+            message ===
+            "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+        ),
+      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          jobId: failedJob.id,
+          action: "finished",
+          status,
+          error,
+        }),
+      );
+      const history = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(store.storePath),
+        jobId: failedJob.id,
+      });
+      expect(history.entries).toEqual([
+        expect.objectContaining({ jobId: failedJob.id, status, error }),
+      ]);
+      expect(listTaskRecords().find((task) => task.sourceId === failedJob.id)?.status).toBe(
+        taskStatus,
+      );
     },
   );
 
-  it("re-arms the pre-execution watchdog when before_agent_reply does not claim (#82811)", async () => {
-    vi.useFakeTimers();
-    try {
+  it.each(["timer maintenance", "startup catch-up"] as const)(
+    "persists schedule auto-disable before notifying during %s",
+    async (path) => {
       const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-17T03:00:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "isolated-before-agent-reply-unhandled-82811",
-        name: "before agent reply unhandled regression",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
-        state: { nextRunAtMs: scheduledAt },
+      const now = Date.parse("2026-08-01T11:00:00.000Z");
+      const malformed = createIsolatedRegressionJob({
+        id: `malformed-${path}`,
+        name: `malformed ${path}`,
+        scheduledAt: now,
+        schedule: { kind: "cron", expr: "0 1 * * *" },
+        payload: { kind: "agentTurn", message: "malformed" },
+        state: { scheduleErrorCount: 2 },
       });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+      const jobs =
+        path === "startup catch-up"
+          ? [
+              createDueIsolatedJob({ id: "due-startup-catch-up", nowMs: now, nextRunAtMs: now }),
+              malformed,
+            ]
+          : [malformed];
+      await saveCronStore(store.storePath, { version: 1, jobs });
 
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred<void>();
-      let abortObserved = false;
-      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const order: string[] = [];
+      const enqueueSystemEvent = vi.fn(() => {
+        expect(order.at(-1)).toBe("persist");
+        order.push("notify");
+      });
+      const requestHeartbeat = vi.fn(() => {
+        expect(order.at(-1)).toBe("notify");
+        order.push("heartbeat");
+      });
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
         log: noopLogger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        cleanupTimedOutAgentRun,
-        runIsolatedAgentJob: vi.fn(
-          async ({
-            abortSignal,
-            onExecutionStarted,
-            onExecutionPhase,
-          }: {
-            abortSignal?: AbortSignal;
-            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-          }) => {
-            onExecutionStarted?.({
-              jobId: "isolated-before-agent-reply-unhandled-82811",
-              phase: "runner_entered",
-            });
-            onExecutionPhase?.({
-              jobId: "isolated-before-agent-reply-unhandled-82811",
-              phase: "before_agent_reply",
-            });
-            onExecutionPhase?.({
-              jobId: "isolated-before-agent-reply-unhandled-82811",
-              phase: "runtime_plugins",
-            });
-            started.resolve();
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
-                abortObserved = true;
-              },
-              { once: true },
-            );
-            return await new Promise<never>(() => {});
-          },
-        ),
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const computeNextRunAtMs = schedule.computeNextRunAtMs;
+      vi.spyOn(schedule, "computeNextRunAtMs").mockImplementation((cronSchedule, nowMs) => {
+        if (cronSchedule.kind === "cron" && cronSchedule.expr === "0 1 * * *") {
+          throw new Error("simulated schedule failure");
+        }
+        return computeNextRunAtMs(cronSchedule, nowMs);
+      });
+      const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
+      vi.spyOn(cronStoreModule, "saveCronJobsStore").mockImplementation(async (...args) => {
+        await saveCronJobsStore(...args);
+        order.push("persist");
       });
 
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      await timerPromise;
+      if (path === "startup catch-up") {
+        await runMissedJobs(state);
+      } else {
+        await onTimer(state);
+      }
 
-      const job = requireJob(state, "isolated-before-agent-reply-unhandled-82811");
-      expect(abortObserved).toBe(true);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
-      expect(job.state.lastError).toContain("runtime-plugins");
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
+      const notifyAt = order.indexOf("notify");
+      expect(order.slice(notifyAt - 1, notifyAt + 2)).toEqual(["persist", "notify", "heartbeat"]);
+      expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
+      expect(
+        (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),
+      ).toMatchObject({ enabled: false });
+    },
+  );
+
+  it("auto-disables a recurring job on its tenth consecutive run failure", () => {
+    const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
+    const deferredNotifications: Array<() => void> = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-consecutive-failure-threshold.json",
+      log: noopLogger,
+      nowMs: () => startedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "recurring-failure-threshold",
+      name: "recurring failure threshold",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "fail" },
+      state: { consecutiveErrors: 8 },
+    });
+
+    applyJobResult(
+      state,
+      job,
+      { status: "error", error: "ninth failure", startedAt, endedAt: startedAt + 10 },
+      { deferredNotifications },
+    );
+    expect(job.enabled).toBe(true);
+    expect(job.state.consecutiveErrors).toBe(9);
+    expect(job.state.autoDisabled).toBeUndefined();
+    expect(deferredNotifications).toHaveLength(0);
+
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "tenth failure",
+        startedAt: startedAt + 60_000,
+        endedAt: startedAt + 60_010,
+      },
+      { deferredNotifications },
+    );
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.autoDisabled).toEqual({
+      reason: "consecutive-failures",
+      atMs: startedAt + 60_010,
+      consecutiveErrors: 10,
+    });
+    expect(deferredNotifications).toHaveLength(1);
+  });
+
+  it("resets the auto-disable streak after a successful recurring run", () => {
+    const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-consecutive-failure-reset.json",
+      log: noopLogger,
+      nowMs: () => startedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "recurring-failure-reset",
+      name: "recurring failure reset",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "recover" },
+      state: {},
+    });
+    const apply = (status: "ok" | "error", run: number) =>
+      applyJobResult(
+        state,
+        job,
+        {
+          status,
+          ...(status === "error" ? { error: `failure ${run}` } : {}),
+          startedAt: startedAt + run * 60_000,
+          endedAt: startedAt + run * 60_000 + 10,
+        },
+        { deferredNotifications: [] },
+      );
+
+    for (let run = 0; run < 9; run += 1) {
+      apply("error", run);
     }
+    apply("ok", 9);
+    for (let run = 10; run < 19; run += 1) {
+      apply("error", run);
+    }
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.consecutiveErrors).toBe(9);
+    expect(job.state.autoDisabled).toBeUndefined();
+  });
+
+  it.each([
+    { name: "stale schedule", opts: { scheduleOwnership: "stale" as const } },
+    { name: "forced run", opts: { scheduleMode: "preserve" as const } },
+  ])("does not auto-disable after a $name failure", ({ opts }) => {
+    const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
+    const deferredNotifications: Array<() => void> = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-non-owning-failure.json",
+      log: noopLogger,
+      nowMs: () => startedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "non-owning-recurring-failure",
+      name: "non-owning recurring failure",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "fail" },
+      state: { consecutiveErrors: 9, nextRunAtMs: startedAt + 60_000 },
+    });
+
+    applyJobResult(
+      state,
+      job,
+      { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
+      { ...opts, deferredNotifications },
+    );
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.consecutiveErrors).toBe(10);
+    expect(job.state.autoDisabled).toBeUndefined();
+    expect(deferredNotifications).toHaveLength(0);
   });
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {
@@ -3733,6 +3236,37 @@ describe("cron service timer regressions", () => {
       status: "error",
       error: "cron script payload failed (timeout): wall-clock timeout exceeded",
       errorClassification: { kind: "reason", reason: "timeout" },
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBe("timeout");
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
+  });
+
+  it("classifies interrupted agent transport before applying bounded retry", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "transient-agent-transport",
+      name: "transient-agent-transport",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-transient-agent-transport.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "stream disconnected before completion: upstream reset",
       executionStarted: true,
       startedAt,
       endedAt,

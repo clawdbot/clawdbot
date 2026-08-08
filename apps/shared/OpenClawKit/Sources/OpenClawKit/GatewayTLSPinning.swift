@@ -81,6 +81,10 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
     }
 }
 
+public enum GatewayBoundedDataError: Error, Equatable, Sendable {
+    case responseTooLarge(maximumBytes: Int)
+}
+
 protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
@@ -129,6 +133,92 @@ enum GatewayTLSValidationPolicy {
             return .accept(fingerprint: observedFingerprint, enforcePin: false, saveFirstUse: false)
         }
         return .reject(observedFingerprint == nil ? .certificateUnavailable : .untrustedCertificate)
+    }
+}
+
+public enum GatewayTLSServerTrustDecision: Equatable, Sendable {
+    case accept
+    case reject
+}
+
+enum GatewayTLSServerTrustEvaluation {
+    case accept(fingerprint: String?, enforcePin: Bool)
+    case reject(failure: GatewayTLSValidationFailure, enforcedFingerprint: String?)
+}
+
+public enum GatewayTLSServerTrust {
+    public static func evaluate(
+        trust: SecTrust,
+        host: String,
+        port: Int,
+        params: GatewayTLSParams) -> GatewayTLSServerTrustDecision
+    {
+        let expectedFingerprint = params.expectedFingerprint ?? params.storeKey.flatMap {
+            GatewayTLSStore.loadFingerprint(stableID: $0)
+        }
+        return switch self.evaluate(
+            trust: trust,
+            host: host,
+            port: port,
+            params: params,
+            expectedFingerprint: expectedFingerprint)
+        {
+        case .accept:
+            .accept
+        case .reject:
+            .reject
+        }
+    }
+
+    static func evaluate(
+        trust: SecTrust,
+        host: String,
+        port: Int,
+        params: GatewayTLSParams,
+        expectedFingerprint: String?) -> GatewayTLSServerTrustEvaluation
+    {
+        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
+        let fingerprint = certificateFingerprint(trust)
+        let expected = expectedFingerprint.map(normalizeFingerprint)
+        let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
+        failure = { kind, expectedFingerprint, enforcedFingerprint in
+            .reject(
+                failure: GatewayTLSValidationFailure(
+                    kind: kind,
+                    host: host,
+                    storeKey: params.storeKey,
+                    expectedFingerprint: expectedFingerprint,
+                    observedFingerprint: fingerprint,
+                    systemTrustOk: systemTrustOk,
+                    port: port),
+                enforcedFingerprint: enforcedFingerprint)
+        }
+        switch GatewayTLSValidationPolicy.decide(
+            expectedFingerprint: expected,
+            observedFingerprint: fingerprint,
+            allowTOFU: params.allowTOFU,
+            required: params.required,
+            systemTrustOk: systemTrustOk)
+        {
+        case let .accept(acceptedFingerprint, enforcePin, saveFirstUse):
+            guard saveFirstUse else {
+                return .accept(fingerprint: acceptedFingerprint, enforcePin: enforcePin)
+            }
+            guard let acceptedFingerprint,
+                  let storeKey = params.storeKey,
+                  let claimedFingerprint = GatewayTLSStore.claimFirstUseFingerprint(
+                      acceptedFingerprint,
+                      stableID: storeKey)
+            else {
+                return failure(.pinStorageUnavailable, nil, nil)
+            }
+            guard claimedFingerprint == acceptedFingerprint else {
+                return failure(.pinMismatch, claimedFingerprint, claimedFingerprint)
+            }
+            return .accept(fingerprint: acceptedFingerprint, enforcePin: enforcePin)
+        case let .reject(kind):
+            return failure(kind, expected, nil)
+        }
     }
 }
 
@@ -678,6 +768,42 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
+    public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
+        self.registerExpectedAuthority(url: request.url)
+        guard maximumBytes >= 0 else {
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        let (bytes, response) = try await self.session.bytes(for: request)
+        let expectedLength = response.expectedContentLength
+        guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
+            bytes.task.cancel()
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        var data = Data()
+        if expectedLength > 0 {
+            data.reserveCapacity(Int(expectedLength))
+        }
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    bytes.task.cancel()
+                    throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                }
+                data.append(byte)
+            }
+        } catch {
+            bytes.task.cancel()
+            throw error
+        }
+        return (data, response)
+    }
+
+    public func finishTasksAndInvalidate() {
+        self.session.finishTasksAndInvalidate()
+    }
+
     public func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
@@ -708,60 +834,21 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
-        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
-        let fingerprint = certificateFingerprint(trust)
-        let decision = GatewayTLSValidationPolicy.decide(
-            expectedFingerprint: expected,
-            observedFingerprint: fingerprint,
-            allowTOFU: self.params.allowTOFU,
-            required: self.params.required,
-            systemTrustOk: systemTrustOk)
-
-        switch decision {
-        case let .accept(acceptedFingerprint, enforcePin, saveFirstUse):
-            if saveFirstUse {
-                guard let acceptedFingerprint,
-                      let storeKey = self.params.storeKey,
-                      let claimedFingerprint = GatewayTLSStore.claimFirstUseFingerprint(
-                          acceptedFingerprint,
-                          stableID: storeKey)
-                else {
-                    self.recordTLSFailure(GatewayTLSValidationFailure(
-                        kind: .pinStorageUnavailable,
-                        host: host,
-                        storeKey: self.params.storeKey,
-                        expectedFingerprint: nil,
-                        observedFingerprint: acceptedFingerprint,
-                        systemTrustOk: systemTrustOk,
-                        port: challenge.protectionSpace.port))
-                    completionHandler(.cancelAuthenticationChallenge, nil)
-                    return
-                }
-                guard claimedFingerprint == acceptedFingerprint else {
-                    self.recordTLSPinExpectation(claimedFingerprint)
-                    self.recordTLSFailure(GatewayTLSValidationFailure(
-                        kind: .pinMismatch,
-                        host: host,
-                        storeKey: storeKey,
-                        expectedFingerprint: claimedFingerprint,
-                        observedFingerprint: acceptedFingerprint,
-                        systemTrustOk: systemTrustOk,
-                        port: challenge.protectionSpace.port))
-                    completionHandler(.cancelAuthenticationChallenge, nil)
-                    return
-                }
-            }
-            self.recordTLSAcceptance(acceptedFingerprint, enforcePin: enforcePin)
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: host,
+            port: port,
+            params: self.params,
+            expectedFingerprint: expected)
+        {
+        case let .accept(fingerprint, enforcePin):
+            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
             completionHandler(.useCredential, URLCredential(trust: trust))
-        case let .reject(kind):
-            self.recordTLSFailure(GatewayTLSValidationFailure(
-                kind: kind,
-                host: host,
-                storeKey: self.params.storeKey,
-                expectedFingerprint: expected,
-                observedFingerprint: fingerprint,
-                systemTrustOk: systemTrustOk,
-                port: challenge.protectionSpace.port))
+        case let .reject(failure, enforcedFingerprint):
+            if let enforcedFingerprint {
+                self.recordTLSPinExpectation(enforcedFingerprint)
+            }
+            self.recordTLSFailure(failure)
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }

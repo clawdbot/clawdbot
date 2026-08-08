@@ -2,12 +2,13 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
+import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
 
 export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
@@ -36,6 +37,8 @@ export class ClawWorkspaceWriteError extends Error {
     this.name = "ClawWorkspaceWriteError";
   }
 }
+
+class ClawWorkspaceSourceAliasError extends Error {}
 
 type WorkspaceFileRow = {
   schema_version: string;
@@ -83,6 +86,39 @@ function containedRelativePath(root: string, path: string): string | undefined {
     return undefined;
   }
   return child;
+}
+
+export async function readClawWorkspaceActionSource(params: {
+  action: ClawAddPlanAction;
+  packageRoot: string;
+  sourceRoot: Root;
+}): Promise<{ content: Buffer; sourcePath: string; sourceRelative: string }> {
+  if (!params.action.source) {
+    throw new Error("Workspace file action lacks a source.");
+  }
+  const sourcePath = resolve(params.action.source);
+  const sourceRelative = containedRelativePath(params.packageRoot, sourcePath);
+  if (!sourceRelative) {
+    throw new Error("Workspace file source must remain inside the Claw package.");
+  }
+  const read = await params.sourceRoot.read(sourceRelative, {
+    hardlinks: "reject",
+    maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
+    symlinks: "reject",
+  });
+  if (resolve(read.realPath) !== sourcePath) {
+    throw new ClawWorkspaceSourceAliasError(
+      "Workspace source no longer resolves to the consented file.",
+    );
+  }
+  if (params.action.sourceKind !== "clawMarkdownBody") {
+    return { content: read.buffer, sourcePath, sourceRelative };
+  }
+  const parsed = parseClawMarkdown(read.buffer, sourcePath);
+  if (!parsed.ok) {
+    throw new Error(parsed.diagnostics.map((item) => item.message).join("; "));
+  }
+  return { content: parsed.body, sourcePath, sourceRelative };
 }
 
 function persistWorkspaceFile(
@@ -327,11 +363,9 @@ export async function createClawWorkspaceFiles(
           createdFiles,
         );
       }
-      const sourcePath = resolve(action.source);
       const targetPath = resolve(action.target);
-      const sourceRelative = containedRelativePath(packageRoot, sourcePath);
       const targetRelative = containedRelativePath(workspaceRoot, targetPath);
-      if (!sourceRelative || !targetRelative) {
+      if (!targetRelative) {
         throw new ClawWorkspaceWriteError(
           [
             diagnostic(
@@ -343,24 +377,12 @@ export async function createClawWorkspaceFiles(
           createdFiles,
         );
       }
-      const read = await source.read(sourceRelative, {
-        hardlinks: "reject",
-        maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
-        symlinks: "reject",
+      const resolvedSource = await readClawWorkspaceActionSource({
+        action,
+        packageRoot,
+        sourceRoot: source,
       });
-      if (resolve(read.realPath) !== sourcePath) {
-        throw new ClawWorkspaceWriteError(
-          [
-            diagnostic(
-              action,
-              "workspace_file_path_alias",
-              `Workspace source ${JSON.stringify(action.id)} no longer resolves to the consented file.`,
-            ),
-          ],
-          createdFiles,
-        );
-      }
-      const digest = contentDigest(read.buffer);
+      const digest = contentDigest(resolvedSource.content);
       if (digest !== action.digest) {
         throw new ClawWorkspaceWriteError(
           [
@@ -378,7 +400,7 @@ export async function createClawWorkspaceFiles(
         agentId: plan.agent.finalId,
         workspace: workspace.rootReal,
         path: targetRelative.replaceAll(sep, "/"),
-        sourcePath: sourceRelative.replaceAll(sep, "/"),
+        sourcePath: resolvedSource.sourceRelative.replaceAll(sep, "/"),
         contentDigest: digest,
         status: "pending",
         createdAtMs: nowMs,
@@ -448,7 +470,10 @@ export async function createClawWorkspaceFiles(
         persistWorkspaceFile(record, options);
       }
       try {
-        await workspace.write(targetRelative, read.buffer, { mkdir: true, overwrite: false });
+        await workspace.write(targetRelative, resolvedSource.content, {
+          mkdir: true,
+          overwrite: false,
+        });
         record.status = "complete";
         updateWorkspaceFileStatus(record, ["pending"], options);
         createdFiles.push(record);
@@ -468,7 +493,11 @@ export async function createClawWorkspaceFiles(
         throw error;
       }
       const code =
-        error instanceof FsSafeError ? `workspace_file_${error.code}` : "workspace_file_io_error";
+        error instanceof ClawWorkspaceSourceAliasError
+          ? "workspace_file_path_alias"
+          : error instanceof FsSafeError
+            ? `workspace_file_${error.code}`
+            : "workspace_file_io_error";
       throw new ClawWorkspaceWriteError(
         [diagnostic(action, code, error instanceof Error ? error.message : String(error))],
         createdFiles,

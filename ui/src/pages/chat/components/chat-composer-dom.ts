@@ -32,7 +32,12 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   // final CSS-constrained height actually clips the draft.
   el.style.overflowY = "hidden";
   el.style.height = "auto";
-  el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+  // The owning surface declares its cap in CSS. Retain the historical fallback
+  // for detached/test controls whose computed max-height is not a pixel value.
+  const computedMaxHeight = getComputedStyle(el).maxHeight.trim();
+  const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
+  const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
+  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   updateTextareaOverflow(el);
 }
 
@@ -122,6 +127,20 @@ export function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
   currentTarget
     .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
     ?.focus({ preventScroll: true });
+}
+
+export function preserveComposerFocusOnPrimaryAction(
+  event: PointerEvent,
+  textarea: HTMLTextAreaElement | null,
+): void {
+  const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
+  if (
+    document.activeElement === textarea &&
+    composerShell &&
+    Number.parseFloat(getComputedStyle(composerShell).marginBottom) === 0
+  ) {
+    event.preventDefault();
+  }
 }
 
 export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {

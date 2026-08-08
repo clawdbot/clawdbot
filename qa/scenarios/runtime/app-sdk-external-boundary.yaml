@@ -1,0 +1,28 @@
+title: External App SDK package and transport boundary
+
+scenario:
+  id: app-sdk-external-boundary
+  surface: app-sdk
+  coverage:
+    primary:
+      - app-sdk.app-plugin-boundary
+      - app-sdk.custom-transport
+  objective: Verify a clean external consumer can install the packed preview App SDK, import only its exported entrypoint, inject a custom transport, and execute its operations without plugin-internal imports.
+  successCriteria:
+    - A clean temporary consumer installs the packed @openclaw/sdk tarball and its packed workspace dependencies.
+    - The consumer imports OpenClaw and public helpers only from @openclaw/sdk.
+    - A hand-written custom transport serves agent, run, artifact, and environment operations through the public client.
+    - Run wait parameters and transport-level timeout ownership remain intact.
+    - Closing the SDK client closes the injected transport.
+  docsRefs:
+    - docs/gateway/external-apps.md
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - packages/sdk/src/index.ts
+    - packages/sdk/src/client.ts
+    - packages/sdk/src/app-sdk-external-boundary.e2e.test.ts
+  execution:
+    kind: vitest
+    path: packages/sdk/src/app-sdk-external-boundary.e2e.test.ts
+    summary: Pack the source-internal preview SDK graph, install it in a clean consumer, and execute exported operations through an injected transport.

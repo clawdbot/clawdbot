@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { flushLogger } from "../logging/logger.js";
+import {
+  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -330,6 +335,27 @@ describe("device bootstrap tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("requires the exact closed browser-owner profile before binding", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("rejects cross-role scope escalation (node role requesting operator scopes)", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
@@ -438,6 +464,8 @@ describe("device bootstrap tokens", () => {
       },
     });
 
+    // The file transport appends asynchronously; drain it before reading.
+    await flushLogger();
     const content = await fs.readFile(logPath, "utf8");
     expect(content).toContain("bootstrap_token_scopes_stripped");
     expect(content).toContain("node.exec");

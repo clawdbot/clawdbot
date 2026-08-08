@@ -4,6 +4,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -28,6 +29,7 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
@@ -48,21 +50,29 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import {
+  isSafeToUseExternalCliCredential,
+  readExternalCliBootstrapCredential,
+} from "../auth-profiles/external-cli-sync.js";
+import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
+import {
+  loadAuthProfileStoreForRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
-  buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
+  buildBootstrapBudgetState,
   buildBootstrapTruncationReportMeta,
-  analyzeBootstrapBudget,
 } from "../bootstrap-budget.js";
 import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
@@ -79,10 +89,9 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
-  resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
-  resolveBootstrapTotalMaxChars,
-} from "../embedded-agent-helpers.js";
+  applyEmbeddedAttemptToolsAllow,
+  mergeForcedEmbeddedAttemptToolsAllow,
+} from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
 import {
   prependSystemPromptAddition,
@@ -94,6 +103,8 @@ import {
   mapSandboxSkillEntriesForPrompt,
   resolveSandboxSkillRuntimeInputs,
 } from "../embedded-agent-runner/sandbox-skills.js";
+import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -107,9 +118,14 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
+import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import {
+  resolveBundledCliBackendAuthPolicy,
+  type BundledCliBackendAuthPolicy,
+} from "./cli-backend-auth-policy.js";
 import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
@@ -130,8 +146,18 @@ import type {
 } from "./types.js";
 
 type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
 };
+
+function unsupportedIsolatedCompletionError(backendId: string): Error & { code: "unsupported" } {
+  const error = new Error(
+    `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
+  ) as Error & { code: "unsupported" };
+  error.name = "IsolatedCompletionUnsupportedError";
+  error.code = "unsupported";
+  return error;
+}
 
 function resolveClaudeCliContextModelId(modelId: string): string {
   const trimmed = modelId.trim();
@@ -163,6 +189,7 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   getClaudeLiveSessionGenerationForOwner,
+  readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
 
@@ -314,17 +341,59 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function shouldRefreshAuthProfileForExecution(params: {
-  backendId: string;
+  policy?: BundledCliBackendAuthPolicy;
   authProfileId?: string;
   authCredential?: AuthProfileCredential;
 }): boolean {
-  return Boolean(
-    (params.backendId === "google-gemini-cli" || params.backendId === "claude-cli") &&
-    params.authProfileId &&
-    (params.authCredential?.type === "oauth" ||
-      params.authCredential?.type === "api_key" ||
-      params.authCredential?.type === "token"),
-  );
+  if (!params.policy || !params.authProfileId || !params.authCredential) {
+    return false;
+  }
+  if (params.authCredential.type === "oauth") {
+    return params.policy.oauthRefreshOwner === "core";
+  }
+  return params.authCredential.type === "api_key" || params.authCredential.type === "token";
+}
+
+type CliAuthProfileResolutionFailure =
+  | { kind: "unmaterialized" }
+  | { kind: "resolved-as-other"; resolvedProfileId: string }
+  | { kind: "native-login-missing" }
+  | { kind: "native-login-identity-mismatch" };
+
+function describeCliAuthProfileResolutionFailure(
+  profileId: string,
+  failure: CliAuthProfileResolutionFailure,
+): string {
+  switch (failure.kind) {
+    case "resolved-as-other":
+      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
+    case "native-login-missing":
+      return `selected auth profile "${profileId}" reuses the host's Claude CLI login, but no reusable Claude CLI login is available`;
+    case "native-login-identity-mismatch":
+      return `selected auth profile "${profileId}" reuses the host's Claude CLI login, but the current Claude CLI login belongs to a different account`;
+    case "unmaterialized":
+      return `could not materialize selected auth profile "${profileId}"`;
+  }
+  return failure satisfies never;
+}
+
+function buildCliAuthProfileResolutionError(params: {
+  backendId: string;
+  profileId: string;
+  provider: string;
+  agentDir: string;
+  failure: CliAuthProfileResolutionFailure;
+}): CliAuthProfilePreparationError {
+  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
+    profileId: params.profileId,
+  });
+  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
+  return new CliAuthProfilePreparationError({
+    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+    profileId: params.profileId,
+    provider: params.provider,
+    agentDir: params.agentDir,
+  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
@@ -353,6 +422,7 @@ export async function prepareCliRunContext(
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
+  const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
@@ -378,6 +448,13 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
+  const canEnforceExactToolAvailability =
+    backendResolved.nativeToolMode === "selectable" &&
+    ((backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+      backendResolved.resolveExecutionArgs !== undefined) ||
+      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
+        backendResolved.prepareExecution !== undefined));
   let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
     if (params.cliToolAvailability !== undefined) {
@@ -412,6 +489,16 @@ export async function prepareCliRunContext(
       };
     }
   }
+  if (params.disableTools === true && !isSideQuestion && canEnforceExactToolAvailability) {
+    // Selectable backends need the exact empty cap as well as the generic flag;
+    // otherwise their native tools remain selectable and the run must fail closed.
+    runtimeToolsAllowPolicy = undefined;
+    params = {
+      ...params,
+      toolsAllow: undefined,
+      cliToolAvailability: { native: [], openClaw: [] },
+    };
+  }
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = resolveNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -429,15 +516,7 @@ export async function prepareCliRunContext(
       },
     };
   }
-  if (
-    params.cliToolAvailability !== undefined &&
-    (backendResolved.nativeToolMode !== "selectable" ||
-      !backendResolved.toolAvailabilityEnforcement ||
-      (backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-        !backendResolved.resolveExecutionArgs) ||
-      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-        !backendResolved.prepareExecution))
-  ) {
+  if (params.cliToolAvailability !== undefined && !canEnforceExactToolAvailability) {
     // Cron persists this verbatim and failure alerts truncate at 200 characters,
     // so keep the upgrade recovery and fail-closed outcome compact.
     throw new Error(
@@ -497,10 +576,50 @@ export async function prepareCliRunContext(
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
   }
-  if (
+  // Claude CLI-provider OAuth credentials exist only as imports of the host's
+  // own `claude` login; Claude owns that single-use refresh-token family.
+  // Forwarding a snapshot goes stale within hours and blocks the subprocess
+  // from refreshing itself, so verify the live login matches the selected
+  // identity and let Claude authenticate natively (it refreshes in place).
+  const nativeClaudeCliCredential =
+    backendAuthPolicy?.nativePassthroughProviderId !== undefined &&
+    authCredential?.type === "oauth" &&
+    authCredential.provider === backendAuthPolicy.nativePassthroughProviderId
+      ? authCredential
+      : undefined;
+  if (effectiveAuthProfileId && authStore && nativeClaudeCliCredential) {
+    const authProfileId = effectiveAuthProfileId;
+    const liveNativeLogin = prepareDeps.readExternalCliBootstrapCredential({
+      store: authStore,
+      profileId: authProfileId,
+      credential: nativeClaudeCliCredential,
+    });
+    if (!liveNativeLogin) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: nativeClaudeCliCredential.provider,
+        agentDir,
+        failure: { kind: "native-login-missing" },
+      });
+    }
+    if (!isSafeToUseExternalCliCredential(nativeClaudeCliCredential, liveNativeLogin)) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: nativeClaudeCliCredential.provider,
+        agentDir,
+        failure: { kind: "native-login-identity-mismatch" },
+      });
+    }
+    // Spawn with no forwarded credential. The local-login auth epoch then keys
+    // the session to the host account (identity-hashed, rotation-stable), and
+    // the next store load re-adopts whatever Claude rotates.
+    authCredential = undefined;
+  } else if (
     effectiveAuthProfileId &&
     shouldRefreshAuthProfileForExecution({
-      backendId: backendResolved.id,
+      policy: backendAuthPolicy,
       authProfileId: effectiveAuthProfileId,
       authCredential,
     })
@@ -512,11 +631,48 @@ export async function prepareCliRunContext(
       store: writableAuthStore,
       profileId: authProfileId,
       agentDir,
+      // Claude's selected profile is an account boundary. Never refresh or
+      // substitute a sibling account while preparing this run.
+      ...(backendAuthPolicy?.strictSelectedProfile ? { allowProfileFallback: false } : {}),
     });
+    if (!resolvedAuth && backendAuthPolicy?.strictSelectedProfile) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        agentDir,
+        failure: { kind: "unmaterialized" },
+      });
+    }
+    if (
+      resolvedAuth &&
+      backendAuthPolicy?.strictSelectedProfile &&
+      resolvedAuth.profileId !== authProfileId
+    ) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        agentDir,
+        failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
+      });
+    }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    const resolvedAuthCredential = resolvedAuth?.credential;
     authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
-    authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
+    authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
+    if (
+      backendAuthPolicy?.strictSelectedProfile &&
+      (!authCredential ||
+        (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
+    ) {
+      throw buildCliAuthProfileResolutionError({
+        backendId: backendResolved.id,
+        profileId: authProfileId,
+        provider: resolvedAuth?.provider ?? params.provider,
+        agentDir,
+        failure: { kind: "unmaterialized" },
+      });
+    }
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
       resolvedProfileAuth = {
@@ -572,6 +728,57 @@ export async function prepareCliRunContext(
     params.provider;
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  let openClawHistoryMessages: unknown[] | undefined;
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.config,
+    });
+    return openClawHistoryMessages;
+  };
+  const promptBuildHookResult = await (async () => {
+    if (isSideQuestion) {
+      return undefined;
+    }
+    const hookRunner = getGlobalHookRunner();
+    try {
+      return await resolvePromptBuildHookResult({
+        config: params.config ?? getRuntimeConfig(),
+        prompt: params.prompt,
+        messages: await loadOpenClawHistoryMessages(),
+        hookCtx: {
+          runId: params.runId,
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir,
+          modelProviderId: params.provider,
+          modelId,
+          trigger: params.trigger,
+          ...buildAgentHookContextChannelFields(params),
+        },
+        hookRunner,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
+      });
+    } catch (error) {
+      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+      return undefined;
+    }
+  })();
+  const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
+    promptBuildHookResult?.toolsAllow,
+    {
+      forceMessageTool: messageToolOwnsVisibleReply({
+        sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+      }),
+    },
+  );
+  const promptBuildRestrictsTools =
+    promptBuildToolsAllow !== undefined &&
+    !promptBuildToolsAllow.some((toolName) => normalizeToolName(toolName) === "*");
   const isClaudeCli = isClaudeCliProvider(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
@@ -639,6 +846,7 @@ export async function prepareCliRunContext(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        chatType: runtimeChatType,
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
@@ -685,20 +893,17 @@ export async function prepareCliRunContext(
   const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
     ? bootstrapFiles
     : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
-  const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles: bootstrapFilesForInjectionStats,
-      injectedFiles: contextFiles,
-    }),
+  const {
+    bootstrapAnalysis,
     bootstrapMaxChars,
+    bootstrapPromptWarning,
+    bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
-  });
-  const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
-  const bootstrapPromptWarning = buildBootstrapPromptWarning({
-    analysis: bootstrapAnalysis,
-    mode: bootstrapPromptWarningMode,
+  } = buildBootstrapBudgetState({
+    config: params.config,
+    agentId: sessionAgentId,
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
@@ -750,6 +955,15 @@ export async function prepareCliRunContext(
           modelId,
         })
       : undefined;
+  const mcpToolAuthAgentDir = mcpContextBase
+    ? resolveRuntimeAuthProfileAgentDir(agentDir)
+    : undefined;
+  const mcpToolAuth = mcpContextBase
+    ? {
+        ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
+        store: authStore ?? loadScopedAuthStore(),
+      }
+    : undefined;
   const requestedLoopbackToolsAllow =
     runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
   const mcpProjectionContext =
@@ -760,26 +974,85 @@ export async function prepareCliRunContext(
     runtimeToolsAllowPolicy !== undefined
       ? prepareDeps.resolveMcpLoopbackPolicyTools
       : prepareDeps.resolveMcpLoopbackScopedTools;
-  const projectedTools =
+  const projectedToolsBeforePromptBuild =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy) && mcpProjectionContext
-      ? resolveProjectedTools({ cfg: runtimeConfig, ...mcpProjectionContext }).tools
+      ? resolveProjectedTools({
+          cfg: runtimeConfig,
+          ...mcpProjectionContext,
+          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
+          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
+        }).tools
       : [];
+  const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
+    projectedToolsBeforePromptBuild,
+    promptBuildToolsAllow,
+  );
+  if (
+    promptBuildRestrictsTools &&
+    (backendResolved.nativeToolMode === "always-on" ||
+      (backendResolved.nativeToolMode === "selectable" && !canEnforceExactToolAvailability))
+  ) {
+    throw new Error(
+      `CLI backend "${backendResolved.id}" cannot enforce before_prompt_build tool restrictions. Use a backend with exact tool availability or remove the hook restriction. OpenClaw did not start the run.`,
+    );
+  }
+  if (promptBuildRestrictsTools && params.cliToolAvailability === undefined) {
+    if (backendResolved.nativeToolMode === "selectable") {
+      params = {
+        ...params,
+        cliToolAvailability: {
+          native: [],
+          openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
+        },
+      };
+    }
+  }
   if (runtimeToolsAllowPolicy !== undefined && shouldMaterializeRuntimePolicy) {
     params = {
       ...params,
       cliToolAvailability: {
         native: [],
-        openClaw: projectedTools.map((tool) => tool.name),
+        openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
       },
     };
   }
+  if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
+    const filterToolNames = (names: string[]) =>
+      applyEmbeddedAttemptToolsAllow(
+        names.map((name) => ({ name })),
+        promptBuildToolsAllow,
+      ).map((tool) => tool.name);
+    params = {
+      ...params,
+      cliToolAvailability: {
+        native: filterToolNames(params.cliToolAvailability.native),
+        openClaw: filterToolNames(params.cliToolAvailability.openClaw),
+      },
+    };
+  }
+  const projectedTools = params.cliToolAvailability
+    ? applyEmbeddedAttemptToolsAllow(
+        hookFilteredProjectedTools,
+        params.cliToolAvailability.openClaw,
+      )
+    : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const messageToolAvailable = promptTools.some(
+    (tool) => normalizeToolName(tool.name) === "message",
+  );
+  const resultContentSourceByToolName = new Map(
+    promptTools.flatMap((tool) =>
+      tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
+    ),
+  );
   // A restricted selectable tool surface must also bound the MCP bundle:
   // CLI-side --allowedTools is advisory under bypass permission modes, so
   // user/plugin MCP servers must not be merged into the run's config at all.
   // The loopback server (scoped by the grant allowlist) becomes the complete
   // tool universe for the run.
-  const restrictedLoopbackToolsAllow = params.cliToolAvailability?.openClaw;
+  const restrictedLoopbackToolsAllow =
+    params.cliToolAvailability?.openClaw ??
+    (promptBuildRestrictsTools ? projectedTools.map((tool) => tool.name) : undefined);
   const mcpGrantContext =
     mcpContextBase && restrictedLoopbackToolsAllow !== undefined
       ? { ...mcpContextBase, toolsAllow: [...restrictedLoopbackToolsAllow] }
@@ -807,6 +1080,7 @@ export async function prepareCliRunContext(
         ? prepareDeps.mintMcpLoopbackClientGrant({
             context: mcpGrantContext,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+            ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
     const mcpClientGrantCapture =
@@ -851,6 +1125,7 @@ export async function prepareCliRunContext(
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      toolOverrides: params.toolOverrides,
       agentDir,
       // Restricted runs serve only the loopback server; merging user/plugin
       // MCP servers would let the run reach tools outside its allowlist.
@@ -894,20 +1169,49 @@ export async function prepareCliRunContext(
         : undefined,
       env: preparedBackend.env,
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-    preparedExecution =
-      (await backendResolved.prepareExecution?.(
-        (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
-          ? {
-              ...prepareExecutionContext,
-              // Private bridge for bundled auth-owning CLI backends. This is intentionally not
-              // part of the public Plugin SDK until a credential-forwarding
-              // contract exists.
-              authCredential,
-            }
-          : prepareExecutionContext) as typeof prepareExecutionContext & {
-          authCredential?: AuthProfileCredential;
-        },
-      )) ?? undefined;
+    const privatePrepareExecutionContext = params.isolatedCompletion
+      ? {
+          ...prepareExecutionContext,
+          // Bundled owners may project this through a native per-process system-prompt
+          // channel. Keep it private so exact isolated inference does not expand the SDK.
+          isolatedCompletionCwd: cwd,
+          isolatedCompletionModelId: normalizedModel,
+          isolatedCompletionPrompt: params.prompt,
+          isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
+        }
+      : prepareExecutionContext;
+    try {
+      preparedExecution =
+        (await backendResolved.prepareExecution?.(
+          (backendAuthPolicy
+            ? {
+                ...privatePrepareExecutionContext,
+                // The core-internal auth policy table owns this private credential and isolated
+                // completion bridge; third-party backends cannot opt into either capability.
+                authCredential,
+              }
+            : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
+            authCredential?: AuthProfileCredential;
+            isolatedCompletionCwd?: string;
+            isolatedCompletionModelId?: string;
+            isolatedCompletionPrompt?: string;
+            isolatedCompletionSystemPrompt?: string;
+          },
+        )) ?? undefined;
+    } catch (error) {
+      if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
+        // Preserve the selected-profile fact across lazy plugin preparation so
+        // the generic runner can settle it once without backend-owned writes.
+        throw new CliAuthProfilePreparationError({
+          message: error.message,
+          profileId: effectiveAuthProfileId,
+          provider: authStore?.profiles[effectiveAuthProfileId]?.provider ?? params.provider,
+          agentDir,
+          cause: error,
+        });
+      }
+      throw error;
+    }
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
@@ -919,6 +1223,9 @@ export async function prepareCliRunContext(
           }
         : undefined;
     cleanupPreparedResources = preparedBackendCleanup;
+    if (params.isolatedCompletion && preparedExecution?.isolatedCompletionEnforced !== true) {
+      throw unsupportedIsolatedCompletionError(backendResolved.id);
+    }
     if (
       params.cliToolAvailability &&
       backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
@@ -1096,17 +1403,6 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    let openClawHistoryMessages: unknown[] | undefined;
-    const loadOpenClawHistoryMessages = async () => {
-      openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
-        sessionId: params.sessionId,
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
-      });
-      return openClawHistoryMessages;
-    };
     const heartbeatPrompt =
       isSideQuestion || params.bootstrapContextRunKind === "commitment-only"
         ? undefined
@@ -1155,7 +1451,7 @@ export async function prepareCliRunContext(
           requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
           silentReplyPromptMode: params.silentReplyPromptMode,
           runtimeChannel,
-          runtimeChatType: params.sessionEntry?.chatType,
+          runtimeChatType,
           runtimeCapabilities,
           ownerNumbers: params.ownerNumbers,
           heartbeatPrompt,
@@ -1182,43 +1478,33 @@ export async function prepareCliRunContext(
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
     let systemPrompt = transformedSystemPrompt;
-    let preparedPrompt = params.prompt;
+    const finalizedTranscriptPrompt =
+      params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
+        ? params.prompt
+        : params.transcriptPrompt;
+    let preparedPrompt =
+      params.finalizePromptForResolvedTools?.({
+        prompt: params.prompt,
+        messageToolAvailable,
+      }) ?? params.prompt;
     if (!isSideQuestion) {
-      const hookRunner = getGlobalHookRunner();
       try {
-        const hookResult = await resolvePromptBuildHookResult({
-          config: params.config ?? getRuntimeConfig(),
-          prompt: params.prompt,
-          messages: await loadOpenClawHistoryMessages(),
-          hookCtx: {
-            runId: params.runId,
-            agentId: sessionAgentId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            workspaceDir,
-            modelProviderId: params.provider,
-            modelId,
-            trigger: params.trigger,
-            ...buildAgentHookContextChannelFields(params),
-          },
-          hookRunner,
-          bootstrapContextRunKind: params.bootstrapContextRunKind,
-        });
-        if (hookResult.prependContext) {
+        const hookResult = promptBuildHookResult;
+        if (hookResult?.prependContext) {
           preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
         }
-        if (hookResult.appendContext) {
+        if (hookResult?.appendContext) {
           preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
         }
-        const hookSystemPrompt = hookResult.systemPrompt?.trim();
+        const hookSystemPrompt = hookResult?.systemPrompt?.trim();
         if (hookSystemPrompt) {
           systemPrompt = hookSystemPrompt;
         }
         systemPrompt =
           composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPrompt,
-            prependSystemContext: hookResult.prependSystemContext,
-            appendSystemContext: hookResult.appendSystemContext,
+            prependSystemContext: hookResult?.prependSystemContext,
+            appendSystemContext: hookResult?.appendSystemContext,
           }) ?? systemPrompt;
         const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
           sessionKey: params.sessionKey,
@@ -1333,12 +1619,14 @@ export async function prepareCliRunContext(
         ...params,
         config: contextEngineConfig,
         prompt: preparedPrompt,
+        transcriptPrompt: finalizedTranscriptPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
       };
 
       return {
         params: preparedParams,
         effectiveAuthProfileId,
+        ...(authStore ? { authProfileStore: authStore } : {}),
         agentDir,
         started,
         workspaceDir,
@@ -1362,6 +1650,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         messageToolPolicyHash,
         promptToolNamesHash,
+        ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
         cwdHash,
         ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
       };
@@ -1375,20 +1664,37 @@ export async function prepareCliRunContext(
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
     const contextEngineAgentDir = resolveAgentDir(contextEngineConfig, contextEngineSessionAgentId);
-    const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
-      agentDir: contextEngineAgentDir,
-      workspaceDir,
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: backendResolved.id,
+      capabilities: backendResolved.contextEngineHostCapabilities,
     });
+    let resolvedContextEngine;
+    if (params.contextEngineLogicalTurnLease) {
+      selectContextEngineForTranscriptHost({
+        lease: params.contextEngineLogicalTurnLease,
+        host: contextEngineHostSupport,
+        operation: "agent-run",
+        recorder: params.userTurnTranscriptRecorder,
+      });
+      await drainPendingContextEngineTurnsBeforeRun({
+        admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+        isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
+        lease: params.contextEngineLogicalTurnLease,
+      });
+      resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
+    } else {
+      resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
+        agentDir: contextEngineAgentDir,
+        workspaceDir,
+      });
+    }
     const contextEngine =
       resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
     if (contextEngine) {
       assertContextEngineHostSupport({
         contextEngine,
         operation: "agent-run",
-        host: buildGenericCliContextEngineHostSupport({
-          backendId: backendResolved.id,
-          capabilities: backendResolved.contextEngineHostCapabilities,
-        }),
+        host: contextEngineHostSupport,
       });
     }
     const hadSessionFile = await hasCliSessionTranscript({
@@ -1403,12 +1709,14 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 
     return {
       params: preparedParams,
       effectiveAuthProfileId,
+      ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,
       started,
       workspaceDir,
@@ -1439,6 +1747,7 @@ export async function prepareCliRunContext(
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
+      ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };

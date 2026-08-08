@@ -93,7 +93,17 @@ export function renderSidebar(state: UiState): string {
   const realModels = state.bootstrap?.runnerCatalog.real ?? [];
   const modelOptions =
     selection?.providerMode === "live-frontier" && realModels.length > 0 ? realModels : MOCK_MODELS;
-  const selectedIds = new Set(selection?.scenarioIds ?? []);
+  const plan = state.runnerPlanOverride ?? state.bootstrap?.runner.plan ?? null;
+  const resolvedIds = plan?.selectedScenarios.map((scenario) => scenario.id) ?? [];
+  const selectedIds = new Set(
+    selection?.scenarioIds ?? (state.runnerDraftDirty ? [] : resolvedIds),
+  );
+  const profiles = state.bootstrap?.runnerCatalog.profiles ?? [];
+  const channels = state.bootstrap?.runnerCatalog.channels ?? [];
+  const hasRunnableSelection =
+    selection?.scenarioIds === null
+      ? Boolean(selection.profile)
+      : Boolean(selection?.scenarioIds.length);
 
   return `
     <aside class="sidebar${state.sidebarCollapsed ? " is-collapsed" : ""}">
@@ -107,10 +117,67 @@ export function renderSidebar(state: UiState): string {
           ? `<div class="sidebar-section sidebar-panel-body">
               <div class="sidebar-section-title"><h3>Configuration</h3></div>
               <div class="config-field">
+                <span class="config-label">Profile</span>
+                <select id="run-profile"${isRunning ? " disabled" : ""}>
+                  ${profiles
+                    .map(
+                      (profile) =>
+                        `<option value="${esc(profile.id)}"${selection?.profile === profile.id ? " selected" : ""}>${esc(profile.id)}</option>`,
+                    )
+                    .join("")}
+                </select>
+              </div>
+              <div class="config-field">
                 <span class="config-label">Provider lane</span>
                 <select id="provider-mode"${isRunning ? " disabled" : ""}>
                   <option value="mock-openai"${selection?.providerMode === "mock-openai" ? " selected" : ""}>Synthetic (mock)</option>
                   <option value="live-frontier"${selection?.providerMode === "live-frontier" ? " selected" : ""}>Real frontier providers</option>
+                </select>
+              </div>
+              <div class="config-field">
+                <span class="config-label">Channel driver</span>
+                <select id="channel-driver"${isRunning ? " disabled" : ""}>
+                  <option value="qa-channel"${selection?.channelDriver === "qa-channel" ? " selected" : ""}>Synthetic QA channel</option>
+                  <option value="crabline"${selection?.channelDriver === "crabline" ? " selected" : ""}>Crabline channel driver</option>
+                  <option value="live"${selection?.channelDriver === "live" ? " selected" : ""}>Real channels</option>
+                </select>
+              </div>
+              <div class="config-field">
+                <span class="config-label">Execution channel</span>
+                <select id="execution-channel"${isRunning ? " disabled" : ""}>
+                  <option value=""${selection?.channel ? "" : " selected"}>Catalog/default</option>
+                  ${channels
+                    .map(
+                      (channel) =>
+                        `<option value="${esc(channel)}"${selection?.channel === channel ? " selected" : ""}>${esc(channel)}</option>`,
+                    )
+                    .join("")}
+                </select>
+              </div>
+              <div class="config-field">
+                <span class="config-label">Evidence mode</span>
+                <select id="evidence-mode"${isRunning ? " disabled" : ""}>
+                  <option value="full"${selection?.evidenceMode === "full" ? " selected" : ""}>Full</option>
+                  <option value="slim"${selection?.evidenceMode === "slim" ? " selected" : ""}>Slim</option>
+                </select>
+              </div>
+              <div class="config-field">
+                <span class="config-label">Runtime pair</span>
+                <select id="runtime-pair"${isRunning ? " disabled" : ""}>
+                  <option value=""${selection?.runtimePair ? "" : " selected"}>Single runtime</option>
+                  <option value="openclaw,codex"${selection?.runtimePair ? " selected" : ""}>OpenClaw × Codex</option>
+                </select>
+              </div>
+              <div class="config-field">
+                <span class="config-label">Runtime-pair lane</span>
+                <select id="runtime-pair-lane"${isRunning ? " disabled" : ""}>
+                  <option value=""${selection?.runtimePairLane ? "" : " selected"}>Profile/default</option>
+                  ${(["core", "extended", "soak"] as const)
+                    .map(
+                      (lane) =>
+                        `<option value="${lane}"${selection?.runtimePairLane === lane ? " selected" : ""}>${lane}</option>`,
+                    )
+                    .join("")}
                 </select>
               </div>
               ${renderModelSelect({
@@ -143,10 +210,10 @@ export function renderSidebar(state: UiState): string {
             ? `<div class="sidebar-panel-body">${run || runner ? renderRunStatus(state) : '<div class="sidebar-section"><div class="text-dimmed text-sm">No run data yet.</div></div>'}</div>`
             : `<div class="sidebar-section sidebar-scenarios sidebar-panel-body">
                 <div class="sidebar-section-title">
-                  <h3>Scenarios (${selectedIds.size}/${scenarios.length})</h3>
+                  <h3>Scenarios (${selection?.scenarioIds === null ? "profile" : selectedIds.size}/${scenarios.length})</h3>
                   <div class="btn-group">
                     <button class="btn-sm btn-ghost" data-action="select-all-scenarios"${isRunning ? " disabled" : ""}>All</button>
-                    <button class="btn-sm btn-ghost" data-action="clear-scenarios"${isRunning ? " disabled" : ""}>None</button>
+                    <button class="btn-sm btn-ghost" data-action="clear-scenarios"${isRunning ? " disabled" : ""}>Profile</button>
                   </div>
                 </div>
                 <div class="scenario-scroll">
@@ -160,7 +227,7 @@ export function renderSidebar(state: UiState): string {
                           <span class="${statusDotClass(status)}"></span>
                           <div class="scenario-item-info">
                             <span class="scenario-item-title">${esc(s.title)}</span>
-                            <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.id)}</span>
+                            <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.execution?.kind ?? "flow")} · ${esc(s.id)}</span>
                           </div>
                         </label>`;
                     })
@@ -171,8 +238,8 @@ export function renderSidebar(state: UiState): string {
 
       <!-- Actions -->
       <div class="sidebar-actions">
-        <button class="btn-primary" data-action="run-suite"${isRunning || !selectedIds.size || state.busy ? " disabled" : ""}>
-          Run ${selectedIds.size} scenario${selectedIds.size === 1 ? "" : "s"}
+        <button class="btn-primary" data-action="run-suite"${isRunning || !hasRunnableSelection || state.busy ? " disabled" : ""}>
+          ${selection?.scenarioIds === null ? `Resolve & run ${esc(selection.profile)}` : `Run ${selectedIds.size} scenario${selectedIds.size === 1 ? "" : "s"}`}
         </button>
         <div class="btn-row">
           <button data-action="self-check"${isRunning || state.busy ? " disabled" : ""}>Self-check</button>
@@ -185,6 +252,7 @@ export function renderSidebar(state: UiState): string {
 function renderRunStatus(state: UiState): string {
   const run = state.scenarioRun;
   const runner = state.bootstrap?.runner ?? null;
+  const plan = state.runnerPlanOverride ?? (state.runnerDraftDirty ? null : (runner?.plan ?? null));
   if (!run && !runner) {
     return "";
   }
@@ -206,6 +274,9 @@ function renderRunStatus(state: UiState): string {
           : ""
       }
       <div class="run-meta">
+        ${plan ? `<strong>Resolved plan:</strong> ${plan.selectedScenarios.length} selected · ${esc(plan.executionKinds.join(", ") || "none")}` : ""}
+        ${plan?.exclusions.length ? `<br>${plan.exclusions.length} excluded: ${esc(plan.exclusions.map((item) => `${item.scenarioId} (${item.reasons.join(", ")})`).join("; "))}` : ""}
+        ${plan?.errors.length ? `<br><span style="color:var(--danger)">${esc(plan.errors.join(" "))}</span>` : ""}
         ${runner?.startedAt ? `Started ${esc(formatIso(runner.startedAt))}` : ""}
         ${runner?.finishedAt ? `<br>Finished ${esc(formatIso(runner.finishedAt))}` : ""}
         ${runner?.error ? `<br><span style="color:var(--danger)">${esc(runner.error)}</span>` : ""}

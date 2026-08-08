@@ -230,6 +230,7 @@
       "volcengine-plan": {
         "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
         "api": "openai-completions",
+        "defaultModel": "ark-code-latest",
         "models": [
           {
             "id": "ark-code-latest",
@@ -277,6 +278,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -293,6 +297,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -309,6 +316,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           }
         ]

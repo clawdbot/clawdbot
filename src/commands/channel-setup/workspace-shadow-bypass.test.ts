@@ -54,6 +54,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
 }));
 
 import { resolveChannelSetupEntries } from "./discovery.js";

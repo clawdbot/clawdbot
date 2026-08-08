@@ -3,12 +3,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   bootstrapCacheMocks,
   sessionHookMocks,
   beforeResetHookMocks,
@@ -22,7 +23,7 @@ import {
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
 type HookEventRecord = Record<string, unknown> & {
   context?: Record<string, unknown> & {
@@ -185,14 +186,11 @@ async function writeMainTranscriptSession(params: {
     sessionKey: "agent:main:main",
     storePath,
   });
-  return expectStringValue(
-    loadSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath,
-    })?.sessionFile,
-    "sessionFile",
-  );
+  return formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId: params.sessionId,
+    storePath,
+  });
 }
 
 function loadEntry(params: { agentId?: string; sessionKey: string; storePath: string }) {
@@ -640,14 +638,11 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
     content: "new transcript",
     messageId: "m-new",
   });
-  const newSessionFile = expectStringValue(
-    loadEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath,
-    })?.sessionFile,
-    "new sessionFile",
-  );
+  const newSessionFile = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId: "sess-new",
+    storePath,
+  });
 
   const reset = await performSessionReset({
     key: "main",

@@ -23,7 +23,7 @@ Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults: approvals can only tighten config-derived security/ask, never
 loosen them. If an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
-host-local `ask: "always"` in the execution host approvals file keeps
+host-local `ask: "always"` in the execution host approvals document keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
 </Note>
 
@@ -51,11 +51,11 @@ Exec approvals are enforced locally on the execution host:
 
 ## Inspecting the effective policy
 
-| Command                                                          | What it shows                                                                          |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                       |
-| `openclaw exec-policy show`                                      | Local-machine merged view.                                                             |
-| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals file in one step. |
+| Command                                                          | What it shows                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                           |
+| `openclaw exec-policy show`                                      | Local-machine merged view.                                                                 |
+| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step. |
 
 <Note>
 Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-exec).
@@ -79,24 +79,31 @@ message as a fallback.
 
 ## Settings and storage
 
-Approvals live in a local JSON file on the execution host. When
-`OPENCLAW_STATE_DIR` is set, the file follows that state directory;
+Approvals live in the shared SQLite state database on the execution host. When
+`OPENCLAW_STATE_DIR` is set, the database follows that state directory;
 otherwise it uses the default OpenClaw state directory:
 
 ```text
-$OPENCLAW_STATE_DIR/exec-approvals.json
+$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config
 # otherwise
-~/.openclaw/exec-approvals.json
+~/.openclaw/state/openclaw.sqlite#exec_approvals_config
 ```
+
+The `#exec_approvals_config` suffix is a display locator for the singleton
+SQLite row, not part of the database filename. The row keeps the JSON document
+shown below as its authoritative value, so CLI and Gateway compare-and-swap
+hashes remain stable.
 
 The default approval socket follows the same root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
 State directories are independent trust scopes. When `OPENCLAW_STATE_DIR`
-points somewhere else, OpenClaw never imports or archives
-`~/.openclaw/exec-approvals.json`; configure approvals separately for the
-custom state directory. Doctor also imports legacy
+points somewhere else, OpenClaw never imports or archives approvals from the
+default state directory; configure approvals separately for the custom state
+directory. After upgrading from a file-backed release, stop the Gateway and run
+`openclaw doctor --fix` once to import the active state directory's retired
+`exec-approvals.json`. Doctor also imports legacy
 `plugin-binding-approvals.json` only when it belongs to the active state
 directory.
 
@@ -230,7 +237,7 @@ Set globally under `tools.exec.commandHighlighting` or per agent under
 
 To run host exec without approval prompts, open **both** policy layers:
 requested exec policy in OpenClaw config (`tools.exec.*`) **and**
-host-local approvals policy in the execution host approvals file.
+host-local approvals policy in the execution host approvals document.
 
 Omitted `askFallback` defaults to `deny`. Set host `askFallback` to `full`
 explicitly when a no-UI approval prompt should fall back to allow.
@@ -273,7 +280,7 @@ If you want a more conservative setup, tighten OpenClaw exec policy back to
     openclaw gateway restart
     ```
   </Step>
-  <Step title="Match the host approvals file">
+  <Step title="Match the host approvals document">
     ```bash
     openclaw approvals set --stdin <<'EOF'
     {
@@ -313,7 +320,7 @@ To set individual fields instead of a full preset, use
 
 ### Node host
 
-Apply the same approvals file on the node instead:
+Apply the same approvals document on the node instead:
 
 ```bash
 openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
@@ -341,11 +348,11 @@ EOF
 
 - `/exec security=full ask=off` changes only the current session.
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
-  when both the requested policy and the host approvals file resolve to
+  when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
 "always"`, still prompts.
 
-If the host approvals file stays stricter than config, the stricter host
+If the host approvals document stays stricter than config, the stricter host
 policy still wins.
 
 ## Allowlist (per agent)
@@ -453,7 +460,7 @@ shows last-used metadata per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or headless
 node host). If a node does not advertise exec approvals yet, edit its
-local approvals file directly.
+local approvals document directly.
 
 Some node hosts, including the Windows companion, own a different approval
 policy format. Control UI shows these host-native policies read-only. Use the

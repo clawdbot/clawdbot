@@ -3,6 +3,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createWorkboardCapability } from "../../lib/workboard/capability.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
 import * as workboardLib from "../../lib/workboard/index.ts";
+import type { WorkboardRouteData } from "./route.ts";
 
 const configureLiveRefresh = vi.fn((): boolean => false);
 const handleChanged = vi.fn();
@@ -15,8 +16,10 @@ await import("./workboard-page.ts");
 
 type WorkboardPageTestElement = HTMLElement & {
   context: ApplicationContext;
+  routeData?: WorkboardRouteData;
   updateComplete: Promise<boolean>;
   syncWorkboardAgentScope: () => void;
+  syncWorkboardBoardFilter: () => void;
 };
 
 function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContext {
@@ -24,6 +27,7 @@ function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContex
     client: null,
     phase: "stopped",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -113,6 +117,47 @@ describe("WorkboardPage lifecycle", () => {
       epoch: "epoch-a",
       revision: 1,
     });
+  });
+
+  it("ignores snapshot and invalidation callbacks retained by a retired Gateway", async () => {
+    const firstWorkboard = createWorkboardCapability();
+    const secondWorkboard = createWorkboardCapability();
+    const firstContext = contextWithWorkboard(firstWorkboard);
+    const secondContext = contextWithWorkboard(secondWorkboard);
+    let retiredSnapshot: Parameters<typeof firstContext.gateway.subscribe>[0] | undefined;
+    let retiredEvent: Parameters<typeof firstContext.gateway.subscribeEvents>[0] | undefined;
+    firstContext.gateway.subscribe = (listener) => {
+      retiredSnapshot = listener;
+      return () => undefined;
+    };
+    firstContext.gateway.subscribeEvents = (listener) => {
+      retiredEvent = listener;
+      return () => undefined;
+    };
+    firstContext.gateway.snapshot.phase = "connected";
+    firstContext.gateway.snapshot.client = { request: vi.fn() } as never;
+    secondContext.gateway.snapshot.phase = "connected";
+    secondContext.gateway.snapshot.client = { request: vi.fn() } as never;
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = firstContext;
+    document.body.append(page);
+    await page.updateComplete;
+
+    page.context = secondContext;
+    (page as unknown as { requestUpdate: () => void }).requestUpdate();
+    await page.updateComplete;
+    vi.clearAllMocks();
+
+    retiredSnapshot?.({ ...firstContext.gateway.snapshot, phase: "stopped", client: null });
+    retiredEvent?.({
+      type: "event",
+      event: "plugin.workboard.changed",
+      payload: { epoch: "retired", revision: 1 },
+    });
+
+    expect(stopLiveRefresh).not.toHaveBeenCalledWith(secondWorkboard);
+    expect(stopLifecycleRefresh).not.toHaveBeenCalledWith(secondWorkboard);
+    expect(handleChanged).not.toHaveBeenCalled();
   });
 
   it("forces one canonical reload when the live client is newly installed", async () => {
@@ -240,5 +285,65 @@ describe("WorkboardPage lifecycle", () => {
     expect(workboard.state.detailCommentBody).toBe("draft comment");
     expect(workboard.state.draftOpen).toBe(true);
     expect(workboard.state.editingCardId).toBe("writer-card");
+  });
+
+  it.each([
+    { boardFilter: "product", remainsVisible: false },
+    { boardFilter: "__all__", remainsVisible: true },
+  ])(
+    "reconciles existing card overlays when the board route changes to $boardFilter",
+    async ({ boardFilter, remainsVisible }) => {
+      const workboard = createWorkboardCapability();
+      const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+      page.context = contextWithWorkboard(workboard);
+      document.body.append(page);
+      await page.updateComplete;
+      workboard.state.cards = [
+        {
+          id: "ops-card",
+          title: "Operations task",
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 1000,
+          createdAt: 1,
+          updatedAt: 1,
+          metadata: { automation: { boardId: "ops" } },
+        },
+      ];
+      workboard.state.boardFilter = "ops";
+      workboard.state.detailCardId = "ops-card";
+      workboard.state.detailCommentBody = "draft comment";
+      workboard.state.draftOpen = true;
+      workboard.state.editingCardId = "ops-card";
+      page.routeData = { boardFilter, search: "" };
+
+      page.syncWorkboardBoardFilter();
+
+      expect(workboard.state.boardFilter).toBe(boardFilter);
+      expect(workboard.state.detailCardId).toBe(remainsVisible ? "ops-card" : null);
+      expect(workboard.state.detailCommentBody).toBe(remainsVisible ? "draft comment" : "");
+      expect(workboard.state.draftOpen).toBe(remainsVisible);
+      expect(workboard.state.editingCardId).toBe(remainsVisible ? "ops-card" : null);
+    },
+  );
+
+  it("preserves a new-card draft when the board route changes", async () => {
+    const workboard = createWorkboardCapability();
+    const page = document.createElement("openclaw-workboard-page") as WorkboardPageTestElement;
+    page.context = contextWithWorkboard(workboard);
+    document.body.append(page);
+    await page.updateComplete;
+    workboard.state.boardFilter = "ops";
+    workboard.state.draftOpen = true;
+    workboard.state.draftTitle = "New operations task";
+    page.routeData = { boardFilter: "product", search: "" };
+
+    page.syncWorkboardBoardFilter();
+
+    expect(workboard.state.boardFilter).toBe("product");
+    expect(workboard.state.draftOpen).toBe(true);
+    expect(workboard.state.draftTitle).toBe("New operations task");
+    expect(workboard.state.editingCardId).toBeNull();
   });
 });

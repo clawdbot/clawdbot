@@ -8,6 +8,24 @@ describe("plugin loader records", () => {
     vi.unstubAllEnvs();
   });
 
+  it("keeps package attribution separate from the runtime version", () => {
+    const record = createPluginRecord({
+      id: "versioned",
+      name: "Versioned",
+      source: "test",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+      packageVersion: "1.2.3",
+      version: "runtime-4",
+    });
+
+    expect(record).toMatchObject({
+      packageVersion: "1.2.3",
+      version: "runtime-4",
+    });
+  });
+
   it("preserves manifest-declared channel ids before runtime registration", () => {
     const record = createPluginRecord({
       id: "kitchen-sink",

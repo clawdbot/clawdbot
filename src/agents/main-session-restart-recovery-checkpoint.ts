@@ -4,7 +4,6 @@ import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restar
 import {
   applySessionEntryReplacements,
   persistSessionTranscriptTurn,
-  type SessionTranscriptTurnExpectedState,
   type SessionTranscriptTurnLifecyclePatch,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -21,7 +20,7 @@ import {
 } from "./embedded-agent-runner/message-visibility.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
-import { log } from "./main-session-restart-recovery-shared.js";
+import { buildRestartRecoveryExpectedState, log } from "./main-session-restart-recovery-shared.js";
 
 export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
   const runs = entry.restartRecoveryRuns;
@@ -67,6 +66,7 @@ export async function reconcileInterruptedCompletionReport(params: {
         ...buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: false }),
         ...buildMainSessionRecoveryClearPatch(entry),
         status: "killed",
+        lifecycleRunId: undefined,
         abortedLastRun: false,
         endedAt,
         lastRunError: undefined,
@@ -316,15 +316,9 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
       terminalSourceRunId: expectedRecoverySourceRunId,
     }),
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     endedAt,
     pendingFinalDelivery: undefined,
-    pendingFinalDeliveryText: undefined,
-    pendingFinalDeliveryCreatedAt: undefined,
-    pendingFinalDeliveryLastAttemptAt: undefined,
-    pendingFinalDeliveryAttemptCount: undefined,
-    pendingFinalDeliveryLastError: undefined,
-    pendingFinalDeliveryContext: undefined,
-    pendingFinalDeliveryIntentId: undefined,
     restartRecoveryForceSafeTools: undefined,
     restartRecoveryRuns: undefined,
     runtimeMs:
@@ -433,25 +427,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     recoveryToolResultIdempotencyKey &&
     successfulToolResultIndex === undefined
   ) {
-    const expectedSessionState: SessionTranscriptTurnExpectedState = {
-      abortedLastRun: params.entry.abortedLastRun,
-      restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
-      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
-      restartRecoveryDeliveryToolCallId: params.entry.restartRecoveryDeliveryToolCallId,
-      restartRecoveryDeliveryRequestFingerprint:
-        params.entry.restartRecoveryDeliveryRequestFingerprint,
-      restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
-      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
-      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
-      restartRecoverySameChannelThreadRequired:
-        params.entry.restartRecoverySameChannelThreadRequired,
-      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
-      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
-      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
-      status: params.entry.status,
-      updatedAt: params.entry.updatedAt,
-    };
+    const expectedSessionState = buildRestartRecoveryExpectedState(params.entry);
     const persisted = await persistSessionTranscriptTurn(
       {
         agentId: params.agentId,

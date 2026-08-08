@@ -3,18 +3,29 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  runOpenClawStateWriteTransaction,
+  withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   acquireStartupMigrationLease,
   hasActiveStartupMigrationLease,
+  needsStateMigrationCheckpoint,
   needsStartupMigrationCheckpoint,
   readStartupMigrationVersion,
+  recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
+  STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "./startup-migration-checkpoint.js";
 
 afterEach(() => {
@@ -22,6 +33,41 @@ afterEach(() => {
 });
 
 const startupMigrationTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type StartupMigrationLeaseTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "schema_meta" | "state_leases"
+>;
+
+const migrationIdentity = {
+  effectiveConfigFingerprint: "effective-config",
+  pluginDoctorConfigFingerprint: "plugin-doctor-config",
+  pluginMigrationFingerprint: "plugin-migrations",
+};
+
+/** Rewrites only the recorded owner start time so the live owner PID looks recycled. */
+function overwriteStartupMigrationLeaseOwnerStartedAt(
+  env: NodeJS.ProcessEnv,
+  startedAt: number,
+): void {
+  withOpenClawStateStartupMigrationCheckpointDatabase(
+    (db) => {
+      const kysely = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely.selectFrom("state_leases").select("payload_json as payloadJson"),
+      );
+      const payload = JSON.parse(row?.payloadJson ?? "{}") as { owner?: { startedAt?: number } };
+      executeSqliteQuerySync(
+        db,
+        kysely.updateTable("state_leases").set({
+          payload_json: JSON.stringify({ ...payload, owner: { ...payload.owner, startedAt } }),
+        }),
+      );
+    },
+    { env },
+  );
+}
 
 describe("startup migration checkpoint", () => {
   it("checks migration activity without creating shared state", () => {
@@ -45,6 +91,15 @@ describe("startup migration checkpoint", () => {
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
+      }),
+    ).toBe(true);
+    expect(
+      needsStateMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
       }),
     ).toBe(true);
 
@@ -52,6 +107,7 @@ describe("startup migration checkpoint", () => {
       env,
       version: "2026.7.1",
       buildIdentity: "2026-07-11T00:00:00.000Z",
+      identity: migrationIdentity,
       nowMs: 1234,
     });
 
@@ -61,6 +117,15 @@ describe("startup migration checkpoint", () => {
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
+      }),
+    ).toBe(false);
+    expect(
+      needsStateMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
       }),
     ).toBe(false);
     expect(
@@ -68,6 +133,7 @@ describe("startup migration checkpoint", () => {
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:01:00.000Z",
+        identity: migrationIdentity,
       }),
     ).toBe(true);
     expect(
@@ -75,8 +141,41 @@ describe("startup migration checkpoint", () => {
         env,
         version: "2026.7.2",
         buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
       }),
     ).toBe(true);
+    for (const [field, value] of [
+      ["effectiveConfigFingerprint", "effective-config-changed"],
+      ["pluginDoctorConfigFingerprint", "plugin-doctor-config-changed"],
+      ["pluginMigrationFingerprint", "plugin-migrations-changed"],
+    ] as const) {
+      expect(
+        needsStartupMigrationCheckpoint({
+          env,
+          version: "2026.7.1",
+          buildIdentity: "2026-07-11T00:00:00.000Z",
+          identity: { ...migrationIdentity, [field]: value },
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("keeps state-only completion narrower than gateway startup", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const checkpoint = {
+      env,
+      version: "2026.7.1",
+      buildIdentity: "2026-07-11T00:00:00.000Z",
+      identity: migrationIdentity,
+    };
+
+    recordSuccessfulStateMigrations({ ...checkpoint, nowMs: 1234 });
+
+    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(readStartupMigrationVersion(env)).toBeNull();
   });
 
   it("keeps the fast path disabled without immutable build provenance", () => {
@@ -88,19 +187,64 @@ describe("startup migration checkpoint", () => {
       env,
       version: "2026.7.1",
       buildIdentity: null,
+      identity: migrationIdentity,
       nowMs: 1234,
     });
 
-    expect(needsStartupMigrationCheckpoint({ env, version: "2026.7.1", buildIdentity: null })).toBe(
-      true,
-    );
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: null,
+        identity: migrationIdentity,
+      }),
+    ).toBe(true);
     expect(
       needsStartupMigrationCheckpoint({
         env,
         version: "2026.7.1",
         buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
       }),
     ).toBe(true);
+    expect(
+      needsStartupMigrationCheckpoint({
+        env,
+        version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats legacy build-only checkpoints as stale once", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const checkpoint = {
+      env,
+      version: "2026.7.1",
+      buildIdentity: "2026-07-11T00:00:00.000Z",
+      identity: migrationIdentity,
+    };
+    recordSuccessfulStartupMigrations({ ...checkpoint, nowMs: 1234 });
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        const kysely = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
+        executeSqliteQuerySync(
+          db,
+          kysely.updateTable("schema_meta").set({
+            app_version: `${checkpoint.version}\n${checkpoint.buildIdentity}`,
+            schema_version: 2,
+          }),
+        );
+      },
+      { env },
+    );
+
+    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(true);
+    expect(readStartupMigrationVersion(env)).toBe("2026.7.1");
   });
 
   it("serializes startup migrations with an expiring shared-state lease", () => {
@@ -112,7 +256,7 @@ describe("startup migration checkpoint", () => {
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1001, owner: "second" })).toThrow(
-      "OpenClaw startup migrations are already running",
+      `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
     );
 
     lease.release();
@@ -122,6 +266,48 @@ describe("startup migration checkpoint", () => {
     const next = acquireStartupMigrationLease({ env, nowMs: 1002, owner: "second" });
     next.release();
   });
+
+  it("reclaims an active startup migration lease whose owner process is gone", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const deadPid = 2_147_483_647;
+    const stale = acquireStartupMigrationLease({
+      env,
+      nowMs: 1000,
+      owner: "stale",
+      ownerPid: deadPid,
+    });
+
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
+
+    const replacement = acquireStartupMigrationLease({ env, nowMs: 1001, owner: "replacement" });
+    stale.release();
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
+    replacement.release();
+  });
+
+  // PID numbers are recycled by the OS. Without the start-time guard a stale lease whose PID was
+  // reassigned to an unrelated live process would block startup for the full TTL.
+  it.skipIf(process.platform === "win32")(
+    "reclaims a startup migration lease whose owner PID was recycled",
+    () => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+      };
+      const stale = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "stale" });
+
+      // The owner PID is this live test process; only the recorded start identity is stale.
+      overwriteStartupMigrationLeaseOwnerStartedAt(env, 1);
+
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
+
+      const replacement = acquireStartupMigrationLease({ env, nowMs: 1001, owner: "replacement" });
+      stale.release();
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
+      replacement.release();
+    },
+  );
 
   it("does not report an expired startup migration lease as active", () => {
     const env = {
@@ -161,11 +347,39 @@ describe("startup migration checkpoint", () => {
         env,
         lease: first,
         version: "2026.7.1",
+        buildIdentity: "2026-07-11T00:00:00.000Z",
+        identity: migrationIdentity,
         nowMs: 400_001,
       }),
     ).toThrow("startup migration lease was lost");
     expect(readStartupMigrationVersion(env)).toBeNull();
 
+    second.release();
+  });
+
+  it("checks exact lease ownership inside the caller write transaction", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const nowMs = Date.now();
+    const first = acquireStartupMigrationLease({ env, nowMs, owner: "first" });
+    const second = acquireStartupMigrationLease({
+      env,
+      nowMs: nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
+      owner: "second",
+    });
+
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        expect(() => first.assertOwnedInTransaction(db)).toThrow(
+          "startup migration lease was lost",
+        );
+        expect(() => second.assertOwnedInTransaction(db)).not.toThrow();
+      },
+      { env },
+    );
+
+    first.release();
     second.release();
   });
 

@@ -33,7 +33,7 @@ export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
-export type SessionFilePathOptions = {
+type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
 };
@@ -295,11 +295,14 @@ export function resolveSessionTranscriptPath(
 }
 export function resolveSessionFilePath(
   sessionId: string,
-  entry?: { sessionFile?: string },
+  entry?: object,
   opts?: SessionFilePathOptions,
 ): string {
   const sessionsDir = resolveSessionsDir(opts);
-  const candidate = entry?.sessionFile?.trim();
+  const candidate =
+    entry && "sessionFile" in entry && typeof entry.sessionFile === "string"
+      ? entry.sessionFile.trim()
+      : undefined;
   if (candidate) {
     if (candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
       return candidate;

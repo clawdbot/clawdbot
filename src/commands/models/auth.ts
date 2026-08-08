@@ -41,7 +41,6 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
@@ -69,22 +68,10 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-// CLI auth writes occur outside the gateway process, which may retain an older runtime snapshot.
-async function refreshRunningGatewayAuthState(): Promise<void> {
-  try {
-    await callGateway({
-      method: "models.authStatus",
-      params: { refresh: true },
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Auth writes must still succeed when no local gateway is running.
-  }
-}
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -164,9 +151,10 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai" || normalized === "codex" || normalized === "openai-codex"
-    ? "openai"
-    : normalized;
+  if (normalized === "openai-codex" || normalized === "codex-cli") {
+    throw new Error(`"${normalized}" is a legacy provider ID; use --provider openai.`);
+  }
+  return normalized === "openai" || normalized === "codex" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {
@@ -555,8 +543,10 @@ async function runProviderAuthMethod(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
+  params.signal?.throwIfAborted();
   const selectedProviderId = normalizeProviderId(params.provider.id);
   await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
@@ -569,6 +559,7 @@ async function runProviderAuthMethod(params: {
     runtime: params.runtime,
     allowSecretRefPrompt: false,
     isRemote: params.isRemote ?? isRemoteEnvironment(),
+    signal: params.signal,
     openUrl:
       params.openUrl ??
       (async (url) => {
@@ -579,6 +570,7 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  params.signal?.throwIfAborted();
   const resultProviderIds = new Set(
     result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
   );
@@ -934,6 +926,7 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 };
 
@@ -1096,6 +1089,7 @@ export async function runModelsAuthLoginFlow(
     setDefault: opts.setDefault,
     env: opts.env,
     isRemote: opts.isRemote,
+    signal: opts.signal,
     openUrl: opts.openUrl,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);

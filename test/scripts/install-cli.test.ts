@@ -41,6 +41,38 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("rejects a git checkout without a commit before updating it", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      repo="$tmp/repo"
+      mkdir -p "$repo/.git"
+      ensure_git() { :; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      git() {
+        [[ "$1" == "--git-dir=$repo/.git" ]] &&
+          [[ "$2" == "--work-tree=$repo" ]] &&
+          [[ "$3" == "rev-parse" ]] &&
+          [[ "$4" == "--verify" ]] &&
+          [[ "$5" == "--quiet" ]] &&
+          [[ "$6" == "HEAD^{commit}" ]] &&
+          return 1
+        return 99
+      }
+
+      set +e
+      (install_openclaw_from_git "$repo")
+      status="$?"
+      set -e
+      [[ "$status" -eq 1 ]]
+      [[ -d "$repo/.git" ]]
+    `);
+
+    expect(result.status).toBe(0);
+  });
+
   it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
@@ -183,6 +215,87 @@ describe("install-cli.sh", () => {
     expect(result.status).toBe(1);
     expect(result.stdout + result.stderr).toContain("Missing value for --prefix");
     expect(result.stdout + result.stderr).not.toContain("unbound variable");
+  });
+
+  it("matches the Gateway future-config compatibility rule", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      node_bin() { command -v node; }
+      set +e
+      for pair in \
+        2026.7.1-2:2026.7.2 \
+        2026.7.2-beta.6:2026.7.2-beta.7 \
+        2026.7.2:2026.7.2-beta.7 \
+        2026.7.2-beta.7:2026.7.2 \
+        2026.7.2-1:2026.7.2-2 \
+        2026.7.3-beta.1:2026.7.2; do
+        candidate="\${pair%%:*}"
+        writer="\${pair#*:}"
+        openclaw_version_is_compatible_with "$candidate" "$writer"
+        printf '%s=%s\\n' "$pair" "$?"
+      done
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("2026.7.1-2:2026.7.2=1");
+    expect(result.stdout).toContain("2026.7.2-beta.6:2026.7.2-beta.7=1");
+    expect(result.stdout).toContain("2026.7.2:2026.7.2-beta.7=0");
+    expect(result.stdout).toContain("2026.7.2-beta.7:2026.7.2=0");
+    expect(result.stdout).toContain("2026.7.2-1:2026.7.2-2=0");
+    expect(result.stdout).toContain("2026.7.3-beta.1:2026.7.2=0");
+  });
+
+  it("rejects an incompatible channel before replacing an existing managed CLI", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-compatible-"));
+    const prefix = join(tmp, "prefix");
+    const bin = join(prefix, "bin");
+    const openclaw = join(bin, "openclaw");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(openclaw, "existing-managed-cli\n");
+
+    try {
+      const result = runInstallCliShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        PREFIX=${JSON.stringify(prefix)}
+        OPENCLAW_VERSION=latest
+        REQUIRED_COMPATIBLE_VERSION=2026.7.2
+        node_bin() { command -v node; }
+        npm_bin() { printf 'npm\\n'; }
+        npm_config_has_raw_key() { return 1; }
+        npm() {
+          if [[ "$1" == "view" ]]; then printf '2026.7.1-2\\n'; return 0; fi
+          if [[ "$1" == "config" ]]; then printf 'null\\n'; return 0; fi
+          printf 'unexpected mutation: %s\\n' "$*" >&2
+          return 99
+        }
+        install_openclaw
+      `);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("OpenClaw 2026.7.1-2 is older than config writer 2026.7.2");
+      expect(result.stderr).not.toContain("unexpected mutation");
+      expect(readFileSync(openclaw, "utf8")).toBe("existing-managed-cli\n");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("checks a git checkout version before dependency install or wrapper replacement", () => {
+    const checkoutIndex = script.indexOf('checkout_git_openclaw_ref "$repo_dir" "$git_ref"');
+    const compatibilityIndex = script.indexOf(
+      'require_openclaw_version_compatible "$resolved_version"',
+    );
+    const dependencyInstallIndex = script.indexOf(
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+    );
+    const wrapperIndex = script.indexOf('cat > "${PREFIX}/bin/openclaw"', compatibilityIndex);
+
+    expect(checkoutIndex).toBeGreaterThan(-1);
+    expect(compatibilityIndex).toBeGreaterThan(checkoutIndex);
+    expect(dependencyInstallIndex).toBeGreaterThan(compatibilityIndex);
+    expect(wrapperIndex).toBeGreaterThan(compatibilityIndex);
   });
 
   it("does not restart a gateway again after force-install activates it", () => {

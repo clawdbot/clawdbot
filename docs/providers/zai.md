@@ -82,8 +82,8 @@ openclaw plugins install @openclaw/zai-provider
 
 | Onboarding choice   | Base URL                                      | Default model |
 | ------------------- | --------------------------------------------- | ------------- |
-| `zai-global`        | `https://api.z.ai/api/paas/v4`                | `glm-5.1`     |
-| `zai-cn`            | `https://open.bigmodel.cn/api/paas/v4`        | `glm-5.1`     |
+| `zai-global`        | `https://api.z.ai/api/paas/v4`                | `glm-5.2`     |
+| `zai-cn`            | `https://open.bigmodel.cn/api/paas/v4`        | `glm-5.2`     |
 | `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.2`     |
 | `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.2`     |
 
@@ -167,7 +167,7 @@ The manifest-backed catalog currently includes:
 
 | Model ref          | Notes                                             |
 | ------------------ | ------------------------------------------------- |
-| `zai/glm-5.2`      | Coding Plan default; 1M context                   |
+| `zai/glm-5.2`      | Default; 1M context                               |
 | `zai/glm-5-turbo`  | OpenClaw-optimized text model; 200K context       |
 | `zai/glm-5v-turbo` | Multimodal coding model; 200K context             |
 | `zai/glm-5.1`      | Deprecated; hidden unless configured; use GLM-5.2 |
@@ -182,8 +182,8 @@ GLM models are available as `zai/<model>` (example: `zai/glm-5.2`).
 </Tip>
 
 <Note>
-Coding Plan setup defaults to `zai/glm-5.2`; general API setup keeps
-`zai/glm-5.1`. On the Coding Plan endpoints, auto-detection falls back to
+All fresh Z.AI setup paths default to `zai/glm-5.2`. On the Coding Plan endpoints,
+auto-detection falls back to
 `glm-5.1` and then `glm-4.7` when the key/plan does not expose GLM-5.2. GLM
 versions and availability can change; run `openclaw models list --all --provider zai`
 to see the catalog known to your installed version.

@@ -1,7 +1,14 @@
 // Control UI runtime config capability and shared config-domain mutations.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
@@ -12,10 +19,34 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "../config-form-utils.ts";
+import { canCallGatewayMethod } from "../gateway-methods.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
+import { normalizeAgentId } from "../sessions/session-key.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
+
+type RuntimeConfigExternalMutationResult<T> =
+  | {
+      ok: true;
+      value: T;
+      refresh: { ok: true } | { ok: false; error: string };
+    }
+  | {
+      ok: false;
+      reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
+      error: string;
+    };
+
+type RuntimeConfigExternalMutationOptions = {
+  waitForWritesResumed?: boolean;
+  canDispatch?: () => boolean;
+  dispatchError?: string;
+};
+
+type RuntimeConfigDispatchOptions = {
+  canDispatch?: () => boolean;
+};
 
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -36,6 +67,13 @@ function readAckHash(ack: unknown): string | null {
 function isConfigBaseHashConflictError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message.includes("config changed since last load");
+}
+
+function isDefinitiveConfigMutationRejection(err: unknown): boolean {
+  return (
+    err instanceof GatewayRequestError &&
+    (err.gatewayCode === ErrorCodes.INVALID_REQUEST || err.gatewayCode === ErrorCodes.FORBIDDEN)
+  );
 }
 
 type ConfigState = {
@@ -71,6 +109,91 @@ type ConfigState = {
   chatError?: string | null;
 };
 
+function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
+  let message = String(error);
+  if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
+    return message;
+  }
+  const issues = error.details.issues;
+  if (!Array.isArray(issues)) {
+    return message;
+  }
+  const summaryPrefix = `${error.name}: invalid config: `;
+  if (!message.startsWith(summaryPrefix)) {
+    return message;
+  }
+  const submittedForm = parseConfigRawDraft(submittedRaw);
+  if (!submittedForm) {
+    return message;
+  }
+  let offset = summaryPrefix.length;
+  for (const issue of issues) {
+    if (
+      !isRecord(issue) ||
+      typeof issue.path !== "string" ||
+      typeof issue.message !== "string" ||
+      !message.startsWith(`${issue.path}: ${issue.message}`, offset)
+    ) {
+      break;
+    }
+    const displayPath = formatConfigIssuePathFromDraft(issue.path, submittedForm);
+    if (displayPath !== issue.path) {
+      message = `${message.slice(0, offset)}${displayPath}${message.slice(offset + issue.path.length)}`;
+    }
+    offset += displayPath.length + 2 + issue.message.length;
+    if (!message.startsWith("; ", offset)) {
+      break;
+    }
+    offset += 2;
+  }
+  return message;
+}
+
+function formatConfigIssuePathFromDraft(path: string, draft: unknown): string {
+  const segments = path.split(".");
+
+  const visit = (value: unknown, offset: number): string[] => {
+    if (offset === segments.length) {
+      return [""];
+    }
+    const segment = segments[offset];
+    if (segment === undefined) {
+      return [];
+    }
+    if (Array.isArray(value)) {
+      const index = Number(segment);
+      if (!/^\d+$/u.test(segment) || !Number.isSafeInteger(index) || !Object.hasOwn(value, index)) {
+        return [segments.slice(offset).join(".")];
+      }
+      return visit(value[index], offset + 1).map((tail) =>
+        tail ? `#${index + 1}.${tail}` : `#${index + 1}`,
+      );
+    }
+    if (!isRecord(value)) {
+      return [segments.slice(offset).join(".")];
+    }
+
+    const matches = Object.keys(value).flatMap((key) => {
+      const keySegments = key.split(".");
+      if (
+        keySegments.length > segments.length - offset ||
+        !keySegments.every((keySegment, index) => keySegment === segments[offset + index])
+      ) {
+        return [];
+      }
+      return visit(value[key], offset + keySegments.length).map((tail) =>
+        tail ? `${key}.${tail}` : key,
+      );
+    });
+    return matches.length > 0 ? matches : [segments.slice(offset).join(".")];
+  };
+
+  // Flattened Gateway paths cannot distinguish overlapping dotted object keys;
+  // keep the machine path unless the actual draft proves one display spelling.
+  const displayPaths = new Set(visit(draft, 0));
+  return displayPaths.size === 1 ? (displayPaths.values().next().value ?? path) : path;
+}
+
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
 const requestVersionsByState = new WeakMap<ConfigState, { config: number; schema: number }>();
 const connectionEpochsByState = new WeakMap<object, number>();
@@ -79,6 +202,7 @@ type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   phase: ApplicationGatewayPhase;
   sessionKey: string;
+  hello?: GatewayHelloOk | null;
 };
 
 type RuntimeConfigGateway = {
@@ -88,6 +212,10 @@ type RuntimeConfigGateway = {
 
 export type RuntimeConfigCapability = {
   readonly state: ConfigState;
+  readonly canSet?: boolean;
+  readonly canApply?: boolean;
+  readonly canPatch?: boolean;
+  readonly canOpenFile?: boolean;
   ensureLoaded: () => Promise<void>;
   ensureSchemaLoaded: () => Promise<void>;
   refresh: (options?: LoadConfigOptions) => Promise<void>;
@@ -102,13 +230,22 @@ export type RuntimeConfigCapability = {
   setWritesSuspended: (suspended: boolean) => void;
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
-  save: () => Promise<boolean>;
+  save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
-  ensureAgentEntry: (agentId: string) => number;
+  /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
+  agentEntry: (agentId: string, options?: { ensure?: boolean }) => AgentConfigEntryTarget | null;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
+  /**
+   * Serializes a config-writing RPC behind this capability's pending draft,
+   * then refreshes the authoritative snapshot before resolving.
+   */
+  runExternalMutation: <T>(
+    task: (client: GatewayBrowserClient) => Promise<T>,
+    options?: RuntimeConfigExternalMutationOptions,
+  ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
@@ -123,10 +260,17 @@ type ConfigPatchOptions = {
   note: string;
   /** Array paths the caller intentionally shrinks; required by the gateway's destructive-array guard. */
   replacePaths?: string[];
+  /** Caller-owned lifecycle/access guard, rechecked at the final dispatch boundary. */
+  canDispatch?: () => boolean;
 };
 
 type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
 type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
+type ConfigPatchAck = {
+  config?: unknown;
+  hash?: unknown;
+  noop?: boolean;
+};
 
 type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -135,18 +279,6 @@ type ConfigGatewayClient = {
 type ConfigConnectionState = {
   client: ConfigGatewayClient | null;
   connected: boolean;
-};
-
-type ConfigGatewayState = Pick<
-  ConfigState,
-  | "connected"
-  | "applySessionKey"
-  | "configNeedsApply"
-  | "configSnapshot"
-  | "lastError"
-  | "chatError"
-> & {
-  client: ConfigGatewayClient | null;
 };
 
 function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>): ConfigState {
@@ -373,21 +505,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
   return value as JsonSchema;
 }
 
-function coerceNumberString(value: string, integer: boolean): number | undefined | string {
-  const trimmed = value.trim();
-  if (trimmed === "") {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  if (integer && !Number.isInteger(parsed)) {
-    return value;
-  }
-  return parsed;
-}
-
 function coerceBooleanString(value: string): boolean | string {
   const trimmed = value.trim();
   if (trimmed === "true") {
@@ -405,8 +522,9 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   }
 
   if (schema.allOf && schema.allOf.length > 0) {
-    let next: unknown = value;
-    for (const segment of schema.allOf) {
+    const { allOf, ...baseSchema } = schema;
+    let next: unknown = coerceFormValues(value, baseSchema);
+    for (const segment of allOf) {
       next = coerceFormValues(next, segment);
     }
     return next;
@@ -430,7 +548,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {
-          const coerced = coerceNumberString(value, variantType === "integer");
+          const coerced = coerceConfigFormNumberString(value, variantType === "integer");
           if (coerced === undefined || typeof coerced === "number") {
             return coerced;
           }
@@ -457,7 +575,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
   if (type === "number" || type === "integer") {
     if (typeof value === "string") {
-      const coerced = coerceNumberString(value, type === "integer");
+      const coerced = coerceConfigFormNumberString(value, type === "integer");
       if (coerced === undefined || typeof coerced === "number") {
         return coerced;
       }
@@ -601,6 +719,7 @@ async function submitConfigChange(
   busyKey: ConfigSubmitBusyKey,
   extraParams: Record<string, unknown> = {},
   onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected) {
@@ -613,6 +732,7 @@ async function submitConfigChange(
   state[busyKey] = true;
   state.lastError = null;
   state.chatError = null;
+  let submittedFormRaw: string | null = null;
   try {
     if (state.configRawOriginalParsePending) {
       // JSON5 originals parse asynchronously on first load; sanitize needs them.
@@ -622,9 +742,15 @@ async function submitConfigChange(
       }
     }
     const raw = serializeFormForSubmit(state);
+    // The serialized candidate includes schema coercion; a live draft can
+    // change while the request is pending, so never infer from it afterward.
+    submittedFormRaw = state.configFormMode === "form" ? raw : null;
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
+      return false;
+    }
+    if (!isCurrent() || !canDispatch()) {
       return false;
     }
     // Dispatch-phase report (ackHash null): if the connection dies before the
@@ -677,7 +803,7 @@ async function submitConfigChange(
     return true;
   } catch (err) {
     if (isCurrent()) {
-      state.lastError = String(err);
+      state.lastError = formatConfigMutationError(err, submittedFormRaw);
       if (isConfigBaseHashConflictError(err)) {
         // Applies conflict the same way saves do so the UI offers Reload.
         state.configAutoSaveStatus = "conflict";
@@ -702,12 +828,16 @@ function teardownFlushConfigDraft(
   state: ConfigState,
   client: GatewayBrowserClient,
   baseHash: string,
+  canDispatch: () => boolean,
 ): void {
   // Must stay synchronous: page unload destroys the context before any
   // deferred work runs. If a JSON5 original parse is still pending, sanitize
   // passes placeholders through; the gateway restores restorable sentinels
   // (restoreRedactedValues) and rejects unrestorable ones, so the worst case
   // matches not flushing at all while the common case saves the draft.
+  if (!canDispatch()) {
+    return;
+  }
   const raw = serializeFormForSubmit(state);
   void client.request("config.set", { raw, baseHash }).catch(() => undefined);
 }
@@ -722,6 +852,7 @@ function teardownFlushConfigDraft(
 async function autoSaveConfig(
   state: ConfigState,
   onAck?: (ackHash: string | null) => void,
+  canDispatch: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   if (!client || !state.connected || !state.configFormDirty || state.configFormMode !== "form") {
@@ -744,6 +875,9 @@ async function autoSaveConfig(
   if (!baseHash) {
     state.configAutoSaveStatus = "error";
     state.lastError = "Config hash missing; reload and retry.";
+    return false;
+  }
+  if (!isCurrent() || !canDispatch()) {
     return false;
   }
   state.configAutoSaveStatus = "saving";
@@ -789,7 +923,7 @@ async function autoSaveConfig(
     return true;
   } catch (err) {
     if (isCurrent()) {
-      state.lastError = String(err);
+      state.lastError = formatConfigMutationError(err, submittedRaw);
       state.configAutoSaveStatus = isConfigBaseHashConflictError(err) ? "conflict" : "error";
     }
     return false;
@@ -831,34 +965,47 @@ function resetStaleAutoSaveStatus(state: ConfigState) {
 async function saveConfig(
   state: ConfigState,
   onSubmitted?: (info: { raw: string; ackHash: string | null }) => void,
+  canDispatch?: () => boolean,
 ): Promise<boolean> {
-  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted);
+  return submitConfigChange(state, "config.set", "configSaving", {}, onSubmitted, canDispatch);
 }
 
-async function applyConfig(state: ConfigState): Promise<boolean> {
-  return submitConfigChange(state, "config.apply", "configApplying", {
-    sessionKey: state.applySessionKey,
-  });
+async function applyConfig(state: ConfigState, canDispatch?: () => boolean): Promise<boolean> {
+  return submitConfigChange(
+    state,
+    "config.apply",
+    "configApplying",
+    {
+      sessionKey: state.applySessionKey,
+    },
+    undefined,
+    canDispatch,
+  );
 }
 
 async function patchConfig(
-  state: ConfigGatewayState,
+  state: ConfigState,
   options: ConfigPatchOptions,
+  onAck?: (ack: ConfigPatchAck, snapshotAtDispatch: ConfigSnapshot) => Promise<void> | void,
 ): Promise<boolean> {
   const client = state.client;
-  if (!client || !state.connected) {
+  const currentSnapshot = state.configSnapshot;
+  if (!client || !state.connected || !currentSnapshot) {
     return false;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
-  const baseHash = state.configSnapshot?.hash;
+  const baseHash = currentSnapshot.hash;
   if (!baseHash) {
     state.lastError = "Config hash missing; refresh and retry.";
+    return false;
+  }
+  if (options.canDispatch && !options.canDispatch()) {
     return false;
   }
   state.lastError = null;
   state.chatError = null;
   try {
-    const ack = await client.request<{ noop?: boolean }>("config.patch", {
+    const ack = await client.request<ConfigPatchAck>("config.patch", {
       baseHash,
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
@@ -868,7 +1015,17 @@ async function patchConfig(
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return false;
     }
-    if (ack.noop !== true) {
+    const committed = ack.noop !== true;
+    if (committed) {
+      // The patch is committed once the gateway acknowledges it. Preserve
+      // that fact even if a legacy hash-only ack requires a fallible refresh.
+      state.configNeedsApply = true;
+    }
+    await onAck?.(ack, currentSnapshot);
+    if (committed) {
+      // A successful acknowledgement refresh may publish the previous
+      // applied revision. Keep the existing immediate apply-needed signal;
+      // reconcileAppliedRefresh replaces it with authoritative process truth.
       state.configNeedsApply = true;
     }
     return true;
@@ -878,6 +1035,33 @@ async function patchConfig(
     }
     return false;
   }
+}
+
+function adoptConfigPatchAck(
+  state: ConfigState,
+  ack: ConfigPatchAck,
+  snapshotAtDispatch: ConfigSnapshot,
+) {
+  const ackConfig = asConfigRecord(ack.config);
+  const ackHash = readAckHash(ack);
+  if (!ackConfig) {
+    return;
+  }
+  const currentSnapshot = state.configSnapshot ?? snapshotAtDispatch;
+  const raw =
+    ack.noop === true
+      ? (currentSnapshot.raw ?? state.configRaw)
+      : ackConfig
+        ? serializeConfigForm(ackConfig)
+        : (currentSnapshot.raw ?? state.configRaw);
+  applyConfigSnapshot(state, {
+    ...currentSnapshot,
+    ...(ackConfig ? { config: ackConfig, sourceConfig: ackConfig } : {}),
+    hash: ackHash ?? currentSnapshot.hash ?? null,
+    raw,
+    valid: true,
+    issues: [],
+  });
 }
 
 async function lookupConfigSchemaPath(
@@ -1086,68 +1270,97 @@ function removeConfigFormValue(state: ConfigState, path: Array<string | number>)
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
-export function findAgentConfigEntryIndex(
-  config: Record<string, unknown> | null,
-  agentId: string,
-): number {
-  const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
-    return -1;
+export type AgentConfigEntryTarget = {
+  path: ["agents", "entries", string];
+  entry: Record<string, unknown>;
+};
+
+const AGENT_CONFIG_ENTRY_ID_PATTERN = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+const BLOCKED_AGENT_CONFIG_ENTRY_IDS = new Set(["__proto__", "prototype", "constructor"]);
+
+function normalizeAgentConfigEntryId(agentId: string): string | null {
+  const trimmedAgentId = agentId.trim();
+  if (
+    !AGENT_CONFIG_ENTRY_ID_PATTERN.test(trimmedAgentId) ||
+    BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(trimmedAgentId)
+  ) {
+    return null;
   }
-  const list = (config as { agents?: { list?: unknown[] } } | null)?.agents?.list;
-  if (!Array.isArray(list)) {
-    return -1;
-  }
-  return list.findIndex(
-    (entry) =>
-      entry &&
-      typeof entry === "object" &&
-      "id" in entry &&
-      (entry as { id?: string }).id === normalizedAgentId,
-  );
+  const normalizedAgentId = normalizeAgentId(trimmedAgentId);
+  return BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(normalizedAgentId) ? null : normalizedAgentId;
 }
 
-function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
-  const normalizedAgentId = agentId.trim();
+export function resolveAgentConfigEntryTarget(
+  config: Record<string, unknown> | null,
+  agentId: string,
+): AgentConfigEntryTarget | null {
+  const normalizedAgentId = normalizeAgentConfigEntryId(agentId);
   if (!normalizedAgentId) {
-    return -1;
+    return null;
+  }
+  const agents = isRecord(config?.agents) ? config.agents : null;
+  const entries = isRecord(agents?.entries) ? agents.entries : null;
+  const authoredAgentId = Object.keys(entries ?? {}).find(
+    (candidate) =>
+      AGENT_CONFIG_ENTRY_ID_PATTERN.test(candidate) &&
+      !BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(candidate) &&
+      normalizeAgentId(candidate) === normalizedAgentId,
+  );
+  if (!entries || !authoredAgentId || !Object.hasOwn(entries, authoredAgentId)) {
+    return null;
+  }
+  const entry = entries[authoredAgentId];
+  if (!isRecord(entry)) {
+    return null;
+  }
+  return {
+    path: ["agents", "entries", authoredAgentId],
+    entry,
+  };
+}
+
+function agentConfigEntry(
+  state: ConfigState,
+  agentId: string,
+  options: { ensure?: boolean } = {},
+): AgentConfigEntryTarget | null {
+  const normalizedAgentId = normalizeAgentConfigEntryId(agentId);
+  if (!normalizedAgentId) {
+    return null;
   }
   const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
-  const existingIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
-  if (existingIndex >= 0) {
-    return existingIndex;
+  const existing = resolveAgentConfigEntryTarget(source, normalizedAgentId);
+  if (existing) {
+    return existing;
   }
-  const list = (source as { agents?: { list?: unknown[] } } | null)?.agents?.list;
-  const nextIndex = Array.isArray(list) ? list.length : 0;
-  updateConfigFormValue(state, ["agents", "list", nextIndex, "id"], normalizedAgentId);
-  return nextIndex;
+  if (!options.ensure) {
+    return null;
+  }
+  const path = ["agents", "entries", normalizedAgentId] as const;
+  return { path: [...path], entry: {} };
 }
 
 function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string): boolean {
-  const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
-    return false;
-  }
   const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
-  const targetIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
-  if (targetIndex < 0) {
+  const target = resolveAgentConfigEntryTarget(source, agentId);
+  if (!target) {
     return false;
   }
+  const authoredAgentId = target.path[2];
   mutateConfigForm(state, (draft) => {
-    const list = (draft as { agents?: { list?: unknown[] } } | null)?.agents?.list;
-    if (!Array.isArray(list)) {
+    const agents = isRecord(draft.agents) ? draft.agents : null;
+    const entries = isRecord(agents?.entries) ? agents.entries : null;
+    if (!entries) {
       return;
     }
-    for (let i = 0; i < list.length; i++) {
-      const entry = list[i];
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    for (const [id, entry] of Object.entries(entries)) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const record = entry as Record<string, unknown>;
-      if (i === targetIndex) {
-        record.default = true;
+      if (id === authoredAgentId) {
+        entry.default = true;
       } else {
-        delete record.default;
+        delete entry.default;
       }
     }
   });
@@ -1211,6 +1424,8 @@ export function createRuntimeConfigCapability(
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let autoSaveInFlight: Promise<unknown> | null = null;
   let autoSaveTrailing = false;
+  let autoSaveDraftConnection: { client: GatewayBrowserClient; epoch: number } | null = null;
+  let autoSaveRequiresExplicitSubmit = false;
   let lastFlightSubmittedRaw: string | null = null;
   let lastFlightAckHash: string | null = null;
   let manualSubmitInFlight: Promise<unknown> | null = null;
@@ -1236,10 +1451,68 @@ export function createRuntimeConfigCapability(
   // App-updater interlock: config writes or gateway restarts mid-update can
   // corrupt the install, so all writes pause until the updater settles.
   let writesSuspended = false;
+  let writesResumed: (() => void) | null = null;
+  let writesResumedPromise: Promise<void> = Promise.resolve();
   // Submission info of the pending manual SAVE (applies never register:
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
   let manualFlightInfo: { raw: string; ackHash: string | null } | null = null;
+  const canCallConfigMethod = (
+    method: "config.set" | "config.apply" | "config.patch" | "config.openFile",
+    options?: { requireAdvertisement?: boolean },
+  ) =>
+    canCallGatewayMethod(
+      {
+        client: gateway.snapshot.client,
+        hello: gateway.snapshot.hello ?? null,
+        phase: gateway.snapshot.phase,
+      },
+      method,
+      "operator.admin",
+      options,
+    );
+  const clearAutoSaveDraftConnection = () => {
+    autoSaveDraftConnection = null;
+    autoSaveRequiresExplicitSubmit = false;
+  };
+  const captureAutoSaveDraftConnection = () => {
+    if (
+      autoSaveRequiresExplicitSubmit ||
+      autoSaveDraftConnection ||
+      !state.client ||
+      !state.connected ||
+      !state.configFormDirty ||
+      state.configFormMode !== "form"
+    ) {
+      return;
+    }
+    autoSaveDraftConnection = {
+      client: state.client,
+      epoch: currentConfigConnectionEpoch(state),
+    };
+  };
+  const bindDraftToExplicitSubmit = () => {
+    if (!state.client || !state.connected || state.configFormMode !== "form") {
+      return;
+    }
+    autoSaveDraftConnection = {
+      client: state.client,
+      epoch: currentConfigConnectionEpoch(state),
+    };
+    autoSaveRequiresExplicitSubmit = false;
+  };
+  const canAutoSaveDraftOnCurrentConnection = () =>
+    !autoSaveRequiresExplicitSubmit &&
+    autoSaveDraftConnection !== null &&
+    autoSaveDraftConnection.client === state.client &&
+    autoSaveDraftConnection.epoch === currentConfigConnectionEpoch(state);
+  const reconcileAutoSaveDraftConnection = () => {
+    if (state.configFormDirty && state.configFormMode === "form") {
+      captureAutoSaveDraftConnection();
+    } else if (autoSaveInFlight === null && manualSubmitInFlight === null) {
+      clearAutoSaveDraftConnection();
+    }
+  };
 
   const publish = () => {
     if (disposed) {
@@ -1303,7 +1576,13 @@ export function createRuntimeConfigCapability(
   const cancelAppliedRefresh = appliedRefresh.cancel;
   const reconcileAppliedRefresh = appliedRefresh.reconcile;
   const runAutoSave = () => {
-    if (disposed || suppressAutoSave || writesSuspended) {
+    if (
+      disposed ||
+      suppressAutoSave ||
+      writesSuspended ||
+      !canAutoSaveDraftOnCurrentConnection() ||
+      !canCallConfigMethod("config.set")
+    ) {
       return;
     }
     if (autoSaveInFlight ?? manualSubmitInFlight) {
@@ -1320,9 +1599,13 @@ export function createRuntimeConfigCapability(
     lastFlightSubmittedRaw = serializeFormForSubmit(state);
     lastFlightAckHash = null;
     const flight = run(() =>
-      autoSaveConfig(state, (ackHash) => {
-        lastFlightAckHash = ackHash;
-      }),
+      autoSaveConfig(
+        state,
+        (ackHash) => {
+          lastFlightAckHash = ackHash;
+        },
+        () => canCallConfigMethod("config.set"),
+      ),
     )
       .catch(() => false)
       .then((saved) => {
@@ -1332,6 +1615,7 @@ export function createRuntimeConfigCapability(
           return;
         }
         autoSaveInFlight = null;
+        reconcileAutoSaveDraftConnection();
         // One trailing save catches edits (or reverts back to the pre-save
         // value) made while the request was in flight. A still-armed debounce
         // timer owns its own save, and failed flights never self-retry.
@@ -1350,11 +1634,26 @@ export function createRuntimeConfigCapability(
       });
     autoSaveInFlight = flight;
   };
+  const flushScheduledAutoSave = () => {
+    if (!autoSaveTimer) {
+      return;
+    }
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+    runAutoSave();
+  };
   const scheduleAutoSave = () => {
     // Only form-draft edits auto-save; raw-text drafts stay manual so a
     // half-typed JSON5 buffer never gets written to disk. Suspended writes
     // (app updater running) stay dirty and reschedule when suspension lifts.
-    if (disposed || writesSuspended || !state.configFormDirty || state.configFormMode !== "form") {
+    if (
+      disposed ||
+      writesSuspended ||
+      !canAutoSaveDraftOnCurrentConnection() ||
+      !canCallConfigMethod("config.set") ||
+      !state.configFormDirty ||
+      state.configFormMode !== "form"
+    ) {
       return;
     }
     // A conflict proves the snapshot is stale; retrying against the same base
@@ -1379,9 +1678,15 @@ export function createRuntimeConfigCapability(
   // connection epoch.
   // Drains ALL pending config writes: the autosave chain (a settling flight
   // can spawn a trailing save) AND any manual Save still in flight.
-  const drainPendingWrites = async (): Promise<void> => {
-    let flight = autoSaveInFlight ?? manualSubmitInFlight;
-    while (flight) {
+  const drainPendingWrites = async (flushScheduledDraft = false): Promise<void> => {
+    while (true) {
+      if (flushScheduledDraft) {
+        flushScheduledAutoSave();
+      }
+      const flight = autoSaveInFlight ?? manualSubmitInFlight;
+      if (!flight) {
+        return;
+      }
       // Race the connection wake: a disconnect deregisters in-flight writes,
       // and a drain already awaiting one resumes from that deregistration
       // instead of depending on the transport's close-time rejection order.
@@ -1389,8 +1694,13 @@ export function createRuntimeConfigCapability(
       if (disposed) {
         return;
       }
-      cancelScheduledAutoSave();
-      flight = autoSaveInFlight ?? manualSubmitInFlight;
+      if (!flushScheduledDraft) {
+        // save/apply submit the latest full draft themselves. Edits made
+        // while the preceding flight settled may have armed a fresh debounce;
+        // cancel it before the explicit write starts or it can race the same
+        // post-flight base hash.
+        cancelScheduledAutoSave();
+      }
     }
   };
   // Discard barrier shared by discardDraft and refresh({discardPendingChanges}):
@@ -1411,11 +1721,21 @@ export function createRuntimeConfigCapability(
   // callers queued behind the same in-flight write would otherwise both
   // finish draining and dispatch against the same base hash.
   let explicitOpQueue: Promise<unknown> | null = null;
-  const afterPendingWritesSettled = (task: () => Promise<boolean>): Promise<boolean> => {
+  const afterPendingWritesSettled = <T>(
+    task: () => Promise<T>,
+    unavailable: T,
+    options: { flushScheduledDraft?: boolean; canDispatch?: () => boolean } = {},
+  ): Promise<T> => {
     if (writesSuspended) {
-      return Promise.resolve(false);
+      return Promise.resolve(unavailable);
     }
-    cancelScheduledAutoSave();
+    const client = state.client;
+    const connectionEpoch = currentConfigConnectionEpoch(state);
+    if (options.flushScheduledDraft) {
+      flushScheduledAutoSave();
+    } else {
+      cancelScheduledAutoSave();
+    }
     // Start synchronously when no explicit op is queued so the submit binds
     // to the CURRENT connection epoch; only genuine queuing pays the hop.
     const start = () =>
@@ -1423,17 +1743,25 @@ export function createRuntimeConfigCapability(
         // Drain before the explicit op — otherwise an apply could race a
         // pending config.set on the same base hash into a CAS failure.
         if (autoSaveInFlight ?? manualSubmitInFlight) {
-          await drainPendingWrites();
+          await drainPendingWrites(options.flushScheduledDraft);
         }
         // The updater may have started while we drained; suspension must be a
         // real barrier or an apply could restart the gateway mid-update.
         if (writesSuspended || disposed) {
-          return false;
+          return unavailable;
+        }
+        if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {
+          return unavailable;
+        }
+        // Hello method/scope metadata can change while the client and
+        // connection epoch stay stable. Recheck at the dispatch boundary.
+        if (options.canDispatch && !options.canDispatch()) {
+          return unavailable;
         }
         manualFlightInfo = null;
         const submit = task();
         const settled = submit
-          .catch(() => false)
+          .catch(() => unavailable)
           .then(() => {
             if (manualSubmitInFlight !== settled) {
               return;
@@ -1478,13 +1806,25 @@ export function createRuntimeConfigCapability(
     state.connected = connected;
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
+      const draftBelongsToPreviousConnection =
+        state.configFormMode === "form" &&
+        (state.configFormDirty || autoSaveInFlight !== null || manualSubmitInFlight !== null);
       configLoad = null;
       schemaLoad = null;
+      // A dead prior-connection flight must not keep the reconnected owner's
+      // explicit-operation FIFO waiting forever.
+      explicitOpQueue = null;
       // A reconnect may reuse the client object. Keep generations monotonic so work
       // from the previous connection cannot commit into the new connection epoch.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       cancelAppliedRefresh();
+      if (draftBelongsToPreviousConnection) {
+        // A retained draft belongs to the Gateway connection where the edit
+        // began. Preserve it across replacement, but require an explicit
+        // Save/Apply or reload before the new Gateway may receive it.
+        autoSaveRequiresExplicitSubmit = true;
+      }
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;
         // deregistering releases drain barriers and the trailing-save chain
@@ -1511,15 +1851,12 @@ export function createRuntimeConfigCapability(
       if (state.configAutoSaveStatus === "saving") {
         state.configAutoSaveStatus = "idle";
       }
-      // A reconnect must not strand a dirty draft whose debounce was just
-      // cancelled; reschedule against the new connection. If the file moved
-      // while offline, the save reports a baseHash conflict instead of
-      // clobbering the other writer.
       if (state.connected && state.client) {
         if (hasInterruptedWrite) {
           // The interrupted write may or may not have committed. Fetch the
-          // authoritative snapshot before autosave resumes so an uncertain
-          // flight can't strand a clean-looking draft or retry a stale base.
+          // authoritative snapshot so an uncertain flight cannot leave a
+          // clean-looking draft or a stale base. Replacement connections
+          // never resume autosave for the retained draft.
           const interruptedRaw = interruptedWriteRaw;
           // A revert made while the write was in flight reads clean (the ack
           // never rebased the originals), so the reload below would replace
@@ -1539,9 +1876,6 @@ export function createRuntimeConfigCapability(
               // Reload failed or the connection flipped again: keep the
               // interruption metadata so the NEXT reconnect retries
               // reconciliation instead of silently taking the plain path.
-              // A dirty draft may still reschedule; a stale base surfaces
-              // as a conflict with its Reload recovery, never a clobber.
-              scheduleAutoSave();
               reconcileAppliedRefresh();
               return;
             }
@@ -1558,7 +1892,17 @@ export function createRuntimeConfigCapability(
                 state.configNeedsApply = true;
               }
               if (state.configFormDirty) {
-                state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                if (serializeFormForSubmit(state) === interruptedRaw) {
+                  // The lost acknowledgement was the only missing event: the
+                  // retained bytes are already authoritative, so no draft
+                  // remains to submit on the replacement connection.
+                  applyConfigSnapshot(state, state.configSnapshot, {
+                    discardPendingChanges: true,
+                  });
+                  clearAutoSaveDraftConnection();
+                } else {
+                  state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                }
               } else if (
                 draftFormBefore &&
                 draftRawBefore !== null &&
@@ -1576,11 +1920,9 @@ export function createRuntimeConfigCapability(
               }
             }
             publish();
-            scheduleAutoSave();
             reconcileAppliedRefresh();
           });
         } else {
-          scheduleAutoSave();
           reconcileAppliedRefresh();
         }
       }
@@ -1590,24 +1932,49 @@ export function createRuntimeConfigCapability(
 
   const queueConfigPatch = (resolveOptions: () => ConfigPatchBuildResult): Promise<boolean> => {
     cancelAppliedRefresh();
-    if (autoSaveTimer) {
-      cancelScheduledAutoSave();
-      runAutoSave();
-    }
-    return afterPendingWritesSettled(async () => {
-      // A drained autosave can start its own refresh while this patch waits.
-      cancelAppliedRefresh();
-      try {
-        const resolved = resolveOptions();
-        if ("error" in resolved) {
-          state.lastError = resolved.error;
-          return false;
+    return afterPendingWritesSettled(
+      async () => {
+        // A drained autosave can start its own refresh while this patch waits.
+        cancelAppliedRefresh();
+        try {
+          const resolved = resolveOptions();
+          if ("error" in resolved) {
+            state.lastError = resolved.error;
+            return false;
+          }
+          return await patchConfig(state, resolved.options, async (ack, snapshotAtDispatch) => {
+            // The ack is newer than every config.get that began before it.
+            // Detach and invalidate those loads so stale pre-patch responses
+            // cannot replace the acknowledged config/hash.
+            configLoad = null;
+            nextRequestVersion(state, "config");
+            state.configLoading = false;
+            if (asConfigRecord(ack.config)) {
+              adoptConfigPatchAck(state, ack, snapshotAtDispatch);
+              return;
+            }
+            // Older/hash-only acknowledgements do not carry enough data to
+            // pair their new hash with a safe local document. Force a fresh
+            // snapshot instead of publishing an inconsistent hash/config.
+            const refresh = run(() => loadConfig(state));
+            void trackLoad("config", refresh);
+            if (!(await refresh)) {
+              throw new Error(
+                state.lastError ??
+                  "The configuration patch completed, but its authoritative refresh failed.",
+              );
+            }
+          });
+        } finally {
+          reconcileAppliedRefresh();
         }
-        return await patchConfig(state, resolved.options);
-      } finally {
-        reconcileAppliedRefresh();
-      }
-    }).finally(() => {
+      },
+      false,
+      {
+        flushScheduledDraft: true,
+        canDispatch: () => canCallConfigMethod("config.patch"),
+      },
+    ).finally(() => {
       scheduleAutoSave();
     });
   };
@@ -1615,6 +1982,18 @@ export function createRuntimeConfigCapability(
   return {
     get state() {
       return state;
+    },
+    get canSet() {
+      return canCallConfigMethod("config.set");
+    },
+    get canApply() {
+      return canCallConfigMethod("config.apply");
+    },
+    get canPatch() {
+      return canCallConfigMethod("config.patch");
+    },
+    get canOpenFile() {
+      return canCallConfigMethod("config.openFile", { requireAdvertisement: false });
     },
     ensureLoaded,
     ensureSchemaLoaded,
@@ -1639,16 +2018,19 @@ export function createRuntimeConfigCapability(
       ),
     patchForm: (path, value) => {
       mutate(() => updateConfigFormValue(state, path, value));
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
     },
     removeFormValue: (path) => {
       mutate(() => removeConfigFormValue(state, path));
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
     },
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
     resetDraft: () => {
       cancelScheduledAutoSave();
       mutate(() => resetConfigPendingChanges(state));
+      clearAutoSaveDraftConnection();
       reconcileAppliedRefresh();
     },
     discardDraft: async () => {
@@ -1663,6 +2045,7 @@ export function createRuntimeConfigCapability(
             "config",
             run(() => loadConfig(state, { discardPendingChanges: true })),
           );
+          clearAutoSaveDraftConnection();
         } finally {
           reconcileAppliedRefresh();
         }
@@ -1680,6 +2063,7 @@ export function createRuntimeConfigCapability(
           state.lastError = null;
         }
       });
+      clearAutoSaveDraftConnection();
     },
     setWritesSuspended: (suspended) => {
       if (writesSuspended === suspended) {
@@ -1688,52 +2072,91 @@ export function createRuntimeConfigCapability(
       writesSuspended = suspended;
       if (suspended) {
         cancelScheduledAutoSave();
+        writesResumedPromise = new Promise((resolve) => {
+          writesResumed = resolve;
+        });
       } else {
+        const resume = writesResumed;
+        writesResumed = null;
+        resume?.();
         // Edits made during the update save once it ends.
         scheduleAutoSave();
       }
     },
-    waitForPendingWrites: () => drainPendingWrites(),
-    save: () =>
-      afterPendingWritesSettled(async () => {
-        cancelAppliedRefresh();
-        try {
-          return await saveConfig(state, (info) => {
-            manualFlightInfo = info;
-          });
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }),
-    apply: () =>
-      afterPendingWritesSettled(async () => {
-        cancelAppliedRefresh();
-        // Checked after the drain: a raw draft whose explicit Save is in
-        // flight resolves clean and may apply. A raw draft that is STILL
-        // dirty here was never reviewed-saved — applying would implicitly
-        // write unreviewed raw text, so refuse and point at the Raw editor.
-        if (state.configFormDirty && state.configFormMode === "raw") {
-          state.configAutoSaveStatus = "error";
-          state.lastError = t("configView.rawDraftBlocksApply");
-          reconcileAppliedRefresh();
-          return false;
-        }
-        try {
-          return await applyConfig(state);
-        } finally {
-          reconcileAppliedRefresh();
-        }
-      }),
-    openFile: () => run(() => openConfigFile(state)),
-    ensureAgentEntry: (agentId) => {
-      const index = ensureAgentConfigEntry(state, agentId);
-      publish();
-      scheduleAutoSave();
-      return index;
+    waitForPendingWrites: () => {
+      // A debounce timer represents pending persisted intent too. Convert it
+      // into a tracked flight before draining so external writers cannot race
+      // the draft simply because the user clicked again within 800 ms.
+      flushScheduledAutoSave();
+      return drainPendingWrites(true);
     },
+    save: (options = {}) => {
+      const canDispatch = () =>
+        canCallConfigMethod("config.set") && (options.canDispatch?.() ?? true);
+      return !canDispatch()
+        ? Promise.resolve(false)
+        : afterPendingWritesSettled(
+            async () => {
+              bindDraftToExplicitSubmit();
+              cancelAppliedRefresh();
+              try {
+                const saved = await saveConfig(
+                  state,
+                  (info) => {
+                    manualFlightInfo = info;
+                  },
+                  canDispatch,
+                );
+                reconcileAutoSaveDraftConnection();
+                return saved;
+              } finally {
+                reconcileAppliedRefresh();
+              }
+            },
+            false,
+            { canDispatch },
+          );
+    },
+    apply: () =>
+      !canCallConfigMethod("config.apply")
+        ? Promise.resolve(false)
+        : afterPendingWritesSettled(
+            async () => {
+              bindDraftToExplicitSubmit();
+              cancelAppliedRefresh();
+              // Checked after the drain: a raw draft whose explicit Save is in
+              // flight resolves clean and may apply. A raw draft that is STILL
+              // dirty here was never reviewed-saved — applying would implicitly
+              // write unreviewed raw text, so refuse and point at the Raw editor.
+              if (state.configFormDirty && state.configFormMode === "raw") {
+                state.configAutoSaveStatus = "error";
+                state.lastError = t("configView.rawDraftBlocksApply");
+                reconcileAppliedRefresh();
+                return false;
+              }
+              try {
+                const applied = await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                reconcileAutoSaveDraftConnection();
+                return applied;
+              } finally {
+                reconcileAppliedRefresh();
+              }
+            },
+            false,
+            { canDispatch: () => canCallConfigMethod("config.apply") },
+          ),
+    openFile: () =>
+      canCallConfigMethod("config.openFile", { requireAdvertisement: false })
+        ? run(() => openConfigFile(state))
+        : Promise.resolve(),
+    agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
     stageDefaultAgent: (agentId) => {
+      if (!canCallConfigMethod("config.set")) {
+        return false;
+      }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
+      reconcileAutoSaveDraftConnection();
       scheduleAutoSave();
       return changed;
     },
@@ -1742,14 +2165,146 @@ export function createRuntimeConfigCapability(
     // Unlike save/apply, a patch does not submit the form draft — flush a
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
-    patch: (options) => queueConfigPatch(() => ({ options })),
+    patch: (options) =>
+      canCallConfigMethod("config.patch") && (options.canDispatch?.() ?? true)
+        ? queueConfigPatch(() => ({ options }))
+        : Promise.resolve(false),
     patchFromSnapshot: (build) =>
-      queueConfigPatch(() => {
-        const config = resolveEditableSnapshotConfig(state.configSnapshot);
-        return config
-          ? build(config)
-          : { error: "Configuration is unavailable; refresh and try again." };
-      }),
+      canCallConfigMethod("config.patch")
+        ? queueConfigPatch(() => {
+            const config = resolveEditableSnapshotConfig(state.configSnapshot);
+            return config
+              ? build(config)
+              : { error: "Configuration is unavailable; refresh and try again." };
+          })
+        : Promise.resolve(false),
+    runExternalMutation: async <T>(
+      task: (client: GatewayBrowserClient) => Promise<T>,
+      options: RuntimeConfigExternalMutationOptions = {},
+    ): Promise<RuntimeConfigExternalMutationResult<T>> => {
+      const mutationClient = state.client;
+      const mutationConnectionEpoch = currentConfigConnectionEpoch(state);
+      while (true) {
+        if (options.waitForWritesResumed && writesSuspended && !disposed) {
+          await writesResumedPromise;
+        }
+        const unavailable: RuntimeConfigExternalMutationResult<T> = {
+          ok: false,
+          reason: writesSuspended ? "suspended" : "unavailable",
+          error: writesSuspended
+            ? "Configuration writes are temporarily suspended."
+            : "Configuration is unavailable; reconnect and try again.",
+        };
+        if (
+          !mutationClient ||
+          !isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)
+        ) {
+          return {
+            ok: false,
+            reason: "unavailable",
+            error: "Connection changed before the configuration update started.",
+          };
+        }
+        const result = await afterPendingWritesSettled<RuntimeConfigExternalMutationResult<T>>(
+          async (): Promise<RuntimeConfigExternalMutationResult<T>> => {
+            if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+              return unavailable;
+            }
+            if (options.canDispatch && !options.canDispatch()) {
+              return {
+                ok: false,
+                reason: "unavailable",
+                error:
+                  options.dispatchError ??
+                  "Access changed before the configuration update started.",
+              };
+            }
+            let value: T;
+            try {
+              value = await task(mutationClient);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+                return {
+                  ok: false,
+                  reason: "unavailable",
+                  error: "Connection changed before the configuration update completed.",
+                };
+              }
+              return {
+                ok: false,
+                reason: isConfigBaseHashConflictError(error)
+                  ? "conflict"
+                  : isDefinitiveConfigMutationRejection(error)
+                    ? "rejected"
+                    : "error",
+                error: message,
+              };
+            }
+            if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+              return {
+                ok: true,
+                value,
+                refresh: {
+                  ok: false,
+                  error: "Connection changed before the configuration update was refreshed.",
+                },
+              };
+            }
+            try {
+              // Do not join an older config.get that started before the external
+              // RPC. Start a fresh versioned load so only post-mutation state can
+              // satisfy this method's authoritative-refresh contract.
+              const refresh = run(() => loadConfig(state));
+              void trackLoad("config", refresh);
+              const refreshed = await refresh;
+              if (!isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)) {
+                return {
+                  ok: true,
+                  value,
+                  refresh: {
+                    ok: false,
+                    error: "Connection changed before the configuration update was refreshed.",
+                  },
+                };
+              }
+              if (!refreshed) {
+                return {
+                  ok: true,
+                  value,
+                  refresh: {
+                    ok: false,
+                    error:
+                      state.lastError ??
+                      "The configuration update completed, but its authoritative refresh failed.",
+                  },
+                };
+              }
+              return { ok: true, value, refresh: { ok: true } };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              return {
+                ok: true,
+                value,
+                refresh: { ok: false, error: message },
+              };
+            }
+          },
+          unavailable,
+          { flushScheduledDraft: true },
+        );
+        if (
+          !(
+            options.waitForWritesResumed &&
+            !disposed &&
+            !result.ok &&
+            (result.reason === "suspended" || writesSuspended)
+          )
+        ) {
+          return result;
+        }
+      }
+    },
     lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);
@@ -1757,6 +2312,8 @@ export function createRuntimeConfigCapability(
     },
     dispose() {
       disposed = true;
+      writesResumed?.();
+      writesResumed = null;
       // Free any drain awaiting a flight that will never be reconciled now;
       // the disposed guard exits its loop.
       connectionWake?.();
@@ -1767,7 +2324,12 @@ export function createRuntimeConfigCapability(
       // invalidated below.
       const client = state.client;
       const canFlush =
-        state.connected && client !== null && state.configFormMode === "form" && !writesSuspended;
+        state.connected &&
+        client !== null &&
+        state.configFormMode === "form" &&
+        !writesSuspended &&
+        canAutoSaveDraftOnCurrentConnection() &&
+        canCallConfigMethod("config.set");
       const autoFlight = autoSaveInFlight;
       const pendingFlight = autoFlight ?? manualSubmitInFlight;
       cancelScheduledAutoSave();
@@ -1792,11 +2354,13 @@ export function createRuntimeConfigCapability(
           // pre-save value reads configFormDirty=false while the persisted
           // bytes are still the unreverted submission.
           if (ackHash && submittedRaw !== null && serializeFormForSubmit(state) !== submittedRaw) {
-            teardownFlushConfigDraft(state, client, ackHash);
+            teardownFlushConfigDraft(state, client, ackHash, () =>
+              canCallConfigMethod("config.set"),
+            );
           }
         });
       } else if (canFlush && state.configFormDirty) {
-        void autoSaveConfig(state);
+        void autoSaveConfig(state, undefined, () => canCallConfigMethod("config.set"));
       }
       invalidateConfigConnection(state);
       state.connected = false;

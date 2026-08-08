@@ -32,6 +32,10 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
+type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
+type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
+type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
+
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
 interface CreateCopilotAgentHarnessOptions {
@@ -44,6 +48,7 @@ interface CreateCopilotAgentHarnessOptions {
 }
 
 interface TrackedSession {
+  journalVersion?: 1;
   sdkSessionId: string;
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
@@ -91,6 +96,7 @@ interface CopilotHistoryCompactSession {
 
 export type CopilotSessionBinding = {
   schemaVersion: 2;
+  journalVersion?: 1;
   sdkSessionId: string;
   compatKey: string;
   compactKey: string;
@@ -107,7 +113,10 @@ type LegacyCopilotSessionBinding = {
   updatedAt: number;
 };
 
-type CopilotAttemptSessionBinding = Pick<CopilotSessionBinding, "compatKey" | "sdkSessionId">;
+type CopilotAttemptSessionBinding = Pick<
+  CopilotSessionBinding,
+  "compatKey" | "journalVersion" | "sdkSessionId"
+>;
 type DeferredCompactionCleanupOutcome = "aborted" | "completed" | "deadline";
 type DeferredCompactionCleanup = {
   abort: () => void;
@@ -160,6 +169,7 @@ function normalizeBinding(
     value.compatKey.trim() === "" ||
     typeof value.compactKey !== "string" ||
     value.compactKey.trim() === "" ||
+    (value.journalVersion !== undefined && value.journalVersion !== 1) ||
     (value.authMode !== "gitHubToken" &&
       value.authMode !== "byok" &&
       value.authMode !== "useLoggedInUser") ||
@@ -175,6 +185,7 @@ function normalizeBinding(
   }
   return {
     schemaVersion: 2,
+    ...(value.journalVersion === 1 ? { journalVersion: 1 as const } : {}),
     sdkSessionId: value.sdkSessionId.trim(),
     compatKey: value.compatKey,
     compactKey: value.compactKey,
@@ -704,12 +715,13 @@ export function createCopilotAgentHarness(
           ? undefined
           : lookupStoredBinding(options?.sessionStore, openclawSessionId)
         : undefined;
-      const resumableSessionId =
+      const resumableBinding =
         tracked && tracked.compatKey === currentCompatKey
-          ? tracked.sdkSessionId
+          ? tracked
           : !tracked && stored && stored.compatKey === currentCompatKey
-            ? stored.sdkSessionId
+            ? stored
             : undefined;
+      const resumableSessionId = resumableBinding?.sdkSessionId;
       if (operation === "settled-tool-finalization" && !resumableSessionId) {
         throw new Error(
           "[copilot] cannot safely finalize a settled tool turn without its compatible SDK session",
@@ -739,15 +751,19 @@ export function createCopilotAgentHarness(
             // still requiring the exact compatible native session above.
             initialReplayState:
               operation === "settled-tool-finalization"
-                ? { sdkSessionId: resumableSessionId }
+                ? {
+                    ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
+                    sdkSessionId: resumableSessionId,
+                  }
                 : {
                     ...params.initialReplayState,
+                    ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
                     sdkSessionId: resumableSessionId,
                   },
           } as AgentHarnessAttemptParams)
         : params;
 
-      return runCopilotAttempt(effectiveParams, {
+      const result = await runCopilotAttempt(effectiveParams, {
         pool,
         ...(operation === "settled-tool-finalization" ? { operation } : {}),
         onSessionEstablished:
@@ -835,12 +851,65 @@ export function createCopilotAgentHarness(
             }
           : undefined,
       });
+      if (operation === "attempt" && openclawSessionId) {
+        const attemptResult = result as AgentHarnessAttemptResult & {
+          journalValidated?: boolean;
+          sdkSessionId?: string;
+        };
+        const sdkSessionId = attemptResult.sdkSessionId;
+        const trackedSession = trackedSessions.get(openclawSessionId);
+        if (sdkSessionId && trackedSession?.sdkSessionId === sdkSessionId) {
+          const { journalVersion: _journalVersion, ...baseTracked } = trackedSession;
+          const nextTracked: TrackedSession = {
+            ...baseTracked,
+            ...(attemptResult.journalValidated ? { journalVersion: 1 } : {}),
+          };
+          trackedSessions.set(openclawSessionId, nextTracked);
+          registerStoredBinding(options?.sessionStore, openclawSessionId, {
+            schemaVersion: 2,
+            ...(attemptResult.journalValidated ? { journalVersion: 1 } : {}),
+            sdkSessionId,
+            compatKey: nextTracked.compatKey,
+            compactKey: nextTracked.compactKey,
+            ...sessionAuthFields(nextTracked),
+            updatedAt: Date.now(),
+          });
+        }
+      }
+      return result;
     })();
     inFlight.add(attemptPromise);
     try {
       return await attemptPromise;
     } finally {
       inFlight.delete(attemptPromise);
+    }
+  }
+
+  async function runIsolatedCompletion(
+    params: AgentHarnessIsolatedCompletionParams,
+  ): Promise<AgentHarnessIsolatedCompletionResult> {
+    const completionPromise = (async () => {
+      if (disposed) {
+        throw new Error("[copilot] harness has been disposed; cannot start isolated completion");
+      }
+      const { runCopilotIsolatedCompletion } = await import("./src/isolated-completion.js");
+      if (disposed) {
+        throw new Error("[copilot] harness was disposed while starting isolated completion");
+      }
+      return await runCopilotIsolatedCompletion(params, async () => {
+        const pool = await getPool();
+        if (disposed) {
+          throw new Error("[copilot] harness was disposed while starting isolated completion");
+        }
+        return pool;
+      });
+    })();
+    inFlight.add(completionPromise);
+    try {
+      return await completionPromise;
+    } finally {
+      inFlight.delete(completionPromise);
     }
   }
 
@@ -893,6 +962,8 @@ export function createCopilotAgentHarness(
     },
 
     runAttempt: (params) => runHarnessAttempt(params, "attempt"),
+
+    runIsolatedCompletion,
 
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");

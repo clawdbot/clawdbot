@@ -3,6 +3,12 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/**
+ * One closed visibility mode instead of independent incognito/draft booleans:
+ * an incognito session is never persisted, so "incognito draft" is unrepresentable.
+ */
+export type NewSessionVisibility = "normal" | "draft" | "incognito";
+
 export function canStartSessionAsDraft(params: {
   allowedVisibilities?: readonly string[];
   hasMultipleIdentities?: boolean;
@@ -24,7 +30,7 @@ export function buildDraftSessionCreateParams(draft: {
   message: string;
   model?: string;
   thinkingLevel?: string;
-  incognito?: boolean;
+  visibility?: NewSessionVisibility;
   attachments?: unknown[];
   worktree: boolean;
   baseRef?: string;
@@ -33,7 +39,6 @@ export function buildDraftSessionCreateParams(draft: {
   workspace?: string;
   execNode?: string;
   catalogId?: string;
-  startAsDraft?: boolean;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
@@ -46,8 +51,8 @@ export function buildDraftSessionCreateParams(draft: {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
-    ...(draft.incognito ? { incognito: true } : {}),
-    ...(draft.startAsDraft ? { visibility: "draft" } : {}),
+    ...(draft.visibility === "incognito" ? { incognito: true } : {}),
+    ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(!catalogId && model ? { model } : {}),

@@ -1,12 +1,11 @@
 // Venice provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { discoverVeniceModels, VENICE_BASE_URL } from "./models.js";
+import { VENICE_BASE_URL, VENICE_MODEL_CATALOG } from "./models.js";
 
-export async function buildVeniceProvider(): Promise<ModelProviderConfig> {
-  const models = await discoverVeniceModels();
+export function buildStaticVeniceProvider(): ModelProviderConfig {
   return {
     baseUrl: VENICE_BASE_URL,
     api: "openai-completions",
-    models,
+    models: structuredClone(VENICE_MODEL_CATALOG),
   };
 }

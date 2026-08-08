@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
 import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
-} from "./reply-payloads.js";
+  shouldDedupeMessagingToolRepliesForRoute,
+} from "./reply-payloads-dedupe.js";
 
 function targetsMatchTelegramReplySuppression(params: {
   originTarget: string;
@@ -212,6 +212,38 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
         messageProvider: "telegram",
         originatingTo: "123",
         messagingToolSentTargets: [{ tool: "message", provider: "", to: "456" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("matches a Teams send resolved to the originating DM conversation", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "msteams",
+        originatingTo: "conversation:19:dm-current@thread.v2",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "msteams",
+            to: "conversation:19:dm-current@thread.v2",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match a Teams user alias resolved to a different DM conversation", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "msteams",
+        originatingTo: "conversation:19:dm-current@thread.v2",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "msteams",
+            to: "conversation:19:dm-newer@thread.v2",
+          },
+        ],
       }),
     ).toBe(false);
   });

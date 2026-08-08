@@ -5,10 +5,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  readOpenClawManagedNpmRootOverrides,
-  syncManagedNpmRootPeerDependencies,
-} from "../infra/npm-managed-root.js";
+import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -19,6 +16,7 @@ import {
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey, resetPluginSlotsToDefaults } from "./slots.js";
+import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 
 type UninstallActions = {
   entry: boolean;
@@ -363,11 +361,11 @@ export function resolveUninstallChannelConfigKeys(
   return keys;
 }
 
-function loadPathMatchesInstallSourcePath(loadPath: string, sourcePath: string): boolean {
-  if (loadPath === sourcePath) {
+function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
+  if (loadPath === installPath) {
     return true;
   }
-  return resolveComparablePath(loadPath) === resolveComparablePath(sourcePath);
+  return resolveComparablePath(loadPath) === resolveComparablePath(installPath);
 }
 
 function resolveComparablePath(value: string): string {
@@ -437,17 +435,23 @@ export function removePluginFromConfig(
     actions.denylist = true;
   }
 
-  // Remove linked path from load.paths (for source === "path" plugins)
+  // Remove exact tracked install paths without consuming parent, child, or prefix matches.
   let load = pluginsConfig.load;
-  if (installRecord?.source === "path" && installRecord.sourcePath) {
-    const sourcePath = installRecord.sourcePath;
+  const trackedInstallPaths = [
+    installRecord?.installPath,
+    installRecord?.source === "path" ? installRecord.sourcePath : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (trackedInstallPaths.length > 0) {
     const loadPaths = load?.paths;
     if (
       Array.isArray(loadPaths) &&
-      loadPaths.some((p) => loadPathMatchesInstallSourcePath(p, sourcePath))
+      loadPaths.some((p) =>
+        trackedInstallPaths.some((installPath) => loadPathMatchesInstallPath(p, installPath)),
+      )
     ) {
       const nextLoadPaths = loadPaths.filter(
-        (p) => !loadPathMatchesInstallSourcePath(p, sourcePath),
+        (p) =>
+          !trackedInstallPaths.some((installPath) => loadPathMatchesInstallPath(p, installPath)),
       );
       load = nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined;
       actions.loadPath = true;
@@ -683,43 +687,13 @@ export async function applyPluginUninstallDirectoryRemoval(
     }
     try {
       const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-      const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
+      const warning = await pruneManagedNpmPeerDependenciesAfterUninstall({
         npmRoot: removal.cleanup.npmRoot,
+        packageName: removal.cleanup.packageName,
         managedOverrides,
       });
-      if (syncedPeerDependencies) {
-        const cleanup = await runCommandWithTimeout(
-          [
-            "npm",
-            "install",
-            "--omit=dev",
-            "--omit=peer",
-            "--loglevel=error",
-            "--legacy-peer-deps",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-          ],
-          {
-            cwd: removal.cleanup.npmRoot,
-            timeoutMs: 300_000,
-            env: createSafeNpmInstallEnv(process.env, {
-              legacyPeerDeps: true,
-              npmConfigCwd: removal.cleanup.npmRoot,
-              packageLock: true,
-              quiet: true,
-            }),
-          },
-        );
-        if (cleanup.code !== 0) {
-          warnings.push(
-            `Failed to prune managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${
-              cleanup.stderr.trim() ||
-              cleanup.stdout.trim() ||
-              `npm exited with code ${cleanup.code}`
-            }`,
-          );
-        }
+      if (warning) {
+        warnings.push(warning);
       }
     } catch (error) {
       warnings.push(

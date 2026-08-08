@@ -49,6 +49,7 @@ export {
   readQaAgentIdentityMarkdown,
 } from "./src/qa-agent-bootstrap.js";
 export { seedQaAgentWorkspace } from "./src/qa-agent-workspace.js";
+export { createQaChannelTransport } from "./src/qa-channel-transport.js";
 export {
   buildQaGatewayConfig,
   DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
@@ -57,6 +58,11 @@ export {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   type QaThinkingLevel,
 } from "./src/qa-gateway-config.js";
+export {
+  TINY_PNG_BASE64,
+  type MockOpenAiRequestSnapshot,
+} from "./src/providers/mock-openai/mock-openai-contracts.js";
+export { startQaMockOpenAiServer } from "./src/providers/mock-openai/server.js";
 export { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./src/report.js";
 export {
   type QaScenarioDefinition,

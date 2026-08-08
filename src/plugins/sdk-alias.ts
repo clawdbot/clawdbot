@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
@@ -51,18 +53,21 @@ function sanitizeJitiCachePathSegment(value: string): string {
   return normalized.length > 0 ? normalized : "unknown";
 }
 
-function resolveJitiFsCacheTmpDir(): string {
-  let tmpDir = os.tmpdir();
-  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
-    const originalTmpDir = process.env.TMPDIR;
-    delete process.env.TMPDIR;
-    try {
-      tmpDir = os.tmpdir();
-    } finally {
-      process.env.TMPDIR = originalTmpDir;
-    }
+function resolveJitiFsCacheRoot(): string {
+  const xdgCacheHome = process.env.XDG_CACHE_HOME?.trim();
+  if (xdgCacheHome && path.isAbsolute(xdgCacheHome)) {
+    return xdgCacheHome;
   }
-  return tmpDir;
+  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    return localAppData && path.isAbsolute(localAppData)
+      ? localAppData
+      : path.join(homeDir, "AppData", "Local");
+  }
+  return process.platform === "darwin"
+    ? path.join(homeDir, "Library", "Caches")
+    : path.join(homeDir, ".cache");
 }
 
 function readJitiBooleanEnv(name: string, defaultValue: boolean): boolean {
@@ -141,9 +146,9 @@ function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {
     // Package installs should have package.json; keep cache setup best-effort.
   }
   return path.join(
-    resolveJitiFsCacheTmpDir(),
-    "jiti",
+    resolveJitiFsCacheRoot(),
     "openclaw",
+    "jiti",
     version,
     sanitizeJitiCachePathSegment(installMarker),
   );
@@ -350,10 +355,6 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
   return dedupeResolvedPaths(starts);
 }
 
-function formatResolutionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function resolveDevSourceRootParam(params: { devSourceRoot?: string | null }): string | null {
   return params.devSourceRoot !== undefined
     ? params.devSourceRoot
@@ -412,9 +413,12 @@ const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>
 const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const cachedWorkspacePackageAliasMaps = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
+const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
@@ -453,8 +457,8 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     officialInstalledPackageName: "@openclaw/codex",
     allowPrivateQaCli: true,
     subpaths: [
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
     ],
   },
   {
@@ -482,477 +486,104 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
 // workspace package import reachable from plugin SDK barrels needs an explicit
 // source/dist alias here to keep source checkouts and packaged builds aligned.
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "readiness",
-    srcFile: "readiness.ts",
-    distFile: "readiness.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "timeouts",
-    srcFile: "timeouts.ts",
-    distFile: "timeouts.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "client-info",
-    srcFile: "client-info.ts",
-    distFile: "client-info.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "connect-error-details",
-    srcFile: "connect-error-details.ts",
-    distFile: "connect-error-details.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "frame-guards",
-    srcFile: "frame-guards.ts",
-    distFile: "frame-guards.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "schema",
-    srcFile: "schema.ts",
-    distFile: "schema.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "startup-unavailable",
-    srcFile: "startup-unavailable.ts",
-    distFile: "startup-unavailable.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "version",
-    srcFile: "version.ts",
-    distFile: "version.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "code-spans",
-    srcFile: "code-spans.ts",
-    distFile: "code-spans.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "fences",
-    srcFile: "fences.ts",
-    distFile: "fences.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "frontmatter",
-    srcFile: "frontmatter.ts",
-    distFile: "frontmatter.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "ir",
-    srcFile: "ir.ts",
-    distFile: "ir.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "render",
-    srcFile: "render.ts",
-    distFile: "render.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "render-aware-chunking",
-    srcFile: "render-aware-chunking.ts",
-    distFile: "render-aware-chunking.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "tables",
-    srcFile: "tables.ts",
-    distFile: "tables.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "types",
-    srcFile: "types.ts",
-    distFile: "types.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "capability-model-ref",
-    srcFile: "capability-model-ref.ts",
-    distFile: "capability-model-ref.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "catalog",
-    srcFile: "catalog.ts",
-    distFile: "catalog.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "model-ref",
-    srcFile: "model-ref.ts",
-    distFile: "model-ref.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "normalization",
-    srcFile: "normalization.ts",
-    distFile: "normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "base64",
-    srcFile: "base64.ts",
-    distFile: "base64.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "constants",
-    srcFile: "constants.ts",
-    distFile: "constants.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "content-length",
-    srcFile: "content-length.ts",
-    distFile: "content-length.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "file-name",
-    srcFile: "file-name.ts",
-    distFile: "file-name.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "inbound-path-policy",
-    srcFile: "inbound-path-policy.ts",
-    distFile: "inbound-path-policy.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "inline-image-data-url",
-    srcFile: "inline-image-data-url.ts",
-    distFile: "inline-image-data-url.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "media-source-url",
-    srcFile: "media-source-url.ts",
-    distFile: "media-source-url.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "mime",
-    srcFile: "mime.ts",
-    distFile: "mime.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "read-byte-stream-with-limit",
-    srcFile: "read-byte-stream-with-limit.ts",
-    distFile: "read-byte-stream-with-limit.mjs",
-  },
-  {
-    packageName: "@openclaw/retry",
-    packageDir: "retry",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "ansi",
-    srcFile: "ansi.ts",
-    distFile: "ansi.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "decorative-emoji",
-    srcFile: "decorative-emoji.ts",
-    distFile: "decorative-emoji.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "health-style",
-    srcFile: "health-style.ts",
-    distFile: "health-style.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "links",
-    srcFile: "links.ts",
-    distFile: "links.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "note",
-    srcFile: "note.ts",
-    distFile: "note.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "osc-progress",
-    srcFile: "osc-progress.ts",
-    distFile: "osc-progress.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "palette",
-    srcFile: "palette.ts",
-    distFile: "palette.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "progress-line",
-    srcFile: "progress-line.ts",
-    distFile: "progress-line.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-select-styled",
-    srcFile: "prompt-select-styled.ts",
-    distFile: "prompt-select-styled.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-select-styled-params",
-    srcFile: "prompt-select-styled-params.ts",
-    distFile: "prompt-select-styled-params.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-style",
-    srcFile: "prompt-style.ts",
-    distFile: "prompt-style.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "restore",
-    srcFile: "restore.ts",
-    distFile: "restore.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "safe-text",
-    srcFile: "safe-text.ts",
-    distFile: "safe-text.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "stream-writer",
-    srcFile: "stream-writer.ts",
-    distFile: "stream-writer.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "table",
-    srcFile: "table.ts",
-    distFile: "table.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "terminal-link",
-    srcFile: "terminal-link.ts",
-    distFile: "terminal-link.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "theme",
-    srcFile: "theme.ts",
-    distFile: "theme.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "ip",
-    srcFile: "ip.ts",
-    distFile: "ip.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "ipv4",
-    srcFile: "ipv4.ts",
-    distFile: "ipv4.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "redact-sensitive-url",
-    srcFile: "redact-sensitive-url.ts",
-    distFile: "redact-sensitive-url.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "url-protocol",
-    srcFile: "url-protocol.ts",
-    distFile: "url-protocol.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "url-userinfo",
-    srcFile: "url-userinfo.ts",
-    distFile: "url-userinfo.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "configured-model-refs",
-    srcFile: "configured-model-refs.ts",
-    distFile: "configured-model-refs.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-refs",
-    srcFile: "model-catalog-refs.ts",
-    distFile: "model-catalog-refs.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-normalize",
-    srcFile: "model-catalog-normalize.ts",
-    distFile: "model-catalog-normalize.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-types",
-    srcFile: "model-catalog-types.ts",
-    distFile: "model-catalog-types.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-id",
-    srcFile: "provider-id.ts",
-    distFile: "provider-id.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-model-id-normalization",
-    srcFile: "provider-model-id-normalization.ts",
-    distFile: "provider-model-id-normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-model-id-normalize",
-    srcFile: "provider-model-id-normalize.ts",
-    distFile: "provider-model-id-normalize.mjs",
-  },
+// Packaged installs omit workspace manifests; preserve the exact curated subpaths
+// instead of expanding aliases from package exports.
+const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
+  ["gateway-client", ["", "readiness", "timeouts"]],
+  [
+    "gateway-protocol",
+    [
+      "",
+      "client-info",
+      "connect-error-details",
+      "frame-guards",
+      "schema",
+      "startup-unavailable",
+      "version",
+    ],
+  ],
+  [
+    "markdown-core",
+    [
+      "",
+      "code-spans",
+      "fences",
+      "frontmatter",
+      "ir",
+      "render",
+      "render-aware-chunking",
+      "tables",
+      "types",
+    ],
+  ],
+  ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
+  [
+    "media-core",
+    [
+      "",
+      "base64",
+      "constants",
+      "content-length",
+      "file-name",
+      "inbound-path-policy",
+      "inline-image-data-url",
+      "media-source-url",
+      "mime",
+      "read-byte-stream-with-limit",
+    ],
+  ],
+  ["retry", [""]],
+  [
+    "terminal-core",
+    [
+      "",
+      "ansi",
+      "decorative-emoji",
+      "health-style",
+      "links",
+      "note",
+      "osc-progress",
+      "palette",
+      "progress-line",
+      "prompt-select-styled",
+      "prompt-select-styled-params",
+      "prompt-style",
+      "restore",
+      "safe-text",
+      "stream-writer",
+      "table",
+      "terminal-link",
+      "theme",
+    ],
+  ],
+  ["net-policy", ["", "ip", "ipv4", "redact-sensitive-url", "url-protocol", "url-userinfo"]],
+  [
+    "model-catalog-core",
+    [
+      "",
+      "configured-model-refs",
+      "model-catalog-refs",
+      "model-catalog-normalize",
+      "model-catalog-types",
+      "provider-id",
+      "provider-model-id-normalization",
+      "provider-model-id-normalize",
+    ],
+  ],
 ] as const;
+
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
+  WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
+    subpaths.map(
+      (subpath): WorkspacePackageAliasEntry => ({
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
+        subpath,
+        srcFile: `${subpath || "index"}.ts`,
+        distFile: `${subpath || "index"}.mjs`,
+      }),
+    ),
+  );
 const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "acp-core",
   "media-core",
@@ -1105,7 +736,6 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   );
   return [
     ...new Set([
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
@@ -1274,6 +904,13 @@ function resolveWorkspacePackageAliasMap(params: {
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
+  // Raw modes with the same effective preference order resolve identical targets.
+  // Key the process-stable cache by that target-affecting order, not the caller spelling.
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cached = cachedWorkspacePackageAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
@@ -1311,6 +948,7 @@ function resolveWorkspacePackageAliasMap(params: {
       }
     }
   }
+  cachedWorkspacePackageAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
 }
 
@@ -1640,6 +1278,50 @@ const pluginLoaderModuleConfigCache = new PluginLruCache<{
   aliasMap: Record<string, string>;
   cacheKey: string;
 }>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
+const normalizedAliasTargetsByInput = new WeakMap<Record<string, string>, Record<string, string>>();
+const mergedAliasMapsByComponent = new WeakMap<
+  Record<string, string>,
+  WeakMap<Record<string, string>, WeakMap<Record<string, string>, Record<string, string>>>
+>();
+
+function normalizeAliasTargets(aliasMap: Record<string, string>): Record<string, string> {
+  if (process.platform !== "win32") {
+    return aliasMap;
+  }
+  const cached = normalizedAliasTargetsByInput.get(aliasMap);
+  if (cached) {
+    return cached;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(aliasMap).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+  );
+  normalizedAliasTargetsByInput.set(aliasMap, normalized);
+  return normalized;
+}
+
+function mergeAliasMaps(
+  bundled: Record<string, string>,
+  workspace: Record<string, string>,
+  pluginSdk: Record<string, string>,
+): Record<string, string> {
+  let byWorkspace = mergedAliasMapsByComponent.get(bundled);
+  if (!byWorkspace) {
+    byWorkspace = new WeakMap();
+    mergedAliasMapsByComponent.set(bundled, byWorkspace);
+  }
+  let byPluginSdk = byWorkspace.get(workspace);
+  if (!byPluginSdk) {
+    byPluginSdk = new WeakMap();
+    byWorkspace.set(workspace, byPluginSdk);
+  }
+  const cached = byPluginSdk.get(pluginSdk);
+  if (cached) {
+    return cached;
+  }
+  const merged = { ...bundled, ...workspace, ...pluginSdk };
+  byPluginSdk.set(pluginSdk, merged);
+  return merged;
+}
 
 function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
   return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
@@ -1801,33 +1483,32 @@ export function buildPluginLoaderAliasMap(
     return cached;
   }
 
-  const result: Record<string, string> = {
-    ...resolveBundledPluginPackagePublicSurfaceAliasMap({
+  const bundledAliases = resolveBundledPluginPackagePublicSurfaceAliasMap({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+    devSourceRoot,
+  });
+  const workspaceAliases = resolveWorkspacePackageAliasMap({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+    devSourceRoot,
+  });
+  const pluginSdkAliases = normalizeAliasTargets(
+    resolvePluginSdkScopedAliasMap({
       modulePath,
       argv1,
       moduleUrl,
       pluginSdkResolution,
       devSourceRoot,
     }),
-    ...resolveWorkspacePackageAliasMap({
-      modulePath,
-      argv1,
-      moduleUrl,
-      pluginSdkResolution,
-      devSourceRoot,
-    }),
-    ...Object.fromEntries(
-      Object.entries(
-        resolvePluginSdkScopedAliasMap({
-          modulePath,
-          argv1,
-          moduleUrl,
-          pluginSdkResolution,
-          devSourceRoot,
-        }),
-      ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
-    ),
-  };
+  );
+  // Different plugin entrypoints commonly resolve the same process-stable SDK surface.
+  // Reuse one merged map so plugin count does not multiply identical alias objects.
+  const result = mergeAliasMaps(bundledAliases, workspaceAliases, pluginSdkAliases);
   aliasMapCache.set(cacheKey, result);
   return result;
 }
@@ -1880,7 +1561,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       packageRoot,
       candidates: dedupeResolvedPaths(candidates),
       resolvedPath: null,
-      error: formatResolutionError(error),
+      error: formatErrorMessage(error),
     };
   }
   return {
@@ -1924,7 +1605,7 @@ function isBundledPluginDistModulePath(modulePath: string): boolean {
   return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
 }
 
-export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
+function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   if (!supportsNativeModuleRuntime()) {
     return false;
   }

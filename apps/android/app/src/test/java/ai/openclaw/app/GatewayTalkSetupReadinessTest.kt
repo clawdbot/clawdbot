@@ -4,6 +4,7 @@ import ai.openclaw.app.i18n.NativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -90,6 +91,15 @@ class GatewayTalkSetupReadinessTest {
     val dictation = readiness.dictation as GatewayTalkSetupState.Ready
     assertEquals("OpenAI Realtime", realtime.provider?.label)
     assertEquals("Deepgram", dictation.provider.label)
+  }
+
+  @Test
+  fun browserOnlyModelsSkipAndroidRealtimeRelay() {
+    assertFalse(isAndroidRealtimeRelayModelSupported("gpt-live"))
+    assertFalse(isAndroidRealtimeRelayModelSupported(" GPT-LIVE-future "))
+    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-realtime-2.1"))
+    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-liveness"))
+    assertTrue(isAndroidRealtimeRelayModelSupported(null))
   }
 
   @Test

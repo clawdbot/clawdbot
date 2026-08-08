@@ -46,12 +46,12 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
-  it("adds incognito only when the draft toggle is on", () => {
+  it("adds incognito only when that visibility is selected", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "private task",
-        incognito: true,
+        visibility: "incognito",
         worktree: false,
       }),
     ).toEqual({ agentId: "main", message: "private task", incognito: true });
@@ -63,7 +63,7 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "private work in progress",
         worktree: false,
-        startAsDraft: true,
+        visibility: "draft",
       }),
     ).toEqual({
       agentId: "main",
