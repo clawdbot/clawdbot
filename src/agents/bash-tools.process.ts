@@ -391,6 +391,12 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
+              // Finished polls render a bounded tail; disclose retained content so the
+              // model can recover it through paged logs instead of treating it as complete.
+              const retainedOutputNote =
+                scopedFinished.tail.length < scopedFinished.aggregated.length
+                  ? "\n\n[earlier retained output is omitted; use action=log with offset and limit to page]"
+                  : "";
               return {
                 content: [
                   {
@@ -400,6 +406,7 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
+                        retainedOutputNote +
                         `\n\nProcess exited with ${
                           scopedFinished.exitSignal
                             ? `signal ${scopedFinished.exitSignal}`
