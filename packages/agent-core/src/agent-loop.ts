@@ -597,37 +597,30 @@ async function streamAssistantResponse(
         break;
 
       case "done":
-      case "error": {
-        const finalMessage = withAssistantTurnTaint(
-          ensureToolTurnIdentity(removeNonExecutableToolCalls(await response.result())),
-          turnTainted,
-        );
-        if (addedPartial) {
-          context.messages[context.messages.length - 1] = finalMessage;
-        } else {
-          context.messages.push(finalMessage);
-        }
-        if (!addedPartial) {
-          await emit({ type: "message_start", message: { ...finalMessage } });
-        }
-        await emit({ type: "message_end", message: finalMessage });
-        return finalMessage;
-      }
+      case "error":
+        return await finalizeAssistantMessage();
     }
   }
 
-  const finalMessage = withAssistantTurnTaint(
-    ensureToolTurnIdentity(removeNonExecutableToolCalls(await response.result())),
-    turnTainted,
-  );
-  if (addedPartial) {
-    context.messages[context.messages.length - 1] = finalMessage;
-  } else {
-    context.messages.push(finalMessage);
-    await emit({ type: "message_start", message: { ...finalMessage } });
+  // Stream ended without a terminal event: result() either carries an explicit
+  // end(result) value or rejects with the EventStream terminal-contract error,
+  // so a contract-violating producer surfaces loudly instead of hanging here.
+  return await finalizeAssistantMessage();
+
+  async function finalizeAssistantMessage(): Promise<AssistantMessage> {
+    const finalMessage = withAssistantTurnTaint(
+      ensureToolTurnIdentity(removeNonExecutableToolCalls(await response.result())),
+      turnTainted,
+    );
+    if (addedPartial) {
+      context.messages[context.messages.length - 1] = finalMessage;
+    } else {
+      context.messages.push(finalMessage);
+      await emit({ type: "message_start", message: { ...finalMessage } });
+    }
+    await emit({ type: "message_end", message: finalMessage });
+    return finalMessage;
   }
-  await emit({ type: "message_end", message: finalMessage });
-  return finalMessage;
 }
 
 /**
