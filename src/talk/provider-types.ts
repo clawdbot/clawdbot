@@ -139,6 +139,16 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   reasoningEffort?: string;
   /** Host-injected agent delegation runner for provider-owned realtime control channels. */
   runAgentConsult?: RealtimeVoiceAgentConsultRunner;
+  /** Host-owned control callbacks for browser media sessions whose provider wire stays server-side. */
+  gatewayControl?: RealtimeVoiceGatewayControl;
+};
+
+/** Narrow host/plugin seam for Gateway-owned control of a client-owned media session. */
+export type RealtimeVoiceGatewayControl = Omit<
+  RealtimeVoiceBridgeCallbacks,
+  "onAudio" | "onClearAudio" | "onMark"
+> & {
+  bindBridge: (bridge: RealtimeVoiceBridge) => void;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {

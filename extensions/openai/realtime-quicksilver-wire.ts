@@ -5,6 +5,7 @@ import {
   readResponseTextLimited,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
@@ -19,6 +20,7 @@ const OPENAI_REALTIME_CALL_URL = "https://api.openai.com/v1/realtime/calls";
 const OPENAI_REALTIME_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
+const OPENAI_REALTIME_LOCATION_MAX_BYTES = 512;
 const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 const OPENAI_QUICKSILVER_VOICES = [
@@ -281,10 +283,10 @@ function openAIRealtimeAuthHeaders(params: {
   };
 }
 
-function buildOpenAIQuicksilverMultipartBody(params: {
-  sdp: string;
-  session: OpenAIQuicksilverSession;
-}): { body: string; contentType: string } {
+function buildOpenAIQuicksilverMultipartBody(params: { sdp: string; session: unknown }): {
+  body: string;
+  contentType: string;
+} {
   const sessionJson = JSON.stringify(params.session);
   let boundary: string;
   do {
@@ -306,6 +308,38 @@ function buildOpenAIQuicksilverMultipartBody(params: {
     ].join(""),
     contentType: `multipart/form-data; boundary=${boundary}`,
   };
+}
+
+function parseOpenAIRealtimeCallLocation(location: string | null): string {
+  if (!location) {
+    throw new Error("OpenAI Realtime call response is missing the Location header");
+  }
+  if (Buffer.byteLength(location, "utf8") > OPENAI_REALTIME_LOCATION_MAX_BYTES) {
+    throw new Error("OpenAI Realtime call response Location header is too large");
+  }
+  let url: URL;
+  try {
+    url = new URL(location, OPENAI_REALTIME_CALL_URL);
+  } catch {
+    throw new Error("OpenAI Realtime call response Location header is invalid");
+  }
+  if (url.origin !== "https://api.openai.com" || url.search || url.hash) {
+    throw new Error("OpenAI Realtime call response Location header has an unexpected target");
+  }
+  const match = /^\/v1\/realtime\/calls\/(rtc_[A-Za-z0-9_-]{1,128})\/?$/u.exec(url.pathname);
+  if (!match?.[1]) {
+    throw new Error("OpenAI Realtime call response Location header has no valid call id");
+  }
+  return match[1];
+}
+
+export function buildOpenAIRealtimeSidebandUrl(callId: string): string {
+  if (!/^rtc_[A-Za-z0-9_-]{1,128}$/u.test(callId)) {
+    throw new Error("OpenAI Realtime call id is invalid");
+  }
+  const url = new URL("wss://api.openai.com/v1/realtime");
+  url.searchParams.set("call_id", callId);
+  return url.toString();
 }
 
 function isOpenAIQuicksilverCallId(value: string): boolean {
@@ -375,10 +409,11 @@ function describeOpenAIQuicksilverCallError(status: number, detail: string): str
 export async function createOpenAIQuicksilverCall(params: {
   auth: OpenAIQuicksilverAuth;
   sdp: string;
-  session: OpenAIQuicksilverSession;
+  session: OpenAIQuicksilverSession | (Record<string, unknown> & { model: string });
   requestIds: OpenAIQuicksilverRequestIds;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  gaSideband?: boolean;
 }): Promise<
   | {
       kind: "gpt-live";
@@ -388,8 +423,18 @@ export async function createOpenAIQuicksilverCall(params: {
       sidebandUrl: string;
     }
   | { kind: "ga-realtime"; status: number; answerSdp: string }
+  | {
+      kind: "ga-sideband";
+      status: number;
+      answerSdp: string;
+      callId: string;
+      sidebandUrl: string;
+    }
 > {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
+  if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
+    throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
+  }
   const authHeaders = isGptLive
     ? openAIQuicksilverAuthHeaders(params.auth, params.requestIds)
     : openAIRealtimeAuthHeaders({
@@ -398,15 +443,18 @@ export async function createOpenAIQuicksilverCall(params: {
         baseUrl: OPENAI_REALTIME_CALL_URL,
         includeQuicksilverAlpha: false,
       });
-  const multipart = isGptLive
-    ? buildOpenAIQuicksilverMultipartBody({
-        sdp: params.sdp,
-        session: params.session,
-      })
-    : undefined;
+  const multipart =
+    isGptLive || params.gaSideband
+      ? buildOpenAIQuicksilverMultipartBody({
+          sdp: params.sdp,
+          session: params.session,
+        })
+      : undefined;
   const callUrl = isGptLive
     ? OPENAI_QUICKSILVER_CALL_URL
-    : `${OPENAI_REALTIME_CALL_URL}?model=${encodeURIComponent(params.session.model)}`;
+    : params.gaSideband
+      ? OPENAI_REALTIME_CALL_URL
+      : `${OPENAI_REALTIME_CALL_URL}?model=${encodeURIComponent(params.session.model)}`;
 
   const response = await (params.fetchImpl ?? fetch)(callUrl, {
     method: "POST",
@@ -420,11 +468,16 @@ export async function createOpenAIQuicksilverCall(params: {
   if (!response.ok) {
     // Provider failures are untrusted streams. Bound and cancel unread overflow
     // before retaining the short diagnostic included in the user-facing error.
-    const detail = (
-      await readResponseTextLimited(response, OPENAI_REALTIME_ERROR_BODY_MAX_BYTES).catch(() => "")
-    )
-      .trim()
-      .slice(0, OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS);
+    const detail = redactSensitiveText(
+      (
+        await readResponseTextLimited(response, OPENAI_REALTIME_ERROR_BODY_MAX_BYTES).catch(
+          () => "",
+        )
+      )
+        .trim()
+        .slice(0, OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS),
+      { mode: "tools" },
+    );
     throw new OpenAIQuicksilverCallError(
       isGptLive
         ? describeOpenAIQuicksilverCallError(response.status, detail)
@@ -443,6 +496,16 @@ export async function createOpenAIQuicksilverCall(params: {
       response.status,
     );
   }
+  if (params.gaSideband) {
+    const callId = parseOpenAIRealtimeCallLocation(response.headers.get("Location"));
+    return {
+      kind: "ga-sideband",
+      status: response.status,
+      answerSdp,
+      callId,
+      sidebandUrl: buildOpenAIRealtimeSidebandUrl(callId),
+    };
+  }
   if (!isGptLive) {
     return { kind: "ga-realtime", status: response.status, answerSdp };
   }
@@ -458,6 +521,34 @@ export async function createOpenAIQuicksilverCall(params: {
     callId,
     sidebandUrl: `wss://api.openai.com/v1/live/${callId}`,
   };
+}
+
+export async function hangupOpenAIRealtimeCall(params: {
+  apiKey: string;
+  callId: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  if (!/^rtc_[A-Za-z0-9_-]{1,128}$/u.test(params.callId)) {
+    throw new Error("OpenAI Realtime call id is invalid");
+  }
+  const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;
+  const headers = resolveProviderRequestHeaders({
+    provider: "openai",
+    baseUrl: url,
+    capability: "audio",
+    transport: "http",
+    defaultHeaders: { Authorization: `Bearer ${params.apiKey}` },
+  }) ?? { Authorization: `Bearer ${params.apiKey}` };
+  const response = await (params.fetchImpl ?? fetch)(url, {
+    method: "POST",
+    headers,
+    signal: params.signal,
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`OpenAI Realtime call hangup failed (${response.status})`);
+  }
+  await response.body?.cancel().catch(() => undefined);
 }
 
 function readQuicksilverErrorMessage(value: unknown): string {

@@ -82,6 +82,11 @@ const mocks = vi.hoisted(() => ({
   registerClientVoiceConsultRun: vi.fn(),
   resolveOpenClientVoiceSessionId: vi.fn(),
   consultRealtimeVoiceAgent: vi.fn(async (_params?: unknown) => ({ text: "agent answer" })),
+  closeTalkClientGatewayControlSession: vi.fn(async () => false),
+  gatewayControlActivate: vi.fn(),
+  gatewayControlClose: vi.fn(async () => undefined),
+  gatewayControl: { bindBridge: vi.fn() },
+  createTalkClientGatewayControlOwner: vi.fn(),
   agentRuntime: {},
 }));
 
@@ -200,6 +205,15 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
     steerTalkRealtimeRelayAgentRun: mocks.steerTalkRealtimeRelayAgentRun,
     stopTalkRealtimeRelaySession: mocks.stopTalkRealtimeRelaySession,
     submitTalkRealtimeRelayToolResult: mocks.submitTalkRealtimeRelayToolResult,
+  };
+});
+
+vi.mock("../talk-client-gateway-control.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../talk-client-gateway-control.js")>();
+  return {
+    ...actual,
+    closeTalkClientGatewayControlSession: mocks.closeTalkClientGatewayControlSession,
+    createTalkClientGatewayControlOwner: mocks.createTalkClientGatewayControlOwner,
   };
 });
 
@@ -2928,6 +2942,12 @@ describe("talk.client.create handler", () => {
     mocks.resolveRealtimeBootstrapContextInstructions.mockResolvedValue(undefined);
     mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-test");
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
+    mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
+    mocks.createTalkClientGatewayControlOwner.mockReturnValue({
+      activate: mocks.gatewayControlActivate,
+      close: mocks.gatewayControlClose,
+      control: mocks.gatewayControl,
+    });
   });
 
   it("builds realtime launch defaults from talk.realtime", () => {
@@ -3136,6 +3156,121 @@ describe("talk.client.create handler", () => {
     });
     expect(createInput).not.toHaveProperty("tools");
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
+  });
+
+  it("returns a Gateway-owned descriptor only after a supported reservation succeeds", async () => {
+    mocks.createOrResumeClientVoiceSession.mockReturnValueOnce("voice-gateway");
+    const browserSession = {
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "gateway-token",
+      offerUrl: "/plugins/openai/realtime/calls",
+    };
+    const createBrowserSession = vi.fn(async () => browserSession);
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "platform-key", model: "gpt-realtime-2.1" },
+    });
+    mocks.resolveRealtimeVoiceProviderCapabilities.mockReturnValueOnce({
+      transports: ["webrtc"],
+      inputAudioFormats: [],
+      outputAudioFormats: [],
+      supportsGatewayControl: true,
+      supportsToolCalls: true,
+      supportsVideoFrames: true,
+    });
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.client.create", {
+      params: {
+        sessionKey: "main",
+        voiceSessionId: "voice-gateway",
+        capabilities: ["gateway-control-v1"],
+      },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({ talk: { realtime: { provider: "openai" } } }) as OpenClawConfig,
+        logGateway: { warn: vi.fn() },
+      },
+    });
+
+    expect(createBrowserSession).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayControl: mocks.gatewayControl }),
+    );
+    expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voiceSessionId: "voice-gateway",
+        transcriptCapable: true,
+      }),
+    );
+    expect(mocks.gatewayControlActivate).toHaveBeenCalledWith(expect.any(Function));
+    expectRespondOk(respond, {
+      ...browserSession,
+      voiceSessionId: "voice-gateway",
+      clientControl: { owner: "gateway" },
+    });
+  });
+
+  it("fails a requested Gateway-owned session without provider/auth support", async () => {
+    const createBrowserSession = vi.fn();
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: {
+        id: "openai",
+        label: "OpenAI Realtime",
+        isConfigured: () => true,
+        createBrowserSession,
+        createBridge: vi.fn(),
+      },
+      providerConfig: { model: "gpt-realtime-2.1" },
+    });
+    mocks.resolveRealtimeVoiceProviderCapabilities.mockReturnValueOnce({
+      transports: ["webrtc"],
+      inputAudioFormats: [],
+      outputAudioFormats: [],
+      supportsToolCalls: true,
+    });
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.client.create", {
+      params: { sessionKey: "main", capabilities: ["gateway-control-v1"] },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({ talk: { realtime: { provider: "openai" } } }) as OpenClawConfig,
+      },
+    });
+
+    expect(createBrowserSession).not.toHaveBeenCalled();
+    expect(mocks.createTalkClientGatewayControlOwner).not.toHaveBeenCalled();
+    expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message:
+        'Realtime provider "openai" does not support gateway-control-v1 with its configured authentication',
+    });
+  });
+
+  it("routes client close through the Gateway-controlled provider owner", async () => {
+    mocks.closeTalkClientGatewayControlSession.mockResolvedValueOnce(true);
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.client.close", {
+      params: { sessionKey: "main", voiceSessionId: "voice-gateway" },
+      respond,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig },
+    });
+
+    expect(mocks.closeTalkClientGatewayControlSession).toHaveBeenCalledWith({
+      voiceSessionId: "voice-gateway",
+      sessionKey: "main",
+      connId: "conn-1",
+    });
+    expectRespondOk(respond, { ok: true });
   });
 
   it("binds GPT-Live delegations to the voice session and browser-owned steer lifecycle", async () => {

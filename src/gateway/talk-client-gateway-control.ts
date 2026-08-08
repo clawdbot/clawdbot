@@ -1,0 +1,384 @@
+import { normalizeTalkSection } from "../config/talk.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
+import { parseRealtimeVoiceAgentConsultArgs } from "../talk/agent-consult-tool.js";
+import {
+  buildRealtimeVoiceAgentCancelProviderResult,
+  buildRealtimeVoiceAgentControlSpeechMessage,
+  controlRealtimeVoiceAgentRun,
+  parseRealtimeVoiceAgentControlToolArgs,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  shouldAutoControlRealtimeVoiceAgentText,
+} from "../talk/agent-run-control.js";
+import type { RealtimeVoiceAgentControlResult } from "../talk/agent-run-control.js";
+import {
+  authorizeClientVoiceConfirmation,
+  bindAuthorizedClientVoiceConfirmation,
+} from "../talk/client-voice-confirmation.js";
+import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceGatewayControl,
+  RealtimeVoiceToolCallEvent,
+} from "../talk/provider-types.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { formatError } from "./server-utils.js";
+import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
+
+type GatewayControlOwner = {
+  activate: (closeProvider: () => Promise<void>) => void;
+  close: (options?: { skipProvider?: boolean }) => Promise<void>;
+  connId: string;
+  control: RealtimeVoiceGatewayControl;
+  sessionKey: string;
+};
+
+const owners = new Map<string, GatewayControlOwner>();
+
+const REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES = 8_000;
+
+export function boundTalkClientRealtimeInitialItems(
+  items: readonly { role: "user" | "assistant"; text: string }[],
+): Array<{ role: "user" | "assistant"; text: string }> {
+  // Keep startup context below provider byte ceilings while retaining the newest
+  // complete turns; truncating an individual entry would change transcript meaning.
+  let remainingBytes = REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES;
+  const newestFirst: Array<{ role: "user" | "assistant"; text: string }> = [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item) {
+      continue;
+    }
+    const itemBytes = Buffer.byteLength(item.text, "utf8");
+    if (itemBytes > remainingBytes) {
+      break;
+    }
+    newestFirst.push(item);
+    remainingBytes -= itemBytes;
+  }
+  return newestFirst.toReversed();
+}
+
+export function createTalkClientAgentConsultRunner(params: {
+  config: OpenClawConfig;
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
+  agentId: string;
+  sessionKey: string;
+  ownerConnId?: string;
+  getVoiceSessionId: () => string | undefined;
+  initialItems: Array<{ role: "user" | "assistant"; text: string }>;
+}) {
+  let agentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+  const runArgs = async (args: unknown, signal?: AbortSignal) => {
+    const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
+    const voiceSessionId = params.getVoiceSessionId();
+    if (!voiceSessionId) {
+      throw new Error("Realtime browser voice session is not ready for agent consult");
+    }
+    const confirmationGrant = parsedArgs.confirmationId
+      ? authorizeClientVoiceConfirmation({
+          agentId: params.agentId,
+          voiceSessionId,
+          confirmationId: parsedArgs.confirmationId,
+        })
+      : undefined;
+    agentRuntime ??= createPluginRuntime().agent;
+    const talkConfig = normalizeTalkSection(params.config.talk);
+    return await consultRealtimeVoiceAgent({
+      cfg: params.config,
+      agentRuntime,
+      logger: params.context.logGateway,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      messageProvider: "webchat",
+      lane: "talk",
+      runIdPrefix: "talk-realtime-consult",
+      args: parsedArgs,
+      transcript: params.initialItems,
+      surface: "a browser Talk session",
+      userLabel: "User",
+      questionSourceLabel: "user",
+      thinkLevel: talkConfig?.consultThinkingLevel,
+      fastMode: talkConfig?.consultFastMode,
+      abortSignal: signal,
+      onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+        registerClientVoiceConsultRun({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          voiceSessionId,
+          runId,
+          config: params.config,
+        });
+        if (confirmationGrant) {
+          bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
+        }
+        if (!params.ownerConnId) {
+          return undefined;
+        }
+        const registration = registerChatAbortController({
+          chatAbortControllers: params.context.chatAbortControllers,
+          runId,
+          sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          timeoutMs,
+          ownerConnId: params.ownerConnId,
+          controlUiVisible: false,
+          kind: "chat-send",
+        });
+        return { abortSignal: registration.controller.signal, cleanup: registration.cleanup };
+      },
+    });
+  };
+  return {
+    runArgs,
+    runPrompt: async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
+      await runArgs({ question: prompt }, signal),
+  };
+}
+
+export function createTalkClientGatewayControlOwner(params: {
+  voiceSessionId: string;
+  sessionKey: string;
+  connId: string;
+  runAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
+  appendTranscript: (entry: {
+    entryId: string;
+    role: "user" | "assistant";
+    text: string;
+  }) => Promise<void>;
+  closeLogicalSession: () => Promise<void>;
+  controlAgentRun?: (params: {
+    sessionKey: string;
+    text: string;
+    mode?: unknown;
+  }) => Promise<RealtimeVoiceAgentControlResult>;
+  warn: (message: string) => void;
+}): GatewayControlOwner {
+  let bridge: RealtimeVoiceBridge | undefined;
+  let closeProvider: (() => Promise<void>) | undefined;
+  let closing: Promise<void> | undefined;
+  let closed = false;
+  let transcriptSequence = 0;
+  let transcriptTail = Promise.resolve();
+  let consultTail = Promise.resolve();
+  let controlTail = Promise.resolve();
+  const consultControllers = new Map<string, AbortController>();
+
+  const submit = async (callId: string, result: unknown): Promise<void> => {
+    if (!bridge) {
+      throw new Error("OpenAI Realtime Gateway control bridge is not ready");
+    }
+    await bridge.submitToolResult(callId, result);
+  };
+
+  const applyControl = async (args: unknown) => {
+    const parsed = parseRealtimeVoiceAgentControlToolArgs(args);
+    const result = await (params.controlAgentRun ?? controlRealtimeVoiceAgentRun)({
+      sessionKey: params.sessionKey,
+      text: parsed.text,
+      mode: parsed.mode,
+    });
+    if (result.mode === "cancel" && result.ok) {
+      for (const controller of consultControllers.values()) {
+        controller.abort(new Error("Realtime voice consult cancelled"));
+      }
+    }
+    return result;
+  };
+
+  const runConsult = async (
+    event: RealtimeVoiceToolCallEvent,
+    controller: AbortController,
+  ): Promise<void> => {
+    try {
+      controller.signal.throwIfAborted();
+      await transcriptTail;
+      const result = await params.runAgentConsult(event.args, controller.signal);
+      if (closed) {
+        return;
+      }
+      await submit(event.callId, { result: result.text });
+    } catch (error) {
+      if (closed) {
+        return;
+      }
+      const result = controller.signal.aborted
+        ? buildRealtimeVoiceAgentCancelProviderResult()
+        : { error: formatError(error) };
+      await submit(event.callId, result);
+    } finally {
+      if (consultControllers.get(event.callId) === controller) {
+        consultControllers.delete(event.callId);
+      }
+    }
+  };
+
+  const queueControl = (args: unknown, callId?: string, ready?: Promise<void>): void => {
+    const current = controlTail.then(async () => {
+      await ready;
+      if (closed) {
+        return;
+      }
+      try {
+        const result = await applyControl(args);
+        if (closed) {
+          return;
+        }
+        if (callId) {
+          await submit(callId, result);
+        } else if (result.speak && !result.suppress && result.message.trim()) {
+          bridge?.sendUserMessage?.(buildRealtimeVoiceAgentControlSpeechMessage(result.message));
+        }
+      } catch (error) {
+        if (callId && !closed) {
+          await submit(callId, { error: formatError(error) });
+          return;
+        }
+        throw error;
+      }
+    });
+    controlTail = current.catch((error: unknown) => {
+      if (!closed) {
+        params.warn(`talk Gateway control failed: ${formatError(error)}`);
+      }
+    });
+  };
+
+  const handleToolCall = (event: RealtimeVoiceToolCallEvent): void => {
+    if (closed) {
+      return;
+    }
+    if (event.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      const controller = new AbortController();
+      consultControllers.set(event.callId, controller);
+      const current = consultTail.then(() => runConsult(event, controller));
+      consultTail = current.catch((error: unknown) => {
+        params.warn(`talk Gateway control consult failed: ${formatError(error)}`);
+      });
+      return;
+    }
+    if (event.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
+      queueControl(event.args, event.callId);
+      return;
+    }
+    void submit(event.callId, { error: `Unsupported realtime Talk tool: ${event.name}` }).catch(
+      (error: unknown) => {
+        params.warn(`talk Gateway control rejection failed: ${formatError(error)}`);
+      },
+    );
+  };
+
+  const handleTranscript = (role: "user" | "assistant", text: string, final: boolean): void => {
+    if (!final || !text.trim()) {
+      return;
+    }
+    transcriptSequence += 1;
+    const entryId = `gateway-${transcriptSequence}`;
+    transcriptTail = transcriptTail
+      .then(() => params.appendTranscript({ entryId, role, text }))
+      .catch((error: unknown) => {
+        params.warn(`talk Gateway control transcript failed: ${formatError(error)}`);
+      });
+    if (
+      role !== "user" ||
+      consultControllers.size === 0 ||
+      !shouldAutoControlRealtimeVoiceAgentText(text)
+    ) {
+      return;
+    }
+    queueControl({ text }, undefined, transcriptTail);
+  };
+
+  const owner: GatewayControlOwner = {
+    connId: params.connId,
+    sessionKey: params.sessionKey,
+    control: {
+      bindBridge: (nextBridge) => {
+        bridge = nextBridge;
+      },
+      onTranscript: handleTranscript,
+      onToolCall: handleToolCall,
+      onError: (error) => params.warn(`talk Gateway control provider error: ${error.message}`),
+      onClose: () => {
+        void owner.close({ skipProvider: true }).catch((error: unknown) => {
+          params.warn(`talk Gateway control close failed: ${formatError(error)}`);
+        });
+      },
+    },
+    activate: (nextCloseProvider) => {
+      closeProvider = nextCloseProvider;
+      const previous = owners.get(params.voiceSessionId);
+      owners.set(params.voiceSessionId, owner);
+      if (previous && previous !== owner) {
+        void previous.close().catch((error: unknown) => {
+          params.warn(`talk replaced Gateway control close failed: ${formatError(error)}`);
+        });
+      }
+      registerTalkConnectionCleanup(params.connId, "browser-control", () => {
+        for (const current of owners.values()) {
+          if (current.connId !== params.connId) {
+            continue;
+          }
+          void current.close().catch((error: unknown) => {
+            params.warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
+          });
+        }
+      });
+    },
+    close: (options) => {
+      if (closing) {
+        return closing;
+      }
+      // Defer teardown until after `closing` is assigned so provider callbacks
+      // can re-enter close without starting a second cleanup.
+      closing = Promise.resolve().then(async () => {
+        closed = true;
+        if (owners.get(params.voiceSessionId) === owner) {
+          owners.delete(params.voiceSessionId);
+        }
+        for (const controller of consultControllers.values()) {
+          controller.abort(new Error("Realtime voice session closed"));
+        }
+        const providerClose = options?.skipProvider
+          ? Promise.resolve()
+          : Promise.resolve().then(() => closeProvider?.());
+        const [providerResult] = await Promise.allSettled([
+          providerClose,
+          transcriptTail,
+          controlTail,
+          consultTail,
+        ]);
+        await params.closeLogicalSession();
+        if (providerResult?.status === "rejected") {
+          throw providerResult.reason;
+        }
+      });
+      return closing;
+    },
+  };
+  return owner;
+}
+
+export async function closeTalkClientGatewayControlSession(params: {
+  voiceSessionId: string;
+  sessionKey: string;
+  connId?: string;
+}): Promise<boolean> {
+  const owner = owners.get(params.voiceSessionId);
+  if (!owner) {
+    return false;
+  }
+  if (
+    owner.sessionKey !== params.sessionKey.trim() ||
+    !params.connId ||
+    owner.connId !== params.connId
+  ) {
+    throw new Error("Gateway-controlled voice session is not owned by this client");
+  }
+  await owner.close();
+  return true;
+}

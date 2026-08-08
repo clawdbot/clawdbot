@@ -56,6 +56,7 @@ import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
+import { buildOpenAIRealtimeSidebandUrl } from "./realtime-quicksilver-wire.js";
 import {
   isOpenAIGptLiveModel,
   isSupportedOpenAIGptLiveModel,
@@ -92,6 +93,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
 
 type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   apiKey?: string;
+  callId?: string;
   model?: string;
   voice?: OpenAIRealtimeVoice;
   temperature?: number;
@@ -138,6 +140,8 @@ const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const OPENAI_REALTIME_SIDEBAND_STARTUP_MAX_BYTES = 1024 * 1024;
+const OPENAI_REALTIME_FUNCTION_OUTPUT_ACK_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 // Realtime validates this character set but accepts names beyond the 64-character
 // cap used by other OpenAI tool surfaces.
@@ -634,6 +638,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private lastAssistantItemId: string | null = null;
   private connectionUrl = "";
   private completedToolCallIds = new Set<string>();
+  private standaloneSpeechQueue: string[] = [];
+  private standaloneSpeechActive = false;
+  private standaloneSpeechEventId: string | null = null;
+  private pendingFunctionOutputAcks = new Map<
+    string,
+    { eventId: string; reject: (error: Error) => void; resolve: () => void; timer: NodeJS.Timeout }
+  >();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
   private reconnectReason: string | undefined;
@@ -671,6 +682,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   sendUserMessage(text: string): void {
+    if (this.pendingToolCallIds.size > 0) {
+      // Control/status speech must not wait behind the long-running consult whose
+      // function output owns the default conversation response.
+      this.standaloneSpeechQueue.push(text);
+      this.flushStandaloneSpeech();
+      return;
+    }
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -689,26 +707,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
-  submitToolResult(
+  async submitToolResult(
     callId: string,
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
-  ): void {
+  ): Promise<void> {
     if (this.lifecycle.phase() === "terminal" || !this.pendingToolCallIds.has(callId)) {
       return;
     }
-    const output = JSON.stringify(result);
-    if (typeof output !== "string") {
-      throw new Error("OpenAI realtime voice tool result is not JSON-serializable");
-    }
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output,
-      },
-    });
+    await this.sendFunctionOutput(callId, result);
     if (options?.willContinue === true) {
       this.continuingToolCallIds.add(callId);
       return;
@@ -768,6 +775,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private async doConnect(lifecycleConnection: RealtimeVoiceSessionConnection): Promise<void> {
     let activeWs: WebSocket | undefined;
+    let startupFrameBytes = 0;
     const attempt = this.lifecycle.createConnectAttempt({
       connection: lifecycleConnection,
       timeoutMs: OpenAIRealtimeVoiceBridge.CONNECT_TIMEOUT_MS,
@@ -840,6 +848,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         if (attempt.settled && !attempt.ready) {
           return;
+        }
+        if (!attempt.ready) {
+          startupFrameBytes += data.byteLength;
+          if (startupFrameBytes > OPENAI_REALTIME_SIDEBAND_STARTUP_MAX_BYTES) {
+            const error = new Error("OpenAI realtime sideband startup buffer exceeded");
+            attempt.reject(error);
+            this.failConnection(error, ws, lifecycleConnection, {
+              code: 1009,
+              reason: "Sideband startup buffer exceeded",
+            });
+            return;
+          }
         }
         captureWsEvent({
           url,
@@ -923,6 +943,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       ws.on("close", (code, reasonBuffer) => {
+        this.rejectFunctionOutputAcks(new Error("OpenAI realtime connection closed"));
         captureOpenAIRealtimeWsClose({
           url,
           flowId: this.flowId,
@@ -1067,7 +1088,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       };
     }
 
-    const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
+    const url = cfg.callId
+      ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
+      : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     return {
       url,
       headers: resolveProviderRequestHeaders({
@@ -1401,6 +1424,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
         break;
 
+      case "conversation.item.created":
+        if (event.item?.type === "function_call_output" && event.item.call_id) {
+          this.resolveFunctionOutputAck(event.item.call_id);
+        }
+        break;
+
       case "response.function_call_arguments.delta":
       case "response.function_call_arguments.done":
       case "conversation.item.done":
@@ -1419,7 +1448,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.manualResponseCreateEventId = null;
         this.responseCancelInFlight = false;
         this.manualResponseCancelEventId = null;
-        if (this.responseCreatePending) {
+        if (this.standaloneSpeechActive) {
+          this.standaloneSpeechActive = false;
+          this.standaloneSpeechEventId = null;
+        }
+        if (this.standaloneSpeechQueue.length > 0) {
+          this.flushStandaloneSpeech();
+        } else if (this.responseCreatePending) {
           this.flushPendingResponseCreate();
         } else {
           this.restoreAutoRespondAfterManualResponse();
@@ -1428,6 +1463,22 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
+        const rejectedEventId = readRealtimeErrorEventId(event.error);
+        if (rejectedEventId && this.rejectFunctionOutputAck(rejectedEventId, detail)) {
+          return;
+        }
+        if (rejectedEventId && rejectedEventId === this.standaloneSpeechEventId) {
+          this.responseCreateInFlight = false;
+          this.standaloneSpeechActive = false;
+          this.standaloneSpeechEventId = null;
+          this.config.onError?.(new Error(detail));
+          if (this.standaloneSpeechQueue.length > 0) {
+            this.flushStandaloneSpeech();
+          } else if (this.responseCreatePending) {
+            this.flushPendingResponseCreate();
+          }
+          return;
+        }
         const rejectsManualResponseCreate =
           this.manualResponseCreateEventId !== null &&
           readRealtimeErrorEventId(event.error) === this.manualResponseCreateEventId;
@@ -1632,7 +1683,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       detail: `reason=${params.reason}`,
       itemId: params.itemId,
     });
-    this.submitToolResult(params.callId, { error: params.message });
+    void this.submitToolResult(params.callId, { error: params.message }).catch((error: unknown) => {
+      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+    });
   }
 
   private requestResponseCreate(): void {
@@ -1654,6 +1707,40 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     // the manual turn settles so only its rejection may release VAD suppression.
     this.manualResponseCreateEventId = eventId;
     this.sendEvent({ type: "response.create", event_id: eventId });
+  }
+
+  private flushStandaloneSpeech(): void {
+    if (
+      this.standaloneSpeechActive ||
+      this.responseActive ||
+      this.responseCreateInFlight ||
+      this.responseCancelInFlight
+    ) {
+      return;
+    }
+    const text = this.standaloneSpeechQueue.shift();
+    if (!text) {
+      return;
+    }
+    const eventId = `openclaw-standalone-speech-${randomUUID()}`;
+    this.standaloneSpeechActive = true;
+    this.standaloneSpeechEventId = eventId;
+    this.responseCreateInFlight = true;
+    this.sendEvent({
+      type: "response.create",
+      event_id: eventId,
+      response: {
+        conversation: "none",
+        output_modalities: ["audio"],
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        ],
+      },
+    });
   }
 
   private suppressAutoRespondForManualResponse(): void {
@@ -1683,6 +1770,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private resetRealtimeSessionState(): void {
+    this.rejectFunctionOutputAcks(new Error("OpenAI realtime session state reset"));
     this.clearOutstandingMarks();
     this.responseStartTimestamp = null;
     this.responseActive = false;
@@ -1696,6 +1784,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.completedToolCallIds.clear();
+    this.standaloneSpeechQueue = [];
+    this.standaloneSpeechActive = false;
+    this.standaloneSpeechEventId = null;
   }
 
   private resetTerminalState(): void {
@@ -1781,6 +1872,62 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
+  private sendFunctionOutput(callId: string, result: unknown): Promise<void> {
+    const output = JSON.stringify(result);
+    if (typeof output !== "string") {
+      throw new Error("OpenAI realtime voice tool result is not JSON-serializable");
+    }
+    const eventId = `openclaw-function-output-${randomUUID()}`;
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingFunctionOutputAcks.delete(callId);
+        reject(new Error("OpenAI realtime function output acknowledgement timed out"));
+      }, OPENAI_REALTIME_FUNCTION_OUTPUT_ACK_TIMEOUT_MS);
+      timer.unref?.();
+      this.pendingFunctionOutputAcks.set(callId, { eventId, reject, resolve, timer });
+      this.sendEvent({
+        type: "conversation.item.create",
+        event_id: eventId,
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output,
+        },
+      });
+    });
+  }
+
+  private resolveFunctionOutputAck(callId: string): void {
+    const pending = this.pendingFunctionOutputAcks.get(callId);
+    if (!pending) {
+      return;
+    }
+    this.pendingFunctionOutputAcks.delete(callId);
+    clearTimeout(pending.timer);
+    pending.resolve();
+  }
+
+  private rejectFunctionOutputAck(eventId: string, detail: string): boolean {
+    for (const [callId, pending] of this.pendingFunctionOutputAcks) {
+      if (pending.eventId !== eventId) {
+        continue;
+      }
+      this.pendingFunctionOutputAcks.delete(callId);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(detail));
+      return true;
+    }
+    return false;
+  }
+
+  private rejectFunctionOutputAcks(error: Error): void {
+    for (const pending of this.pendingFunctionOutputAcks.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pendingFunctionOutputAcks.clear();
+  }
+
   private describeServerEvent(event: RealtimeEvent): string | undefined {
     if (
       event.type === "error" ||
@@ -1835,6 +1982,7 @@ type OpenAIQuicksilverBrowserSessionBroker = ReturnType<
 type OpenAIInternalRealtimeBrowserSessionCreateRequest =
   RealtimeVoiceBrowserSessionCreateRequest & {
     agentId: string;
+    ownerConnId?: string;
     workspaceDir: string;
     initialItems: Array<{
       role: "user" | "assistant";
@@ -1844,6 +1992,7 @@ type OpenAIInternalRealtimeBrowserSessionCreateRequest =
 
 type OpenAIInternalRealtimeVoiceCapabilities = RealtimeVoiceProviderCapabilities & {
   handlesAgentConsult?: boolean;
+  supportsGatewayControl?: boolean;
 };
 
 type OpenAIInternalRealtimeVoiceProviderApi = {
@@ -1886,6 +2035,53 @@ const quicksilverBrokerBySession = new WeakMap<
   OpenAIQuicksilverBrowserSessionBroker
 >();
 
+function buildOpenAIRealtimeBrowserSessionConfig(
+  req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
+  config: OpenAIRealtimeVoiceProviderConfig,
+  model: string,
+): {
+  session: Record<string, unknown> & { model: string };
+  voice: OpenAIRealtimeVoice;
+} {
+  const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
+  const tools = normalizeOpenAIRealtimeTools(req.tools);
+  const session: Record<string, unknown> & { model: string } = {
+    type: "realtime",
+    model,
+    instructions: req.instructions,
+    audio: {
+      input: {
+        noise_reduction: { type: "near_field" },
+        turn_detection: {
+          type: "server_vad",
+          create_response: true,
+          interrupt_response: true,
+          ...(typeof (req.vadThreshold ?? config.vadThreshold) === "number"
+            ? { threshold: req.vadThreshold ?? config.vadThreshold }
+            : {}),
+          ...(typeof (req.prefixPaddingMs ?? config.prefixPaddingMs) === "number"
+            ? { prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs }
+            : {}),
+          ...(typeof (req.silenceDurationMs ?? config.silenceDurationMs) === "number"
+            ? { silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs }
+            : {}),
+        },
+        transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+      },
+      output: { voice },
+    },
+  };
+  if (tools) {
+    session.tools = tools;
+    session.tool_choice = "auto";
+  }
+  const reasoningEffort = trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort;
+  if (reasoningEffort) {
+    session.reasoning = { effort: reasoningEffort };
+  }
+  return { session, voice };
+}
+
 async function createOpenAIRealtimeBrowserSession(
   req: OpenAIInternalRealtimeBrowserSessionCreateRequest,
   quicksilverBroker: OpenAIQuicksilverBrowserSessionBroker | undefined,
@@ -1897,6 +2093,66 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  if (req.gatewayControl) {
+    if (isOpenAIGptLiveModel(model)) {
+      throw new Error("gateway-control-v1 supports OpenAI GA Realtime models only");
+    }
+    if (!quicksilverBroker) {
+      throw new Error("OpenAI realtime browser session broker is unavailable");
+    }
+    const auth = await requireOpenAIRealtimePlatformAuth({
+      configuredApiKey: config.apiKey,
+      cfg: req.cfg,
+    });
+    const { session: sessionConfig, voice } = buildOpenAIRealtimeBrowserSessionConfig(
+      req,
+      config,
+      model,
+    );
+    const gatewayControl = req.gatewayControl;
+    const session = await quicksilverBroker.createBrowserSession(
+      {
+        ...req,
+        model,
+        voice,
+        gaSideband: {
+          session: sessionConfig,
+          createBridge: ({ apiKey, callId, onTerminal }) => {
+            const bridge = new OpenAIRealtimeVoiceBridge({
+              cfg: req.cfg,
+              providerConfig: req.providerConfig,
+              apiKey,
+              callId,
+              model,
+              voice,
+              instructions: req.instructions,
+              tools: req.tools,
+              reasoningEffort: req.reasoningEffort ?? config.reasoningEffort,
+              vadThreshold: req.vadThreshold ?? config.vadThreshold,
+              silenceDurationMs: req.silenceDurationMs ?? config.silenceDurationMs,
+              prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
+              onAudio: () => undefined,
+              onClearAudio: () => undefined,
+              onEvent: gatewayControl.onEvent,
+              onTranscript: gatewayControl.onTranscript,
+              onToolCall: gatewayControl.onToolCall,
+              onReady: gatewayControl.onReady,
+              onError: gatewayControl.onError,
+              onClose: (reason) => {
+                gatewayControl.onClose?.(reason);
+                onTerminal();
+              },
+            });
+            gatewayControl.bindBridge(bridge);
+            return bridge;
+          },
+        },
+      },
+      { type: "api-key", token: auth.value },
+    );
+    quicksilverBrokerBySession.set(session, quicksilverBroker);
+    return session;
+  }
   if (isOpenAIGptLiveModel(model)) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
@@ -1977,42 +2233,7 @@ async function createOpenAIRealtimeBrowserSession(
     return session;
   }
 
-  const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
-  const tools = normalizeOpenAIRealtimeTools(req.tools);
-  const session: Record<string, unknown> = {
-    type: "realtime",
-    model,
-    instructions: req.instructions,
-    audio: {
-      input: {
-        noise_reduction: { type: "near_field" },
-        turn_detection: {
-          type: "server_vad",
-          create_response: true,
-          interrupt_response: true,
-          ...(typeof (req.vadThreshold ?? config.vadThreshold) === "number"
-            ? { threshold: req.vadThreshold ?? config.vadThreshold }
-            : {}),
-          ...(typeof (req.prefixPaddingMs ?? config.prefixPaddingMs) === "number"
-            ? { prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs }
-            : {}),
-          ...(typeof (req.silenceDurationMs ?? config.silenceDurationMs) === "number"
-            ? { silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs }
-            : {}),
-        },
-        transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
-      },
-      output: { voice },
-    },
-  };
-  if (tools) {
-    session.tools = tools;
-    session.tool_choice = "auto";
-  }
-  const reasoningEffort = trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort;
-  if (reasoningEffort) {
-    session.reasoning = { effort: reasoningEffort };
-  }
+  const { session, voice } = buildOpenAIRealtimeBrowserSessionConfig(req, config, model);
 
   const clientSecret = await createOpenAIRealtimeClientSecret({
     authToken: auth.value,
@@ -2039,7 +2260,7 @@ async function cancelOpenAIRealtimeBrowserSession(
 ): Promise<void> {
   const quicksilverBroker = quicksilverBrokerBySession.get(session);
   quicksilverBrokerBySession.delete(session);
-  quicksilverBroker?.cancelBrowserSession(session);
+  await quicksilverBroker?.cancelBrowserSession(session);
 }
 
 export function buildOpenAIRealtimeVoiceProvider(options?: {
@@ -2165,7 +2386,7 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
       );
     },
-    resolveBrowserSessionCapabilities: ({ providerConfig, model }) => {
+    resolveBrowserSessionCapabilities: ({ cfg, providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (isSupportedOpenAIGptLiveModel(model ?? config.model)) {
         return {
@@ -2173,7 +2394,13 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           ...OPENAI_QUICKSILVER_CAPABILITIES,
         };
       }
-      return OPENAI_REALTIME_CAPABILITIES;
+      return {
+        ...OPENAI_REALTIME_CAPABILITIES,
+        ...(options?.quicksilverBrowserSessionBroker !== undefined &&
+        hasOpenAIRealtimePlatformAuthInput({ configuredApiKey: config.apiKey, cfg })
+          ? { supportsGatewayControl: true }
+          : {}),
+      };
     },
     isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);

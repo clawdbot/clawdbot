@@ -876,6 +876,14 @@ catalog, API-key auth, and dynamic model resolution.
         Set `handlesInputAudioBargeIn` only when provider VAD confirms an
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.
+
+        A browser-session request can include `gatewayControl` when the host has
+        explicitly negotiated server-owned provider control. The provider keeps
+        vendor authentication and signaling private, calls
+        `gatewayControl.bindBridge(bridge)` before connecting the attached
+        control transport, and forwards bridge events through the supplied
+        callbacks. The Gateway remains the owner of tool policy and run
+        lifecycle. Do not infer or enable this mode from a model name alone.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

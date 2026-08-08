@@ -33,6 +33,7 @@ function readInternalRealtimeVoiceProviderApi(provider: object) {
       handlesAgentConsult?: boolean;
       supportsToolCalls?: boolean;
       supportsVideoFrames?: boolean;
+      supportsGatewayControl?: boolean;
       transports?: string[];
     };
     resolveGatewayRelayCapabilities: (ctx: {
@@ -254,6 +255,25 @@ function emitCompletedToolCalls(
         name: "lookup_weather",
         arguments: "{}",
       })),
+    },
+  });
+}
+
+function acknowledgeFunctionOutput(socket: FakeWebSocketInstance, callId: string): void {
+  emitServerEvent(socket, {
+    type: "conversation.item.created",
+    item: { type: "function_call_output", call_id: callId },
+  });
+}
+
+function expectedFunctionOutput(callId: string, result: unknown) {
+  return expect.objectContaining({
+    type: "conversation.item.create",
+    event_id: expect.stringMatching(/^openclaw-function-output-/),
+    item: {
+      type: "function_call_output",
+      call_id: callId,
+      output: JSON.stringify(result),
     },
   });
 }
@@ -1180,6 +1200,97 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
       Authorization: "Bearer sk-platform", // pragma: allowlist secret
     });
+  });
+
+  it("reserves GA Gateway control only with Platform auth and binds an attached sideband", async () => {
+    const createBrowserSession = vi.fn(
+      async (_request: unknown, _auth: unknown) =>
+        ({
+          provider: "openai",
+          transport: "webrtc" as const,
+          clientSecret: "gateway-token",
+          offerUrl: "/plugins/openai/realtime/calls",
+        }) as const,
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider({
+      quicksilverBrowserSessionBroker: {
+        capabilities: { handlesAgentConsult: true as const },
+        createBrowserSession,
+        cancelBrowserSession: vi.fn(async () => undefined),
+      },
+    });
+    const bindBridge = vi.fn();
+    const cfg = {} as never;
+
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
+        cfg,
+        providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
+        model: "gpt-realtime-2.1",
+      }),
+    ).toMatchObject({ supportsGatewayControl: true });
+    await expect(
+      provider.createBrowserSession?.({
+        cfg,
+        providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
+        model: "gpt-realtime-2.1",
+        tools: [createRealtimeTool("openclaw_agent_consult")],
+        gatewayControl: { bindBridge },
+      }),
+    ).resolves.toMatchObject({
+      clientSecret: "gateway-token",
+      offerUrl: "/plugins/openai/realtime/calls",
+    });
+    const brokerRequest = requireRecord(createBrowserSession.mock.calls[0]?.[0], "broker request");
+    expect(createBrowserSession.mock.calls[0]?.[1]).toEqual({
+      type: "api-key",
+      token: "sk-platform", // pragma: allowlist secret
+    });
+    const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
+    expect(gaSideband.session).toMatchObject({
+      type: "realtime",
+      model: "gpt-realtime-2.1",
+      tool_choice: "auto",
+    });
+    const createBridge = gaSideband.createBridge as (params: {
+      apiKey: string;
+      callId: string;
+      onTerminal: () => void;
+    }) => RealtimeVoiceBridge;
+    const bridge = createBridge({
+      apiKey: "sk-platform", // pragma: allowlist secret
+      callId: "rtc_gateway",
+      onTerminal: vi.fn(),
+    });
+    expect(bindBridge).toHaveBeenCalledWith(bridge);
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
+    openSocket(socket);
+    emitSessionUpdated(socket);
+    await connecting;
+    bridge.close();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("does not advertise GA Gateway control for OAuth-only browser auth", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes("oauth") === true,
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider({
+      quicksilverBrowserSessionBroker: {
+        capabilities: { handlesAgentConsult: true as const },
+        createBrowserSession: vi.fn(),
+        cancelBrowserSession: vi.fn(async () => undefined),
+      },
+    });
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
+        cfg: {},
+        providerConfig: {},
+        model: "gpt-realtime-2.1",
+      }),
+    ).not.toHaveProperty("supportsGatewayControl");
   });
 
   it("uses ChatGPT OAuth as the browser-only fallback for GA realtime", async () => {
@@ -2384,6 +2495,21 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
+  it("bounds sideband frames received before session readiness", async () => {
+    const bridge = createNativeBridge();
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    const frame = Buffer.from(
+      JSON.stringify({ type: "session.created", padding: "x".repeat(600 * 1024) }),
+    );
+
+    socket.emit("message", frame);
+    socket.emit("message", frame);
+
+    await expect(connecting).rejects.toThrow("sideband startup buffer exceeded");
+    expect(bridge.isConnected()).toBe(false);
+  });
+
   it("does not report startup timeout shutdown as a clean close", async () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
@@ -3494,31 +3620,25 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const socket = await connectReadyBridge(bridge);
     emitCompletedToolCalls(socket);
 
-    void bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    const working = bridge.submitToolResult(
+      "call_1",
+      { status: "working" },
+      { willContinue: true },
+    );
 
     expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ status: "working" }),
-        },
-      },
+      expectedFunctionOutput("call_1", { status: "working" }),
     ]);
     expect(hasSentEventType(socket, "response.create")).toBe(false);
+    acknowledgeFunctionOutput(socket, "call_1");
+    await working;
 
-    void bridge.submitToolResult("call_1", { text: "done" });
+    const done = bridge.submitToolResult("call_1", { text: "done" });
+    acknowledgeFunctionOutput(socket, "call_1");
+    await done;
 
     expect(parseSent(socket).slice(-3)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ text: "done" }),
-        },
-      },
+      expectedFunctionOutput("call_1", { text: "done" }),
       expect.objectContaining({ type: "session.update" }),
       expectedResponseCreateEvent(),
     ]);
@@ -3536,22 +3656,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const socket = await connectReadyBridge(bridge);
     emitCompletedToolCalls(socket);
 
-    void bridge.submitToolResult(
+    const submission = bridge.submitToolResult(
       "call_1",
       { status: "already_delivered" },
       { suppressResponse: true },
     );
 
     expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ status: "already_delivered" }),
-        },
-      },
+      expectedFunctionOutput("call_1", { status: "already_delivered" }),
     ]);
+    acknowledgeFunctionOutput(socket, "call_1");
+    await submission;
     expect(hasSentEventType(socket, "response.create")).toBe(false);
   });
 
@@ -3560,11 +3675,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const socket = await connectReadyBridge(bridge);
     emitCompletedToolCalls(socket, ["call_1", "call_2"]);
 
-    void bridge.submitToolResult("call_1", { text: "first" });
+    const first = bridge.submitToolResult("call_1", { text: "first" });
+    acknowledgeFunctionOutput(socket, "call_1");
+    await first;
 
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
 
-    void bridge.submitToolResult("call_2", { text: "second" });
+    const second = bridge.submitToolResult("call_2", { text: "second" });
+    acknowledgeFunctionOutput(socket, "call_2");
+    await second;
 
     expect(
       parseSent(socket).filter((event) => event.type === "conversation.item.create"),
@@ -3577,12 +3696,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const socket = await connectReadyBridge(bridge);
     emitCompletedToolCalls(socket, ["call_1", "call_2"]);
 
-    void bridge.submitToolResult("call_1", { text: "first" });
-    void bridge.submitToolResult(
+    const first = bridge.submitToolResult("call_1", { text: "first" });
+    const second = bridge.submitToolResult(
       "call_2",
       { status: "already_delivered" },
       { suppressResponse: true },
     );
+    acknowledgeFunctionOutput(socket, "call_1");
+    acknowledgeFunctionOutput(socket, "call_2");
+    await Promise.all([first, second]);
 
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
   });
@@ -3621,7 +3743,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     if (!staleWork.signal.aborted) {
       void bridge.submitToolResult("call_reused", { text: "stale" });
     }
-    void bridge.submitToolResult("call_reused", { text: "fresh" });
+    const fresh = bridge.submitToolResult("call_reused", { text: "fresh" });
+    acknowledgeFunctionOutput(reconnectedSocket, "call_reused");
+    await fresh;
 
     expect(onToolCall).toHaveBeenCalledTimes(2);
     expect(
@@ -3641,26 +3765,62 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const socket = await connectReadyBridge(bridge);
 
     emitCompletedToolCalls(socket);
-    void bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    const working = bridge.submitToolResult(
+      "call_1",
+      { status: "working" },
+      { willContinue: true },
+    );
+    acknowledgeFunctionOutput(socket, "call_1");
+    await working;
     bridge.sendUserMessage?.("queue after tool result");
 
     expect(onError).not.toHaveBeenCalled();
-    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_status" } })),
+    );
+    emitServerEvent(socket, {
+      type: "response.done",
+      response: { id: "resp_status", status: "completed", output: [] },
+    });
 
-    void bridge.submitToolResult("call_1", { text: "done" });
+    const done = bridge.submitToolResult("call_1", { text: "done" });
+    acknowledgeFunctionOutput(socket, "call_1");
+    await done;
 
     expect(parseSent(socket).slice(-3)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ text: "done" }),
-        },
-      },
+      expectedFunctionOutput("call_1", { text: "done" }),
       expect.objectContaining({ type: "session.update" }),
       expectedResponseCreateEvent(),
     ]);
+  });
+
+  it("serializes standalone control speech while an agent tool call is pending", async () => {
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket);
+
+    for (const text of ["status", "steer", "cancel"]) {
+      bridge.sendUserMessage?.(text);
+    }
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+
+    for (let index = 0; index < 3; index += 1) {
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({ type: "response.created", response: { id: `resp_control_${index}` } }),
+        ),
+      );
+      emitServerEvent(socket, {
+        type: "response.done",
+        response: { id: `resp_control_${index}`, status: "completed", output: [] },
+      });
+      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(
+        Math.min(index + 2, 3),
+      );
+    }
   });
 
   it("drains deferred response.create after response.cancelled", async () => {

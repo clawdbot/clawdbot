@@ -1,4 +1,4 @@
-// Shared process-wide cap for browser and Gateway-relay GPT-Live sessions.
+// Shared process-wide cap for OpenAI browser and Gateway-relay realtime sessions.
 const OPENAI_QUICKSILVER_MAX_SESSIONS = 8;
 const reservations = new Map<unknown, number | undefined>();
 
@@ -17,7 +17,7 @@ export function reserveOpenAIQuicksilverSession(
     return;
   }
   if (reservations.size >= OPENAI_QUICKSILVER_MAX_SESSIONS) {
-    throw new Error("Too many concurrent OpenAI GPT-Live sessions; try again in a minute");
+    throw new Error("Too many concurrent OpenAI realtime sessions; try again in a minute");
   }
   reservations.set(owner, opts?.expiresAtMs);
 }

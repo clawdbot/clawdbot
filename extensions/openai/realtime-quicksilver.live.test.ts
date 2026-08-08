@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
@@ -17,6 +18,7 @@ import {
   openAIQuicksilverAuthHeaders,
   type OpenAIQuicksilverAuth,
 } from "./realtime-quicksilver-wire.js";
+import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const LIVE_ENABLED =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_GPT_LIVE === "1";
@@ -201,6 +203,132 @@ describeLive("GPT-Live Platform WebSocket", () => {
         expect(bridge.isConnected()).toBe(true);
       } finally {
         bridge.close();
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
+  it(
+    "brokers audio-only SDP, attaches the Platform sideband, and completes one tool response",
+    async ({ skip }) => {
+      const apiKey = process.env.OPENAI_API_KEY?.trim();
+      if (!apiKey) {
+        skip("No OpenAI Platform API key is available");
+        return;
+      }
+      const realtime = createOpenAIQuicksilverBrowserSessionBroker({
+        getConfig: () => ({}),
+        logger: { debug: () => undefined, warn: () => undefined },
+      });
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: realtime.broker,
+      });
+      const server = createServer((req, res) => {
+        if (req.url === "/") {
+          res.statusCode = 200;
+          res.end("<!doctype html><title>OpenClaw GA sideband proof</title>");
+          return;
+        }
+        if (req.url === OPENAI_QUICKSILVER_OFFER_PATH) {
+          void realtime.handler(req, res);
+          return;
+        }
+        res.statusCode = 404;
+        res.end("Not found");
+      });
+      const baseUrl = await listen(server);
+      const { chromium } = await import("playwright");
+      const browser = await chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--use-fake-device-for-media-stream"],
+      });
+      const page = await browser.newPage();
+      let controlBridge: ReturnType<typeof provider.createBridge> | undefined;
+      let reservation:
+        | Awaited<ReturnType<NonNullable<typeof provider.createBrowserSession>>>
+        | undefined;
+      let resolveTool!: () => void;
+      let resolveResponse!: () => void;
+      let responseDoneCount = 0;
+      const toolObserved = new Promise<void>((resolve) => {
+        resolveTool = resolve;
+      });
+      const responseObserved = new Promise<void>((resolve) => {
+        resolveResponse = resolve;
+      });
+      try {
+        await page.goto(baseUrl);
+        reservation = await provider.createBrowserSession!({
+          providerConfig: { apiKey },
+          model: "gpt-realtime-2.1",
+          voice: "marin",
+          instructions:
+            "When the user asks for a check, call openclaw_agent_consult exactly once, then speak its result.",
+          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+          gatewayControl: {
+            bindBridge: (bridge) => {
+              controlBridge = bridge;
+            },
+            onToolCall: (event) => {
+              resolveTool();
+              void controlBridge?.submitToolResult(event.callId, {
+                result: "OpenClaw GA sideband live proof passed.",
+              });
+            },
+            onEvent: (event) => {
+              if (event.direction === "server" && event.type === "response.done") {
+                responseDoneCount += 1;
+                if (responseDoneCount >= 2) {
+                  resolveResponse();
+                }
+              }
+            },
+          },
+        });
+        if (reservation.transport !== "webrtc" || !reservation.offerUrl) {
+          throw new Error("GA Gateway control did not return a WebRTC broker reservation");
+        }
+        const offerSdp = await createBrowserOffer(page);
+        expect(offerSdp).not.toMatch(/^m=application /m);
+        const brokerResponse = await page.evaluate(
+          async ({ offerUrl, token, sdp }) => {
+            const response = await fetch(offerUrl, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/sdp" },
+              body: sdp,
+            });
+            return { status: response.status, answerSdp: await response.text() };
+          },
+          {
+            offerUrl: `${baseUrl}${reservation.offerUrl}`,
+            token: reservation.clientSecret,
+            sdp: offerSdp,
+          },
+        );
+        expect(brokerResponse.status).toBe(201);
+        await applyBrowserAnswer(page, brokerResponse.answerSdp);
+        controlBridge?.sendUserMessage?.("Please check this through OpenClaw.");
+        const timeout = new Promise<never>((_resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("GA sideband tool response timed out")),
+            30_000,
+          );
+          timer.unref?.();
+        });
+        await Promise.race([toolObserved, timeout]);
+        await Promise.race([responseObserved, timeout]);
+      } finally {
+        if (reservation) {
+          await Promise.resolve(realtime.broker.cancelBrowserSession(reservation)).catch(
+            () => undefined,
+          );
+        }
+        await closeBrowserPeer(page).catch(() => undefined);
+        await browser.close();
+        await realtime.cleanup();
+        await closeServer(server);
       }
     },
     LIVE_TIMEOUT_MS,

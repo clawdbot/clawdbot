@@ -80,6 +80,23 @@ use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
 
+## Gateway-controlled WebRTC Talk
+
+`talk.client.create` accepts the additive capability
+`gateway-control-v1`. It is currently available only for OpenAI GA Realtime
+sessions with resolvable Platform API-key authentication. A successful result
+includes `clientControl: { owner: "gateway" }`, a 60-second single-use Gateway
+broker token in `clientSecret`, and the relative
+`offerUrl: "/plugins/openai/realtime/calls"`.
+
+The client sends only `application/sdp` to that route with the broker token. It
+must not create a provider control data channel. The Gateway creates the call,
+attaches the provider sideband before returning the answer SDP, and owns tool,
+transcript, steering, cancellation, and close lifecycle. Clients that omit the
+capability retain the existing browser session behavior. A Gateway or
+configured authentication path that cannot provide the requested owner returns
+`UNAVAILABLE`; it never downgrades the request to client-owned control.
+
 ## Handshake
 
 Gateway sends a pre-connect challenge:
@@ -567,7 +584,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
     - `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
-    - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call.
+    - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call. Clients that negotiate `gateway-control-v1` keep WebRTC media direct but move the provider control channel and tool lifecycle to the Gateway.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
     - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.

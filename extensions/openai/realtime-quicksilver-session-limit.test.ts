@@ -32,7 +32,7 @@ describe("GPT-Live shared session limit", () => {
         reserveOpenAIQuicksilverSession(owner, { expiresAtMs: now + 1 });
       }
       expect(() => reserveOpenAIQuicksilverSession(owners[8])).toThrow(
-        "Too many concurrent OpenAI GPT-Live sessions",
+        "Too many concurrent OpenAI realtime sessions",
       );
     } finally {
       for (const owner of owners) {
@@ -53,7 +53,7 @@ describe("GPT-Live shared session limit", () => {
       }
       vi.mocked(Date.now).mockReturnValue(now + 60_000);
       expect(() => reserveOpenAIQuicksilverSession(owners[8])).toThrow(
-        "Too many concurrent OpenAI GPT-Live sessions",
+        "Too many concurrent OpenAI realtime sessions",
       );
     } finally {
       for (const owner of owners) {
@@ -70,7 +70,7 @@ describe("GPT-Live shared session limit", () => {
         reserveOpenAIQuicksilverSession(owner);
       }
       expect(() => reserveOpenAIQuicksilverSession(owners[8])).toThrow(
-        "Too many concurrent OpenAI GPT-Live sessions",
+        "Too many concurrent OpenAI realtime sessions",
       );
       releaseOpenAIQuicksilverSession(owners[0]);
       expect(() => reserveOpenAIQuicksilverSession(owners[8])).not.toThrow();
