@@ -111,8 +111,7 @@ describe("qqbot local media path remapping", () => {
     // attachments under sibling directories of `media/qqbot/`. The plugin must
     // trust the shared `~/.openclaw/media` root so auto-routed sends can access
     // those files without the path-outside-storage guard firing.
-    const actualHome = getHomeDir();
-    const outboundDir = path.join(actualHome, ".openclaw", "media", "outbound");
+    const outboundDir = path.join(getHomeDir(), ".openclaw", "media", "outbound");
     fs.mkdirSync(outboundDir, { recursive: true });
     const outboundFile = fs.mkdtempSync(path.join(outboundDir, "qqbot-outbound-"));
     const mediaFile = path.join(outboundFile, "tts.mp3");
@@ -238,6 +237,12 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
       vi.stubEnv("OPENCLAW_HOME", sentinel);
       expect(getQQBotMediaPath()).toBe(path.join(realOsHome, ".openclaw", "media", "qqbot"));
     }
+  });
+
+  it("does not use OPENCLAW_STATE_DIR for media path (honors OPENCLAW_HOME only)", () => {
+    const fakeStateDir = makeFakeOpenclawHome();
+    vi.stubEnv("OPENCLAW_STATE_DIR", fakeStateDir);
+    expect(getQQBotMediaPath()).toBe(path.join(realOsHome, ".openclaw", "media", "qqbot"));
   });
 
   it("keeps persisted QQ Bot data anchored on the OS home (compatibility)", () => {

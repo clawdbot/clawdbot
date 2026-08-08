@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
 import type { OpenClawConfig } from "../api.js";
 
@@ -226,11 +227,18 @@ function expandHomePath(inputPath: string, homedir: string): string {
 }
 
 function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki", "main");
+  return path.join(
+    resolveStateDir(process.env, () => homedir),
+    "wiki",
+    "main",
+  );
 }
 
 function resolveDefaultMemoryWikiVaultRoot(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki");
+  return path.join(
+    resolveStateDir(process.env, () => homedir),
+    "wiki",
+  );
 }
 
 export function resolveMemoryWikiConfig(

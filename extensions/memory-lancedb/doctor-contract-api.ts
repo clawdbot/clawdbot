@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
@@ -100,7 +101,7 @@ function resolveConfiguredDbPath(
   const pluginConfig = asRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
   const configured = typeof pluginConfig?.dbPath === "string" ? pluginConfig.dbPath.trim() : "";
   if (!configured) {
-    return path.join(resolveHome(env), ".openclaw", "memory", "lancedb");
+    return path.join(resolveStateDir(env), "memory", "lancedb");
   }
   if (configured.includes("://")) {
     return configured;

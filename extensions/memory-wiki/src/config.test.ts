@@ -5,6 +5,7 @@ import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import {
@@ -33,7 +34,13 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.vaultMode).toBe("isolated");
     expect(config.vault.scope).toBe("global");
     expect(config.vault.renderMode).toBe("native");
-    expect(config.vault.path).toBe(path.join("/Users/tester", ".openclaw", "wiki", "main"));
+    expect(config.vault.path).toBe(
+      path.join(
+        resolveStateDir(process.env, () => "/Users/tester"),
+        "wiki",
+        "main",
+      ),
+    );
     expect(config.search.backend).toBe("shared");
     expect(config.search.corpus).toBe("wiki");
     expect(config.context.includeCompiledDigestPrompt).toBe(false);
@@ -116,7 +123,10 @@ describe("resolveMemoryWikiConfig", () => {
       appConfig: { agents: { list: [{ id: "support", default: true }] } },
     });
 
-    const expectedRoot = path.join("/Users/tester", ".openclaw", "wiki");
+    const expectedRoot = path.join(
+      resolveStateDir(process.env, () => "/Users/tester"),
+      "wiki",
+    );
     expect(base.vault.path).toBe(expectedRoot);
     expect(resolved.vault.path).toBe(path.join(expectedRoot, "support"));
   });
