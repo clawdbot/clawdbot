@@ -45,6 +45,7 @@ const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
   handoffId: "handoff-1",
 }));
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
+const logGatewayInfoMock = vi.fn();
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
   validateUpdateRunParams: () => true,
@@ -176,6 +177,7 @@ beforeEach(() => {
   detectRespawnSupervisorMock.mockReturnValue(null);
   startManagedServiceUpdateHandoffMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockClear();
+  logGatewayInfoMock.mockClear();
 });
 
 function setDevCampaignSchedule(upstreamSha = "frozen-upstream-sha"): void {
@@ -217,7 +219,15 @@ async function invokeUpdateRun(): Promise<void> {
   )({
     params: {},
     respond: () => undefined,
-    context: { getRuntimeConfig: () => ({ update: {} }) as OpenClawConfig },
+    client: {
+      connId: "conn-1",
+      clientIp: "127.0.0.1",
+      connect: { client: { id: "control-ui" }, device: { id: "device-1" } },
+    },
+    context: {
+      getRuntimeConfig: () => ({ update: {} }) as OpenClawConfig,
+      logGateway: { info: logGatewayInfoMock },
+    },
   } as never);
 }
 
@@ -235,6 +245,10 @@ describe("update.run campaign ownership", () => {
 
     expect(runGatewayUpdateMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "beta", tag: "2.0.0" }),
+    );
+    expect(logGatewayInfoMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^update\.run adopted campaign campaign-1 actor=control-ui /),
+      { target: { kind: "package", version: "2.0.0" } },
     );
   });
 
@@ -329,6 +343,9 @@ describe("update.run campaign ownership", () => {
 
     expect(adoptCampaignMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).toHaveBeenCalledOnce();
+    expect(logGatewayInfoMock).toHaveBeenCalledWith("update.run failed; adopted campaign cleared", {
+      campaignId: "campaign-1",
+    });
   });
 
   it("does not clear a campaign that update.run did not adopt", async () => {
@@ -360,6 +377,10 @@ describe("update.run campaign ownership", () => {
 
     expect(getCampaignStateMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).not.toHaveBeenCalled();
+    expect(logGatewayInfoMock).not.toHaveBeenCalledWith(
+      "update.run failed; adopted campaign cleared",
+      expect.anything(),
+    );
   });
 
   it("keeps the adopted campaign while a successful update restarts", async () => {

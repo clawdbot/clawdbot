@@ -1137,11 +1137,12 @@ describe("update-startup", () => {
   it("resets a busy dev campaign and forces it at the deadline", async () => {
     mockDevGitStatus();
     let busy = 1;
+    const log = { info: vi.fn() };
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
+      log,
       isNixMode: false,
       allowInTests: true,
       activeWorkInspectors: {
@@ -1151,9 +1152,28 @@ describe("update-startup", () => {
       runAutoUpdate,
     });
     expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "waiting-for-idle" });
+    expect(log.info).toHaveBeenCalledWith(
+      "update campaign waiting-for-idle",
+      expect.objectContaining({
+        campaignId: expect.any(String),
+        state: "waiting-for-idle",
+        channel: "dev",
+        target: { upstreamSha: "upstream-sha", commitsBehind: 2 },
+        forceAtMs: expect.any(Number),
+      }),
+    );
     busy = 0;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "countdown" });
+    expect(log.info).toHaveBeenCalledWith(
+      "update campaign countdown",
+      expect.objectContaining({
+        campaignId: expect.any(String),
+        state: "countdown",
+        channel: "dev",
+        applyAtMs: expect.any(Number),
+      }),
+    );
     busy = 1;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "waiting-for-idle" });
@@ -1162,6 +1182,14 @@ describe("update-startup", () => {
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 50_000);
     expect(getUpdateSchedule()?.campaign?.state).toBe("applying");
     expect(runAutoUpdate).toHaveBeenCalledOnce();
+    expect(log.info).toHaveBeenCalledWith(
+      "auto-update applied",
+      expect.objectContaining({
+        channel: "dev",
+        version: "upstream-sha",
+        forced: true,
+      }),
+    );
   });
 
   it("supersedes and clears dev git campaigns from fresh git facts", async () => {
@@ -1451,10 +1479,19 @@ describe("update-startup", () => {
       skipCooldown: true,
       skipDeferral: true,
     });
+    expect(log.info).toHaveBeenCalledWith(
+      "update campaign waiting-for-idle",
+      expect.objectContaining({
+        campaignId: expect.any(String),
+        channel: "beta",
+        target: "2.0.0-beta.1",
+      }),
+    );
     expect(log.info).toHaveBeenCalledWith("auto-update handoff started", {
       channel: "beta",
       version: "2.0.0-beta.1",
       tag: "beta",
+      forced: false,
       command: "openclaw update --yes --channel beta --tag 2.0.0-beta.1 --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
     });
@@ -1484,8 +1521,16 @@ describe("update-startup", () => {
       channel: "beta",
       version: "2.0.0-beta.1",
       tag: "beta",
+      forced: false,
       reason: "Error: spawn ENOENT",
     });
+    expect(log.info).toHaveBeenCalledWith(
+      "update campaign ended",
+      expect.objectContaining({
+        campaignId: expect.any(String),
+        channel: "beta",
+      }),
+    );
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
   });
 
