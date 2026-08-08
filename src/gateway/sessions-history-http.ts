@@ -178,7 +178,7 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const limit = limitResult.value;
-  const cursor = getRequestUrl(req).searchParams.get("cursor")?.trim();
+  const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   if (cursor !== undefined && resolveCursorSeq(cursor) === undefined) {
     sendInvalidRequest(res, "cursor must be a positive integer");
     return true;
