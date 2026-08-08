@@ -34,7 +34,7 @@ import {
 } from "./workspace-result-staging.js";
 import {
   parseManifestRef,
-  parseRemoteWorkspaceDirectory,
+  parseRemoteWorkspaceSetup,
   probeWorkspaceGitMode,
   readTransferredManifest,
   resolveRemoteWorkspaceManifest,
@@ -67,9 +67,9 @@ const REMOTE_SETUP_TIMEOUT_MS = 20_000;
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
 const WORKSPACE_QUIESCENCE_TIMEOUT_MS = 12 * 60_000;
 const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 4 * 60_000;
-// Relative to the $HOME/.openclaw-worker root owned by REMOTE_WORKSPACE_SETUP_SCRIPT;
+// Relative to the canonical worker $HOME owned by REMOTE_WORKSPACE_SETUP_SCRIPT;
 // rsync targets must use the returned absolute directory, never this relative path.
-const REMOTE_WORKSPACE_ROOT = "workspaces";
+const REMOTE_WORKSPACE_ROOT = ".openclaw-worker/workspaces";
 const REMOTE_GIT_PACK_NAME = ".openclaw-base.pack";
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const INBOUND_RSYNC_BW_LIMIT_KIB = 65_536;
@@ -260,7 +260,10 @@ export function createWorkerWorkspaceActions(
     if (!success(setup)) {
       throw workspaceSyncError(setup);
     }
-    const remoteWorkspaceDir = parseRemoteWorkspaceDirectory(setup.stdout.trim());
+    const { canonicalHome, remoteWorkspaceDir } = parseRemoteWorkspaceSetup(
+      setup.stdout.trim(),
+      remoteRelative,
+    );
     // Result refs can make plain workspaces unborn repos; only committed repos use Git sync.
     const { mode, gitRoot, baseCommit } = await probeWorkspaceGitMode({
       localPath: request.localPath,
@@ -402,7 +405,14 @@ export function createWorkerWorkspaceActions(
                 const reset = await runTask(
                   workerWorkspaceSshArgv(
                     prepared,
-                    ["node", "-e", REMOTE_GIT_WORKSPACE_RETRY_RESET_JS, remoteWorkspaceDir],
+                    [
+                      "node",
+                      "-e",
+                      REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
+                      remoteWorkspaceDir,
+                      canonicalHome,
+                      remoteRelative,
+                    ],
                     port,
                   ),
                   commandOptions(),

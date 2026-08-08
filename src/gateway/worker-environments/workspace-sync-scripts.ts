@@ -65,7 +65,33 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIR
 const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
 const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
 const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
-const root = fs.realpathSync(process.argv[1]);
+const workspace = process.argv[1];
+const canonicalHome = process.argv[2];
+const remoteRelative = process.argv[3];
+const currentHome = process.env.HOME;
+if (
+  !currentHome ||
+  typeof workspace !== "string" ||
+  typeof canonicalHome !== "string" ||
+  typeof remoteRelative !== "string" ||
+  !path.posix.isAbsolute(canonicalHome) ||
+  path.posix.normalize(canonicalHome) !== canonicalHome ||
+  path.posix.isAbsolute(remoteRelative) ||
+  path.posix.normalize(remoteRelative) !== remoteRelative ||
+  path.posix.join(canonicalHome, remoteRelative) !== workspace ||
+  fs.realpathSync(currentHome) !== canonicalHome
+) {
+  throw new Error("worker workspace retry reset no longer matches its attested owner");
+}
+const workspaceStats = fs.lstatSync(workspace);
+if (
+  !workspaceStats.isDirectory() ||
+  workspaceStats.isSymbolicLink() ||
+  fs.realpathSync(workspace) !== workspace
+) {
+  throw new Error("worker workspace retry reset no longer matches its attested owner");
+}
+const root = workspace;
 function clean(directory, relativeDirectory) {
   const originalMode = fs.lstatSync(directory).mode & 0o7777;
   fs.chmodSync(directory, originalMode | 0o700);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import {
@@ -218,18 +219,33 @@ export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest
   }
 }
 
-export function parseRemoteWorkspaceDirectory(stdout: string): string {
-  const lines = stdout.split(/\r?\n/u).filter(Boolean);
-  const directory = lines.length === 1 ? lines[0] : undefined;
-  if (
-    !directory ||
-    !path.posix.isAbsolute(directory) ||
-    path.posix.normalize(directory) !== directory ||
-    directory === "/"
-  ) {
-    throw new Error("Worker workspace setup returned an invalid remote directory");
+export function parseRemoteWorkspaceSetup(
+  stdout: string,
+  remoteRelative: string,
+): { canonicalHome: string; remoteWorkspaceDir: string } {
+  let response: unknown;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    throw new Error("Worker workspace setup returned an invalid response");
   }
-  return directory;
+  const record = isRecord(response) ? response : undefined;
+  const canonicalHome = record?.canonicalHome;
+  const remoteWorkspaceDir = record?.canonicalWorkspace;
+  if (
+    record?.tag !== "openclaw-workspace-setup-v1" ||
+    typeof canonicalHome !== "string" ||
+    !path.posix.isAbsolute(canonicalHome) ||
+    path.posix.normalize(canonicalHome) !== canonicalHome ||
+    typeof remoteWorkspaceDir !== "string" ||
+    !path.posix.isAbsolute(remoteWorkspaceDir) ||
+    path.posix.normalize(remoteWorkspaceDir) !== remoteWorkspaceDir ||
+    remoteWorkspaceDir === "/" ||
+    remoteWorkspaceDir !== path.posix.join(canonicalHome, remoteRelative)
+  ) {
+    throw new Error("Worker workspace setup returned an invalid response");
+  }
+  return { canonicalHome, remoteWorkspaceDir };
 }
 
 export function parseManifestRef(stdout: string): string {
