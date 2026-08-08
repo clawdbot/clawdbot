@@ -41,14 +41,11 @@ vi.mock("../../agents/model-auth.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent.js", () => ({
+  runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
   compactEmbeddedAgentSession: vi.fn().mockResolvedValue({ compacted: false }),
   queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   abortEmbeddedAgentRun: (sessionId: string) => abortEmbeddedAgentRun(sessionId),
   isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActive(sessionId),
-}));
-
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: (params: unknown) => runEmbeddedAgentMock(params),
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({ runCliAgent: vi.fn() }));
@@ -228,7 +225,6 @@ describe("runReplyAgent :: finally does not claim queued delegates (I4)", () => 
         shouldSteer: false,
         shouldFollowup: false,
         isActive: false,
-        isStreaming: false,
         typing,
         sessionCtx,
         sessionEntry,
