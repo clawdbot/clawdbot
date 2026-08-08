@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { createDeferred } from "../shared/deferred.js";
-import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 import {
   cleanupMcpCliTestState,
   clearMcpOAuthCredentials,
@@ -19,6 +18,7 @@ import {
   setCreateSessionMcpRuntimeOverride,
   serveOpenClawChannelMcp,
 } from "./mcp-cli.test-harness.js";
+import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 
 describe("mcp cli", () => {
   beforeEach(() => {
