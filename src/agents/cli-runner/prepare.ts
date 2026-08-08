@@ -15,6 +15,7 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
+  bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
@@ -48,6 +49,7 @@ import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -177,6 +179,7 @@ const prepareDeps = {
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
   activateMcpLoopbackClientGrantCapture,
+  bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
@@ -422,6 +425,20 @@ export async function prepareCliRunContext(
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
+  const admitPreparedParams = async (
+    candidate: RunCliAgentParams,
+  ): Promise<
+    RunCliAgentParams & { admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]> }
+  > => {
+    const admittedRunContext = await resolvePreparedRunAdmission({
+      runId: candidate.runId,
+      runtimeKind: "embedded",
+      admittedRunContext: candidate.admittedRunContext,
+      preparedRunAdmission: candidate.preparedRunAdmission,
+    });
+    const { preparedRunAdmission: _preparedRunAdmission, ...rest } = candidate;
+    return { ...rest, admittedRunContext };
+  };
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
@@ -1080,9 +1097,25 @@ export async function prepareCliRunContext(
         ? prepareDeps.mintMcpLoopbackClientGrant({
             context: mcpGrantContext,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+            admittedRunContext: params.admittedRunContext,
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
+    const bindMcpClientGrantAdmission = (
+      admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]>,
+    ) => {
+      if (
+        mcpClientGrant &&
+        mcpLoopbackRuntime &&
+        !prepareDeps.bindMcpLoopbackClientGrantAdmission({
+          token: mcpClientGrant.token,
+          runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+          admittedRunContext,
+        })
+      ) {
+        throw new Error("CLI MCP client grant is no longer valid for this admitted run");
+      }
+    };
     const mcpClientGrantCapture =
       mcpClientGrant && mcpLoopbackRuntime
         ? {
@@ -1614,13 +1647,14 @@ export async function prepareCliRunContext(
     });
     const contextEngineConfig = params.config ?? getRuntimeConfig();
     if (isSideQuestion) {
-      const preparedParams: RunCliAgentParams = {
+      const preparedParams = await admitPreparedParams({
         ...params,
         config: contextEngineConfig,
         prompt: preparedPrompt,
         transcriptPrompt: finalizedTranscriptPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
-      };
+      });
+      bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
 
       return {
         params: preparedParams,
@@ -1706,13 +1740,14 @@ export async function prepareCliRunContext(
       config: contextEngineConfig,
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
-    const preparedParams: RunCliAgentParams = {
+    const preparedParams = await admitPreparedParams({
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
       transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
-    };
+    });
+    bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
 
     return {
       params: preparedParams,

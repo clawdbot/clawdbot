@@ -7,11 +7,13 @@
  */
 import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { normalizeCliModel } from "./cli-runner/helpers.js";
@@ -148,14 +150,21 @@ async function runCliIsolatedCompletion(params: {
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
       const sessionId = `isolated-completion-${Date.now()}`;
+      const config = params.request.config ?? getRuntimeConfig();
       const result = await runCliAgent({
+        preparedRunAdmission: prepareSystemAgentRunAdmission(
+          config,
+          sessionId,
+          params.agentId,
+          "isolated-completion",
+        ),
         sessionId,
         sessionFile: path.join(dir, "session.json"),
         workspaceDir: params.workspaceDir,
         cwd: dir,
         agentDir: params.agentDir,
         agentId: params.agentId,
-        config: params.request.config,
+        config,
         prompt: params.request.prompt,
         extraSystemPrompt: params.request.systemPrompt,
         timeoutMs: params.request.timeoutMs,

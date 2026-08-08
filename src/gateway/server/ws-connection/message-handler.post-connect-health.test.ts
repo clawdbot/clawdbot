@@ -1300,6 +1300,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
         }),
       },
     });
@@ -1354,6 +1355,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
         }),
       },
     });

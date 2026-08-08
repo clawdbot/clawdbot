@@ -5,7 +5,6 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
-import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -194,10 +193,9 @@ export type AgentCommandOpts = {
   /** Gateway already consumed this automatic recovery run's durable reservation. */
   mainRestartRecoveryAdmitted?: boolean;
   /** Private recovery correlation; public ingress callers cannot author identity evidence. */
-  executionIdentityAdmission?: {
-    token: ExecutionIdentityAdmissionToken;
-    retryOnly: boolean;
-  };
+  executionIdentityAdmission?: ReturnType<
+    (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
+  >;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */

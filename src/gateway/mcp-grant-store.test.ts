@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import {
   activateMcpLoopbackClientGrantCapture,
+  bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
@@ -200,6 +202,52 @@ describe("mcp-grant-store", () => {
       }),
     ).toBe(true);
     expect(resolve("runtime-one", "capture-b")).toBeUndefined();
+  });
+
+  it("retains the exact admitted host context outside child-visible grant data", () => {
+    const admittedRunContext = createTestAdmittedRunContext("run-1");
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:first", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-one",
+      admittedRunContext,
+    });
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: "runtime-one",
+      captureKey: "capture-a",
+    });
+
+    const resolved = resolveMcpLoopbackClientGrant({
+      token: grant.token,
+      runtimeOwnerToken: "runtime-one",
+      captureKey: "capture-a",
+    });
+    expect(resolved?.admittedRunContext).toBe(admittedRunContext);
+    expect(grant.context).not.toHaveProperty("admittedRunContext");
+  });
+
+  it("binds one exact late admission and rejects replacement authority", () => {
+    const first = createTestAdmittedRunContext("run-1");
+    const replacement = createTestAdmittedRunContext("run-1");
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:first", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-one",
+    });
+
+    expect(
+      bindMcpLoopbackClientGrantAdmission({
+        token: grant.token,
+        runtimeOwnerToken: "runtime-one",
+        admittedRunContext: first,
+      }),
+    ).toBe(true);
+    expect(
+      bindMcpLoopbackClientGrantAdmission({
+        token: grant.token,
+        runtimeOwnerToken: "runtime-one",
+        admittedRunContext: replacement,
+      }),
+    ).toBe(false);
   });
 
   it("revokes client grants by token or exact Gateway runtime", () => {

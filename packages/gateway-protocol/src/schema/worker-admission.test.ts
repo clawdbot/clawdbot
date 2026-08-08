@@ -354,6 +354,7 @@ describe("worker protocol schemas", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
     expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-execution-context-v1");
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),

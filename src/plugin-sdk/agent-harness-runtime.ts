@@ -111,8 +111,13 @@ export type {
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
 export type EmbeddedRunAttemptParams = Omit<
   CoreEmbeddedRunAttemptParams,
-  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
->;
+  | "admittedRunContext"
+  | "contextEngineLogicalTurnLease"
+  | "onContextEngineTurnCandidate"
+  | "trajectoryRecorder"
+> & {
+  hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
 export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,

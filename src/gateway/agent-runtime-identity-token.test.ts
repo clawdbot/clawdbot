@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -10,6 +11,12 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 const tempHomes: string[] = [];
+
+function operationalRun(runId = "run-1") {
+  return {
+    operationalRunInstance: { instanceId: `instance-${runId}`, runId },
+  } as const;
+}
 
 function useTempHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-runtime-"));
@@ -53,6 +60,7 @@ describe("agent runtime identity token", () => {
     const token = await firstProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
     });
 
     const persistedToken = readExecApprovals().socket?.token;
@@ -64,23 +72,52 @@ describe("agent runtime identity token", () => {
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
+      operationalRunInstance: operationalRun().operationalRunInstance,
     });
   });
 
-  it("round-trips the authenticated turn-source account", async () => {
+  it("round-trips the authenticated plugin owner and turn-source route", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
+      approvalOwnerPluginId: " codex ",
+      turnSourceChannel: " telegram ",
+      turnSourceTo: " chat-1 ",
       turnSourceAccountId: " Work ",
+      turnSourceThreadId: " thread-1 ",
     });
 
     await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
+      operationalRunInstance: operationalRun().operationalRunInstance,
+      approvalOwnerPluginId: "codex",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "chat-1",
       turnSourceAccountId: "work",
+      turnSourceThreadId: "thread-1",
+    });
+  });
+
+  it("omits execution identity from a different operational run", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      ...operationalRun("run-1"),
+      executionIdentityToken: createExecutionIdentityAdmissionToken("run-other"),
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "session-1",
+      operationalRunInstance: operationalRun("run-1").operationalRunInstance,
     });
   });
 
@@ -90,6 +127,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
+      ...operationalRun(),
       sessionSpawnContext: {
         completionOwnerSessionKey: " agent:main:discord:direct:alice ",
         inheritedToolPolicy: {
@@ -122,6 +160,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "ops",
       sessionKey: "agent:ops:cron:job-1:run:run-1",
+      ...operationalRun(),
       cronSelfManagementJobId: " job-1 ",
     });
 
@@ -129,6 +168,7 @@ describe("agent runtime identity token", () => {
       kind: "agentRuntime",
       agentId: "ops",
       sessionKey: "agent:ops:cron:job-1:run:run-1",
+      operationalRunInstance: operationalRun().operationalRunInstance,
       cronSelfManagementContext: { jobId: "job-1", expiresAtMs: 61_000 },
     });
     await expect(
@@ -194,6 +234,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
     });
 
     await expect(
@@ -207,6 +248,7 @@ describe("agent runtime identity token", () => {
     const token = await firstProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
     });
     expect(readExecApprovals().socket?.token).toEqual(expect.any(String));
 
@@ -215,6 +257,7 @@ describe("agent runtime identity token", () => {
     const secondToken = await secondProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
     });
 
     expect(secondToken).not.toBe(token);
@@ -227,6 +270,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
       messageActionContext: {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
@@ -248,6 +292,7 @@ describe("agent runtime identity token", () => {
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
       messageActionContext: {
         expiresAtMs: 5000,
         sourceReplyFinal: true,
@@ -276,6 +321,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
       messageActionContext: { expiresAtMs: Number.MAX_SAFE_INTEGER },
     });
 
@@ -297,6 +343,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
     });
     let verifications: Array<ReturnType<typeof runtimeToken.verifyAgentRuntimeIdentityToken>> = [];
 
@@ -316,6 +363,7 @@ describe("agent runtime identity token", () => {
         kind: "agentRuntime",
         agentId: "main",
         sessionKey: "session-1",
+        operationalRunInstance: operationalRun().operationalRunInstance,
       })),
     );
   });
@@ -327,6 +375,7 @@ describe("agent runtime identity token", () => {
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
+      ...operationalRun(),
       messageActionContext: { expiresAtMs: 5000 },
     });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);

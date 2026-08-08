@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { isStrictAgenticSupportedProviderModel } from "../execution-contract.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -159,7 +160,7 @@ export function resetRunIncompleteTurnOwnerMocks(): void {
   mockedSleepWithAbort.mockResolvedValue(undefined);
 }
 
-type OwnerHarnessParams = RunEmbeddedAgentParams & {
+type OwnerHarnessParams = Omit<RunEmbeddedAgentParams, "admittedRunContext"> & {
   authProfileStateMode?: "read-write" | "read-only";
 };
 
@@ -187,7 +188,13 @@ function terminalLifecycleSetter(
  * Exercises the production incomplete-turn owners without importing the full
  * runner, plugin registry, session store, or prepared-runtime graph.
  */
-export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) {
+export async function runIncompleteTurnOwnerHarness(inputParams: OwnerHarnessParams) {
+  const params: RunEmbeddedAgentParams & {
+    authProfileStateMode?: "read-write" | "read-only";
+  } = {
+    ...inputParams,
+    admittedRunContext: createTestAdmittedRunContext(inputParams.runId),
+  };
   const usageAccumulator = createUsageAccumulator();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const retryState = createEmbeddedRunTerminalRetryState();

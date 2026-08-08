@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -819,6 +820,12 @@ async function probeTarget(params: {
     }
     const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedAgent({
+      preparedRunAdmission: prepareSystemAgentRunAdmission(
+        probeConfig,
+        runId,
+        agentId,
+        "models.auth-probe",
+      ),
       sessionId: sessionTarget.sessionId,
       sessionKey: sessionTarget.sessionKey,
       sessionTarget,

@@ -22,6 +22,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -33,6 +34,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type SubscribeEmbeddedAgentSessionFn =
   typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession;
@@ -1367,9 +1369,7 @@ export async function createContextEngineAttemptRunner(params: {
     process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
   try {
-    return await (
-      await loadRunEmbeddedAttempt()
-    )({
+    const attempt: Omit<EmbeddedRunAttemptParams, "admittedRunContext"> = {
       sessionId: "embedded-session",
       sessionKey: params.sessionKey,
       sessionFile: params.sessionKey,
@@ -1418,6 +1418,12 @@ export async function createContextEngineAttemptRunner(params: {
         },
       },
       ...params.attemptOverrides,
+    };
+    return await (
+      await loadRunEmbeddedAttempt()
+    )({
+      ...attempt,
+      admittedRunContext: createTestAdmittedRunContext(attempt.runId),
     });
   } finally {
     if (previousTrajectoryEnv === undefined) {

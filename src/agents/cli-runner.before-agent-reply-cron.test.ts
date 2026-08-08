@@ -13,6 +13,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -112,7 +113,11 @@ const baseRunParams = {
   runId: "test-run-id",
 } as const;
 
-let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
+type ProductionRunCliAgent = typeof import("./cli-runner.js").runCliAgent;
+type TestRunCliAgent = (
+  params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunCliAgent>;
+let runCliAgent: TestRunCliAgent;
 let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
 let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
 
@@ -187,8 +192,9 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
-  ({ runCliAgent, restoreCliRunnerTestDeps, setCliRunnerTestDeps } =
-    await import("./cli-runner.js"));
+  const cliRunner = await import("./cli-runner.js");
+  runCliAgent = wrapRunWithTestAdmission(cliRunner.runCliAgent);
+  ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
 });
 
 afterEach(() => {

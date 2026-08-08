@@ -235,7 +235,14 @@ export async function createCopilotToolBridge(
 
   let sourceTools: unknown;
   try {
-    sourceTools = await createOpenClawCodingTools(toolOptions);
+    const constructedTools = await createOpenClawCodingTools(toolOptions);
+    const hostCapabilities = input.attemptParams?.hostCapabilities;
+    if (input.attemptParams && !hostCapabilities) {
+      throw new Error("Copilot attempt tools require host-bound capabilities.");
+    }
+    sourceTools = hostCapabilities
+      ? hostCapabilities.bindToolSurface(constructedTools)
+      : constructedTools;
   } catch (error: unknown) {
     throw createError(
       `[copilot-tool-bridge] createOpenClawCodingTools failed: ${toError(error).message}`,

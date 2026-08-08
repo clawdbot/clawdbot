@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -543,6 +545,8 @@ async function runSkillExperienceReviewInner(
   }
 
   const sessionId = randomUUID();
+  const runId = `skill-workshop-review:${randomUUID()}`;
+  const config = candidate.config ?? getRuntimeConfig();
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
     remaining: 1,
     readSkillHashes: new Map(),
@@ -550,13 +554,19 @@ async function runSkillExperienceReviewInner(
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
   const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
-    config: candidate.config,
+    config,
     agentId: candidate.ctx.agentId,
   }).map((skill) =>
     skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
   );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
+    preparedRunAdmission: prepareSystemAgentRunAdmission(
+      config,
+      runId,
+      candidate.ctx.agentId ?? "main",
+      "skill-workshop.experience",
+    ),
     sessionId,
     sessionKey: reviewSessionKey,
     sandboxSessionKey: sessionKey,
@@ -582,7 +592,7 @@ async function runSkillExperienceReviewInner(
     agentHarnessId: "openclaw",
     agentHarnessRuntimeOverride: "openclaw",
     workspaceDir,
-    ...(candidate.config ? { config: candidate.config } : {}),
+    config,
     prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
     provider: modelProviderId,
     model: modelId,
@@ -592,7 +602,7 @@ async function runSkillExperienceReviewInner(
       ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
       : {}),
     timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
-    runId: `skill-workshop-review:${randomUUID()}`,
+    runId,
     toolsAllow: ["skill_workshop"],
     disableMessageTool: true,
     disableTrajectory: true,

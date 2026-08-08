@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
   return mock.mock.calls.at(index);
@@ -32,6 +33,32 @@ function gatewayToolArg(index = 0, argIndex = 0) {
 }
 
 function createParams(): EmbeddedRunAttemptParams {
+  const hostCapabilities: AgentHarnessHostCapabilities = {
+    kind: "agent-harness-host-capability",
+    version: 1,
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async ({ params }) => ({ blocked: false, params }),
+    requestApproval: async (request) =>
+      (await callGatewayTool(
+        "plugin.approval.request",
+        { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+        {
+          pluginId: "openclaw-codex-app-server",
+          ...request,
+          timeoutMs: request.timeoutMs,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      )) as Awaited<ReturnType<AgentHarnessHostCapabilities["requestApproval"]>>,
+    waitForApproval: async (request) => {
+      const result = (await callGatewayTool(
+        "plugin.approval.waitDecision",
+        { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+        { id: request.approvalId },
+      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
+      return result?.id === request.approvalId ? result.decision : undefined;
+    },
+  };
   return {
     sessionKey: "agent:main:session-1",
     agentId: "main",
@@ -39,6 +66,7 @@ function createParams(): EmbeddedRunAttemptParams {
     currentChannelId: "chat-1",
     agentAccountId: "default",
     currentThreadTs: "thread-ts",
+    hostCapabilities,
   } as unknown as EmbeddedRunAttemptParams;
 }
 

@@ -1311,7 +1311,7 @@ describe("main-session-restart-recovery", () => {
     },
   );
 
-  it("retains one stable transcript-only claim across ambiguous dispatch rejection", async () => {
+  it("keeps ambiguous pre-admission recovery identity unbound", async () => {
     const { sessionsDir, storePath } = await makeMainSessionFixture({
       restartRecoveryDeliveryRunId: "control-ui-run",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
@@ -1336,14 +1336,7 @@ describe("main-session-restart-recovery", () => {
       status: "running",
     });
     expect(pending?.mainRestartRecovery?.reservation).toBeUndefined();
-    const executionIdentity = pending?.mainRestartRecovery?.executionIdentity;
-    expect(executionIdentity).toMatchObject({
-      tokenVersion: 1,
-      contextId: expect.any(String),
-      executionId: expect.any(String),
-      runId: firstRecoveryRunId,
-      createdAt: expect.any(Number),
-    });
+    expect(pending?.mainRestartRecovery?.executionIdentity).toBeUndefined();
     const firstRequest = vi.mocked(callGateway).mock.calls[0]?.[0];
     expect(firstRequest).toBeDefined();
     expect((firstRequest!.params as Record<string, unknown>).internalExecutionIdentityRetry).toBe(
@@ -1363,7 +1356,7 @@ describe("main-session-restart-recovery", () => {
     const recovered = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(recovered).toMatchObject({
       abortedLastRun: false,
-      mainRestartRecovery: { chargedAttempts: 2, executionIdentity },
+      mainRestartRecovery: { chargedAttempts: 2 },
       restartRecoveryDeliveryRunId: firstRecoveryRunId,
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       status: "running",
@@ -1378,7 +1371,7 @@ describe("main-session-restart-recovery", () => {
     ).toBe(true);
   });
 
-  it("does not propagate a retained recovery token after collection is disabled", async () => {
+  it("does not manufacture recovery identity before collection is disabled", async () => {
     const { sessionsDir, storePath } = await makeMainSessionFixture({
       restartRecoveryDeliveryRunId: "control-ui-run",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
@@ -1389,7 +1382,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, executionIdentityEnabledConfig);
     const retained = loadSessionEntry({ sessionKey: "agent:main:main", storePath })
       ?.mainRestartRecovery?.executionIdentity;
-    expect(retained).toBeDefined();
+    expect(retained).toBeUndefined();
 
     await expectRecovery(
       { recovered: 1, failed: 0, skipped: 0 },
@@ -1405,7 +1398,7 @@ describe("main-session-restart-recovery", () => {
     expect(
       loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
         ?.executionIdentity,
-    ).toEqual(retained);
+    ).toBeUndefined();
   });
 
   it("retries reservation cleanup after a transient session-store failure", async () => {

@@ -1,4 +1,5 @@
 import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -90,7 +91,10 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
-    protocolFeatures: [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
+    protocolFeatures: [
+      WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+    ],
   };
   const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",

@@ -16,6 +16,10 @@ import {
   formatAcpRuntimeErrorText,
   toAcpRuntimeError,
 } from "../../acp/runtime/errors.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -779,7 +783,17 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     turnDispatched = true;
+    const admittedRunContext = await prepareAgentRunAdmission({
+      cfg: params.cfg,
+      operationalRunInstance: createOperationalRunInstanceRef(requestId),
+      facts: {
+        runId: requestId,
+        agentId: acpAgentId,
+        ingress: { kind: "acp", boundary: "auto-reply.acp", state: "present" },
+      },
+    }).admit("acp");
     await acpManager.runTurn({
+      admittedRunContext,
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
       provenance: classifySessionStateActor({

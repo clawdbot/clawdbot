@@ -18,9 +18,31 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCopilotToolBridge } from "./tool-bridge.js";
+import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
 
-type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
+type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridgeImpl>[0];
+const testHostCapabilities = {
+  kind: "agent-harness-host-capability" as const,
+  version: 1 as const,
+  bindToolSurface: <T>(tools: T) => tools,
+  runBeforeToolCall: async ({ params }: { params: Record<string, unknown> }) => ({
+    blocked: false as const,
+    params,
+  }),
+  requestApproval: async () => undefined,
+  waitForApproval: async () => undefined,
+} as NonNullable<NonNullable<CopilotToolBridgeInput["attemptParams"]>["hostCapabilities"]>;
+
+function createCopilotToolBridge(input: CopilotToolBridgeInput) {
+  const preparedInput =
+    input.attemptParams && !input.attemptParams.hostCapabilities
+      ? {
+          ...input,
+          attemptParams: { ...input.attemptParams, hostCapabilities: testHostCapabilities },
+        }
+      : input;
+  return createCopilotToolBridgeImpl(preparedInput);
+}
 type ConvertToolOptions = Pick<
   CopilotToolBridgeInput,
   "abortSignal" | "beforeExecute" | "onToolCompleted"

@@ -4,6 +4,7 @@ import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import {
@@ -97,6 +98,7 @@ describe("assertSupportedTurn", () => {
   it("accepts scheduled authority for the worker launch envelope", () => {
     expect(
       assertSupportedTurn({
+        admittedRunContext: createTestAdmittedRunContext("run-1"),
         sessionId: "session-1",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",

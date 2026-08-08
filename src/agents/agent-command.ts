@@ -22,7 +22,11 @@ import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js"
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
-import { executionIdentity } from "./agent-command-execution-identity.js";
+import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import {
+  bindAgentCommandRecoveryExecutionIdentity,
+  executionIdentity,
+} from "./agent-command-execution-identity.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
@@ -57,7 +61,7 @@ import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
-type AgentCommandAdmissionIngress = Parameters<typeof executionIdentity.record>[0]["ingress"];
+type AgentCommandAdmissionIngress = Parameters<typeof executionIdentity.prepare>[0]["ingress"];
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -223,13 +227,36 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
-      executionIdentity.record({
+      const preparedRunAdmission = executionIdentity.prepare({
         admission: opts.executionIdentityAdmission,
         agentId: sessionAgentId,
         cfg,
         ingress: admissionIngress,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
         runId,
-        runtimeKind: !isRawModelRun && acpResolution?.kind === "ready" ? "acp" : "embedded",
+        onAdmitted: async (admittedRunContext) => {
+          if (
+            opts.mainRestartRecoveryAdmitted !== true ||
+            !opts.mainRestartRecoveryOwnerLease ||
+            !admittedRunContext.executionIdentityToken ||
+            !sessionKey ||
+            !storePath
+          ) {
+            return;
+          }
+          const bindingFailure = await bindAgentCommandRecoveryExecutionIdentity({
+            cycleId: opts.mainRestartRecoveryOwnerLease.cycleId,
+            lifecycleGeneration,
+            runId,
+            sessionId,
+            sessionKey,
+            storePath,
+            token: admittedRunContext.executionIdentityToken,
+          });
+          if (bindingFailure) {
+            log.warn(`failed to bind restart recovery execution identity: ${bindingFailure}`);
+          }
+        },
       });
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         try {
@@ -417,6 +444,7 @@ async function agentCommandInternal(
           acpManager,
           acpResolution,
           trackInternalModelRunTarget,
+          preparedRunAdmission,
         });
       }
 
@@ -491,6 +519,7 @@ async function agentCommandInternal(
         modelSelection,
         embeddedSessionState,
         trackInternalModelRunTarget,
+        preparedRunAdmission,
       });
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();

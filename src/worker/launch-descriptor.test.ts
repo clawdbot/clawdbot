@@ -25,6 +25,8 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       },
     },
     assignment: {
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
       turnId: "turn-1",
       prompt: "Inspect the workspace.",
@@ -69,6 +71,13 @@ describe("worker launch descriptor", () => {
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, unexpected: true },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "other-run" },
+        },
       },
       {
         ...descriptor,

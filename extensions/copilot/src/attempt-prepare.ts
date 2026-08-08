@@ -108,11 +108,14 @@ export async function resolveCopilotAttemptSandbox(params: {
   sandboxSessionKey: string | undefined;
 }): Promise<{ sandbox: SandboxContext | null; effectiveWorkspaceDir: string }> {
   const resolveSandbox = params.deps.resolveSandboxContextOverride ?? defaultResolveSandboxContext;
-  const sandbox = await resolveSandbox({
-    config: params.input.config,
-    sessionKey: params.sandboxSessionKey,
-    workspaceDir: params.resolvedWorkspaceForSandbox,
-  });
+  const sandbox =
+    params.input.sandbox !== undefined
+      ? params.input.sandbox
+      : await resolveSandbox({
+          config: params.input.config,
+          sessionKey: params.sandboxSessionKey,
+          workspaceDir: params.resolvedWorkspaceForSandbox,
+        });
   const effectiveWorkspaceDir = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? params.resolvedWorkspaceForSandbox

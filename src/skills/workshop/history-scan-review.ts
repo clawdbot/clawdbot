@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -63,6 +64,12 @@ export async function runSkillHistoryScanReview(params: {
     const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:incognito-${sessionId}`;
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
+      preparedRunAdmission: prepareSystemAgentRunAdmission(
+        params.config,
+        runId,
+        params.agentId,
+        "skill-workshop.history-scan",
+      ),
       sessionId,
       sessionKey,
       sandboxSessionKey: sessionKey,

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -16,10 +17,18 @@ import {
   clearCliSessionBindingForRun,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
-  runCliAgentWithLifecycle,
+  runCliAgentWithLifecycle as runCliAgentWithLifecycleProduction,
 } from "./agent-runner-cli-dispatch.js";
 
-type RunCliAgentWithLifecycleParams = Parameters<typeof runCliAgentWithLifecycle>[0];
+type ProductionLifecycleParams = Parameters<typeof runCliAgentWithLifecycleProduction>[0];
+type RunCliAgentWithLifecycleParams = Omit<ProductionLifecycleParams, "runParams"> & {
+  runParams: Omit<ProductionLifecycleParams["runParams"], "admittedRunContext">;
+};
+const runCliAgentWithLifecycle = (params: RunCliAgentWithLifecycleParams) =>
+  runCliAgentWithLifecycleProduction({
+    ...params,
+    runParams: withTestAdmittedRunContext(params.runParams),
+  });
 type ReasoningTextPayload = Parameters<
   NonNullable<RunCliAgentWithLifecycleParams["onReasoningText"]>
 >[0];

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import type {
   LocalTurnPlacementClaim,
@@ -14,6 +15,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
+import { mintAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -203,6 +206,11 @@ async function executeWorkerTurn(params: {
   ) {
     throw new Error("Active worker placement does not match its attached environment");
   }
+  if (!supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)) {
+    throw new Error(
+      "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
+    );
+  }
   let manifestAccepted = false;
   let workspaceConflict:
     | { paths: string[]; stagedResultRef: string; totalCount: number; summary: string }
@@ -320,6 +328,20 @@ async function executeWorkerTurn(params: {
     modelRef,
     turn,
   });
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: turn.runId,
+    runtimeKind: "worker",
+    runtimeInstanceId: placement.environmentId,
+    admittedRunContext: turn.admittedRunContext,
+    preparedRunAdmission: turn.preparedRunAdmission,
+  });
+  const workerSessionKey = `worker:${placement.sessionId}`;
+  const agentRuntimeIdentityToken = await mintAgentRuntimeIdentityToken({
+    agentId: turn.agentId ?? "main",
+    sessionKey: workerSessionKey,
+    operationalRunInstance: admittedRunContext.operationalRunInstance,
+    executionIdentityToken: admittedRunContext.executionIdentityToken,
+  });
   const launchPlan = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
@@ -334,6 +356,8 @@ async function executeWorkerTurn(params: {
           handshake: environment.bootstrapReceipt,
         },
         assignment: {
+          operationalRunInstance: admittedRunContext.operationalRunInstance,
+          agentRuntimeIdentityToken,
           runId: turn.runId,
           turnId: randomUUID(),
           prompt: turn.prompt,

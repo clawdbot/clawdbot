@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import type {
@@ -98,6 +99,7 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   resolverKind?: OperatorApprovalResolver["kind"] | null;
   consumedAtMs?: number | null;
   consumedBy?: string | null;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
 type OperatorApprovalPersistenceRuntime = {
@@ -323,6 +325,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
           runtimeEpoch: persistence.runtimeEpoch,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
+          ...(record.executionIdentityToken
+            ? { executionIdentityToken: record.executionIdentityToken }
+            : {}),
         },
         databaseOptions: persistence.databaseOptions,
       });

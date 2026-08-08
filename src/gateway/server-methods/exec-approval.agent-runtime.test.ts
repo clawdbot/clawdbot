@@ -1,0 +1,146 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../../state/openclaw-state-db.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createChatRunState } from "../server-chat-state.js";
+import { createExecApprovalHandlers } from "./exec-approval.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const tempDirs: string[] = [];
+
+function databaseOptions(): OpenClawStateDatabaseOptions {
+  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "exec-approval-id-")));
+  tempDirs.push(stateDir);
+  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+}
+
+function identity(enabled: boolean): AgentRuntimeIdentity {
+  return {
+    kind: "agentRuntime",
+    agentId: "main",
+    sessionKey: "agent:main:session-1",
+    operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+    turnSourceChannel: "telegram",
+    turnSourceTo: "chat-1",
+    turnSourceAccountId: "default",
+    turnSourceThreadId: "thread-1",
+    ...(enabled
+      ? {
+          executionIdentity: {
+            tokenVersion: 1,
+            createdAt: 1,
+            runId: "run-1",
+            contextId: "context-1",
+            executionId: "execution-1",
+          },
+        }
+      : {}),
+  };
+}
+
+function requestOptions(runtimeIdentity: AgentRuntimeIdentity): GatewayRequestHandlerOptions {
+  const request = {
+    command: "echo ok",
+    cwd: "/tmp",
+    agentId: "forged-agent",
+    sessionKey: "forged-session",
+    sessionId: "forged-session-id",
+    runId: "forged-run",
+    turnSourceChannel: "forged-channel",
+    turnSourceTo: "forged-target",
+    turnSourceAccountId: "forged-account",
+    turnSourceThreadId: "forged-thread",
+    timeoutMs: 2_000,
+    twoPhase: true,
+  };
+  return {
+    req: { method: "exec.approval.request", params: request, id: "req-1" },
+    params: request,
+    client: {
+      connId: "conn-agent-runtime",
+      connect: { client: { id: "test-client", displayName: "Test Client" } },
+      internal: { agentRuntimeIdentity: runtimeIdentity },
+    },
+    isWebchatConnect: () => false,
+    respond: vi.fn(),
+    context: {
+      broadcast: vi.fn(),
+      getRuntimeConfig: () => ({}),
+      hasExecApprovalClients: () => true,
+      chatRunState: createChatRunState(),
+      logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+    },
+  } as unknown as GatewayRequestHandlerOptions;
+}
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("exec approval signed agent runtime", () => {
+  it.each([
+    ["enabled", true],
+    ["disabled", false],
+  ] as const)("uses signed runtime provenance with collection %s", async (_label, enabled) => {
+    const options = databaseOptions();
+    const manager = new ExecApprovalManager({
+      approvalKind: "exec",
+      persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
+    });
+    const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
+    if (!handler) {
+      throw new Error("exec approval request handler is unavailable");
+    }
+    const opts = requestOptions(identity(enabled));
+
+    const pending = handler(opts);
+    await vi.waitFor(() => expect(opts.context.broadcast).toHaveBeenCalled());
+    const approvalId = String(
+      (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id,
+    );
+    expect(manager.getSnapshot(approvalId)?.request).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:session-1",
+      sessionId: null,
+      runId: "run-1",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "chat-1",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "thread-1",
+    });
+    const db = openOpenClawStateDatabase(options).db;
+    if (enabled) {
+      expect(
+        db
+          .prepare(
+            "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
+          )
+          .get(approvalId),
+      ).toEqual({
+        approval_id: approvalId,
+        source_context_id: "context-1",
+        source_execution_id: "execution-1",
+      });
+    } else {
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approval_execution_identities'",
+          )
+          .get(),
+      ).toBeUndefined();
+    }
+    manager.resolve(approvalId, "deny");
+    await pending;
+  });
+});

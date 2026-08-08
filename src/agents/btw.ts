@@ -21,6 +21,7 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -36,6 +37,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import {
   resolveAvailableAgentHarnessPolicy,
@@ -87,6 +89,7 @@ import {
   scopeAuthProfileStoreToPreparedPlan,
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
@@ -647,7 +650,14 @@ async function runCliBtwSideQuestion(params: {
     cfg: params.cfg,
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
   });
+  const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
   const prepared = await prepareCliRunContext({
+    preparedRunAdmission: prepareSystemAgentRunAdmission(
+      params.cfg,
+      runId,
+      params.sessionAgentId,
+      "btw.side-question",
+    ),
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
@@ -669,7 +679,7 @@ async function runCliBtwSideQuestion(params: {
     disableTools: true,
     timeoutMs,
     runTimeoutOverrideMs: timeoutMs,
-    runId: params.opts?.runId ?? `btw-${randomUUID()}`,
+    runId,
     authProfileId: params.authProfileId,
     abortSignal: params.opts?.abortSignal,
     messageChannel: params.messageChannel,
@@ -964,8 +974,40 @@ export async function runBtwSideQuestion(
       runtimeAuthPlan.modelRoute?.authRequirement === "api-key" && "auth" in resolvedAttempt
         ? resolvedAttempt.auth.apiKey?.trim()
         : undefined;
-    const result = await selectedHarness.runSideQuestion({
+    const sideRunId = params.opts?.runId ?? `btw-${randomUUID()}`;
+    const sandbox = await resolveSandboxContext({
+      config: params.cfg,
+      sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
+      workspaceDir,
+    });
+    const admittedRunContext = await prepareSystemAgentRunAdmission(
+      params.cfg,
+      sideRunId,
+      sessionAgentId,
+      "btw.side-question",
+    ).admit("plugin-harness");
+    const { model: _sideModel, ...hostAttempt } = params;
+    const host = createAgentHarnessHostCapabilities({
+      attempt: {
+        ...hostAttempt,
+        admittedRunContext,
+        config: params.cfg,
+        agentId: sessionAgentId,
+        sessionId,
+        sessionKey: params.sessionKey,
+        sandbox,
+        workspaceDir,
+        runId: sideRunId,
+        currentMessagingTarget: params.messageTo,
+        currentThreadTs:
+          params.messageThreadId === undefined ? undefined : String(params.messageThreadId),
+      },
+      pluginId: selectedHarness.pluginId ?? selectedHarness.id,
+    });
+    const sideParams = {
       ...params,
+      hostCapabilities: host.capabilities,
+      sandbox,
       provider: runtimeModel.provider,
       model: runtimeModel.id,
       runtimeModel,
@@ -995,11 +1037,18 @@ export async function runBtwSideQuestion(
         runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
           ? undefined
           : runtimeAuthPlan.forwardedAuthProfileId,
+      opts: { ...params.opts, runId: sideRunId },
       authProfileIdSource:
         runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
           ? undefined
           : runtimeAuthPlan.forwardedAuthProfileSource,
-    });
+    };
+    let result: Awaited<ReturnType<NonNullable<AgentHarness["runSideQuestion"]>>>;
+    try {
+      result = await selectedHarness.runSideQuestion(sideParams);
+    } finally {
+      host.close();
+    }
     return { kind: "handled", payload: { text: result.text } };
   };
   if (harness.runSideQuestion) {

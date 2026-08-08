@@ -323,8 +323,13 @@ export function prepareEmbeddedAttemptToolBase(params: {
           scheduledToolPolicy: attempt.scheduledToolPolicy,
           onYield: params.onYield,
         });
+        // The built-in harness retains its existing authoritative wrappers.
+        // Only plugin harnesses receive and require the projected host capability.
+        const boundTools = attempt.hostCapabilities
+          ? attempt.hostCapabilities.bindToolSurface(allTools)
+          : allTools;
         params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-        const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
+        const filteredTools = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
           toolMeta: (tool) => getPluginToolMeta(tool),
         });
         params.markCoreToolStage("attempt:tools-allow");

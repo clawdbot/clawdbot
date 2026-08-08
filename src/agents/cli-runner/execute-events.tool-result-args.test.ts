@@ -2,6 +2,7 @@
 // results must not duplicate that potentially large payload.
 import { describe, expect, it, vi } from "vitest";
 import { type AgentEventRuntimePayload, onAgentEvent } from "../../infra/agent-events.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -16,6 +17,7 @@ function buildContext(runId: string): PreparedCliRunContext {
   };
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(runId),
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",

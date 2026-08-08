@@ -29,6 +29,7 @@ import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
@@ -296,6 +297,7 @@ type RunAgentAttemptOverrides = Omit<
 
 function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgentAttemptParams {
   const provider = overrides.providerOverride ?? "openai";
+  const runId = overrides.runId ?? `run-${overrides.sessionEntry.sessionId}`;
   return {
     providerOverride: provider,
     originalProvider: provider,
@@ -308,7 +310,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     isFallbackRetry: false,
     resolvedThinkLevel: "medium",
     timeoutMs: 1_000,
-    runId: `run-${overrides.sessionEntry.sessionId}`,
+    runId,
     spawnedBy: undefined,
     messageChannel: undefined,
     skillsSnapshot: undefined,
@@ -317,6 +319,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
+    preparedRunAdmission: overrides.preparedRunAdmission ?? createTestPreparedRunAdmission(runId),
     lifecycleGeneration: overrides.lifecycleGeneration ?? "test-generation",
     opts: { ...overrides.opts } as RunAgentAttemptParams["opts"],
     runContext: { ...overrides.runContext } as RunAgentAttemptParams["runContext"],

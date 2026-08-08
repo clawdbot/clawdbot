@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -73,6 +74,7 @@ describe("prepareEmbeddedRunTerminal", () => {
       const assistant = assistantMessage(stopReason);
       const prepared = prepareEmbeddedRunTerminal({
         runParams: {
+          admittedRunContext: createTestAdmittedRunContext("run-1"),
           sessionId: "session-1",
           runId: "run-1",
           workspaceDir: "/tmp/openclaw-test",
@@ -145,6 +147,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
     return prepareEmbeddedRunTerminal({
       runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-1"),
         sessionId: "session-1",
         runId: "run-1",
         workspaceDir: "/tmp/openclaw-test",

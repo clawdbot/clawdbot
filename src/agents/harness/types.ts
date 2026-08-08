@@ -9,6 +9,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -90,8 +91,11 @@ type AgentHarnessLegacyAttemptResult = Omit<
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
-  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
->;
+  | "admittedRunContext"
+  | "contextEngineLogicalTurnLease"
+  | "onContextEngineTurnCandidate"
+  | "trajectoryRecorder"
+> & { hostCapabilities: AgentHarnessHostCapabilities };
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
@@ -150,6 +154,10 @@ export type AgentHarnessAuthBindingFingerprintParams = {
   config?: import("../../config/types.openclaw.js").OpenClawConfig;
 };
 export type AgentHarnessSideQuestionParams = {
+  /** Host-bound authority for this admitted side execution; contains no public token fields. */
+  hostCapabilities: AgentHarnessHostCapabilities;
+  /** Host-resolved sandbox snapshot for this side execution. */
+  sandbox?: import("../sandbox/types.js").SandboxContext | null;
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;

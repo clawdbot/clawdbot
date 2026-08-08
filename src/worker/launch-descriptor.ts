@@ -24,6 +24,7 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
@@ -35,6 +36,9 @@ export type WorkerBrowserLaunchDescriptor = {
 };
 
 type WorkerLaunchAssignment = {
+  operationalRunInstance: OperationalRunInstanceRef;
+  /** Opaque host-signed runtime envelope; worker code never parses private identity. */
+  agentRuntimeIdentityToken: string;
   runId: string;
   turnId: string;
   prompt: string;
@@ -149,6 +153,8 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
       value,
       [
         "runId",
+        "operationalRunInstance",
+        "agentRuntimeIdentityToken",
         "turnId",
         "prompt",
         "suppressPromptTranscript",
@@ -167,6 +173,12 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   if (
     !isIdentifier(value.runId) ||
+    !isRecord(value.operationalRunInstance) ||
+    !isIdentifier(value.operationalRunInstance.instanceId) ||
+    value.operationalRunInstance.runId !== value.runId ||
+    typeof value.agentRuntimeIdentityToken !== "string" ||
+    value.agentRuntimeIdentityToken.length < 1 ||
+    value.agentRuntimeIdentityToken.length > 16_384 ||
     !isIdentifier(value.turnId) ||
     typeof value.prompt !== "string" ||
     typeof value.suppressPromptTranscript !== "boolean" ||
@@ -211,7 +223,15 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   ) {
     return undefined;
   }
-  return { ...value, toolAuthority, ...(browser ? { browser } : {}) } as WorkerLaunchAssignment;
+  return {
+    ...value,
+    operationalRunInstance: Object.freeze({
+      instanceId: value.operationalRunInstance.instanceId,
+      runId: value.runId,
+    }),
+    toolAuthority,
+    ...(browser ? { browser } : {}),
+  } as WorkerLaunchAssignment;
 }
 
 export function buildWorkerConnectParams(

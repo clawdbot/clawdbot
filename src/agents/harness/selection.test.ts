@@ -8,6 +8,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
@@ -191,6 +192,7 @@ afterEach(() => {
 
 function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
   return {
+    admittedRunContext: createTestAdmittedRunContext("run-1"),
     prompt: "hello",
     sessionId: "session-1",
     runId: "run-1",
@@ -1106,10 +1108,15 @@ describe("runAgentHarnessAttempt", () => {
 
     const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
-    expect(classifyCall?.[1]).toStrictEqual({
-      ...params,
-      pluginHarnessToolPolicyRestricted: false,
-    });
+    expect(classifyCall?.[1]).toEqual(
+      expect.objectContaining({
+        hostCapabilities: expect.objectContaining({ kind: "agent-harness-host-capability" }),
+        pluginHarnessToolPolicyRestricted: false,
+        runId: params.runId,
+        sessionId: params.sessionId,
+      }),
+    );
+    expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });

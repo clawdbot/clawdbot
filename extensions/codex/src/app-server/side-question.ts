@@ -915,6 +915,7 @@ function buildSideRunAttemptParams(
     },
     onBlockReply: params.opts?.onBlockReply,
     onPartialReply: params.opts?.onPartialReply,
+    hostCapabilities: params.hostCapabilities,
   };
   return sideParams as unknown as EmbeddedRunAttemptParams;
 }
@@ -942,11 +943,14 @@ async function createCodexSideToolBridge(input: {
       input.params.sessionKey?.trim() ||
       input.params.sessionId ||
       input.sessionAgentId;
-    const sandbox = await resolveSandboxContext({
-      config: input.params.cfg,
-      sessionKey: sandboxSessionKey,
-      workspaceDir: input.cwd,
-    });
+    const sandbox =
+      input.params.sandbox !== undefined
+        ? input.params.sandbox
+        : await resolveSandboxContext({
+            config: input.params.cfg,
+            sessionKey: sandboxSessionKey,
+            workspaceDir: input.cwd,
+          });
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
@@ -1044,8 +1048,8 @@ async function createCodexSideToolBridge(input: {
       : requestedWebSearchPlan;
   // Side threads inherit a large parent context but do not own the main
   // context-compaction lifecycle needed to expire screenshot coordinates.
-  const exposedTools = tools.filter(
-    (tool) => tool.name !== "web_search" && tool.name !== "computer",
+  const exposedTools = input.params.hostCapabilities.bindToolSurface(
+    tools.filter((tool) => tool.name !== "web_search" && tool.name !== "computer"),
   );
   const hookChannelFields = buildAgentHookContextChannelFields({
     sessionKey: input.params.sessionKey,

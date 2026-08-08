@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   readBtwTranscriptMessages,
@@ -267,6 +268,12 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
     }
     const result = await runEmbeddedAgent({
+      preparedRunAdmission: prepareSystemAgentRunAdmission(
+        params.cfg,
+        runId,
+        params.agentId,
+        "session-companion.ask",
+      ),
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,

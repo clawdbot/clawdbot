@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -571,6 +572,7 @@ describe("applyPluginNodeInvokePolicy", () => {
             kind: "agentRuntime",
             agentId: "main",
             sessionKey: "agent:main:telegram:direct:alice",
+            operationalRunInstance: createOperationalRunInstanceRef("run-node-policy"),
           },
         },
       },

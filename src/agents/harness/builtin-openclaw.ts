@@ -6,14 +6,18 @@
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 
 function buildRestrictedFinalizationAttempt(
   attempt: AgentHarnessAttemptParams,
-): AgentHarnessAttemptParams {
+): EmbeddedRunAttemptParams {
+  const internalAttempt = attempt as AgentHarnessAttemptParams &
+    Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
   return {
+    admittedRunContext: internalAttempt.admittedRunContext,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
@@ -72,7 +76,7 @@ export function createOpenClawAgentHarness(): AgentHarness {
     label: "OpenClaw embedded agent",
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: runEmbeddedAttempt,
+    runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
     runIsolatedCompletion: async (params) => {
       const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
       const signal = params.abortSignal

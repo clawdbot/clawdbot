@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -92,7 +93,14 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
 
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
+    const runId = `slug-gen-${Date.now()}`;
     const result = await runEmbeddedAgent({
+      preparedRunAdmission: prepareSystemAgentRunAdmission(
+        params.cfg,
+        runId,
+        agentId,
+        "hooks.slug-generator",
+      ),
       sessionId,
       sessionKey,
       sessionManager: SessionManager.inMemory(workspaceDir),
@@ -103,7 +111,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       model: params.model,
       timeoutMs,
-      runId: `slug-gen-${Date.now()}`,
+      runId,
       disableTrajectory: true,
       cleanupBundleMcpOnRunEnd: true,
       // Internal helper run: route failures lane-local so an upstream 400/billing

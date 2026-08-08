@@ -67,7 +67,7 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  const params = input.runParams;
+  let params = input.runParams;
   let { provider, modelId } = input;
   const {
     agentDir,
@@ -106,6 +106,7 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
+  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {

@@ -2,9 +2,11 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
@@ -1187,6 +1189,23 @@ describe("mcp loopback server", () => {
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
     const { port, runtime } = await startLoopbackServerForTest();
+    const admittedRunContext = createTestAdmittedRunContext("run-bound");
+    let toolCallerIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          label: "Message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            toolCallerIdentity = getGatewayToolCallerIdentity();
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+        },
+      ],
+    });
     const boundContext = {
       sessionKey: "agent:main:discord:channel:bound",
       runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
@@ -1235,6 +1254,7 @@ describe("mcp loopback server", () => {
     const grant = mintMcpLoopbackClientGrant({
       context: boundContext,
       runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext,
     });
     expect(
       activateMcpLoopbackClientGrantCapture({
@@ -1296,6 +1316,15 @@ describe("mcp loopback server", () => {
       turnSourceThreadId: "bound-thread",
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+    expect(toolCallerIdentity).toMatchObject({
+      agentId: "main",
+      sessionKey: boundContext.sessionKey,
+      operationalRunInstance: admittedRunContext.operationalRunInstance,
+      turnSourceChannel: boundContext.messageProvider,
+      turnSourceTo: boundContext.currentChannelId,
+      turnSourceAccountId: boundContext.accountId,
+      turnSourceThreadId: boundContext.currentThreadTs,
+    });
   });
 
   it("keeps prepared auth stores isolated between CLI grants", async () => {
