@@ -15,6 +15,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
@@ -39,6 +40,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -66,6 +68,19 @@ function createInitialStateSchemaShape() {
     delete shape[tableName];
   }
   return shape;
+}
+
+function createOlderV6StateSchemaWithoutWorkerSshFallbackPorts(): string {
+  const startMarker = "CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
+  const endMarker = "\n) STRICT;";
+  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+  if (start < 0 || end < 0) {
+    throw new Error("worker SSH fallback port schema block is missing");
+  }
+  return `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(
+    end + endMarker.length,
+  )}`;
 }
 
 function expectStateSchemaMigrationRequired(
@@ -965,7 +980,6 @@ function runConcurrentSchemaProbe(params: {
           ALTER TABLE worker_environments DROP COLUMN owner_epoch;
           ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
           ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
-          ALTER TABLE worker_environments DROP COLUMN ssh_fallback_ports_json;
           PRAGMA user_version = 1;
           UPDATE schema_meta
              SET schema_version = 1,
@@ -1119,6 +1133,27 @@ describe("openclaw state database", () => {
         .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
         .run("not-an-integer"),
     ).toThrow();
+  });
+
+  it("keeps the additive worker SSH fallback table compatible with older v6 containment", () => {
+    const database = openMaterializedCurrentStateDatabase();
+    try {
+      expect(
+        database
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get("worker_environment_ssh_fallback_ports"),
+      ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
+      expect(() =>
+        assertSqliteSchemaContains(
+          database,
+          "older v6 state database",
+          createOlderV6StateSchemaWithoutWorkerSshFallbackPorts(),
+          { allowedMissingTables: FIRST_USE_STATE_TABLES },
+        ),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
   });
 
   it("skips exclusive repair when the automatic schema gate is already current", () => {
@@ -3082,7 +3117,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE worker_environments DROP COLUMN owner_epoch;
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
       ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
-      ALTER TABLE worker_environments DROP COLUMN ssh_fallback_ports_json;
     `);
     markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
@@ -3102,7 +3136,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         "owner_epoch",
         "teardown_terminal_state",
         "ssh_host_key",
-        "ssh_fallback_ports_json",
       ]),
     );
     const credentialTable = reopened.db
