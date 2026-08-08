@@ -1,29 +1,43 @@
 // Builds the shared CLI/package artifacts once before parallel E2E workers
 // start long-lived Gateway processes that import those artifacts lazily.
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mjs";
+import { spawn } from "node:child_process";
 
-type ManagedCommandRunner = typeof runManagedCommand;
+type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
 async function runSetupCommand(
-  runCommand: ManagedCommandRunner,
+  runCommand: SetupCommandRunner,
   args: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const status = await runCommand({
-    bin: process.execPath,
-    args,
-    cwd: process.cwd(),
-    env,
-    stdio: "inherit",
-  });
+  const status = await runCommand(args, env);
 
   if (status !== 0) {
     throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
   }
 }
 
+export function runE2eSetupCommand(args: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    detached: false,
+    env,
+    stdio: "inherit",
+  });
+
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (status, signal) => {
+      if (signal) {
+        reject(new Error(`E2E setup command terminated by ${signal}: ${args.join(" ")}`));
+        return;
+      }
+      resolve(status ?? 1);
+    });
+  });
+}
+
 export async function runE2eGlobalSetup(
-  runCommand: ManagedCommandRunner = runManagedCommand,
+  runCommand: SetupCommandRunner = runE2eSetupCommand,
 ): Promise<void> {
   await runSetupCommand(runCommand, ["scripts/run-node.mjs", "--version"], {
     ...process.env,
