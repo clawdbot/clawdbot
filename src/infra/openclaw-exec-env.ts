@@ -5,7 +5,7 @@ export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 const OPENCLAW_CLI_ENV_VALUE = "1";
 /** Universal advisory marker for tools that adapt behavior under AI agents. */
 const AI_AGENT_ENV_VAR = "AI_AGENT";
-export const AI_AGENT_ENV_VALUE = "openclaw";
+const AI_AGENT_ENV_VALUE = "openclaw";
 
 export type AiAgentEnvPlan = {
   baseEnv: Record<string, string>;
