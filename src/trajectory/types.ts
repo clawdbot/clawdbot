@@ -21,6 +21,7 @@ export type TrajectoryEvent = {
   sourceSeq?: number;
   sessionId: string;
   sessionKey?: string;
+  sessionHash?: string;
   runId?: string;
   workspaceDir?: string;
   provider?: string;

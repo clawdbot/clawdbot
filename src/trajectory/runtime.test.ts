@@ -81,6 +81,8 @@ describe("trajectory runtime", () => {
       apple: "abcd-efgh-ijkl-mnop",
       dynamicToolArgs: {
         sessionKey: "opaque-session-credential",
+        sessionHash: `sha256:v1:${"f".repeat(64)}`,
+        sourceSessionHash: `sha256:v1:${"e".repeat(64)}`,
         sourceSessionKey: "opaque-source-session-credential",
       },
       tools: toTrajectoryToolDefinitions([
@@ -95,6 +97,9 @@ describe("trajectory runtime", () => {
     expect(parsed.type).toBe("context.compiled");
     expect(parsed.source).toBe("runtime");
     expect(parsed.sessionId).toBe("session-1");
+    expect(parsed.sessionHash).toBe(
+      expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "agent:main:session-1"),
+    );
     expect(parsed.data.tools).toEqual([
       { name: "a-tool", description: "alpha", parameters: { a: 1 } },
       { name: "z-tool", parameters: { z: 1 } },
@@ -106,6 +111,8 @@ describe("trajectory runtime", () => {
     expect(parsed.data.dynamicToolArgs).toEqual({});
     expect(JSON.stringify(parsed.data)).not.toContain("opaque-session-credential");
     expect(JSON.stringify(parsed.data)).not.toContain("opaque-source-session-credential");
+    expect(JSON.stringify(parsed.data)).not.toContain(`sha256:v1:${"f".repeat(64)}`);
+    expect(JSON.stringify(parsed.data)).not.toContain(`sha256:v1:${"e".repeat(64)}`);
   });
 
   it.each(["native", "dynamic", "mcp"])(

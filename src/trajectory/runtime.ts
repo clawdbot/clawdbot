@@ -17,6 +17,7 @@ import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
 import {
+  hashTrajectorySourceSessionKey,
   projectTrajectoryDiagnosticValue,
   TrajectoryProvenanceSanitizer,
 } from "./provenance-sanitization.js";
@@ -360,6 +361,7 @@ export function createTrajectoryRuntimeRecorder(
   }
   let seq = 0;
   const traceId = params.sessionId;
+  const sessionHash = hashTrajectorySourceSessionKey(params.sessionKey);
   const provenanceSanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
 
   const buildEvent = (
@@ -380,6 +382,7 @@ export function createTrajectoryRuntimeRecorder(
       sourceSeq,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionHash,
       runId: params.runId,
       workspaceDir: params.workspaceDir,
       provider: params.provider,

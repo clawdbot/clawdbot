@@ -1413,6 +1413,117 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedPrompt?.data).toMatchObject({ prompt: committedPrompt, origin });
   });
 
+  it("joins exported sender and receiver legs through the recorder-owned session hash", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const senderSessionId = "sender-session";
+    const senderSessionKey = "agent:main:sender-session";
+    const receiverSessionId = "receiver-session";
+    const receiverSessionKey = "agent:main:receiver-session";
+    const forgedHash = `sha256:v1:${"f".repeat(64)}`;
+    const senderOutputDir = path.join(tmpDir, "sender-bundle");
+    const receiverOutputDir = path.join(tmpDir, "receiver-bundle");
+    const senderScope = {
+      agentId: "main",
+      sessionId: senderSessionId,
+      sessionKey: senderSessionKey,
+      storePath,
+    };
+    const receiverScope = {
+      agentId: "main",
+      sessionId: receiverSessionId,
+      sessionKey: receiverSessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(senderScope, [
+      {
+        type: "session",
+        version: 3,
+        id: senderSessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+    ]);
+    await replaceTranscriptEvents(receiverScope, [
+      {
+        type: "session",
+        version: 3,
+        id: receiverSessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+    ]);
+    const senderRecorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId: senderSessionId,
+        sessionKey: senderSessionKey,
+        sessionTarget: senderScope,
+        workspaceDir: tmpDir,
+      }),
+      "sender trajectory recorder",
+    );
+    senderRecorder.recordEvent("tool.call", {
+      name: "sessions_send",
+      toolCallId: "call-send",
+      arguments: {
+        sessionKey: receiverSessionKey,
+        sessionHash: forgedHash,
+        sourceSessionHash: forgedHash,
+      },
+    });
+    await senderRecorder.flush();
+    const receiverRecorder = expectDefined(
+      createTrajectoryRuntimeRecorder({
+        sessionId: receiverSessionId,
+        sessionKey: receiverSessionKey,
+        sessionTarget: receiverScope,
+        workspaceDir: tmpDir,
+      }),
+      "receiver trajectory recorder",
+    );
+    receiverRecorder.recordEvent("prompt.submitted", {
+      prompt: "delegated request",
+      origin: {
+        kind: "inter_session",
+        sourceSessionKey: senderSessionKey,
+        sourceTool: "sessions_send",
+      },
+    });
+    await receiverRecorder.flush();
+
+    const senderBundle = await exportTrajectoryBundle({
+      outputDir: senderOutputDir,
+      sessionTarget: senderScope,
+      sessionId: senderSessionId,
+      sessionKey: senderSessionKey,
+      workspaceDir: tmpDir,
+    });
+    const receiverBundle = await exportTrajectoryBundle({
+      outputDir: receiverOutputDir,
+      sessionTarget: receiverScope,
+      sessionId: receiverSessionId,
+      sessionKey: receiverSessionKey,
+      workspaceDir: tmpDir,
+    });
+    const senderCall = senderBundle.events.find((event) => event.type === "tool.call");
+    const receiverPrompt = receiverBundle.events.find((event) => event.type === "prompt.submitted");
+    const receiverOrigin = receiverPrompt?.data?.origin as
+      | { sourceSessionHash?: string }
+      | undefined;
+
+    expect(senderCall?.sessionHash).toBe(
+      expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, senderSessionKey),
+    );
+    expect(senderCall?.sessionHash).toBe(receiverOrigin?.sourceSessionHash);
+    expect(senderCall?.data?.arguments).toEqual({});
+    const exportedText = [senderOutputDir, receiverOutputDir]
+      .map((outputDir) => fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8"))
+      .join("\n");
+    expect(exportedText).not.toContain(senderSessionKey);
+    expect(exportedText).not.toContain(receiverSessionKey);
+    expect(exportedText).not.toContain(forgedHash);
+  });
+
   it("preserves exact Codex steer text from SQLite through export", async () => {
     const tmpDir = makeTempDir();
     const outputDir = path.join(tmpDir, "bundle");

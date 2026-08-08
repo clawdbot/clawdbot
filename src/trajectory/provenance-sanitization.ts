@@ -24,6 +24,7 @@ const MAX_IDENTITY_CHARS = 4096;
 const ROUTING_IDENTITY_FIELDS = new Set([
   "originsessionhash",
   "originsessionid",
+  "sessionhash",
   "sessionkey",
   "sourcesessionhash",
   "sourcesessionkey",
@@ -47,7 +48,7 @@ type PersistedOrigin = {
   sourceTool?: string;
 };
 type Mode = "live" | "export";
-type EventLike = { type: string; data?: Record<string, unknown> };
+type EventLike = { type: string; data?: Record<string, unknown>; sessionHash?: unknown };
 type TranscriptEntryLike = { type?: unknown; message?: unknown };
 type Transforms = {
   transformKey?: (value: string) => string;
@@ -76,6 +77,10 @@ function hashRawIdentifier(value: unknown, domain: string): string | undefined {
   return hashIdentifier(domain, normalized);
 }
 
+export function hashTrajectorySourceSessionKey(value: unknown): string | undefined {
+  return hashRawIdentifier(value, SOURCE_SESSION_HASH_DOMAIN);
+}
+
 function canonicalHash(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && CANONICAL_SESSION_HASH_RE.test(normalized) ? normalized : undefined;
@@ -90,7 +95,7 @@ function projectOrigin(value: unknown, mode: Mode): PersistedOrigin | undefined 
     return undefined;
   }
   const sourceSessionHash =
-    hashRawIdentifier(value.sourceSessionKey, SOURCE_SESSION_HASH_DOMAIN) ??
+    hashTrajectorySourceSessionKey(value.sourceSessionKey) ??
     (mode === "export" ? canonicalHash(value.sourceSessionHash) : undefined);
   const originSessionHash =
     hashRawIdentifier(value.originSessionId, ORIGIN_SESSION_HASH_DOMAIN) ??
@@ -250,7 +255,8 @@ function projectTrajectoryValue(
       }
       return (
         isRoutingIdentityField(key) &&
-        isDiagnosticContext(context, scope) &&
+        (isDiagnosticContext(context, scope) ||
+          (scope.kind === "event" && context.path === undefined)) &&
         !(
           isOwnedProvenanceRecord(context, scope) &&
           (key === "sourceSessionHash" || key === "originSessionHash")
@@ -344,15 +350,18 @@ export class TrajectoryProvenanceSanitizer {
       transformString: params.transformString,
     };
     return {
-      runtimeEvents: params.runtimeEvents.map(
-        (event) =>
-          projectTrajectoryValue(
-            event,
-            { kind: "event", type: event.type },
-            this.params.mode,
-            transforms,
-          ) as TEvent,
-      ),
+      runtimeEvents: params.runtimeEvents.map((event) => {
+        const projected = projectTrajectoryValue(
+          event,
+          { kind: "event", type: event.type },
+          this.params.mode,
+          transforms,
+        ) as TEvent;
+        const sessionHash = canonicalHash(event.sessionHash);
+        // The recorder owns this envelope field; routing-shaped values inside
+        // event data were removed by the projection above.
+        return sessionHash ? ({ ...projected, sessionHash } as TEvent) : projected;
+      }),
       branchEntries: params.branchEntries.map(
         (entry) =>
           projectTrajectoryValue(
