@@ -49,13 +49,13 @@ function normalizeTokenCount(value: number | undefined): number | undefined {
 }
 
 function resolveEntryFreshTotalTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 ): number | undefined {
   return normalizeTokenCount(resolveFreshSessionTotalTokens(entry));
 }
 
 function resolveEntryGoalStartTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 ): number {
   return resolveEntryFreshTotalTokens(entry) ?? 0;
 }
@@ -84,7 +84,7 @@ function recordGoalChange(
 }
 
 export function resolveSessionGoalDisplayState(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
   now?: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
@@ -92,7 +92,7 @@ export function resolveSessionGoalDisplayState(
 }
 
 function accountGoalUsage(
-  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
+  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
   now: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {

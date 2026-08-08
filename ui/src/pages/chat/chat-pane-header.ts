@@ -25,10 +25,8 @@ import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
-import {
-  renderBackgroundTasksToggle,
-  type BackgroundTasksProps,
-} from "./components/chat-background-tasks.ts";
+import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
+import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import {
   type ChatPaneHeaderAction,

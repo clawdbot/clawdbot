@@ -760,18 +760,31 @@ describe("shared Codex app-server client", () => {
   );
 
   it("closes and clears a shared app-server when initialize times out", async () => {
+    vi.useFakeTimers();
     const first = createClientHarness();
     const second = createClientHarness();
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
       .mockReturnValueOnce(first.client)
       .mockReturnValueOnce(second.client);
+    let markFirstStarted: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
 
-    await expect(listCodexAppServerModels({ timeoutMs: 5 })).rejects.toThrow(
+    const firstAcquire = getSharedCodexAppServerClient({
+      timeoutMs: 5,
+      onStartedClient: markFirstStarted,
+    });
+    const firstRejection = expect(firstAcquire).rejects.toThrow(
       "codex app-server initialize timed out",
     );
+    await firstStarted;
+    await vi.advanceTimersByTimeAsync(5);
+    await firstRejection;
     expect(first.process.stdin.destroyed).toBe(true);
 
+    vi.useRealTimers();
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
     await sendInitializeResult(second, "openclaw/0.146.1 (macOS; test)");
     await sendEmptyModelList(second);
@@ -870,12 +883,22 @@ describe("shared Codex app-server client", () => {
   });
 
   it("does not wait for isolated initialize after a timeout closes the client", async () => {
+    vi.useFakeTimers();
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
 
-    await expect(createIsolatedCodexAppServerClient({ timeoutMs: 5 })).rejects.toThrow(
-      "codex app-server initialize timed out",
-    );
+    const client = createIsolatedCodexAppServerClient({
+      timeoutMs: 5,
+      onStartedClient: markStarted,
+    });
+    const rejection = expect(client).rejects.toThrow("codex app-server initialize timed out");
+    await started;
+    await vi.advanceTimersByTimeAsync(5);
+    await rejection;
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 

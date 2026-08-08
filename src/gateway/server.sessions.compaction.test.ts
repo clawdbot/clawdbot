@@ -96,13 +96,14 @@ function compactionCheckpointEntry(
     tokensBefore?: number;
     tokensAfter?: number;
   },
-) {
+): SessionCompactionCheckpoint {
   return {
     checkpointId: options.checkpointId,
     sessionKey: options.sessionKey,
     sessionId: fixture.sessionId,
     createdAt: options.createdAt,
     reason: options.reason,
+    tokensVersion: 1,
     summary: options.summary,
     ...(options.tokensBefore === undefined ? {} : { tokensBefore: options.tokensBefore }),
     ...(options.tokensAfter === undefined ? {} : { tokensAfter: options.tokensAfter }),

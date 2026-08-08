@@ -5,10 +5,7 @@ import type {
   SessionParentForkDecision,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  resolveFreshSessionTotalTokens,
-  resolveSessionTotalTokens,
-} from "./session-entry-runtime.js";
+import { resolveFreshSessionTotalTokens } from "./session-entry-runtime.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -50,11 +47,7 @@ export function resolveSqliteParentForkDecision(
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
 ): SessionParentForkDecision {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens =
-    resolveFreshSessionTotalTokens(parentEntry) ??
-    (transcriptEstimate?.kind === "exact-context"
-      ? transcriptEstimate.tokens
-      : maxPositiveTokenCount(transcriptEstimate?.tokens, resolveSessionTotalTokens(parentEntry)));
+  const parentTokens = resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens;
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -100,6 +93,12 @@ export function estimateSqliteTranscriptPromptTokens(
       continue;
     }
     const contextUsage = readTranscriptContextUsage(usageRaw);
+    if (message?.api === "cli" && contextUsage === undefined) {
+      latestUsageEstimate = undefined;
+      latestUsageEstimateIsExactContext = false;
+      trailingBytes = 0;
+      continue;
+    }
     if (contextUsage?.state === "unavailable") {
       latestUsageEstimate = undefined;
       latestUsageEstimateIsExactContext = false;
@@ -162,17 +161,6 @@ function normalizePositiveTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
-}
-
-function maxPositiveTokenCount(...values: Array<number | undefined>): number | undefined {
-  let max: number | undefined;
-  for (const value of values) {
-    const normalized = normalizePositiveTokenCount(value);
-    if (normalized !== undefined && (max === undefined || normalized > max)) {
-      max = normalized;
-    }
-  }
-  return max;
 }
 
 function readTranscriptContextUsage(

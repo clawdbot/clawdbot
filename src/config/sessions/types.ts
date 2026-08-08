@@ -28,6 +28,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionToolOverrides = {
@@ -163,6 +164,7 @@ export type SessionCompactionCheckpoint = {
   reason: SessionCompactionCheckpointReason;
   tokensBefore?: number;
   tokensAfter?: number;
+  tokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
   summary?: string;
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
@@ -570,6 +572,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
+    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
+    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;

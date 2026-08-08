@@ -776,9 +776,9 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    view: { kind: "list" },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
-    selectedTaskId: null,
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set<string>(),
@@ -787,8 +787,8 @@ function createBackgroundTasks(
     onRefresh: () => undefined,
     onCancel: () => undefined,
     onSelectTask: () => undefined,
-    onBackToList: () => undefined,
-    onOpenSession: () => undefined,
+    onBack: () => undefined,
+    onOpenTranscript: () => undefined,
     ...overrides,
   };
 }

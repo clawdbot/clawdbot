@@ -11,7 +11,10 @@ import {
 } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { resolveSessionTotalTokens } from "../config/sessions/session-entry-runtime.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionTotalTokens,
+} from "../config/sessions/session-entry-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
@@ -459,13 +462,15 @@ export async function getStatusSummary(
             allowAsyncLoad: false,
           }) ?? null;
         const total = resolveSessionTotalTokens(entry);
-        const totalTokensFresh =
-          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+        const freshTotal = resolveFreshSessionTotalTokens(entry);
+        const totalTokensFresh = freshTotal !== undefined;
         const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
+          contextTokens != null && freshTotal !== undefined
+            ? Math.max(0, contextTokens - freshTotal)
+            : null;
         const pct =
-          contextTokens && contextTokens > 0 && total !== undefined
-            ? Math.min(999, Math.round((total / contextTokens) * 100))
+          contextTokens && contextTokens > 0 && freshTotal !== undefined
+            ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
         const runtime = resolveSessionRuntimeLabel({
           cfg,

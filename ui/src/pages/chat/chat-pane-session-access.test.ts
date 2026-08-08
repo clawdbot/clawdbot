@@ -179,7 +179,7 @@ describe("chat pane session access", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -213,7 +213,7 @@ describe("chat pane session access", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         session,
         false,
         undefined,

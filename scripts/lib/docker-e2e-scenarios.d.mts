@@ -11,7 +11,6 @@ export type DockerE2eLane = {
   name: string;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
-  prepublishPluginPackages?: string[];
   resources: string[];
   retries: number;
   retryPatterns: RegExp[];

@@ -66,6 +66,7 @@ export async function prepareReplySessionParentFork(params: {
     forkedFromParent: true,
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
   };
   return forkedEntry;
 }

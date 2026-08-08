@@ -155,6 +155,7 @@ export const SessionCompactionCheckpointSchema = closedObject({
   reason: SessionCompactionCheckpointReasonSchema,
   tokensBefore: Type.Optional(Type.Integer({ minimum: 0 })),
   tokensAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+  tokensVersion: Type.Optional(Type.Literal(1)),
   summary: Type.Optional(Type.String()),
   firstKeptEntryId: Type.Optional(NonEmptyString),
   preCompaction: SessionCompactionTranscriptReferenceSchema,

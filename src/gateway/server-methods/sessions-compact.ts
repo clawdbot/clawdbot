@@ -13,6 +13,7 @@ import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
+  SESSION_TOTAL_TOKENS_VERSION,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
 } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -559,9 +560,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   ) {
                     entryToUpdate.totalTokens = result.result.tokensAfter;
                     entryToUpdate.totalTokensFresh = true;
+                    entryToUpdate.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
                   } else {
                     delete entryToUpdate.totalTokens;
                     delete entryToUpdate.totalTokensFresh;
+                    delete entryToUpdate.totalTokensVersion;
                   }
                   return { ok: true, entry: entryToUpdate };
                 },

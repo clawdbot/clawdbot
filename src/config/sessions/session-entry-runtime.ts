@@ -1,7 +1,11 @@
 // Runtime helpers normalize, merge, and project durable session entries.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MergeSessionEntryOptions, SessionEntry } from "./types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type MergeSessionEntryOptions,
+  type SessionEntry,
+} from "./types.js";
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -197,7 +201,7 @@ export function mergeSessionEntryPreserveActivity(
 }
 
 export function resolveSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<SessionEntry, "totalTokens"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
@@ -207,13 +211,16 @@ export function resolveSessionTotalTokens(
 }
 
 export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion"> | null,
 ): number | undefined {
   const total = resolveSessionTotalTokens(entry);
   if (total === undefined) {
     return undefined;
   }
-  if (entry?.totalTokensFresh === false) {
+  if (
+    entry?.totalTokensFresh !== true ||
+    entry.totalTokensVersion !== SESSION_TOTAL_TOKENS_VERSION
+  ) {
     return undefined;
   }
   return total;

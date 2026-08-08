@@ -20,6 +20,7 @@ import {
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -285,6 +286,7 @@ export function buildGatewaySessionRow(params: {
           goal: entry.goal,
           totalTokens,
           totalTokensFresh,
+          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
         },
         now,
         // Session listing is read-only; stale goal baselines are adopted only
