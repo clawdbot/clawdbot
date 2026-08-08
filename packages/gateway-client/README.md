@@ -72,7 +72,7 @@ client.stop();
 The client waits for the Gateway's `connect.challenge` event before sending its
 `connect` request. It includes the challenge nonce in device authentication and
 does not fall back to a pre-challenge handshake. `onHelloOk` fires only after the
-Gateway accepts the v4 connection, so requests should wait for that callback.
+Gateway accepts a compatible connection, so requests should wait for that callback.
 
 For remote connections, use `wss://`. Plaintext `ws://` is allowed by default
 only for loopback addresses. Authentication material and Gateway traffic must
