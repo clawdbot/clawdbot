@@ -3201,6 +3201,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "direct",
         reason: "visible_reply_missing",
         error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
       },
     },
     {

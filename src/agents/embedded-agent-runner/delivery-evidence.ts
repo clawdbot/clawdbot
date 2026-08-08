@@ -520,7 +520,7 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
 }
 
 /** Returns whether committed non-messaging resource effects make replay unsafe. */
-export function hasCommittedNonMessagingOutboundDeliveryEvidence(
+function hasCommittedNonMessagingOutboundDeliveryEvidence(
   result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
 ): boolean {
   return (
