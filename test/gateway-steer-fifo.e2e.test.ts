@@ -344,6 +344,12 @@ async function writeSteeringToolsPlugin(fixtureDir: string): Promise<SteeringToo
         "export default {",
         `  id: ${JSON.stringify(STEERING_PLUGIN_ID)},`,
         "  register(api) {",
+        '    api.on("before_tool_call", async (event) => {',
+        `      if (event.toolName !== ${JSON.stringify(STEERING_GATE_TOOL)}) return;`,
+        `      await appendFile(${JSON.stringify(tracePath)}, "preflight-start\\n", "utf8");`,
+        "      await waitForRelease();",
+        `      await appendFile(${JSON.stringify(tracePath)}, "preflight-end\\n", "utf8");`,
+        "    });",
         "    api.registerTool({",
         `      name: ${JSON.stringify(STEERING_GATE_TOOL)},`,
         '      label: "Steering Gate",',
@@ -351,9 +357,7 @@ async function writeSteeringToolsPlugin(fixtureDir: string): Promise<SteeringToo
         '      parameters: { type: "object", properties: {}, additionalProperties: false },',
         '      executionMode: "sequential",',
         "      async execute() {",
-        `        await appendFile(${JSON.stringify(tracePath)}, "gate-start\\n", "utf8");`,
-        "        await waitForRelease();",
-        `        await appendFile(${JSON.stringify(tracePath)}, "gate-end\\n", "utf8");`,
+        `        await appendFile(${JSON.stringify(tracePath)}, "gate-executed\\n", "utf8");`,
         '        return { content: [{ type: "text", text: "steering gate completed" }], details: {} };',
         "      },",
         "    });",
@@ -771,7 +775,7 @@ describe("Gateway steer FIFO", () => {
   );
 
   it(
-    "skips an unstarted sequential tool after a Gateway steer",
+    "suppresses sequential tools when a Gateway steer arrives during preflight",
     async () => {
       const fixture = await createGatewayFixture("steer-sequential-tail", {
         withSteeringTools: true,
@@ -786,7 +790,7 @@ describe("Gateway steer FIFO", () => {
       try {
         fixture.modelServer.releaseFirst("sequential-tools");
         await vi.waitFor(
-          async () => expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-start"]),
+          async () => expect(await readTrace(steeringTools.tracePath)).toEqual(["preflight-start"]),
           WAIT_OPTS,
         );
         await queueSteer(fixture, steerMarker);
@@ -798,7 +802,10 @@ describe("Gateway steer FIFO", () => {
       await waitForRunTerminal(fixture, first.runId);
       await vi.waitFor(
         async () =>
-          expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-start", "gate-end"]),
+          expect(await readTrace(steeringTools.tracePath)).toEqual([
+            "preflight-start",
+            "preflight-end",
+          ]),
         WAIT_OPTS,
       );
       await new Promise<void>((resolve) => {
@@ -820,11 +827,16 @@ describe("Gateway steer FIFO", () => {
       expect(gateOutputIndex).toBeGreaterThanOrEqual(0);
       expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
-      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
+      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain(
+        "Skipped due to queued user message.",
+      );
       expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
         "Skipped due to queued user message.",
       );
-      expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-start", "gate-end"]);
+      expect(await readTrace(steeringTools.tracePath)).toEqual([
+        "preflight-start",
+        "preflight-end",
+      ]);
       expect(fixture.modelServer.requests).toHaveLength(2);
       expect(fixture.chatErrors).toEqual([]);
     },

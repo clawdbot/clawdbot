@@ -24,7 +24,7 @@ type ToolLoopCall = {
 };
 
 type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
-  commitReadyCalls?: (toolCallIds: readonly string[]) => void;
+  commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 };
 
@@ -136,7 +136,14 @@ export async function admitToolCallBatch(
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return {};
   }
-  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
+  const {
+    getDiagnosticSessionState,
+    markDiagnosticArgumentChurnObservation,
+    reconcileToolCallExecutionParams,
+    recordToolCall,
+    resolveToolLoopWarningThreshold,
+  } = await loadBeforeToolCallRuntime();
+  const warningThreshold = resolveToolLoopWarningThreshold();
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -206,24 +213,53 @@ export async function admitToolCallBatch(
   for (const call of calls) {
     recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
   }
+  const admittedById = new Map(
+    calls.map((call) => [
+      call.toolCall.id,
+      { toolName: normalizeToolName(call.toolCall.name || "tool") },
+    ]),
+  );
   const committedIds = new Set<string>();
+  const commitReadyCall = (readyCall: { toolCallId: string; args: unknown }) => {
+    const admitted = admittedById.get(readyCall.toolCallId);
+    if (!admitted || committedIds.has(readyCall.toolCallId)) {
+      return;
+    }
+    recordToolCall(
+      sessionState,
+      admitted.toolName,
+      readyCall.args,
+      readyCall.toolCallId,
+      ctx.loopDetection,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
+    const churn = reconcileToolCallExecutionParams(sessionState, {
+      toolName: admitted.toolName,
+      toolParams: readyCall.args,
+      toolCallId: readyCall.toolCallId,
+      runId: ctx.runId,
+      warningThreshold,
+    });
+    markDiagnosticArgumentChurnObservation({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      runId: ctx.runId,
+      active: churn.active,
+    });
+    committedIds.add(readyCall.toolCallId);
+  };
   return {
-    commitReadyCalls(toolCallIds) {
-      const readyIds = new Set(toolCallIds);
+    commitReadyCalls(readyCalls) {
+      if (readyCalls.length === 1 && readyCalls[0]) {
+        commitReadyCall(readyCalls[0]);
+        return;
+      }
+      const readyById = new Map(readyCalls.map((call) => [call.toolCallId, call]));
       for (const call of calls) {
-        const toolCallId = call.toolCall.id;
-        if (!readyIds.has(toolCallId) || committedIds.has(toolCallId)) {
-          continue;
+        const readyCall = readyById.get(call.toolCall.id);
+        if (readyCall) {
+          commitReadyCall(readyCall);
         }
-        recordToolCall(
-          sessionState,
-          normalizeToolName(call.toolCall.name || "tool"),
-          call.args,
-          toolCallId,
-          ctx.loopDetection,
-          ctx.runId ? { runId: ctx.runId } : undefined,
-        );
-        committedIds.add(toolCallId);
       }
     },
     releaseSkippedCalls(toolCallIds) {

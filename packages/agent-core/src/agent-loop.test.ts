@@ -8,6 +8,7 @@ import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } 
 import {
   attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
+  attachInternalToolExecutionPreparer,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -1123,7 +1124,9 @@ describe("agentLoop tool termination", () => {
 
     expect(firstExecute).toHaveBeenCalledOnce();
     expect(secondExecute).not.toHaveBeenCalled();
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith(["call-first"]);
+    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([
+      { toolCallId: "call-first", args: {} },
+    ]);
     expect(releaseSkippedCalls).toHaveBeenCalledWith(["call-second"]);
     expect(requestMessages).toHaveLength(3);
     expect(agent.state.messages.slice(1, 5)).toMatchObject([
@@ -1239,6 +1242,183 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages[1]?.at(-1)).toBe(steer);
     expect(syncGetter).toHaveBeenCalled();
     expect(publicGetter).not.toHaveBeenCalled();
+  });
+
+  it("suppresses a tool when steering arrives during private execution preflight", async () => {
+    const preflightStarted = createDeferred();
+    const releasePreflight = createDeferred();
+    const execute = vi.fn(async () => ({ content: [], details: { executed: true } }));
+    const dispose = vi.fn();
+    const tool = attachInternalToolExecutionPreparer(
+      { ...makeTool("delayed", []), execute },
+      async () => {
+        preflightStarted.resolve();
+        await releasePreflight.promise;
+        const finalArgs = { rewritten: true };
+        return {
+          kind: "ready",
+          args: finalArgs,
+          execute: async (onImplementationStart) => {
+            onImplementationStart?.();
+            return await execute();
+          },
+          dispose,
+        };
+      },
+    );
+    const requestMessages: Message[][] = [];
+    const afterToolOutcome = vi.fn(async () => undefined);
+    const commitReadyCalls = vi.fn();
+    const releaseSkippedCalls = vi.fn();
+    const agent = new Agent({
+      initialState: { model, tools: [tool] },
+      streamFn: createTurnSequenceStream(
+        [
+          [{ type: "toolCall", id: "delayed-call", name: "delayed", arguments: {} }],
+          [{ type: "text", text: "redirected" }],
+        ],
+        requestMessages,
+      ),
+      toolExecution: "sequential",
+      afterToolOutcome,
+    });
+    setInternalBeforeToolBatch(agent, async () =>
+      attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
+    );
+    const steer = { role: "user" as const, content: "redirect", timestamp: 2 };
+
+    const run = agent.prompt("start");
+    await preflightStarted.promise;
+    agent.steer(steer);
+    releasePreflight.resolve();
+    await run;
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(commitReadyCalls).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(requestMessages[1]?.slice(-3)).toMatchObject([
+      { role: "assistant", stopReason: "toolUse" },
+      {
+        role: "toolResult",
+        toolCallId: "delayed-call",
+        isError: true,
+        details: { status: "skipped", deniedReason: "steering" },
+      },
+      steer,
+    ]);
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCall: expect.objectContaining({ id: "delayed-call" }),
+        args: { rewritten: true },
+        executionStarted: false,
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it.each(["sequential", "parallel"] as const)(
+    "uses private final args for %s launch facts and hooks",
+    async (toolExecution) => {
+      const finalArgs = { rewritten: true };
+      const execute = vi.fn(async () => ({ content: [], details: { executed: true } }));
+      const tool = attachInternalToolExecutionPreparer(
+        { ...makeTool("rewritten", []), execute },
+        async () => ({
+          kind: "ready",
+          args: finalArgs,
+          execute: async (start) => {
+            start?.();
+            return await execute();
+          },
+          dispose: vi.fn(),
+        }),
+      );
+      const afterToolCall = vi.fn(async () => undefined);
+      const afterToolOutcome = vi.fn(async () => undefined);
+      const commitReadyCalls = vi.fn();
+      const agent = new Agent({
+        initialState: { model, tools: [tool] },
+        streamFn: createTurnSequenceStream(
+          [
+            [{ type: "toolCall", id: "rewritten-call", name: "rewritten", arguments: {} }],
+            [{ type: "text", text: "done" }],
+          ],
+          [],
+        ),
+        toolExecution,
+        afterToolCall,
+        afterToolOutcome,
+      });
+      setInternalBeforeToolBatch(agent, async () =>
+        attachInternalToolBatchLifecycle(
+          {},
+          {
+            commitReadyCalls,
+            releaseSkippedCalls: vi.fn(),
+          },
+        ),
+      );
+
+      await agent.prompt("start");
+
+      expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([
+        { toolCallId: "rewritten-call", args: finalArgs },
+      ]);
+      expect(afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({ args: finalArgs }),
+        expect.any(AbortSignal),
+      );
+      expect(afterToolOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ args: finalArgs, executionStarted: true }),
+        expect.any(AbortSignal),
+      );
+      expect(execute).toHaveBeenCalledOnce();
+      expect(
+        agent.state.messages.find(
+          (message) => message.role === "assistant" && message.stopReason === "toolUse",
+        ),
+      ).toMatchObject({
+        content: [expect.objectContaining({ id: "rewritten-call", arguments: {} })],
+      });
+    },
+  );
+
+  it("disposes private preflight when the steering checkpoint throws", async () => {
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const dispose = vi.fn();
+    const tool = attachInternalToolExecutionPreparer(
+      { ...makeTool("cleanup", []), execute },
+      async ({ args }) => ({
+        kind: "ready",
+        args,
+        execute: async (onImplementationStart) => {
+          onImplementationStart?.();
+          return await execute();
+        },
+        dispose,
+      }),
+    );
+    const getSteeringMessages = vi
+      .fn<() => Promise<AgentMessage[]>>()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("steering checkpoint failed"));
+
+    await expect(
+      runAgentLoop(
+        [{ role: "user", content: "start", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        { ...config, toolExecution: "sequential", getSteeringMessages },
+        () => {},
+        undefined,
+        createTurnSequenceStream(
+          [[{ type: "toolCall", id: "cleanup-call", name: "cleanup", arguments: {} }]],
+          [],
+        ),
+      ),
+    ).rejects.toThrow("steering checkpoint failed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("delivers async steering between tools before shouldStopAfterTurn", async () => {
@@ -1491,7 +1671,7 @@ describe("agentLoop tool termination", () => {
     ]);
   });
 
-  it("commits a prepared parallel batch in assistant order before launch", async () => {
+  it("commits prepared parallel calls in assistant order at launch", async () => {
     const order: string[] = [];
     const requestMessages: Message[][] = [];
     const streamFn = createTurnSequenceStream(
@@ -1504,8 +1684,8 @@ describe("agentLoop tool termination", () => {
       ],
       requestMessages,
     );
-    const commitReadyCalls = vi.fn((ids: readonly string[]) => {
-      order.push(`commit:${ids.join(",")}`);
+    const commitReadyCalls = vi.fn((calls: readonly { toolCallId: string; args: unknown }[]) => {
+      order.push(`commit:${calls.map((call) => call.toolCallId).join(",")}`);
     });
     const releaseSkippedCalls = vi.fn();
 
@@ -1519,6 +1699,8 @@ describe("agentLoop tool termination", () => {
             ...makeTool("first", []),
             execute: async () => {
               order.push("execute:parallel-first");
+              await Promise.resolve();
+              order.push("gap:parallel-first");
               return { content: [], details: {} };
             },
           },
@@ -1526,6 +1708,8 @@ describe("agentLoop tool termination", () => {
             ...makeTool("second", []),
             execute: async () => {
               order.push("execute:parallel-second");
+              await Promise.resolve();
+              order.push("gap:parallel-second");
               return { content: [], details: {} };
             },
           },
@@ -1543,9 +1727,12 @@ describe("agentLoop tool termination", () => {
     );
 
     expect(order).toEqual([
-      "commit:parallel-first,parallel-second",
+      "commit:parallel-first",
       "execute:parallel-first",
+      "commit:parallel-second",
       "execute:parallel-second",
+      "gap:parallel-first",
+      "gap:parallel-second",
     ]);
     expect(releaseSkippedCalls).not.toHaveBeenCalled();
   });

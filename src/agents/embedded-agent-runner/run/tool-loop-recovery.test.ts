@@ -6,17 +6,14 @@ import type { AgentTool } from "../../runtime/index.js";
 
 const mocks = vi.hoisted(() => ({
   attachedLifecycles: [] as Array<{
-    commitReadyCalls: (ids: readonly string[]) => void;
+    commitReadyCalls: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
     releaseSkippedCalls: (ids: readonly string[]) => void;
   }>,
   committedArgs: [] as unknown[],
   releasedIds: [] as string[][],
-  admitToolCallBatch: vi.fn(async (calls: InternalToolBatchCall[]) => ({
-    commitReadyCalls(ids: readonly string[]) {
-      const readyIds = new Set(ids);
-      mocks.committedArgs.push(
-        ...calls.filter((call) => readyIds.has(call.toolCall.id)).map((call) => call.args),
-      );
+  admitToolCallBatch: vi.fn(async (_calls: InternalToolBatchCall[]) => ({
+    commitReadyCalls(readyCalls: readonly { toolCallId: string; args: unknown }[]) {
+      mocks.committedArgs.push(...readyCalls.map((call) => call.args));
     },
     releaseSkippedCalls(ids: readonly string[]) {
       mocks.releasedIds.push([...ids]);
@@ -94,7 +91,9 @@ describe("tool-loop recovery batch admission", () => {
       context: { systemPrompt: "", messages: [] },
     });
     const firstLifecycle = mocks.attachedLifecycles[0];
-    firstLifecycle?.commitReadyCalls(["code-alias"]);
+    firstLifecycle?.commitReadyCalls([
+      { toolCallId: "code-alias", args: { code: "return 1;", command: "return 1;" } },
+    ]);
     firstLifecycle?.releaseSkippedCalls([]);
     const second = await admission({
       assistantMessage: {
@@ -118,7 +117,9 @@ describe("tool-loop recovery batch admission", () => {
       context: { systemPrompt: "", messages: [] },
     });
     const secondLifecycle = mocks.attachedLifecycles[1];
-    secondLifecycle?.commitReadyCalls(["command-alias"]);
+    secondLifecycle?.commitReadyCalls([
+      { toolCallId: "command-alias", args: { command: "return 1;", code: "return 1;" } },
+    ]);
     secondLifecycle?.releaseSkippedCalls([]);
 
     const admittedArgs = mocks.admitToolCallBatch.mock.calls.map(([calls]) => calls[0]?.args);
