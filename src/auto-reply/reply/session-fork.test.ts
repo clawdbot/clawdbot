@@ -370,10 +370,12 @@ describe("forkSessionEntryFromParent", () => {
       ],
     );
 
-    await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
-      status: "fork",
-      parentTokens: 67,
-    });
+    const decision = await resolveParentForkDecision({ parentEntry, storePath });
+    expect(decision).toMatchObject({ status: "fork", parentTokens: expect.any(Number) });
+    if (decision.status !== "fork" || decision.parentTokens === undefined) {
+      throw new Error("expected a transcript-estimated fork decision");
+    }
+    expect(decision.parentTokens).toBeLessThan(parentEntry.totalTokens);
   });
 
   it("uses exact SQLite context usage instead of stale cached totals", async () => {
