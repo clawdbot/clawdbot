@@ -1817,6 +1817,8 @@ export const en: TranslationMap = {
     detached: "detached",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    dockMain: "Fill main content area",
+    dockMode: "Terminal panel position",
     unavailable: "The terminal is not available on this gateway.",
     uploadTooLarge: "File exceeds the 16 MiB terminal upload limit: {file}",
     uploadUnsafeCmdPath: "Cannot safely insert an uploaded path containing % or ! into cmd.exe",
