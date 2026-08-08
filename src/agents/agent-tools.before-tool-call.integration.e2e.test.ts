@@ -57,6 +57,7 @@ import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
+import { ToolInputError } from "./tools/common.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -1348,6 +1349,62 @@ describe("before_tool_call adapter and client tool integration", () => {
     };
   }
 
+  function installAbortIgnoringAllowedHook() {
+    let releaseHook: () => void = () => {};
+    const hookGate = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const rewrittenParams = { path: "/tmp/rewritten" };
+    installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        markStarted();
+        await hookGate;
+        return { params: rewrittenParams };
+      },
+    });
+    return { release: () => releaseHook(), rewrittenParams, started };
+  }
+
+  function createCancellationParityTool(pathKind: "wrapped" | "adapter" | "client") {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const recorder = { reserve: vi.fn(), complete: vi.fn(), discard: vi.fn() };
+    const runId = `run-late-cancellation-${pathKind}`;
+    const hookContext = { agentId: "main", runId };
+    if (pathKind === "client") {
+      const tool = expectDefined(
+        toClientToolDefinitions(
+          [
+            {
+              type: "function",
+              function: {
+                name: "client_tool",
+                description: "Client tool",
+                parameters: { type: "object", properties: { path: { type: "string" } } },
+              },
+            },
+          ],
+          recorder,
+          hookContext,
+        )[0],
+        "client cancellation parity tool",
+      );
+      return { execute, recorder, runId, tool, toolName: "client_tool" };
+    }
+
+    const sourceTool = asAgentTool({ name: "read", execute });
+    const hookedTool =
+      pathKind === "wrapped" ? wrapToolWithBeforeToolCallHook(sourceTool, hookContext) : sourceTool;
+    const tool = expectDefined(
+      toToolDefinitions([hookedTool], hookContext)[0],
+      `${pathKind} cancellation parity tool`,
+    );
+    return { execute, recorder, runId, tool, toolName: "read" };
+  }
+
   beforeEach(() => {
     resetGlobalHookRunner();
     resetDiagnosticSessionStateForTest();
@@ -1386,6 +1443,104 @@ describe("before_tool_call adapter and client tool integration", () => {
       expect(execute).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["wrapped", "adapter", "client"] as const)(
+    "stops the %s mutation boundary when an allowed hook ignores cancellation",
+    async (pathKind) => {
+      const controller = new AbortController();
+      const abortReason = new Error("run cancelled before tool mutation");
+      const hook = installAbortIgnoringAllowedHook();
+      const { execute, recorder, runId, tool, toolName } = createCancellationParityTool(pathKind);
+      const toolCallId = `call-late-cancellation-${pathKind}`;
+      const execution = tool.execute(
+        toolCallId,
+        { path: "/tmp/input" },
+        controller.signal,
+        undefined,
+        {} as ExtensionContext,
+      );
+      await hook.started;
+      controller.abort(abortReason);
+      hook.release();
+
+      const failure = await execution.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(abortReason.message);
+      if (pathKind === "wrapped") {
+        expect((failure as Error).cause).toBe(abortReason);
+      } else {
+        expect(failure).toBe(abortReason);
+      }
+      expect(execute).not.toHaveBeenCalled();
+      expect(consumeAdjustedParamsForToolCall(toolCallId, runId)).toBeUndefined();
+      if (pathKind === "client") {
+        expect(recorder.reserve).toHaveBeenCalledWith(toolCallId, toolName);
+        expect(recorder.discard).toHaveBeenCalledWith(toolCallId, toolName);
+        expect(recorder.complete).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["wrapped", "adapter", "client"] as const)(
+    "keeps allowed rewritten hook parameters on the non-cancelled %s path",
+    async (pathKind) => {
+      const controller = new AbortController();
+      const hook = installAbortIgnoringAllowedHook();
+      const { execute, recorder, runId, tool, toolName } = createCancellationParityTool(pathKind);
+      const toolCallId = `call-allowed-rewrite-${pathKind}`;
+      const execution = tool.execute(
+        toolCallId,
+        { path: "/tmp/input" },
+        controller.signal,
+        undefined,
+        {} as ExtensionContext,
+      );
+      await hook.started;
+      hook.release();
+
+      const result = await execution;
+      if (pathKind === "client") {
+        expect(result.terminate).toBe(true);
+        expect(recorder.reserve).toHaveBeenCalledWith(toolCallId, toolName);
+        expect(recorder.complete).toHaveBeenCalledWith(toolCallId, toolName, hook.rewrittenParams);
+        expect(recorder.discard).not.toHaveBeenCalled();
+      } else {
+        expect(execute).toHaveBeenCalledWith(
+          toolCallId,
+          hook.rewrittenParams,
+          controller.signal,
+          undefined,
+        );
+        expect(consumeAdjustedParamsForToolCall(toolCallId, runId)).toEqual(hook.rewrittenParams);
+      }
+    },
+  );
+
+  it("preserves input-error cancellation instead of converting it into a client tool result", async () => {
+    const controller = new AbortController();
+    const abortReason = new ToolInputError("run cancelled before client tool mutation");
+    const hook = installAbortIgnoringAllowedHook();
+    const { recorder, tool, toolName } = createCancellationParityTool("client");
+    const toolCallId = "call-client-input-error-cancellation";
+    const execution = tool.execute(
+      toolCallId,
+      { path: "/tmp/input" },
+      controller.signal,
+      undefined,
+      {} as ExtensionContext,
+    );
+    await hook.started;
+    controller.abort(abortReason);
+    hook.release();
+
+    await expect(execution).rejects.toBe(abortReason);
+    expect(recorder.reserve).toHaveBeenCalledWith(toolCallId, toolName);
+    expect(recorder.discard).toHaveBeenCalledWith(toolCallId, toolName);
+    expect(recorder.complete).not.toHaveBeenCalled();
+  });
 
   it("cancels client-tool hook work and releases its reservation", async () => {
     const controller = new AbortController();

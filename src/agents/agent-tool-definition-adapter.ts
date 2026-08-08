@@ -385,6 +385,8 @@ export function toToolDefinitions(
               }
               throw new Error(hookOutcome.reason);
             }
+            // Stop cancellation-ignoring hooks before the synchronous mutation boundary.
+            signal?.throwIfAborted();
             executeParams = finalizeBeforeToolCallExecutionParams({
               tool,
               preparedParams,
@@ -535,6 +537,8 @@ export function toClientToolDefinitions(
             }
             throw new Error(outcome.reason);
           }
+          // Stop cancellation-ignoring hooks before the synchronous mutation boundary.
+          signal?.throwIfAborted();
           const adjustedParams = outcome.params;
           const paramsRecord = coerceParamsRecord(adjustedParams, func.parameters);
           // Client-hosted tools have no tool-owned finalizer, so hook reconciliation
@@ -566,6 +570,9 @@ export function toClientToolDefinitions(
         } catch (err) {
           if (onClientToolCall && typeof onClientToolCall !== "function") {
             onClientToolCall.discard?.(toolCallId, func.name);
+          }
+          if (signal?.aborted) {
+            throw err;
           }
           if (err instanceof ToolInputError) {
             return buildToolExecutionErrorResult({
