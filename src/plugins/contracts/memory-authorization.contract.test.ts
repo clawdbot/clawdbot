@@ -116,9 +116,9 @@ describe("memory authorization SDK contract", () => {
   });
 
   it("makes authorized search results the exact-read continuation input", () => {
-    type SearchResult = Awaited<ReturnType<AuthorizedMemoryRuntime["searchAuthorized"]>>[
-      "value"
-    ][number];
+    type SearchResult = Awaited<
+      ReturnType<AuthorizedMemoryRuntime["searchAuthorized"]>
+    >["value"][number];
     type ReadHandle = Parameters<AuthorizedMemoryRuntime["readAuthorized"]>[0]["handle"];
 
     expectTypeOf<SearchResult>().toEqualTypeOf<AuthorizedMemorySearchResult>();
@@ -338,7 +338,10 @@ describe("memory authorization conformance suite", () => {
         const decision = evaluateMemoryAuthorizationConformanceScenario(params);
         return decision.allowed
           ? decision
-          : (Object.assign(Object.create(null), decision) as MemoryAuthorizationConformanceDecision);
+          : (Object.assign(
+              Object.create(null),
+              decision,
+            ) as MemoryAuthorizationConformanceDecision);
       },
       prefilter: (scenario) => scenario.resources.map((resource) => resource.resourceId),
     };
