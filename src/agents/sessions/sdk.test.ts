@@ -401,7 +401,7 @@ describe("AgentSession queued user turns", () => {
       sourceChannel: "internal",
       sourceTool: "sessions_send",
     };
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => true });
 
     await session.steer("delegated work", undefined, undefined, undefined, undefined, origin);
 
@@ -423,7 +423,7 @@ describe("AgentSession queued user turns", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation((message) => message);
+    const steer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => true });
 
     await session.steer("runtime group prompt", undefined, recorder);
 
@@ -447,7 +447,7 @@ describe("AgentSession queued user turns", () => {
 
   it("carries prompt facts non-enumerably on the exact steered message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation((message) => message);
+    const steer = vi.spyOn(session.agent, "steer").mockReturnValue({ cancel: () => true });
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;
     const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };

@@ -342,12 +342,7 @@ export class Agent {
   }
 
   /** Queue a message to be injected after the current assistant turn finishes. */
-  steer(message: AgentMessage): void {
-    this.steeringQueue.enqueue(message);
-  }
-
-  /** Queue a steering message and return exact pending-entry cancellation. */
-  steerWithReceipt(message: AgentMessage): { cancel(): boolean } {
+  steer(message: AgentMessage): { cancel(): boolean } {
     return this.steeringQueue.enqueue(message);
   }
 

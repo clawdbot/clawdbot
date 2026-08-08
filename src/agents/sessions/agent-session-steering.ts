@@ -1,210 +1,176 @@
+import { createDeferred, type Deferred } from "../../shared/deferred.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 export type AgentSessionSteerReceipt = {
+  accepted: Promise<void>;
   committed: Promise<void>;
   cancel(): boolean;
 };
 
-type AgentQueueReceipt = {
-  cancel(): boolean;
-};
-
-type SteeringState = "preparing" | "ready" | "queued" | "started" | "committed";
-
+type QueueReceipt = { cancel(): boolean };
 type SteeringItem = {
-  text: string;
-  state: SteeringState;
-  enqueue?: () => AgentQueueReceipt;
+  accepted?: Deferred<void>;
+  committed?: Deferred<void>;
+  enqueue?: () => QueueReceipt;
   message?: AgentMessage;
-  queueReceipt?: AgentQueueReceipt;
-  resolveCommitted?: () => void;
-  rejectCommitted?: (error: unknown) => void;
+  queueReceipt?: QueueReceipt;
+  text: string;
 };
-
-type AgentSessionSteerReservation = {
-  receipt: AgentSessionSteerReceipt;
-  admit(text: string, message: AgentMessage, enqueue: () => AgentQueueReceipt): boolean;
-  reject(error: unknown): void;
-};
-
 export class AgentSessionSteering {
-  private items: SteeringItem[] = [];
+  private readonly pending: SteeringItem[] = [];
+  private readonly byMessage = new Map<AgentMessage, SteeringItem>();
 
   constructor(private readonly onChange: () => void) {}
 
-  reserve(text: string): AgentSessionSteerReservation {
-    let resolveCommitted!: () => void;
-    let rejectCommitted!: (error: unknown) => void;
-    const committed = new Promise<void>((resolve, reject) => {
-      resolveCommitted = resolve;
-      rejectCommitted = reject;
-    });
-    // Cleanup may reject before the active-run waiter starts awaiting.
-    void committed.catch(() => {});
-    const item: SteeringItem = {
-      text,
-      state: "preparing",
-      resolveCommitted,
-      rejectCommitted,
-    };
-    const receipt: AgentSessionSteerReceipt = {
-      committed,
-      cancel: () => this.cancel(item),
-    };
-    this.items.push(item);
+  reserve(text: string) {
+    const accepted = createDeferred();
+    const committed = createDeferred();
+    void accepted.promise.catch(() => {});
+    void committed.promise.catch(() => {});
+    const item: SteeringItem = { accepted, committed, text };
+    this.pending.push(item);
     this.onChange();
     return {
-      receipt,
+      receipt: {
+        accepted: accepted.promise,
+        committed: committed.promise,
+        cancel: () => this.cancel(item),
+      },
       admit: (preparedText, message, enqueue) => {
-        if (!this.has(item) || item.state !== "preparing") {
+        if (!this.pending.includes(item) || item.enqueue || item.queueReceipt) {
           return false;
         }
-        item.enqueue = enqueue;
-        item.text = preparedText;
-        item.message = message;
-        item.state = "ready";
-        this.drainReady();
+        Object.assign(item, { text: preparedText, message, enqueue });
+        this.drain();
         this.onChange();
         return true;
       },
       reject: (error) => {
-        if (!this.has(item) || item.state !== "preparing") {
-          return;
+        if (this.pending.includes(item) && !item.queueReceipt) {
+          this.fail(item, error);
+          this.drain();
+          this.onChange();
         }
-        this.rejectItem(item, error);
-        this.drainReady();
-        this.onChange();
       },
     };
   }
 
-  add(text: string, message: AgentMessage): void {
-    this.items.push({ text, message, state: "queued" });
+  add(text: string, message: AgentMessage, queueReceipt: QueueReceipt): void {
+    const item = { message, queueReceipt, text };
+    this.pending.push(item);
+    this.byMessage.set(message, item);
     this.onChange();
   }
 
   start(message: AgentMessage): boolean {
-    const item = this.find(message);
+    const item = this.byMessage.get(message);
     if (!item) {
       return false;
     }
-    if (item.state === "queued") {
-      item.state = "started";
+    if (this.removePending(item)) {
       this.onChange();
     }
     return true;
   }
 
   resolve(message: AgentMessage): void {
-    const item = this.find(message);
-    if (!item) {
-      return;
-    }
-    const wasPending = this.isPending(item);
-    item.state = "committed";
-    this.remove(item);
-    item.resolveCommitted?.();
-    if (wasPending) {
-      this.onChange();
-    }
+    this.settle(message);
   }
-
   reject(message: AgentMessage, error: unknown): void {
-    const item = this.find(message);
-    if (!item) {
-      return;
-    }
-    const wasPending = this.isPending(item);
-    this.rejectItem(item, error);
-    if (wasPending) {
-      this.onChange();
-    }
+    this.settle(message, error);
   }
 
   clear(): string[] {
     const cleared: string[] = [];
-    for (const item of this.items.slice()) {
-      if (item.state === "started" || item.state === "committed") {
-        continue;
-      }
-      if (item.state === "queued" && item.queueReceipt && !item.queueReceipt.cancel()) {
-        // A drained entry remains owned by transcript persistence.
-        item.state = "started";
+    let changed = false;
+    for (const item of [...this.pending]) {
+      if (item.queueReceipt && !item.queueReceipt.cancel()) {
+        this.removePending(item);
+        changed = true;
         continue;
       }
       cleared.push(item.text);
-      this.rejectItem(item, new Error("queued steering message was cleared"));
+      this.fail(item, new Error("queued steering message was cleared"));
+      changed = true;
+    }
+    this.drain();
+    if (changed) {
+      this.onChange();
     }
     return cleared;
   }
 
   dispose(): void {
-    const snapshot = this.items.slice();
-    for (const item of snapshot) {
+    for (const item of new Set([...this.pending, ...this.byMessage.values()])) {
       item.queueReceipt?.cancel();
-      this.rejectItem(item, new Error("agent session was disposed"));
+      this.fail(item, new Error("agent session was disposed"));
     }
   }
 
   get pendingTexts(): string[] {
-    return this.items.filter((item) => this.isPending(item)).map((item) => item.text);
+    return this.pending.map((item) => item.text);
   }
-
   get pendingCount(): number {
-    return this.items.reduce((count, item) => count + (this.isPending(item) ? 1 : 0), 0);
+    return this.pending.length;
   }
 
-  private find(message: AgentMessage): SteeringItem | undefined {
-    return this.items.find((item) => item.message === message);
-  }
-
-  private has(item: SteeringItem): boolean {
-    return this.items.includes(item);
-  }
-
-  private isPending(item: SteeringItem): boolean {
-    return item.state === "preparing" || item.state === "ready" || item.state === "queued";
-  }
-
-  private remove(item: SteeringItem): void {
-    const index = this.items.indexOf(item);
-    if (index !== -1) {
-      this.items.splice(index, 1);
+  private settle(message: AgentMessage, error?: unknown): void {
+    const item = this.byMessage.get(message);
+    if (!item) {
+      return;
     }
+    const notify = this.removePending(item);
+    this.byMessage.delete(message);
+    error === undefined ? item.committed?.resolve(undefined) : item.committed?.reject(error);
+    if (notify) this.onChange();
   }
 
-  private rejectItem(item: SteeringItem, error: unknown): void {
-    this.remove(item);
-    item.rejectCommitted?.(error);
+  private removePending(item: SteeringItem): boolean {
+    const index = this.pending.indexOf(item);
+    if (index < 0) return false;
+    this.pending.splice(index, 1);
+    return true;
   }
 
-  private drainReady(): void {
+  private fail(item: SteeringItem, error: unknown): void {
+    this.removePending(item);
+    if (item.message) {
+      this.byMessage.delete(item.message);
+    }
+    if (!item.queueReceipt) {
+      item.accepted?.reject(error);
+    }
+    item.committed?.reject(error);
+  }
+
+  private drain(): void {
     while (true) {
-      const next = this.items.find((item) => item.state === "preparing" || item.state === "ready");
-      if (!next || next.state === "preparing") {
+      const item = this.pending.find((candidate) => !candidate.queueReceipt);
+      if (!item?.enqueue || !item.message) {
         return;
       }
       try {
-        next.queueReceipt = next.enqueue?.();
-        next.enqueue = undefined;
-        next.state = "queued";
+        item.queueReceipt = item.enqueue();
+        item.enqueue = undefined;
+        this.byMessage.set(item.message, item);
+        item.accepted?.resolve(undefined);
       } catch (error) {
-        this.rejectItem(next, error);
+        this.fail(item, error);
       }
     }
   }
 
   private cancel(item: SteeringItem): boolean {
-    if (!this.has(item) || item.state === "started" || item.state === "committed") {
+    if (!this.pending.includes(item)) {
       return false;
     }
-    if (item.state === "queued" && item.queueReceipt && !item.queueReceipt.cancel()) {
-      item.state = "started";
+    if (item.queueReceipt && !item.queueReceipt.cancel()) {
+      this.removePending(item);
       this.onChange();
       return false;
     }
-    this.rejectItem(item, new Error("queued steering message was cancelled"));
-    this.drainReady();
+    this.fail(item, new Error("queued steering message was cancelled"));
+    this.drain();
     this.onChange();
     return true;
   }

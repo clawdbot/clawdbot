@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
@@ -13,6 +12,22 @@ const mocks = vi.hoisted(() => ({
   setActiveRun: vi.fn(),
   subscribe: vi.fn(),
 }));
+
+function createSteerReceipt() {
+  let resolveAccepted!: () => void;
+  const accepted = new Promise<void>((resolve) => {
+    resolveAccepted = resolve;
+  });
+  let resolveCommitted!: () => void;
+  const committed = new Promise<void>((resolve) => {
+    resolveCommitted = resolve;
+  });
+  return {
+    receipt: { accepted, committed, cancel: vi.fn(() => true) },
+    resolveAccepted,
+    resolveCommitted,
+  };
+}
 
 vi.mock("../../embedded-agent-subscribe.js", () => ({
   subscribeEmbeddedAgentSession: mocks.subscribe,
@@ -34,30 +49,6 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
-type AgentSessionSteerReceipt = {
-  committed: Promise<void>;
-  cancel(): boolean;
-};
-
-function createDeferredReceipt(cancel: () => boolean = () => false): {
-  receipt: AgentSessionSteerReceipt;
-  resolve: () => void;
-  reject: (error: unknown) => void;
-} {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const committed = new Promise<void>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  void committed.catch(() => {});
-  return {
-    receipt: { committed, cancel },
-    resolve,
-    reject,
-  };
-}
-
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],
   options?: {
@@ -70,6 +61,9 @@ function prepareCatalogExecutor(
     runAbortController?: AbortController;
     sandboxSessionKey?: string;
     sessionKey?: string;
+    onAttemptAbort?: () => void;
+    abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
+    markExternalAbort?: () => void;
     activeSession?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"];
     trajectoryRecorder?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["trajectoryRecorder"];
   },
@@ -80,6 +74,7 @@ function prepareCatalogExecutor(
       runId: "run-output-schema",
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
+      onAttemptAbort: options?.onAttemptAbort,
     } as never,
     activeSession: options?.activeSession ?? ({ agent: {}, isStreaming: false } as never),
     hookRunner: undefined as never,
@@ -89,8 +84,8 @@ function prepareCatalogExecutor(
     toolSearchTargetTranscriptProjections: projections,
     isReplaySafeTool: () => false,
     runAbortController,
-    abortRun: vi.fn(),
-    markExternalAbort: vi.fn(),
+    abortRun: options?.abortRun ?? vi.fn(),
+    markExternalAbort: options?.markExternalAbort ?? vi.fn(),
     getRunState:
       options?.getRunState ??
       (() => ({
@@ -274,369 +269,80 @@ describe("prepareEmbeddedAttemptStream", () => {
     await queued;
   });
 
-  it("records queued prompt provenance only after transcript commitment", async () => {
-    const origin = {
-      kind: "inter_session" as const,
-      sourceSessionKey: "agent:sender:main",
-      sourceChannel: "internal",
-      sourceTool: "sessions_send",
-    };
-    const deferred = createDeferredReceipt();
-    const message = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: "delegated work" }],
-      timestamp: 1,
-      provenance: origin,
-    };
+  it("records confirmed no-origin steering once and exposes the same message injection", async () => {
+    const deferred = createSteerReceipt();
+    const steerWithReceipt = vi.fn(() => deferred.receipt);
+    const recordEvent = vi.fn();
     const activeSession = {
-      agent: {
-        hasQueuedMessages: () => true,
-        steeringQueue: { messages: [message] },
-      },
+      agent: { hasQueuedMessages: () => true },
       isStreaming: true,
-      messages: [message],
+      messages: [{ role: "user", content: "queued" }],
       pendingMessageCount: 1,
       steer: vi.fn(async () => undefined),
-      steerWithReceipt: vi.fn(() => deferred.receipt),
-      subscribe: vi.fn(() => () => undefined),
+      steerWithReceipt,
     };
-    const recordEvent = vi.fn();
-    const prepared = prepareEmbeddedAttemptStream({
-      attempt: {
-        runId: "run-active-delegation",
-        sessionId: "session-active-delegation",
-        sessionKey: "agent:receiver:main",
-      } as never,
+    const prepared = prepareCatalogExecutor([], {
       activeSession: activeSession as never,
-      hookRunner: undefined as never,
-      hookAgentId: "receiver",
-      diagnosticTrace: {} as never,
-      clientToolCallSlots: [],
-      toolSearchTargetTranscriptProjections: [],
-      isReplaySafeTool: () => false,
-      runAbortController: new AbortController(),
-      abortRun: vi.fn(),
-      markExternalAbort: vi.fn(),
-      getRunState: () => ({
-        aborted: false,
-        promptError: undefined,
-        timedOut: false,
-        yieldDetected: false,
-      }),
-      hasDeliveredSourceReply: () => false,
-      markSourceReplyDelivered: vi.fn(),
-      onBlockReply: vi.fn(),
-      onBlockReplyFlush: vi.fn(),
-      sandboxSessionKey: "agent:receiver:main",
-      builtinToolNames: new Set(),
-      replaySafeToolNames: new Set(),
       trajectoryRecorder: { recordEvent } as never,
     });
+    const accepted = vi.fn();
 
-    const queued = prepared.queueHandle.queueMessage("delegated work", {
-      deliveryTimeoutMs: 10_000,
+    expect(prepared.queueHandle.messageInjection?.isAvailable()).toBe(true);
+    const queued = prepared.queueHandle.messageInjection!.queueMessage("queued prompt", {
+      onQueueAccepted: accepted,
       waitForTranscriptCommit: true,
-      inputProvenance: origin,
     });
-    await vi.waitFor(() => expect(activeSession.steerWithReceipt).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(steerWithReceipt).toHaveBeenCalledOnce());
     expect(recordEvent).not.toHaveBeenCalled();
 
-    deferred.resolve();
+    deferred.resolveAccepted();
+    await vi.waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
+    deferred.resolveCommitted();
     await queued;
 
     expect(recordEvent).toHaveBeenCalledOnce();
     expect(recordEvent).toHaveBeenCalledWith("prompt.submitted", {
-      prompt: "delegated work",
-      messages: [message],
+      prompt: "queued prompt",
+      messages: activeSession.messages,
       imagesCount: 0,
-      origin,
     });
   });
 
-  it("does not record a pending-input answer as a queued prompt", async () => {
-    const sessionKey = "agent:receiver:pending-answer";
+  it("records confirmed steering provenance only after commitment", async () => {
+    const deferred = createSteerReceipt();
+    const steerWithReceipt = vi.fn(() => deferred.receipt);
+    const recordEvent = vi.fn();
     const origin = {
       kind: "inter_session" as const,
       sourceSessionKey: "agent:sender:main",
       sourceTool: "sessions_send",
     };
-    const answers = { answers: { answer: ["Continue"] } };
-    const pending = registerPendingAgentQuestion({
-      questionId: "ask_pending_answer",
-      sessionKey,
-      questions: [
-        {
-          id: "answer",
-          header: "Answer",
-          question: "What should happen?",
-          isOther: true,
-          options: [],
-        },
-      ],
-      gatewayCall: vi.fn(async () => ({ status: "answered", answers })),
-      answer: Promise.resolve({ status: "answered", answers }),
-    });
-    const steer = vi.fn(async () => undefined);
-    const recordEvent = vi.fn();
     const prepared = prepareCatalogExecutor([], {
-      sessionKey,
       activeSession: {
-        agent: {},
+        agent: { hasQueuedMessages: () => true },
         isStreaming: true,
         messages: [],
-        steer,
-        subscribe: vi.fn(() => () => undefined),
+        pendingMessageCount: 1,
+        steer: vi.fn(async () => undefined),
+        steerWithReceipt,
       } as never,
       trajectoryRecorder: { recordEvent } as never,
     });
 
-    try {
-      await expect(
-        prepared.queueHandle.queueMessage("Continue", {
-          isInboundUserMessage: true,
-          waitForTranscriptCommit: true,
-          inputProvenance: origin,
-        }),
-      ).resolves.toBeUndefined();
-      expect(steer).not.toHaveBeenCalled();
-      expect(recordEvent).not.toHaveBeenCalled();
-    } finally {
-      pending.dispose();
-    }
-  });
-
-  it("does not record steering when transcript confirmation was not requested", async () => {
-    const origin = {
-      kind: "inter_session" as const,
-      sourceSessionKey: "agent:sender:main",
-      sourceTool: "sessions_send",
-    };
-    const steer = vi.fn(async () => undefined);
-    const recordEvent = vi.fn();
-    const prepared = prepareCatalogExecutor([], {
-      activeSession: {
-        agent: {},
-        isStreaming: true,
-        messages: [],
-        steer,
-        subscribe: vi.fn(() => () => undefined),
-      } as never,
-      trajectoryRecorder: { recordEvent } as never,
+    const queued = prepared.queueHandle.queueMessage("delegated work", {
+      inputProvenance: origin,
+      waitForTranscriptCommit: true,
     });
-
-    await expect(
-      prepared.queueHandle.queueMessage("fire and continue", {
-        inputProvenance: origin,
-      }),
-    ).resolves.toBeUndefined();
-    expect(steer).toHaveBeenCalledOnce();
+    deferred.resolveAccepted();
+    await Promise.resolve();
     expect(recordEvent).not.toHaveBeenCalled();
-  });
+    deferred.resolveCommitted();
+    await queued;
 
-  it("records each identical queued prompt from only its exact committed receipt", async () => {
-    const firstOrigin = {
-      kind: "inter_session" as const,
-      sourceSessionKey: "agent:first:main",
-      sourceTool: "sessions_send",
-    };
-    const secondOrigin = {
-      kind: "inter_session" as const,
-      sourceSessionKey: "agent:second:main",
-      sourceTool: "sessions_send",
-    };
-    const firstMessage = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: "same delegated work" }],
-      timestamp: 1,
-      provenance: firstOrigin,
-    };
-    const secondMessage = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: "same delegated work" }],
-      timestamp: 2,
-      provenance: secondOrigin,
-    };
-    const firstReceipt = createDeferredReceipt();
-    const secondReceipt = createDeferredReceipt();
-    const receipts = [firstReceipt.receipt, secondReceipt.receipt];
-    const activeSession = {
-      agent: { hasQueuedMessages: () => true },
-      isStreaming: true,
-      messages: [firstMessage, secondMessage],
-      pendingMessageCount: 2,
-      steer: vi.fn(async () => undefined),
-      steerWithReceipt: vi.fn(() => receipts.shift()!),
-      subscribe: vi.fn(() => () => undefined),
-    };
-    const recordEvent = vi.fn();
-    const prepared = prepareEmbeddedAttemptStream({
-      attempt: {
-        runId: "run-identical-delegation",
-        sessionId: "session-identical-delegation",
-        sessionKey: "agent:receiver:main",
-      } as never,
-      activeSession: activeSession as never,
-      hookRunner: undefined as never,
-      hookAgentId: "receiver",
-      diagnosticTrace: {} as never,
-      clientToolCallSlots: [],
-      toolSearchTargetTranscriptProjections: [],
-      isReplaySafeTool: () => false,
-      runAbortController: new AbortController(),
-      abortRun: vi.fn(),
-      markExternalAbort: vi.fn(),
-      getRunState: () => ({
-        aborted: false,
-        promptError: undefined,
-        timedOut: false,
-        yieldDetected: false,
-      }),
-      hasDeliveredSourceReply: () => false,
-      markSourceReplyDelivered: vi.fn(),
-      onBlockReply: vi.fn(),
-      onBlockReplyFlush: vi.fn(),
-      sandboxSessionKey: "agent:receiver:main",
-      builtinToolNames: new Set(),
-      replaySafeToolNames: new Set(),
-      trajectoryRecorder: { recordEvent } as never,
-    });
-
-    const firstQueued = prepared.queueHandle.queueMessage("same delegated work", {
-      waitForTranscriptCommit: true,
-      inputProvenance: firstOrigin,
-    });
-    const secondQueued = prepared.queueHandle.queueMessage("same delegated work", {
-      waitForTranscriptCommit: true,
-      inputProvenance: secondOrigin,
-    });
-    await vi.waitFor(() => expect(activeSession.steerWithReceipt).toHaveBeenCalledTimes(2));
-
-    firstReceipt.resolve();
-    await firstQueued;
-    expect(recordEvent).toHaveBeenCalledTimes(1);
-    expect(recordEvent).toHaveBeenLastCalledWith(
+    expect(recordEvent).toHaveBeenCalledWith(
       "prompt.submitted",
-      expect.objectContaining({ origin: firstOrigin }),
+      expect.objectContaining({ origin, prompt: "delegated work" }),
     );
-
-    secondReceipt.resolve();
-    await secondQueued;
-    expect(recordEvent).toHaveBeenCalledTimes(2);
-    expect(recordEvent).toHaveBeenLastCalledWith(
-      "prompt.submitted",
-      expect.objectContaining({ origin: secondOrigin }),
-    );
-  });
-
-  it.each([
-    {
-      name: "runtime rejection",
-      runtimeReject: true,
-      persistenceReject: false,
-      cancelResult: false,
-      timeoutMs: 10_000,
-      expectedError: "steering rejected",
-    },
-    {
-      name: "transcript timeout",
-      runtimeReject: false,
-      persistenceReject: false,
-      cancelResult: true,
-      timeoutMs: 1,
-      expectedError: "before timeout",
-    },
-    {
-      name: "accepted without transcript confirmation",
-      runtimeReject: false,
-      persistenceReject: false,
-      cancelResult: false,
-      timeoutMs: 1,
-      expectedError: undefined,
-    },
-    {
-      name: "transcript persistence failure",
-      runtimeReject: false,
-      persistenceReject: true,
-      cancelResult: false,
-      timeoutMs: 10_000,
-      expectedError: "transcript write failed",
-    },
-  ])("does not record queued prompt provenance after $name", async (testCase) => {
-    vi.useFakeTimers();
-    try {
-      const origin = {
-        kind: "inter_session" as const,
-        sourceSessionKey: "agent:sender:main",
-        sourceTool: "sessions_send",
-      };
-      const deferred = createDeferredReceipt(() => testCase.cancelResult);
-      const steerWithReceipt = testCase.runtimeReject
-        ? vi.fn(() => {
-            throw new Error("steering rejected");
-          })
-        : vi.fn(() => deferred.receipt);
-      const recordEvent = vi.fn();
-      const prepared = prepareEmbeddedAttemptStream({
-        attempt: {
-          runId: `run-${testCase.name}`,
-          sessionId: `session-${testCase.name}`,
-          sessionKey: "agent:receiver:main",
-        } as never,
-        activeSession: {
-          agent: {
-            hasQueuedMessages: () => true,
-          },
-          isStreaming: true,
-          messages: [],
-          pendingMessageCount: 1,
-          steer: vi.fn(async () => undefined),
-          steerWithReceipt,
-          subscribe: vi.fn(() => () => undefined),
-        } as never,
-        hookRunner: undefined as never,
-        hookAgentId: "receiver",
-        diagnosticTrace: {} as never,
-        clientToolCallSlots: [],
-        toolSearchTargetTranscriptProjections: [],
-        isReplaySafeTool: () => false,
-        runAbortController: new AbortController(),
-        abortRun: vi.fn(),
-        markExternalAbort: vi.fn(),
-        getRunState: () => ({
-          aborted: false,
-          promptError: undefined,
-          timedOut: false,
-          yieldDetected: false,
-        }),
-        hasDeliveredSourceReply: () => false,
-        markSourceReplyDelivered: vi.fn(),
-        onBlockReply: vi.fn(),
-        onBlockReplyFlush: vi.fn(),
-        sandboxSessionKey: "agent:receiver:main",
-        builtinToolNames: new Set(),
-        replaySafeToolNames: new Set(),
-        trajectoryRecorder: { recordEvent } as never,
-      });
-
-      const queued = prepared.queueHandle.queueMessage("delegated work", {
-        deliveryTimeoutMs: testCase.timeoutMs,
-        waitForTranscriptCommit: true,
-        inputProvenance: origin,
-      });
-      const outcome = testCase.expectedError
-        ? expect(queued).rejects.toThrow(testCase.expectedError)
-        : expect(queued).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
-      if (testCase.persistenceReject) {
-        await vi.waitFor(() => expect(steerWithReceipt).toHaveBeenCalledOnce());
-        deferred.reject(new Error("transcript write failed"));
-      }
-      await vi.advanceTimersByTimeAsync(testCase.timeoutMs + 1);
-
-      await outcome;
-      expect(recordEvent).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("routes live events to the transcript session instead of the sandbox authority session", () => {

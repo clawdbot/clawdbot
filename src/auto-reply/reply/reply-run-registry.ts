@@ -48,6 +48,9 @@ export type ReplyBackendQueueMessageOptions = {
   media?: MediaFact[];
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
+  abortSignal?: AbortSignal;
+  /** Releases arrival ordering once the runtime has actually accepted this queue item. */
+  onQueueAccepted?: (accepted: boolean) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Typed source identity for queued model input and durable transcript persistence. */
@@ -64,11 +67,19 @@ export type ReplyBackendQueueMessageResult = {
 
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
+  readonly runId?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
   cancel(reason?: ReplyBackendCancelReason): void;
+  readonly messageInjection?: {
+    isAvailable(): boolean;
+    queueMessage(
+      text: string,
+      options?: ReplyBackendQueueMessageOptions,
+    ): Promise<void | ReplyBackendQueueMessageResult>;
+  };
   isStreaming(): boolean;
   isStopped?: () => boolean;
   isAbortable?: () => boolean;

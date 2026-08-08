@@ -1,7 +1,6 @@
 /**
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
-import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -14,291 +13,177 @@ import {
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
-type AgentSessionSteerReceipt = {
+type SteerReceipt = {
+  accepted: Promise<void>;
   committed: Promise<void>;
   cancel(): boolean;
 };
-
-type ReceiptAwareSteerTarget = {
-  steerWithReceipt(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    inputProvenance?: InputProvenance,
-  ): AgentSessionSteerReceipt;
+type SteerArgs = [
+  text: string,
+  images?: ImageContent[],
+  recorder?: UserTurnTranscriptRecorder,
+  media?: MediaFact[],
+  imageOrder?: PromptImageOrderEntry[],
+  provenance?: InputProvenance,
+];
+type SteerTarget = {
+  steer(...args: SteerArgs): Promise<void>;
+  steerWithReceipt?(...args: SteerArgs): SteerReceipt;
 };
-
-type EmbeddedSteeringQueueOutcome =
+type SteeringOutcome =
   | { kind: "answered-pending-input" }
   | { kind: "steered"; transcriptCommit: "confirmed" | "not-requested" }
   | { kind: "accepted-unconfirmed"; errorMessage: string };
 
-/**
- * Minimal active-session surface needed to steer a running attempt and observe
- * whether the queued user message reached the transcript.
- */
-type EmbeddedAgentActiveSessionSteerTarget = {
-  steer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    inputProvenance?: InputProvenance,
-  ): Promise<void>;
-  subscribe(listener: (event: unknown) => void): () => void;
-};
+const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
 
-function isReceiptAwareSteerTarget(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-): activeSession is EmbeddedAgentActiveSessionSteerTarget & ReceiptAwareSteerTarget {
-  return (
-    "steerWithReceipt" in activeSession &&
-    typeof (activeSession as { steerWithReceipt?: unknown }).steerWithReceipt === "function"
-  );
-}
+class ReceiptWaitError extends Error {}
 
-/** Default wait for a steered user message to appear in the active transcript. */
-const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
-
-class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "EmbeddedSteeringAcceptedUnconfirmedError";
-  }
-}
-
-function steerActiveSession(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-  images?: ImageContent[],
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  media?: MediaFact[],
-  imageOrder?: PromptImageOrderEntry[],
-  inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
-): Promise<void> {
-  if (inputProvenance) {
-    return activeSession.steer(
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      inputProvenance,
-    );
-  }
-  if (media?.length) {
-    return activeSession.steer(text, images, userTurnTranscriptRecorder, media, imageOrder);
-  }
-  return userTurnTranscriptRecorder
-    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-    : activeSession.steer(text, images);
-}
-
-function isTerminalActiveSessionEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "agent_end",
-  );
-}
-
-function isAutoRetryStartEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "auto_retry_start",
-  );
-}
-
-function isCompactionStartEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "compaction_start",
-  );
-}
-
-/**
- * Sends a steering message and resolves only after its session-owned receipt
- * confirms transcript persistence. Terminal events only drive timely cleanup.
- */
-function steerAndWaitForTranscriptCommit(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
+function waitForStage(
+  stage: Promise<void>,
   deadlineMs: number,
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  images?: ImageContent[],
-  media?: MediaFact[],
-  imageOrder?: PromptImageOrderEntry[],
-  inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
+  signal: AbortSignal | undefined,
+  timeoutMessage: string,
 ): Promise<void> {
-  if (!isReceiptAwareSteerTarget(activeSession)) {
-    return Promise.reject(new Error("active session does not support transcript commit receipts"));
+  if (signal?.aborted) {
+    return Promise.reject(new ReceiptWaitError("queued steering message was cancelled"));
+  }
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    return Promise.reject(new ReceiptWaitError(timeoutMessage));
   }
   return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let receipt: AgentSessionSteerReceipt | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let terminalTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (err?: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (terminalTimer) {
-        clearTimeout(terminalTimer);
-      }
-      unsubscribe?.();
-      if (err) {
-        reject(toErrorObject(err, "Non-Error rejection"));
-        return;
-      }
-      resolve();
+    const finish = (error?: unknown) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      error === undefined ? resolve() : reject(error);
     };
-    const rejectAfterCancellation = (message: string) => {
-      if (!receipt) {
-        finish(new Error(message));
-        return;
-      }
-      try {
-        if (!receipt.cancel()) {
-          log.warn("failed to find queued steering receipt for cancellation");
-          finish(new EmbeddedSteeringAcceptedUnconfirmedError(message));
-          return;
-        }
-        finish(new Error(message));
-      } catch (error) {
-        log.warn(`failed to cancel queued steering message: ${String(error)}`);
-        finish(new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: error }));
-      }
-    };
-    const scheduleTerminalCancellation = () => {
-      if (terminalTimer) {
-        return;
-      }
-      terminalTimer = setTimeout(() => {
-        terminalTimer = undefined;
-        rejectAfterCancellation(
-          "active session ended before queued steering message was committed to the transcript",
-        );
-      }, 0);
-      terminalTimer.unref?.();
-    };
-    const timeoutMessage =
-      "queued steering message was not committed to the transcript before timeout";
-    const startCommitTimer = () => {
-      const remainingMs = deadlineMs - Date.now();
-      if (remainingMs <= 0) {
-        rejectAfterCancellation(timeoutMessage);
-        return;
-      }
-      timer = setTimeout(() => rejectAfterCancellation(timeoutMessage), remainingMs);
-      timer.unref?.();
-    };
-    const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
-      if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
-        // Continuation events prove the run is still alive under a new attempt,
-        // so keep waiting for the queued user message to drain.
-        if (terminalTimer) {
-          clearTimeout(terminalTimer);
-          terminalTimer = undefined;
-        }
-        return;
-      }
-      if (isTerminalActiveSessionEvent(event)) {
-        // AgentSession emits agent_end before announcing auto-retry or
-        // auto-compaction continuations. Defer cancellation one tick so those
-        // continuation events can keep draining this message.
-        scheduleTerminalCancellation();
-      }
-    });
-    try {
-      receipt = activeSession.steerWithReceipt(
-        text,
-        images,
-        userTurnTranscriptRecorder,
-        media,
-        imageOrder,
-        inputProvenance,
-      );
-      void receipt.committed.then(
-        () => finish(),
-        (error: unknown) => finish(error),
-      );
-      startCommitTimer();
-    } catch (error) {
-      finish(error);
-    }
+    const timer = setTimeout(() => finish(new ReceiptWaitError(timeoutMessage)), remainingMs);
+    timer.unref?.();
+    const onAbort = () => finish(new ReceiptWaitError("queued steering message was cancelled"));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void stage.then(() => finish(), finish);
   });
 }
 
-/**
- * Steers the active session directly or waits for transcript commitment when a
- * caller needs delivery proof before returning.
- */
+function tryCancel(receipt: SteerReceipt): boolean {
+  try {
+    return receipt.cancel();
+  } catch (error) {
+    log.warn(`failed to cancel queued steering message: ${String(error)}`);
+    return false;
+  }
+}
+
+async function steerWithCommitWait(
+  target: SteerTarget,
+  text: string,
+  deadlineMs: number,
+  options: EmbeddedAgentQueueMessageOptions,
+): Promise<string | undefined> {
+  if (!target.steerWithReceipt) {
+    options.onQueueAccepted?.(false);
+    throw new Error("active session does not support transcript commit receipts");
+  }
+  if (options.abortSignal?.aborted) {
+    options.onQueueAccepted?.(false);
+    throw new Error("queued steering message was cancelled before acceptance");
+  }
+  const receipt = target.steerWithReceipt(
+    text,
+    options.images,
+    options.userTurnTranscriptRecorder,
+    options.media,
+    options.imageOrder,
+    options.inputProvenance,
+  );
+  let accepted = false;
+  try {
+    await waitForStage(
+      receipt.accepted,
+      deadlineMs,
+      options.abortSignal,
+      "queued steering message was not accepted before timeout",
+    );
+    accepted = true;
+    options.onQueueAccepted?.(true);
+    await waitForStage(
+      receipt.committed,
+      deadlineMs,
+      options.abortSignal,
+      "queued steering message was not committed to the transcript before timeout",
+    );
+  } catch (error) {
+    if (!accepted && !(error instanceof ReceiptWaitError)) {
+      options.onQueueAccepted?.(false);
+      throw error;
+    }
+    const cancelled = tryCancel(receipt);
+    if (!accepted) {
+      options.onQueueAccepted?.(!cancelled);
+    }
+    if (cancelled) {
+      throw error;
+    }
+    return error instanceof Error ? error.message : "queued steering commitment failed";
+  }
+}
+
 export async function steerActiveSessionWithOptionalDeliveryWait(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  target: SteerTarget,
   text: string,
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
-): Promise<EmbeddedSteeringQueueOutcome> {
-  const deadlineMs =
-    options?.waitForTranscriptCommit === true
-      ? Date.now() +
-        Math.max(0, options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS)
-      : undefined;
-  const isInboundUserMessage = options?.isInboundUserMessage === true;
-  const isPlainTextAnswer = !options?.images?.length;
-  if (isInboundUserMessage && !isPlainTextAnswer) {
+): Promise<SteeringOutcome> {
+  const isInbound = options?.isInboundUserMessage === true;
+  if (isInbound && options?.images?.length) {
     try {
       await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
     } catch (error) {
       log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
-  }
-  if (
-    isInboundUserMessage &&
-    isPlainTextAnswer &&
+  } else if (
+    isInbound &&
     (await claimPendingAgentQuestionAnswer({
       sessionKey,
       text,
-      persist: options.userTurnTranscriptRecorder
-        ? async () => {
-            await options.userTurnTranscriptRecorder?.persistApproved();
-          }
+      persist: options?.userTurnTranscriptRecorder
+        ? async () => await options.userTurnTranscriptRecorder?.persistApproved()
         : undefined,
     }))
   ) {
+    options?.onQueueAccepted?.(true);
     return { kind: "answered-pending-input" };
   }
+
   if (options?.waitForTranscriptCommit !== true) {
-    await steerActiveSession(
-      activeSession,
-      text,
-      options?.images,
-      options?.userTurnTranscriptRecorder,
-      options?.media,
-      options?.imageOrder,
-      options?.inputProvenance,
-    );
-    return { kind: "steered", transcriptCommit: "not-requested" };
-  }
-  try {
-    await steerAndWaitForTranscriptCommit(
-      activeSession,
-      text,
-      deadlineMs ?? Date.now(),
-      options.userTurnTranscriptRecorder,
-      options.images,
-      options.media,
-      options.imageOrder,
-      options.inputProvenance,
-    );
-    return { kind: "steered", transcriptCommit: "confirmed" };
-  } catch (error) {
-    if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
-      return { kind: "accepted-unconfirmed", errorMessage: error.message };
+    try {
+      if (options?.abortSignal?.aborted) {
+        throw new Error("queued steering message was cancelled before acceptance");
+      }
+      await target.steer(
+        text,
+        options?.images,
+        options?.userTurnTranscriptRecorder,
+        options?.media,
+        options?.imageOrder,
+        options?.inputProvenance,
+      );
+      options?.onQueueAccepted?.(true);
+      return { kind: "steered", transcriptCommit: "not-requested" };
+    } catch (error) {
+      options?.onQueueAccepted?.(false);
+      throw error;
     }
-    throw error;
   }
+
+  const errorMessage = await steerWithCommitWait(
+    target,
+    text,
+    Date.now() + Math.max(0, options.deliveryTimeoutMs ?? DEFAULT_COMMIT_TIMEOUT_MS),
+    options,
+  );
+  return errorMessage
+    ? { kind: "accepted-unconfirmed", errorMessage }
+    : { kind: "steered", transcriptCommit: "confirmed" };
 }

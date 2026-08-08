@@ -65,6 +65,10 @@ type StreamRunState = {
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
   cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+  messageInjection: {
+    isAvailable(): boolean;
+    queueMessage: EmbeddedAgentQueueHandle["queueMessage"];
+  };
 };
 
 export function prepareEmbeddedAttemptStream(input: {
@@ -391,47 +395,44 @@ export function prepareEmbeddedAttemptStream(input: {
     attempt.onAttemptAbort?.();
     input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
   };
+  const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
+    if (!acceptingSteerMessages) {
+      throw new Error("active session is finalizing");
+    }
+    activeQueueAdmissions++;
+    try {
+      if (options?.steeringMode) {
+        input.activeSession.agent.steeringMode = options.steeringMode;
+      }
+      const outcome = await steerActiveSessionWithOptionalDeliveryWait(
+        input.activeSession,
+        text,
+        options,
+        attempt.sessionKey,
+      );
+      if (outcome.kind === "steered" && outcome.transcriptCommit === "confirmed") {
+        try {
+          input.trajectoryRecorder?.recordEvent("prompt.submitted", {
+            prompt: text,
+            messages: input.activeSession.messages,
+            imagesCount: options.images?.length ?? 0,
+            ...(options.inputProvenance ? { origin: options.inputProvenance } : {}),
+          });
+        } catch (error) {
+          log.warn(`failed to record queued prompt trajectory: ${formatErrorMessage(error)}`);
+        }
+      }
+      return outcome.kind === "accepted-unconfirmed"
+        ? { transcriptCommit: "unconfirmed", errorMessage: outcome.errorMessage }
+        : undefined;
+    } finally {
+      activeQueueAdmissions--;
+    }
+  };
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
-    queueMessage: async (text: string, options) => {
-      if (!acceptingSteerMessages) {
-        throw new Error("active session is finalizing");
-      }
-      activeQueueAdmissions++;
-      try {
-        if (options?.steeringMode) {
-          input.activeSession.agent.steeringMode = options.steeringMode;
-        }
-        const outcome = await steerActiveSessionWithOptionalDeliveryWait(
-          input.activeSession,
-          text,
-          options,
-          attempt.sessionKey,
-        );
-        if (
-          outcome.kind === "steered" &&
-          outcome.transcriptCommit === "confirmed" &&
-          options?.inputProvenance
-        ) {
-          try {
-            input.trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: text,
-              messages: input.activeSession.messages,
-              imagesCount: options.images?.length ?? 0,
-              origin: options.inputProvenance,
-            });
-          } catch (error) {
-            log.warn(`failed to record queued prompt trajectory: ${formatErrorMessage(error)}`);
-          }
-        }
-        return outcome.kind === "accepted-unconfirmed"
-          ? { transcriptCommit: "unconfirmed", errorMessage: outcome.errorMessage }
-          : undefined;
-      } finally {
-        activeQueueAdmissions--;
-      }
-    },
+    queueMessage,
     isStreaming: () => input.activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,
     isStopped: () =>
@@ -441,6 +442,13 @@ export function prepareEmbeddedAttemptStream(input: {
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
+    messageInjection: {
+      isAvailable: () =>
+        acceptingSteerMessages &&
+        !input.getRunState().aborted &&
+        !input.runAbortController.signal.aborted,
+      queueMessage,
+    },
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,

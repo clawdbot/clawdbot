@@ -376,7 +376,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     )
       .then((prepared) => {
         reservation.admit(prepared.text, prepared.message, () =>
-          this.agent.steerWithReceipt(prepared.message),
+          this.agent.steer(prepared.message),
         );
       })
       .catch((error: unknown) => {
@@ -386,8 +386,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   private enqueuePreparedSteer(prepared: { text: string; message: AgentMessage }): void {
-    this.agent.steer(prepared.message);
-    this.steering.add(prepared.text, prepared.message);
+    this.steering.add(prepared.text, prepared.message, this.agent.steer(prepared.message));
   }
 
   /**

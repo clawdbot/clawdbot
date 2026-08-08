@@ -174,55 +174,60 @@ export async function activateCodexAttemptTurn(
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
+  const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
+    const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
+    if (isInboundUserMessage && !optionsLocal?.images?.length) {
+      const claimed = await claimPendingAgentQuestionAnswer({
+        sessionKey: params.sessionKey ?? params.sessionId,
+        text,
+      });
+      if (claimed) {
+        return undefined;
+      }
+    } else if (isInboundUserMessage) {
+      try {
+        await cancelPendingAgentQuestionForSession({
+          sessionKey: params.sessionKey ?? params.sessionId,
+          resolvedBy: "image-reply",
+        });
+      } catch (error) {
+        // Cleanup failure must not drop the user's image turn.
+        embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
+          error,
+        });
+      }
+    }
+    try {
+      const outcome = await activeSteeringQueue.queue(text, optionsLocal);
+      if (outcome.kind === "steered") {
+        trajectoryRecorder?.recordPromptSubmitted(
+          {
+            threadId: resourceState.thread.threadId,
+            turnId: activeTurnId,
+            prompt: text,
+            imagesCount: optionsLocal?.images?.length ?? 0,
+          },
+          optionsLocal?.inputProvenance,
+        );
+      }
+    } catch (error) {
+      if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
+        return {
+          transcriptCommit: "unconfirmed" as const,
+          errorMessage: formatErrorMessage(error),
+        };
+      }
+      throw error;
+    }
+    return undefined;
+  };
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
-    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
-      const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
-      if (isInboundUserMessage && !optionsLocal?.images?.length) {
-        const claimed = await claimPendingAgentQuestionAnswer({
-          sessionKey: params.sessionKey ?? params.sessionId,
-          text,
-        });
-        if (claimed) {
-          return undefined;
-        }
-      } else if (isInboundUserMessage) {
-        try {
-          await cancelPendingAgentQuestionForSession({
-            sessionKey: params.sessionKey ?? params.sessionId,
-            resolvedBy: "image-reply",
-          });
-        } catch (error) {
-          // Cleanup failure must not drop the user's image turn.
-          embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
-            error,
-          });
-        }
-      }
-      try {
-        const outcome = await activeSteeringQueue.queue(text, optionsLocal);
-        if (outcome.kind === "steered") {
-          trajectoryRecorder?.recordPromptSubmitted(
-            {
-              threadId: resourceState.thread.threadId,
-              turnId: activeTurnId,
-              prompt: text,
-              imagesCount: optionsLocal?.images?.length ?? 0,
-            },
-            optionsLocal?.inputProvenance,
-          );
-        }
-      } catch (error) {
-        if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
-          return {
-            transcriptCommit: "unconfirmed" as const,
-            errorMessage: formatErrorMessage(error),
-          };
-        }
-        throw error;
-      }
-      return undefined;
+    queueMessage,
+    messageInjection: {
+      isAvailable: () => !state.completed && !state.timedOut && !runAbortController.signal.aborted,
+      queueMessage,
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
     isAborted: () => runAbortController.signal.aborted,
@@ -235,6 +240,7 @@ export async function activateCodexAttemptTurn(
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
