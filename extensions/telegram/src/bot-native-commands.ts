@@ -76,6 +76,7 @@ import {
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  orderForPressure,
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
@@ -670,7 +671,6 @@ type RegisterTelegramNativeCommandsParams = {
   mediaMaxBytes?: number;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
-  nativeDisabledExplicit: boolean;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
   resolveTelegramGroupConfig: (
     chatId: string | number,
@@ -913,7 +913,6 @@ export const registerTelegramNativeCommands = ({
   mediaMaxBytes,
   nativeEnabled,
   nativeSkillsEnabled,
-  nativeDisabledExplicit,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
@@ -980,9 +979,12 @@ export const registerTelegramNativeCommands = ({
     for (const issue of pluginCatalog.issues) {
       runtime.error?.(danger(issue));
     }
+    const firstSkillCommandIndex = nativeEnabled
+      ? listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).length
+      : 0;
     const allCommandsFull: TelegramMenuCommand[] = [
       ...nativeCommands
-        .map((command): TelegramMenuCommand | null => {
+        .map((command, index): TelegramMenuCommand | null => {
           const normalized = normalizeTelegramCommandName(command.name);
           if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
             runtime.error?.(
@@ -999,6 +1001,9 @@ export const registerTelegramNativeCommands = ({
           if (command.isAlias) {
             menuCommand.isAlias = true;
           }
+          if (index >= firstSkillCommandIndex) {
+            menuCommand.isSkill = true;
+          }
           if (command.descriptionLocalizations) {
             menuCommand.descriptionLocalizations = command.descriptionLocalizations;
           }
@@ -1006,29 +1011,39 @@ export const registerTelegramNativeCommands = ({
         })
         .filter((cmd) => cmd !== null),
       ...(nativeEnabled ? pluginCatalog.commands : []),
-      ...customCommands,
+      ...customCommands.map((command) => ({ ...command, isConfigured: true })),
     ];
     return {
       nativeCommands,
       customCommands,
       pluginCatalog,
+      allCommandsFull,
       ...buildCappedTelegramMenuCommands({
         allCommands: allCommandsFull,
       }),
     };
   };
   const fullCommandCatalog = resolveTelegramMenuCommandCatalog(skillCommands);
-  let menuCommandCatalog = fullCommandCatalog;
-  if (
-    nativeEnabled &&
-    nativeSkillsEnabled &&
-    skillCommands.length > 0 &&
-    fullCommandCatalog.overflowCount > 0
-  ) {
-    const initialCommandCount = fullCommandCatalog.totalCommands;
-    menuCommandCatalog = resolveTelegramMenuCommandCatalog([], skillCommands);
+  let menuCommandCatalog: ReturnType<typeof buildCappedTelegramMenuCommands> = fullCommandCatalog;
+  const omittedSkillCommand =
+    fullCommandCatalog.commandsToRegister.filter((command) => command.isSkill).length <
+    fullCommandCatalog.allCommandsFull.filter((command) => command.isSkill).length;
+  if (omittedSkillCommand) {
+    const skillFallback = fullCommandCatalog.allCommandsFull.find(
+      (command) => command.command === "skill" && !command.isSkill,
+    );
+    const fallbackCommands = fullCommandCatalog.allCommandsFull.filter(
+      (command) => command !== skillFallback && !command.isSkill,
+    );
+    menuCommandCatalog = buildCappedTelegramMenuCommands({
+      allCommands: orderForPressure(
+        skillFallback
+          ? [{ ...skillFallback, isConfigured: true }, ...fallbackCommands]
+          : fallbackCommands,
+      ),
+    });
     runtime.log?.(
-      `${initialCommandCount} commands exceed the ${fullCommandCatalog.maxCommands}-command Telegram limit; removing per-skill commands and keeping /skill.`,
+      "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
   }
   const { nativeCommands, pluginCatalog } = fullCommandCatalog;
@@ -2090,17 +2105,6 @@ export const registerTelegramNativeCommands = ({
         });
       });
     }
-  } else if (nativeDisabledExplicit) {
-    withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands([]),
-    }).catch(() => {});
-    withTelegramApiErrorLogging({
-      operation: "setMyCommands(all_group_chats)",
-      runtime,
-      fn: () => bot.api.setMyCommands([], { scope: { type: "all_group_chats" } }),
-    }).catch(() => {});
   }
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
