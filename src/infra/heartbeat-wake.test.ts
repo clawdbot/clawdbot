@@ -8,6 +8,7 @@ import {
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
@@ -546,6 +547,43 @@ describe("heartbeat-wake", () => {
       intent: "task",
       tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
     });
+  });
+
+  it("retires a stale exec event without retrying or dropping coalesced task work", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000_000_000);
+    const handler = vi.fn(async (request: WakeRequest) =>
+      request.intent === "event"
+        ? ({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT } as const)
+        : ({ status: "ran", durationMs: 1 } as const),
+    );
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    requestHeartbeat({
+      source: "interval",
+      intent: "task",
+      reason: "heartbeat-task:job-inbox",
+      agentId: "main",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(["task", "event"]);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      intent: "task",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 
   it.each([

@@ -32,6 +32,7 @@ import {
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
@@ -377,6 +378,15 @@ export function startHeartbeatRunner(opts: {
         // agent — its target runtime is busy and the wake layer retries.
         return { ran: false, retryableBusySkip: res };
       }
+      if (
+        params.source === "exec-event" &&
+        res.status === "skipped" &&
+        res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
+      ) {
+        // Poll already acknowledged the exec completion. This wake owns no
+        // cadence or commitment work, so it must remain a true no-op.
+        return { ran: false, result: res };
+      }
       // Non-retryable outcome — record bookkeeping for cooldown gates.
       recordRunBookkeeping(agent, now);
       advanceAgentSchedule(agent, now, reason);
@@ -513,6 +523,13 @@ export function startHeartbeatRunner(opts: {
           // retries the same reason shortly; if we recorded `lastRunStartedAtMs`
           // here, the retry would falsely defer with `not-due`/`min-spacing`
           // because the cooldown would treat this skipped attempt as a real run.
+          return res;
+        }
+        if (
+          params.source === "exec-event" &&
+          res.status === "skipped" &&
+          res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
+        ) {
           return res;
         }
         // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record

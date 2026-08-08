@@ -30,7 +30,11 @@ import {
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
-import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+  type HeartbeatScheduledTask,
+  type HeartbeatWakeSource,
+} from "./heartbeat-wake.js";
 import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
@@ -43,7 +47,7 @@ export function truncateHeartbeatPreview(value: string | undefined): string | un
   return value ? truncateUtf16Safe(value, 200) : undefined;
 }
 
-type HeartbeatSkipReason = "empty-heartbeat-file";
+type HeartbeatSkipReason = "empty-heartbeat-file" | typeof HEARTBEAT_SKIP_NO_PENDING_EVENT;
 
 function buildCommitmentDeliveryKey(commitment: CommitmentRecord): string {
   return [
@@ -214,6 +218,18 @@ export async function resolveHeartbeatPreflight(params: {
       : {}),
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
+  // The exec completion can be acknowledged by process poll after its wake is
+  // queued. Treat that stale wake as consumed without touching unrelated events.
+  if (
+    wakeFlags.isExecEventWake &&
+    !params.scheduledTasks?.length &&
+    !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
+  ) {
+    return {
+      ...basePreflight,
+      skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
+    };
+  }
   if (shouldBypassFileGates) {
     return basePreflight;
   }

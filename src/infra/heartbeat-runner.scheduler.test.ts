@@ -13,6 +13,7 @@ import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import {
   getHeartbeatWakeAbortSignal,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatWakeHandler,
@@ -854,6 +855,35 @@ describe("startHeartbeatRunner", () => {
     const financeCalls = runSpy.mock.calls.filter((call) => call[0]?.agentId === "finance");
     expect(financeCalls).toStrictEqual([]);
 
+    runner.stop();
+  });
+
+  it("does not record cooldown bookkeeping for an acknowledged exec wake", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    const requestExecWake = () =>
+      requestHeartbeat({
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+    requestExecWake();
+    await vi.advanceTimersByTimeAsync(1);
+    requestExecWake();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
     runner.stop();
   });
 
