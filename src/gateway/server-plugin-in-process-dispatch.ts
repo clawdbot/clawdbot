@@ -35,6 +35,7 @@ type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticCronRunContinuation?: boolean;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   disableSyntheticClient?: boolean;
+  expectedRequesterLifecycleRevision?: string;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
   internalDeliveryMediaUrls?: string[];
@@ -88,6 +89,7 @@ function resolveInProcessGatewayDispatch(
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
+    expectedRequesterLifecycleRevision: options?.expectedRequesterLifecycleRevision,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
     internalDeliverySuppressText: options?.internalDeliverySuppressText,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
@@ -108,12 +110,16 @@ function resolveInProcessGatewayDispatch(
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
       options?.delegatedToolPolicyHandoff ||
+      options?.expectedRequesterLifecycleRevision !== undefined ||
       scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           ...(options?.pluginSubagentRequester
             ? { pluginSubagentRequester: options.pluginSubagentRequester }
+            : {}),
+          ...(options?.expectedRequesterLifecycleRevision !== undefined
+            ? { expectedRequesterLifecycleRevision: options.expectedRequesterLifecycleRevision }
             : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
           delegatedToolPolicyHandoffId,

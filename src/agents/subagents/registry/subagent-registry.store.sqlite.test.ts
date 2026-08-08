@@ -8,7 +8,6 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -123,19 +122,6 @@ describe("subagent registry sqlite store", () => {
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
       const { db } = openOpenClawStateDatabase();
-      const { rows } = executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<SubagentRegistryDatabase>(db)
-          .selectFrom("subagent_runs")
-          .select([
-            "expected_requester_lifecycle_revision",
-            "requester_settle_wake_lifecycle_mismatch",
-          ])
-          .where("run_id", "=", run.runId),
-      );
-      expect(rows[0]?.expected_requester_lifecycle_revision).toBe("revision-1");
-      expect(rows[0]?.requester_settle_wake_lifecycle_mismatch).toBe("requester_replaced");
-
       const restored = loadSubagentRegistryFromSqlite();
       expect(restored.get(run.runId)).toMatchObject({
         runId: run.runId,
@@ -260,8 +246,6 @@ describe("subagent registry sqlite store", () => {
             pending_final_delivery_last_error: "stale typed delivery",
             requester_settle_wake_status: "pending",
             requester_settle_wake_attempt_count: 99,
-            requester_settle_wake_lifecycle_mismatch: "requester_missing",
-            expected_requester_lifecycle_revision: "stale-revision",
             outcome_json: JSON.stringify({ status: "timeout" }),
           })
           .where("run_id", "=", run.runId),
@@ -344,26 +328,36 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("repairs pre-upgrade databases and reads legacy rows without lifecycle columns", async () => {
+  it("reads pre-upgrade payloads without lifecycle fields and round-trips current rows", async () => {
     await withTempStateEnv(async () => {
-      const legacy = createRun();
+      const legacy = createRun({
+        expectedRequesterLifecycleRevision: "revision-1",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          lifecycleMismatch: "requester_replaced",
+        },
+      });
       saveSubagentRegistryToSqlite(new Map([[legacy.runId, legacy]]));
 
-      // Simulate a database created before the lifecycle fence shipped: drop
-      // the two new columns, then run the doctor repair that restores them.
+      // Simulate a row written before the lifecycle fence shipped: the
+      // canonical payload predates the lifecycle fields, so hydration must
+      // not invent a captured revision or a mismatch outcome.
       const { db } = openOpenClawStateDatabase();
-      db.exec("ALTER TABLE subagent_runs DROP COLUMN expected_requester_lifecycle_revision;");
-      db.exec("ALTER TABLE subagent_runs DROP COLUMN requester_settle_wake_lifecycle_mismatch;");
+      const row = db
+        .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+        .get(legacy.runId) as { payload_json: string };
+      const legacyPayload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      delete legacyPayload.expectedRequesterLifecycleRevision;
+      const settleWake = legacyPayload.requesterSettleWake;
+      if (settleWake && typeof settleWake === "object") {
+        delete (settleWake as Record<string, unknown>).lifecycleMismatch;
+      }
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        JSON.stringify(legacyPayload),
+        legacy.runId,
+      );
       closeOpenClawStateDatabaseForTest();
-
-      repairOpenClawStateDatabaseSchema();
-      const repaired = openOpenClawStateDatabase();
-      const columns = repaired.db
-        .prepare("PRAGMA table_info(subagent_runs)")
-        .all()
-        .map((row) => (row as { name: string }).name);
-      expect(columns).toContain("expected_requester_lifecycle_revision");
-      expect(columns).toContain("requester_settle_wake_lifecycle_mismatch");
 
       const restored = loadSubagentRegistryFromSqlite().get(legacy.runId);
       expect(restored?.expectedRequesterLifecycleRevision).toBeUndefined();

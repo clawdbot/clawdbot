@@ -71,6 +71,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
+  expectedRequesterLifecycleRevision?: string;
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
@@ -80,6 +81,9 @@ async function runAnnounceAgentCall(params: {
       params.agentParams.inputProvenance,
     ),
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+    ...(params.expectedRequesterLifecycleRevision !== undefined
+      ? { expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision }
+      : {}),
     timeoutMs: params.timeoutMs,
   });
 }
@@ -94,6 +98,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  expectedRequesterLifecycleRevision?: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
@@ -368,6 +373,7 @@ export async function sendSubagentAnnounceDirectly(params: {
                   }
                 : undefined,
             expectFinal: true,
+            expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision,
             timeoutMs: announceTimeoutMs,
           });
         },

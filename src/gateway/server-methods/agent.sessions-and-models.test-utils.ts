@@ -619,6 +619,39 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("rejects a settle wake whose requester lifecycle was replaced before final gateway admission", async () => {
+    primeMainAgentRun({ sessionId: "requester-session" });
+    mockMainSessionEntry({
+      sessionId: "requester-session",
+      lifecycleRevision: "replacement-revision",
+    });
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "stale settle wake",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "stale-settle-wake",
+      },
+      {
+        reqId: "stale-settle-wake",
+        client: {
+          ...backendGatewayClient(),
+          internal: { expectedRequesterLifecycleRevision: "admission-revision" },
+        } as AgentHandlerArgs["client"],
+        flushDispatch: false,
+      },
+    );
+
+    expectRespondError(respond, {
+      message: expect.stringMatching(
+        /Session "agent:main:main" changed while starting expected work\. Retry\./,
+      ),
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
   it("rejects plugin SDK subagent registration and adoption when persistence fails", async () => {
     await withTestDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },

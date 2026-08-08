@@ -18,6 +18,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   allowModelOverride?: boolean;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   cronRunContinuation?: boolean;
+  expectedRequesterLifecycleRevision?: string;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
@@ -50,6 +51,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
+      ...(params?.expectedRequesterLifecycleRevision !== undefined
+        ? { expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision }
+        : {}),
       ...(params?.internalDeliveryMediaUrls
         ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
         : {}),

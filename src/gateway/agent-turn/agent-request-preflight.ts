@@ -20,6 +20,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import {
+  resolveInternalExpectedLifecycleConstraint,
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
 } from "../server-methods/agent-expected-session.js";
@@ -189,6 +190,28 @@ export function prepareAgentRequestPreflight(params: {
     ]);
     return undefined;
   }
+  const internalLifecycleResult = resolveInternalExpectedLifecycleConstraint({
+    canUseInternalRuntimeHandoff,
+    expectedRequesterLifecycleRevision: params.client?.internal?.expectedRequesterLifecycleRevision,
+  });
+  if (!internalLifecycleResult.ok) {
+    params.io.emitAcceptance([
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, internalLifecycleResult.error),
+    ]);
+    return undefined;
+  }
+  const expectedSession = expectedSessionResult.constraint
+    ? {
+        ...expectedSessionResult.constraint,
+        ...(internalLifecycleResult.lifecycleRevision
+          ? { lifecycleRevision: internalLifecycleResult.lifecycleRevision }
+          : {}),
+      }
+    : internalLifecycleResult.lifecycleRevision
+      ? { lifecycleRevision: internalLifecycleResult.lifecycleRevision }
+      : undefined;
   const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
   const requestedInternalSessionEffects = request.sessionEffects === "internal";
   const requestedModelOverride = Boolean(request.provider || request.model);
@@ -285,7 +308,7 @@ export function prepareAgentRequestPreflight(params: {
     allowModelOverride,
     canUseInternalRuntimeHandoff,
     canUseCronRunContinuation,
-    expectedSession: expectedSessionResult.constraint,
+    expectedSession,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,
     modelOverride: allowModelOverride ? request.model : undefined,

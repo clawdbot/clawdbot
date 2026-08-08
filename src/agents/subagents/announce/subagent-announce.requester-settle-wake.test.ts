@@ -173,7 +173,7 @@ function deliveredCallArg(): Record<string, unknown> {
 
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   beforeEach(() => {
-    deliverSpy.mockClear();
+    deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
     transitionBatchSpy.mockClear();
     completeBatchSpy.mockClear();
     sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-1" } };
@@ -206,6 +206,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(call.expectsCompletionMessage).toBe(false);
     expect(call.requireDirectDelivery).toBe(true);
     expect(call.requireVisibleReply).toBeUndefined();
+    expect(call.expectedRequesterLifecycleRevision).toBe("revision-1");
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
@@ -443,6 +444,34 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(secondWoke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(transitionBatchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("fences a wake rejected at final gateway admission after a requester reset", async () => {
+    sessionStore = { [REQUESTER]: { sessionId: "sess-main", lifecycleRevision: "revision-1" } };
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    deliverSpy.mockImplementation(async () => {
+      throw new Error('Session "agent:main:main" changed while starting expected work. Retry.');
+    });
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
+    expect(woke).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(deliveredCallArg().expectedRequesterLifecycleRevision).toBe("revision-1");
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(transitionBatchSpy).toHaveBeenLastCalledWith(
+      ["run-a", "run-b"],
+      expect.objectContaining({ lifecycleMismatch: "requester_replaced" }),
+    );
+    for (const child of children) {
+      expect(child.requesterSettleWake?.lifecycleMismatch).toBe("requester_replaced");
+      expect(child.requesterSettleWake?.lastError).toContain("requester_replaced");
+    }
+
+    const secondWoke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+    expect(secondWoke).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
   });
 
   it("fences legacy persisted wakes when the requester lifecycle was replaced", async () => {

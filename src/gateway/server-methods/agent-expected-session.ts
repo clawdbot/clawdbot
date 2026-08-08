@@ -7,7 +7,8 @@ import {
 
 export type ExpectedExistingSessionConstraint = {
   handoffId?: string;
-  sessionId: string;
+  lifecycleRevision?: string;
+  sessionId?: string;
 };
 
 export class ExpectedExistingSessionChangedError extends Error {
@@ -39,6 +40,23 @@ export function resolveExpectedExistingSessionConstraint(params: {
   };
 }
 
+export function resolveInternalExpectedLifecycleConstraint(params: {
+  canUseInternalRuntimeHandoff: boolean;
+  expectedRequesterLifecycleRevision?: unknown;
+}): { ok: true; lifecycleRevision?: string } | { ok: false; error: string } {
+  const lifecycleRevision = normalizeOptionalString(params.expectedRequesterLifecycleRevision);
+  if (!lifecycleRevision) {
+    return { ok: true };
+  }
+  if (!params.canUseInternalRuntimeHandoff) {
+    return {
+      ok: false,
+      error: "expectedRequesterLifecycleRevision is reserved for backend callers.",
+    };
+  }
+  return { ok: true, lifecycleRevision };
+}
+
 export function validateExpectedExistingSessionTarget(params: {
   constraint?: ExpectedExistingSessionConstraint;
   requestedSessionId?: string;
@@ -61,8 +79,19 @@ export function assertExpectedExistingSession(params: {
   entry?: SessionEntry;
   message: string;
 }): void {
-  if (params.constraint && params.entry?.sessionId !== params.constraint.sessionId) {
-    throw new ExpectedExistingSessionChangedError(params.message);
+  if (params.constraint) {
+    if (
+      params.constraint.sessionId !== undefined &&
+      params.entry?.sessionId !== params.constraint.sessionId
+    ) {
+      throw new ExpectedExistingSessionChangedError(params.message);
+    }
+    if (
+      params.constraint.lifecycleRevision !== undefined &&
+      params.entry?.lifecycleRevision !== params.constraint.lifecycleRevision
+    ) {
+      throw new ExpectedExistingSessionChangedError(params.message);
+    }
   }
 }
 

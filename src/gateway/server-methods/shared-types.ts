@@ -128,6 +128,8 @@ export type GatewayClient = {
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     /** Opaque in-process subagent-completion capability; never accepted from wire params. */
     delegatedToolPolicyHandoffId?: string;
+    /** Host-captured expected requester lifecycle revision for subagent settle wakes. */
+    expectedRequesterLifecycleRevision?: string;
   };
 };
 
