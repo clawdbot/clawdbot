@@ -3337,6 +3337,45 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).toBe("QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED");
   });
 
+  it("delivers silent terminal representation through the required message tool", async () => {
+    const server = await startMockServer();
+    const completionInput = [
+      makeUserInput("Subagent terminal reply QA check: silent."),
+      makeUserInput(
+        TEST_RUNTIME_CONTEXT_CARRIER.replace(
+          "runtime metadata",
+          "[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)",
+        ),
+      ),
+    ];
+    const delivery = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      instructions:
+        "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. When the message is the completed reply to the current source conversation, set `final=true`.",
+      input: completionInput,
+    });
+    const messageCall = outputToolCall(delivery, "message");
+    expect(outputToolArgsFromItem(messageCall)).toEqual({
+      action: "send",
+      message: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+      final: true,
+    });
+
+    const settled = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        ...completionInput,
+        messageCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(messageCall, "call_mock_message_silent_terminal"),
+          '{"ok":true,"messageId":"qa-silent-terminal"}',
+        ),
+      ],
+    });
+    expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(settled)).toBe("");
+  });
+
   it.each([
     {
       name: "OpenAI private-source guidance",
@@ -3435,9 +3474,14 @@ Update and merge these partial structured summaries.`,
     },
   );
 
-  it.each(["visible", "silent", "fallback", "restart"])(
-    "uses explicit silence for the %s completion-agent direct fallback",
-    async (terminalCase) => {
+  it.each([
+    ["visible", "NO_REPLY"],
+    ["silent", "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED"],
+    ["fallback", "NO_REPLY"],
+    ["restart", "NO_REPLY"],
+  ])(
+    "uses the expected representation for the %s completion-agent direct fallback",
+    async (terminalCase, expected) => {
       const server = await startMockServer();
       const payload = await expectNonStreamingResponsesJson(server, {
         tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
@@ -3457,7 +3501,7 @@ Update and merge these partial structured summaries.`,
       });
 
       expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(payload)).toBe("NO_REPLY");
+      expect(outputText(payload)).toBe(expected);
     },
   );
 

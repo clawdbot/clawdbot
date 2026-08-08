@@ -1144,7 +1144,13 @@ async function buildResponsesPayload(
     ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
     ?.toLowerCase();
   if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
-    if (terminalCompletionCase === "empty") {
+    const visibleRepresentation =
+      terminalCompletionCase === "silent"
+        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
+        : terminalCompletionCase === "empty"
+          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
+          : undefined;
+    if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
       }
@@ -1159,15 +1165,15 @@ async function buildResponsesPayload(
           );
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          message: visibleRepresentation,
           ...(requiresFinal ? { final: true } : {}),
         });
       }
-      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+      return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, silent, restart, and sanitized
-    // fallback results. Use explicit silence so generic empty-response recovery
-    // cannot replay the historical spawn before that fallback runs.
+    // The direct delivery fallback owns visible, restart, and sanitized fallback
+    // results. Use explicit silence so generic empty-response recovery cannot
+    // replay the historical spawn before that fallback runs.
     return buildAssistantEvents("NO_REPLY");
   }
   const terminalWorkerCase = Array.from(

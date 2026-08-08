@@ -926,6 +926,10 @@ async function sendSubagentAnnounceDirectly(params: {
       subagentCompletionEvents[0]?.childSessionKey === params.sourceSessionKey
         ? subagentCompletionEvents[0]
         : undefined;
+    const hasTrustedRequiredSubagentNoOutputCompletion =
+      params.expectsCompletionMessage &&
+      isSubagentCompletion &&
+      trustedCompletionEvent?.result.trim() === "(no output)";
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -1216,9 +1220,14 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
       !hasMessagingToolDelivery &&
-      (!hasIntentionalSilentCompletionReply || subagentDirectMessageCompletionRequiresMessageTool)
+      (!hasIntentionalSilentCompletionReply ||
+        subagentDirectMessageCompletionRequiresMessageTool ||
+        hasTrustedRequiredSubagentNoOutputCompletion)
     ) {
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (
+        hasTrustedRequiredSubagentNoOutputCompletion ||
+        hasFailedSubagentNoOutputCompletion(params.internalEvents)
+      ) {
         return {
           delivered: false,
           path: "direct",

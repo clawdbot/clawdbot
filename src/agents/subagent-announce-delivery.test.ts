@@ -2935,6 +2935,81 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it.each([
+    { status: "ok", statusLabel: "completed successfully" },
+    { status: "error", statusLabel: "failed" },
+  ] as const)(
+    "fails $status no-output channel subagent completions when parent silently skips required message tool",
+    async ({ status, statusLabel }) => {
+      const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+      const childSessionKey = "agent:worker:subagent:no-output";
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: `announce-channel-subagent-${status}-no-output-message-tool-missing`,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        queueEmbeddedAgentMessageWithOutcome,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "child-session-id",
+          taskLabel: "channel no-output completion smoke",
+          status,
+          statusLabel,
+          result: "(no output)",
+        }),
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      });
+      expectGatewayAgentParams(callGateway, {
+        deliver: false,
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: undefined,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+    },
+  );
+
+  it("preserves intentional silence for no-output channel harness completions", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const childSessionKey = "agent:worker:subagent:harness-no-output";
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-channel-harness-no-output-intentional-silence",
+      sourceTool: "agent_harness_task",
+      sourceSessionKey: childSessionKey,
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "channel harness no-output completion smoke",
+        status: "error",
+        statusLabel: "failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
   it("does not count a different channel target as the requester completion delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
