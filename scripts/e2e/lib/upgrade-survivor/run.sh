@@ -21,8 +21,10 @@ export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
-export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
-export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
+if [ "$SCENARIO" = "configured-plugin-installs" ]; then
+  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
+  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
+fi
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
 export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
