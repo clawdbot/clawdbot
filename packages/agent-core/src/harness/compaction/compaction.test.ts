@@ -357,6 +357,38 @@ describe("session-entry compaction budgeting", () => {
     expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
   });
 
+  it("can prepare another pass after a compaction entry when retained context is still too large", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "first", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("answer ".repeat(1_000), createUsage(20_000), 2), 1),
+      createMessageEntry({ role: "user", content: "second", timestamp: 3 }, 2),
+      createMessageEntry(createAssistant("answer ".repeat(1_000), createUsage(20_000), 4), 3),
+      {
+        type: "compaction",
+        id: "entry-4",
+        parentId: "entry-3",
+        timestamp: new Date(5).toISOString(),
+        summary: "first pass summary",
+        firstKeptEntryId: "entry-2",
+        tokensBefore: 40_000,
+      },
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected second compaction pass to be prepared");
+    }
+    expect(result.value.previousSummary).toBe("first pass summary");
+    expect(result.value.firstKeptEntryId).toBe("entry-3");
+    expect(result.value.turnPrefixMessages.map((message) => message.role)).toEqual(["user"]);
+  });
+
   it("keeps reset-filtered tool rows out of later compaction input", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),

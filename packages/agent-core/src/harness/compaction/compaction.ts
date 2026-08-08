@@ -661,11 +661,7 @@ export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
 ): Result<CompactionPreparation | undefined, CompactionError> {
-  if (
-    pathEntries.at(-1)?.type === "compaction" ||
-    pathEntries.at(-1)?.type === "reset" ||
-    pathEntries.length === 0
-  ) {
+  if (pathEntries.at(-1)?.type === "reset" || pathEntries.length === 0) {
     return ok(undefined);
   }
 
