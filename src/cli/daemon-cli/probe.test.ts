@@ -159,6 +159,27 @@ describe("probeGatewayStatus", () => {
     expect(gatewayProbeResultSawGateway(result)).toBe(true);
   });
 
+  it("does not classify an unvalidated transport close as a reachable gateway", async () => {
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "connect ECONNREFUSED 127.0.0.1:19191",
+      close: { code: 1006, reason: "" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failed gateway probe");
+    }
+    expect(result.connectFailure).toEqual({ kind: "unreachable" });
+    expect(gatewayProbeResultSawGateway(result)).toBe(false);
+  });
+
   it("omits unknown detail codes from serialized daemon status", async () => {
     probeGatewayMock.mockResolvedValueOnce({
       ok: false,

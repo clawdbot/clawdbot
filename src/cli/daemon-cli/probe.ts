@@ -27,15 +27,13 @@ async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/pr
   return await probeGatewayModuleLoader.load();
 }
 
-function formatProbeCloseFailure(close: { code: number; reason: string }): string {
-  return `gateway closed (${close.code}): ${close.reason}`;
-}
-
 function resolveProbeFailureMessage(result: {
   error?: string | null;
   close?: { code: number; reason: string } | null;
 }): string {
-  const closeHint = result.close ? formatProbeCloseFailure(result.close) : null;
+  const closeHint = result.close
+    ? `gateway closed (${result.close.code}): ${result.close.reason}`
+    : null;
   if (closeHint && (!result.error || result.error === "timeout")) {
     return closeHint;
   }
@@ -165,7 +163,7 @@ export async function probeGatewayStatus(opts: {
       connectFailure: projectGatewayConnectFailure({
         details: probeDetails?.connectErrorDetails,
         message: error,
-        ...(probeDetails?.close ? { reason: formatProbeCloseFailure(probeDetails.close) } : {}),
+        reason: probeDetails?.close?.reason,
       }),
       // Probe failure text can echo the credential-bearing target URL (close
       // reasons, transport errors); status renderers print it verbatim.
