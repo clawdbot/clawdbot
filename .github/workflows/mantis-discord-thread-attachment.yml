@@ -22,8 +22,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
   group: mantis-discord-thread-attachment-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
@@ -86,6 +85,7 @@ jobs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
       candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
+      reaction_id: ${{ steps.add_reaction.outputs.reaction_id }}
       request_source: ${{ steps.resolve.outputs.request_source }}
       should_run: ${{ steps.resolve.outputs.should_run }}
     steps:
@@ -161,12 +161,35 @@ jobs:
             setOutput("pr_number", String(issue.number));
             setOutput("request_source", "issue_comment");
 
-            await github.rest.reactions.createForIssueComment({
-              owner,
-              repo,
-              comment_id: context.payload.comment.id,
-              content: "eyes",
-            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+      - name: Create Mantis reaction GitHub App token
+        id: mantis_reaction_token
+        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Add Mantis eyes reaction
+        id: add_reaction
+        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.mantis_reaction_token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.reactions
+              .createForIssueComment({
+                owner,
+                repo,
+                comment_id: context.payload.comment.id,
+                content: "eyes",
+              })
+              .then(({ data: reaction }) => core.setOutput("reaction_id", String(reaction.id)))
+              .catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
 
   validate_candidate:
     name: Validate selected candidate
@@ -605,40 +628,33 @@ jobs:
   clear_issue_comment_reaction:
     name: Clear Mantis command reaction
     needs: [resolve_request, validate_candidate, run_thread_attachment]
-    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' && needs.resolve_request.outputs.reaction_id != '' }}
     runs-on: ubuntu-24.04
-    permissions:
-      issues: write
+    permissions: {}
     steps:
-      - name: Remove workflow eyes reaction
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      - name: Create Mantis cleanup GitHub App token
+        id: mantis_reaction_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Remove Mantis eyes reaction
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          REACTION_ID: ${{ needs.resolve_request.outputs.reaction_id }}
+        with:
+          github-token: ${{ steps.mantis_reaction_token.outputs.token }}
           script: |
             const { owner, repo } = context.repo;
-            const commentId = context.payload.comment?.id;
-            if (!commentId) {
-              core.info("No issue comment id found; skipping reaction cleanup.");
-              return;
-            }
-
-            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+            const reactionId = Number(process.env.REACTION_ID);
+            await github.rest.reactions.deleteForIssueComment({
               owner,
               repo,
-              comment_id: commentId,
-              per_page: 100,
+              comment_id: context.payload.comment.id,
+              reaction_id: reactionId,
             });
-            const eyes = reactions.filter(
-              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
-            );
-            for (const reaction of eyes) {
-              await github.rest.reactions.deleteForIssueComment({
-                owner,
-                repo,
-                comment_id: commentId,
-                reaction_id: reaction.id,
-              });
-              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
-            }
-            if (eyes.length === 0) {
-              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
-            }
+            core.info(`Removed Mantis eyes reaction ${reactionId}.`);
