@@ -31,15 +31,14 @@ export function finalizeEmbeddedAttempt(
   }
   const terminalState = projectAgentRunAttemptTerminal(result.terminal);
   // Yield ends before message_end, so its lastAssistant—not an earlier cycle—owns visible text.
-  const assistant =
-    result.yieldDetected === true
-      ? result.lastAssistant
-      : (result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant);
+  const assistant = terminalState.cleanupYieldAborted
+    ? result.lastAssistant
+    : (result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant);
   const completionOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
     attempt: result,
-    assistant: result.yieldDetected === true ? undefined : assistant,
+    assistant: terminalState.cleanupYieldAborted ? undefined : assistant,
   });
-  const stopReason = result.yieldDetected === true ? "end_turn" : completionOutcome.stopReason;
+  const stopReason = terminalState.cleanupYieldAborted ? "end_turn" : completionOutcome.stopReason;
   const terminal = resolveAttemptTrajectoryTerminal({
     failed: completionOutcome.status === "error",
     interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
