@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -59,28 +60,50 @@ suite.define(() => {
           "MEDIA:https://example.com/clip.mp4",
       });
 
-      for (const selector of ["audio", "video"]) {
-        const media = page.locator(`.chat-thread ${selector}`);
+      const thread = page.locator(".chat-thread");
+      const growMedia = async (selector: "audio" | "video", height: number) => {
+        const media = thread.locator(selector);
         await media.waitFor({ state: "attached", timeout: 10_000 });
         await waitForChatScrollIdle(page);
-        expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(8);
-
-        const scrollGeneration = await media.evaluate((element) => {
-          const pane = document.querySelector("openclaw-chat-pane") as
-            | (HTMLElement & { state?: { chatScrollGeneration?: number } })
-            | null;
-          const before = pane?.state?.chatScrollGeneration;
-          element.style.display = "block";
-          element.style.height = "480px";
-          element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
-          return { after: pane?.state?.chatScrollGeneration, before };
-        });
-
-        expect(scrollGeneration.after).toBeGreaterThan(scrollGeneration.before ?? -1);
+        const scrollHeightBefore = await thread.evaluate((element) => element.scrollHeight);
+        await media.evaluate(
+          (element, { mediaKind, nextHeight }) => {
+            const layoutOwner =
+              mediaKind === "video"
+                ? element.closest<HTMLElement>(".chat-assistant-video-frame")
+                : element.closest<HTMLElement>("openclaw-chat-audio-player");
+            if (!layoutOwner) {
+              throw new Error(`expected assistant ${mediaKind} layout owner`);
+            }
+            layoutOwner.style.display = "block";
+            layoutOwner.style.height = `${nextHeight}px`;
+            layoutOwner.style.minHeight = `${nextHeight}px`;
+            if (mediaKind === "video") {
+              layoutOwner.style.maxHeight = "none";
+              element.style.height = "100%";
+              element.style.maxHeight = "none";
+            }
+            element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
+          },
+          { mediaKind: selector, nextHeight: height },
+        );
         await expect
-          .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-          .toBeLessThanOrEqual(8);
-      }
+          .poll(() => thread.evaluate((element) => element.scrollHeight), { timeout: 10_000 })
+          .toBeGreaterThan(scrollHeightBefore);
+        await waitForChatScrollIdle(page);
+      };
+
+      await growMedia("audio", 320);
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
+
+      await growMedia("video", 480);
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
 
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
@@ -90,35 +113,28 @@ suite.define(() => {
         });
       }
 
-      const media = await page.locator(".chat-thread audio").elementHandle();
-      if (!media) {
-        throw new Error("expected rendered assistant audio");
-      }
-      const thread = page.locator(".chat-thread");
       await thread.hover();
-      await page.mouse.wheel(0, -240);
+      await page.mouse.wheel(0, -600);
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeGreaterThan(8);
+        .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      const scrollToLatest = page.getByRole("button", { name: "Scroll to latest" });
+      await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+      await waitForChatScrollIdle(page);
+      const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
+
+      await growMedia("audio", 720);
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       await expect
         .poll(
-          () =>
-            page.locator("openclaw-chat-pane").evaluate((element) => {
-              const pane = element as HTMLElement & {
-                state?: { chatFollowLocked?: boolean };
-              };
-              return pane.state?.chatFollowLocked;
-            }),
+          async () =>
+            Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
           { timeout: 10_000 },
         )
-        .toBe(true);
-      await media.evaluate((element) => {
-        element.style.height = "600px";
-        element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
-      });
-      await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-        .toBeGreaterThan(8);
+        .toBeLessThanOrEqual(1);
+      await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
 
       if (artifactDir) {
         await page.screenshot({
@@ -126,6 +142,12 @@ suite.define(() => {
           path: path.join(artifactDir, "streamed-media-manual-scroll.png"),
         });
       }
+
+      await scrollToLatest.click();
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      await scrollToLatest.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }

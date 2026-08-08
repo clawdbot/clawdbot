@@ -466,7 +466,7 @@ export class ChatPane extends ChatPaneHeader {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
-      // Media metadata can change height after commit; honor the existing follow lock.
+      // Metadata can resize a committed row; re-enter the scroll owner so the follow lock wins.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,

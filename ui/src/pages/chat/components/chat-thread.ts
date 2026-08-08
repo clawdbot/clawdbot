@@ -72,6 +72,7 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import {
+  CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   getChatSessionScrollPosition,
   saveChatSessionScrollPosition,
   type ChatSessionScrollPosition,
@@ -209,7 +210,6 @@ type ChatTranscriptAnnouncement = {
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
-const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
 const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
 // Initial virtual rows can correct their estimates for several frames. Hold a
 // restored offset for ~200ms so those corrections cannot reapply the end anchor.
