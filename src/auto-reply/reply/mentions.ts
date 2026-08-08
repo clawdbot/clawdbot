@@ -75,9 +75,14 @@ function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
   // glued to another word. The decoration is one optional occurrence of what
   // the name carries: repeating it would consume decoration a member typed
   // beyond the identity, and stripping would take that away with the mention.
+  // Joiners sit in the word class, so raw text carrying one right against the
+  // core would satisfy the trailing assertion's word character and block the
+  // match stripping needs; each seam takes the joiners first. Backtracking
+  // cannot cheat past that: a joiner the seam leaves behind is itself the
+  // word character the assertion refuses.
   const leading = parts.leading ? `(?:${parts.leading}|)` : "";
   const trailing = parts.trailing ? `(?:${parts.trailing}|)` : "";
-  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${parts.core}(?!${trailing}${UNICODE_WORD_CHAR})${trailing}`;
+  return `(?:@|(?<!${UNICODE_WORD_CHAR}${leading}))${leading}${JOINER_SPACING}${parts.core}${JOINER_SPACING}(?!${trailing}${UNICODE_WORD_CHAR})${trailing}`;
 }
 
 function escapeJoinerTolerantLiteral(literal: string): string {
@@ -172,6 +177,8 @@ function encodeEdgeDecoration(unit: NameUnit | undefined, side: "leading" | "tra
   }
   const spelled = unit.marks.join(JOINER_SPACING);
   if (!spelled) {
+    // A markless edge is spelled with joiners and spacing alone. The joiners
+    // are taken at the core's seam, and the whitespace is the member's own.
     return "";
   }
   return side === "leading" ? `${spelled}${DECORATION_SPACING}` : `${DECORATION_SPACING}${spelled}`;

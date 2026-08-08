@@ -483,6 +483,46 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("🦋 bot 早安", regexes)).toBe(true);
   });
 
+  it("strips a markless edge joiner the raw text still carries", () => {
+    // Normalization strips the joiner, so the bare name activates; the raw
+    // text stripping reads still carries it, and a joiner is a word character
+    // to the boundary assertions, so the seam has to take it before them or
+    // the mention matches without ever being stripped.
+    const trailing = configForName("क‍");
+    const leading = configForName("‍क");
+    const trailingRegexes = buildMentionRegexes(trailing, "decorated-agent");
+    const leadingRegexes = buildMentionRegexes(leading, "decorated-agent");
+
+    expect(matchesMentionPatterns("क नमस्ते", trailingRegexes)).toBe(true);
+    expect(matchesMentionPatterns("क नमस्ते", leadingRegexes)).toBe(true);
+    expect(stripMentions("क‍ /status", {} as MsgContext, trailing, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("‍क /status", {} as MsgContext, leading, "decorated-agent")).toBe(
+      "/status",
+    );
+    expect(stripMentions("क /status", {} as MsgContext, trailing, "decorated-agent")).toBe(
+      "/status",
+    );
+    // The name glued into a joined word is still neither matched nor stripped.
+    expect(matchesMentionPatterns("कख नमस्ते", trailingRegexes)).toBe(false);
+    expect(stripMentions("क‍ख नमस्ते", {} as MsgContext, trailing, "decorated-agent")).toBe("क‍ख नमस्ते");
+  });
+
+  it("strips edge decoration reached across a raw joiner", () => {
+    // Same seam, decorated variant: the joiner sits between the core and the
+    // edge decoration in the raw text, where the trailing assertion would
+    // otherwise read it as a following word character.
+    const cfg = configForName("क‍\u{1F98B}");
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("क\u{1F98B} नमस्ते", regexes)).toBe(true);
+    expect(matchesMentionPatterns("क नमस्ते", regexes)).toBe(true);
+    expect(stripMentions("क‍\u{1F98B} /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "/status",
+    );
+  });
+
   it("strips spaced edge decoration together with its spacing", () => {
     // Matching resumes at the bare core either way; if the strip pattern left
     // the edge's inner space out, the emoji would survive in front of the
