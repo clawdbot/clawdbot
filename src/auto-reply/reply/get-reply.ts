@@ -1078,7 +1078,13 @@ export async function getReplyFromConfig(
   }
 
   let hostWorkspaceStagingDir: string | undefined;
+  let hostWorkspaceStagedFiles: string[] = [];
   let cleanupEmptyHostWorkspaceStagingDir: ((stagingDir?: string) => Promise<void>) | undefined;
+  let cleanupHostWorkspaceStagingFiles:
+    | ((params: { stagingDir?: string; stagedFiles: Iterable<string> }) => Promise<void>)
+    | undefined;
+  let hostStagingOwner: "caller" | "queue" | "operation" = "caller";
+  let hostStagingCleanup: Promise<void> | undefined;
   // Already-staged facts or SDK projections must remain a single-stage contract.
   if (
     !useFastTestBootstrap &&
@@ -1087,8 +1093,11 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { cleanupEmptyHostWorkspaceStagingDir: cleanupStagingDir, stageSandboxMedia } =
-      await loadStageSandboxMediaRuntime();
+    const {
+      cleanupEmptyHostWorkspaceStagingDir: cleanupStagingDir,
+      cleanupHostWorkspaceStagingFiles: cleanupStagingFiles,
+      stageSandboxMedia,
+    } = await loadStageSandboxMediaRuntime();
     const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
       stageSandboxMedia({
         ctx,
@@ -1099,8 +1108,16 @@ export async function getReplyFromConfig(
       }),
     );
     hostWorkspaceStagingDir = stageResult.hostWorkspaceStagingDir;
+    hostWorkspaceStagedFiles = [...stageResult.staged.values()];
     cleanupEmptyHostWorkspaceStagingDir = cleanupStagingDir;
+    cleanupHostWorkspaceStagingFiles = cleanupStagingFiles;
   }
+  const releaseHostStaging = () =>
+    (hostStagingCleanup ??=
+      cleanupHostWorkspaceStagingFiles?.({
+        stagingDir: hostWorkspaceStagingDir,
+        stagedFiles: hostWorkspaceStagedFiles,
+      }) ?? Promise.resolve());
 
   logResolverTiming("milestone", "before_run_prepared_reply");
   let replyResult: ReplyPayload | ReplyPayload[] | undefined;
@@ -1144,10 +1161,20 @@ export async function getReplyFromConfig(
         perMessageQueueOptions,
         typing,
         opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-        ...(hostWorkspaceStagingDir && cleanupEmptyHostWorkspaceStagingDir
+        ...(hostWorkspaceStagingDir &&
+        cleanupEmptyHostWorkspaceStagingDir &&
+        cleanupHostWorkspaceStagingFiles
           ? {
+              onHostStagingOwnershipTransferred: (settlement?: PromiseLike<void>) => {
+                hostStagingOwner = settlement ? "operation" : "queue";
+                if (settlement) {
+                  void Promise.resolve(settlement).then(releaseHostStaging, releaseHostStaging);
+                }
+              },
               onQueuedFollowupSettled: () => {
-                void cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingDir);
+                if (hostStagingOwner === "queue") {
+                  void releaseHostStaging();
+                }
               },
             }
           : {}),
@@ -1168,7 +1195,11 @@ export async function getReplyFromConfig(
     );
   } finally {
     if (hostWorkspaceStagingDir) {
-      await cleanupEmptyHostWorkspaceStagingDir?.(hostWorkspaceStagingDir);
+      if (hostStagingOwner === "caller") {
+        await releaseHostStaging();
+      } else {
+        await cleanupEmptyHostWorkspaceStagingDir?.(hostWorkspaceStagingDir);
+      }
     }
   }
   logResolverTiming("completed", "prepared_reply");

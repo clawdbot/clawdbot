@@ -205,6 +205,35 @@ export async function cleanupEmptyHostWorkspaceStagingDir(stagingDir?: string): 
   });
 }
 
+export async function cleanupHostWorkspaceStagingFiles(params: {
+  stagingDir?: string;
+  stagedFiles: Iterable<string>;
+}): Promise<void> {
+  const stagingDir = params.stagingDir;
+  if (!stagingDir) {
+    return;
+  }
+  const normalizedStagingDir = path.resolve(stagingDir);
+  const ownedFiles = [
+    ...new Set(
+      [...params.stagedFiles]
+        .map((filePath) => path.resolve(filePath))
+        .filter((filePath) => path.dirname(filePath) === normalizedStagingDir),
+    ),
+  ];
+  await Promise.all(
+    ownedFiles.map(async (filePath) => {
+      await fs.unlink(filePath).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return;
+        }
+        logVerbose(`Failed to clean staged host media file ${filePath}: ${String(error)}`);
+      });
+    }),
+  );
+  await cleanupEmptyHostWorkspaceStagingDir(stagingDir);
+}
+
 async function isUrlAliasForStagedSource(params: {
   url?: string;
   sourcePath: string;

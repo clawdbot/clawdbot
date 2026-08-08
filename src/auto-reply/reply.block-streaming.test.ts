@@ -68,6 +68,7 @@ vi.mock("./reply/session-reset-model.runtime.js", () => ({
 }));
 vi.mock("./reply/stage-sandbox-media.runtime.js", () => ({
   cleanupEmptyHostWorkspaceStagingDir: vi.fn(async () => undefined),
+  cleanupHostWorkspaceStagingFiles: vi.fn(async () => undefined),
   stageSandboxMedia: vi.fn(async () => ({ staged: new Map() })),
 }));
 vi.mock("./reply/typing.js", () => ({

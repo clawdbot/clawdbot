@@ -55,6 +55,7 @@ let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 let cleanupEmptyHostWorkspaceStagingDirMock: typeof import("./stage-sandbox-media.runtime.js").cleanupEmptyHostWorkspaceStagingDir;
+let cleanupHostWorkspaceStagingFilesMock: typeof import("./stage-sandbox-media.runtime.js").cleanupHostWorkspaceStagingFiles;
 let stageSandboxMediaMock: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
@@ -64,6 +65,7 @@ async function loadGetReplyRuntimeForTest() {
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
   ({
     cleanupEmptyHostWorkspaceStagingDir: cleanupEmptyHostWorkspaceStagingDirMock,
+    cleanupHostWorkspaceStagingFiles: cleanupHostWorkspaceStagingFilesMock,
     stageSandboxMedia: stageSandboxMediaMock,
   } = await import("./stage-sandbox-media.runtime.js"));
 }
@@ -136,6 +138,7 @@ async function resetMessageHookTestState() {
   vi.mocked(resolveDefaultModelMock).mockReset();
   vi.mocked(runPreparedReplyMock).mockReset();
   vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockReset();
+  vi.mocked(cleanupHostWorkspaceStagingFilesMock).mockReset();
   vi.mocked(stageSandboxMediaMock).mockReset();
   vi.mocked(logVerbose).mockReset();
 
@@ -178,6 +181,7 @@ async function resetMessageHookTestState() {
   });
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
   vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockResolvedValue(undefined);
+  vi.mocked(cleanupHostWorkspaceStagingFilesMock).mockResolvedValue(undefined);
   vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
   mocks.resolveReplySessionPreprocessingState.mockReturnValue({
     sessionEntry: undefined,
@@ -712,10 +716,9 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it("cleans an empty host staging directory after the prepared reply settles", async () => {
+  it("releases exact host staging files when no deferred owner accepts them", async () => {
     const hostWorkspaceStagingDir = "/tmp/openclaw-staged-media";
-    const order: string[] = [];
-    let onQueuedFollowupSettled: (() => void) | undefined;
+    const stagedFile = `${hostWorkspaceStagingDir}/voice.ogg`;
     mocks.resolveReplyDirectives.mockResolvedValueOnce(
       createGetReplyContinueDirectivesResult({
         body: "voice transcript",
@@ -729,20 +732,12 @@ describe("getReplyFromConfig message hooks", () => {
       }),
     );
     vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async () => {
-      order.push("stage");
       return {
-        staged: new Map([[0, `${hostWorkspaceStagingDir}/voice.ogg`]]),
+        staged: new Map([[0, stagedFile]]),
         hostWorkspaceStagingDir,
       };
     });
-    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async (params) => {
-      order.push("run");
-      onQueuedFollowupSettled = params.onQueuedFollowupSettled;
-      return { text: "ok" };
-    });
-    vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockImplementation(async (dir) => {
-      order.push(`cleanup:${dir}`);
-    });
+    vi.mocked(runPreparedReplyMock).mockResolvedValueOnce({ text: "ok" });
 
     await expect(
       getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({})),
@@ -750,19 +745,86 @@ describe("getReplyFromConfig message hooks", () => {
       text: "ok",
     });
 
-    expect(order).toEqual(["stage", "run", `cleanup:${hostWorkspaceStagingDir}`]);
-    expect(onQueuedFollowupSettled).toBeTypeOf("function");
+    expect(cleanupHostWorkspaceStagingFilesMock).toHaveBeenCalledOnce();
+    expect(cleanupHostWorkspaceStagingFilesMock).toHaveBeenCalledWith({
+      stagingDir: hostWorkspaceStagingDir,
+      stagedFiles: [stagedFile],
+    });
+    expect(cleanupEmptyHostWorkspaceStagingDirMock).not.toHaveBeenCalled();
+  });
 
+  it("defers exact host staging cleanup to the queued source lifecycle", async () => {
+    const hostWorkspaceStagingDir = "/tmp/openclaw-staged-media";
+    const stagedFile = `${hostWorkspaceStagingDir}/voice.ogg`;
+    let onQueuedFollowupSettled: (() => void) | undefined;
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "voice transcript",
+        abortKey: "telegram:-100123",
+        from: "telegram:user:42",
+        to: "telegram:-100123",
+        senderId: "telegram:user:42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
+      staged: new Map([[0, stagedFile]]),
+      hostWorkspaceStagingDir,
+    });
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async (params) => {
+      params.onHostStagingOwnershipTransferred?.();
+      onQueuedFollowupSettled = params.onQueuedFollowupSettled;
+      return { text: "ok" };
+    });
+
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+
+    expect(cleanupEmptyHostWorkspaceStagingDirMock).toHaveBeenCalledWith(hostWorkspaceStagingDir);
+    expect(cleanupHostWorkspaceStagingFilesMock).not.toHaveBeenCalled();
     onQueuedFollowupSettled?.();
     await vi.waitFor(() => {
-      expect(cleanupEmptyHostWorkspaceStagingDirMock).toHaveBeenCalledTimes(2);
+      expect(cleanupHostWorkspaceStagingFilesMock).toHaveBeenCalledOnce();
     });
-    expect(order).toEqual([
-      "stage",
-      "run",
-      `cleanup:${hostWorkspaceStagingDir}`,
-      `cleanup:${hostWorkspaceStagingDir}`,
-    ]);
+  });
+
+  it("keeps accepted-steer staging until the active operation settles", async () => {
+    const hostWorkspaceStagingDir = "/tmp/openclaw-staged-media";
+    const stagedFile = `${hostWorkspaceStagingDir}/voice.ogg`;
+    let settleOperation: (() => void) | undefined;
+    const ownerSettlement = new Promise<void>((resolve) => {
+      settleOperation = resolve;
+    });
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "voice transcript",
+        abortKey: "telegram:-100123",
+        from: "telegram:user:42",
+        to: "telegram:-100123",
+        senderId: "telegram:user:42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
+      staged: new Map([[0, stagedFile]]),
+      hostWorkspaceStagingDir,
+    });
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async (params) => {
+      params.onHostStagingOwnershipTransferred?.(ownerSettlement);
+      params.onQueuedFollowupSettled?.();
+      return { text: "ok" };
+    });
+
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+
+    expect(cleanupHostWorkspaceStagingFilesMock).not.toHaveBeenCalled();
+    settleOperation?.();
+    await vi.waitFor(() => {
+      expect(cleanupHostWorkspaceStagingFilesMock).toHaveBeenCalledOnce();
+    });
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {

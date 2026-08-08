@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
 import {
   cleanupEmptyHostWorkspaceStagingDir,
+  cleanupHostWorkspaceStagingFiles,
   stageSandboxMedia,
 } from "./reply/stage-sandbox-media.js";
 import {
@@ -243,7 +244,15 @@ describe("stageSandboxMedia", () => {
       await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
       await cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingDir);
       await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
-      await fs.unlink(stagedPath);
+      const unrelatedPath = join(hostWorkspaceStagingDir, "agent-output.txt");
+      await fs.writeFile(unrelatedPath, "keep");
+      await cleanupHostWorkspaceStagingFiles({
+        stagingDir: hostWorkspaceStagingDir,
+        stagedFiles: result.staged.values(),
+      });
+      await expect(fs.lstat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(unrelatedPath, "utf8")).resolves.toBe("keep");
+      await fs.unlink(unrelatedPath);
       await cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingDir);
       await expect(fs.lstat(hostWorkspaceStagingDir)).rejects.toMatchObject({
         code: "ENOENT",

@@ -456,6 +456,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldFollowup,
     queueAdmissionState,
     isActive,
+    onHostStagingOwnershipTransferred: params.onHostStagingOwnershipTransferred,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
       const latestActiveSessionId =

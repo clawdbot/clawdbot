@@ -25,6 +25,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 type ActiveReplySteerParams = {
   followupRun: RunReplyAgentParams["followupRun"];
+  onHostStagingOwnershipTransferred: RunReplyAgentParams["onHostStagingOwnershipTransferred"];
   opts: RunReplyAgentParams["opts"];
   providedReplyOperation: ReplyOperation | undefined;
   queueKey: string;
@@ -138,6 +139,24 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     params.providedReplyOperation?.key === sessionKey
       ? params.providedReplyOperation
       : (registeredReplyOperation ?? params.providedReplyOperation);
+  const activeOwnerSettlement = params.onHostStagingOwnershipTransferred
+    ? expectDefined(activeReplyOperation?.ownerSettlement, "active reply owner settlement")
+    : undefined;
+  let stagingOwnershipTransferred = false;
+  const transferStagingToQueue = () => {
+    if (stagingOwnershipTransferred) {
+      return;
+    }
+    stagingOwnershipTransferred = true;
+    params.onHostStagingOwnershipTransferred?.();
+  };
+  const transferStagingToActiveRun = () => {
+    if (stagingOwnershipTransferred || !activeOwnerSettlement) {
+      return;
+    }
+    stagingOwnershipTransferred = true;
+    params.onHostStagingOwnershipTransferred?.(activeOwnerSettlement);
+  };
   const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
@@ -167,6 +186,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       return "handled";
     }
     if (admission === "fallback") {
+      transferStagingToQueue();
       parked.fallback();
       if (replyOperationRunState) {
         replyOperationRunState.admission = { status: "accepted", mode: "followup" };
@@ -201,6 +221,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       },
     );
     if (!steerOutcome.queued) {
+      transferStagingToQueue();
       parked.fallback();
       if (replyOperationRunState) {
         replyOperationRunState.admission = { status: "accepted", mode: "followup" };
@@ -211,6 +232,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       typing.cleanup();
       return "handled";
     }
+    transferStagingToActiveRun();
     const adoptionDisposition = await finalizeAcceptedSteer({
       activeReplyOperation,
       abortKey: sessionKey ?? queueKey,
@@ -240,6 +262,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     if (resolveFollowupAbortSignal(followupRun)?.aborted) {
       parked.consume();
     } else {
+      transferStagingToQueue();
       parked.fallback();
     }
     throw error;
@@ -248,6 +271,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       if (resolveFollowupAbortSignal(followupRun)?.aborted) {
         parked.consume();
       } else {
+        transferStagingToQueue();
         parked.fallback();
       }
     }
