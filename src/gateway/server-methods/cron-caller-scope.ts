@@ -4,7 +4,12 @@ import {
   createTrustedCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../../cron/scheduled-tool-policy.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronToolsAllowProvenance,
+} from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -17,7 +22,7 @@ export type CronCallerScope = {
   sessionKey?: string;
   accountId: string;
   currentJobId?: string;
-  toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+  toolsAllowProvenance?: CronToolsAllowProvenance;
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
 };
 

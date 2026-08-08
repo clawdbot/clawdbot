@@ -233,6 +233,7 @@ TARGET+PAYLOAD:
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
 - agentTurn {kind:"agentTurn",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.
+- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.
 - script {kind:"script",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
@@ -406,6 +407,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             assertCronCreatorAuthorityResolutionAvailable({
               required: requiresCreatorAuthority,
               resolveCreatorToolAuthority: opts?.resolveCreatorToolAuthority,
+              creatorToolAllowlistCaptureRef: opts?.creatorToolAllowlistCaptureRef,
               unavailableReason: opts?.creatorAuthorityUnavailableReason,
             });
             const resolvedAuthority =

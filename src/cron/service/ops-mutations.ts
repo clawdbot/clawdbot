@@ -15,7 +15,7 @@ import { deleteCronJobScratch } from "../scratch-store.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
 import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
   applyJobPatch,
@@ -201,7 +201,7 @@ async function persistUpdatedJob(params: {
   });
 }
 
-function declarativeFields(job: CronJob, includeEnabled: boolean) {
+function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
     pacing: job.pacing,

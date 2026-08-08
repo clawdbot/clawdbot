@@ -17,10 +17,11 @@ import type {
   CronDeliveryPatch,
   CronFailureAlert,
   CronFailureAlertPatch,
-  CronJob,
   CronJobCreate,
   CronJobPatch,
   CronJobState,
+  CronStoredJob,
+  CronToolsAllowProvenance,
 } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import {
@@ -79,9 +80,9 @@ export function createJob(
   input: CronJobCreate,
   opts?: DeliveryValidationOptions & {
     scheduledToolPolicy?: CronScheduledToolPolicy;
-    toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+    toolsAllowProvenance?: CronToolsAllowProvenance;
   },
-): CronJob {
+): CronStoredJob {
   const now = state.deps.nowMs();
   const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
   const schedule =
@@ -137,7 +138,7 @@ export function createJob(
   // Schedule activation is stamped only by committed scheduling mutations.
   // Accepting caller state here would let imports spoof restart catch-up ownership.
   delete initialState.scheduleActivatedAtMs;
-  const job: CronJob = {
+  const job: CronStoredJob = {
     id,
     ...(declarationKey ? { declarationKey } : {}),
     ...(displayName ? { displayName } : {}),
@@ -210,14 +211,14 @@ export function createJob(
 
 /** Applies a public cron patch in-place, preserving omitted nested fields and validating the result. */
 export function applyJobPatch(
-  job: CronJob,
+  job: CronStoredJob,
   patch: CronJobPatch,
   opts?: {
     defaultAgentId?: string;
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
-    toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+    toolsAllowProvenance?: CronToolsAllowProvenance;
   } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
@@ -420,7 +421,7 @@ export function applyJobPatch(
 
 /** Converges the declared schedule, payload, delivery, and display label only. */
 export function applyDeclarativeJobSpec(
-  job: CronJob,
+  job: CronStoredJob,
   input: CronJobCreate,
   opts: {
     defaultAgentId?: string;
@@ -428,7 +429,7 @@ export function applyDeclarativeJobSpec(
     nowMs: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
-    toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+    toolsAllowProvenance?: CronToolsAllowProvenance;
   } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);

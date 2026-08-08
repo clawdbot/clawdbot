@@ -831,6 +831,9 @@ describe("cron tool", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain("reminders, delayed self-wakeups, loops, recurring work");
     expect(tool.description).toContain("Never exec sleep/poll as timer.");
+    expect(tool.description).toContain(
+      "Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.",
+    );
   });
 
   it("documents the event-trigger authoring contract", () => {
@@ -1650,7 +1653,7 @@ describe("cron tool", () => {
         action: "add",
         job: buildReminderAgentTurnJob(),
       }),
-    ).rejects.toThrow("Retry the automation change in a new turn when no prior turn is active");
+    ).rejects.toThrow("fresh authenticated direct-local operator turn");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1699,6 +1702,23 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
   });
 
+  it("keeps future-tool prevention for complete runtimes without a capture marker", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:main",
+      creatorToolAllowlist: ["read"],
+    });
+
+    await tool.execute("call-future-no-capture-marker", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["future__tool"] },
+      },
+    });
+
+    expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: [] } });
+  });
+
   it("resolves symbolic groups before persisting an add cap", async () => {
     const resolveCreatorToolAuthority = vi.fn(async () =>
       resolvedCreatorAuthority(["read", { name: "configured__lookup", pluginId: "bundle-mcp" }]),
@@ -1739,7 +1759,7 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("fails only inherited-default adds while final tool capture is unavailable", async () => {
+  it("fails incomplete inherited and unknown finite adds while preserving known finite tools", async () => {
     const captureRef = {};
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:telegram:group:restricted-room",
@@ -1752,7 +1772,22 @@ describe("cron tool", () => {
         action: "add",
         job: buildReminderAgentTurnJob(),
       }),
-    ).rejects.toThrow("final tool surface is unavailable");
+    ).rejects.toThrow("fresh authenticated direct-local operator turn");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+
+    await expect(
+      tool.execute("call-unknown-finite-capture-unavailable", {
+        action: "add",
+        job: {
+          ...buildReminderAgentTurnJob(),
+          payload: {
+            kind: "agentTurn",
+            message: "hello",
+            toolsAllow: ["future__tool"],
+          },
+        },
+      }),
+    ).rejects.toThrow("CLI or Gateway with an explicit finite toolsAllow list");
     expect(callGatewayMock).not.toHaveBeenCalled();
 
     await tool.execute("call-explicit-capture-unavailable", {
@@ -3544,6 +3579,32 @@ describe("cron tool", () => {
     ).rejects.toThrow("no automation changes were saved");
     expect(callGatewayMock).toHaveBeenCalledOnce();
     expect(readGatewayCall().method).toBe("cron.get");
+  });
+
+  it("rejects an unknown finite update when configured-MCP capture is incomplete", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      id: "job-incomplete-authority",
+      configRevision: "sha256:incomplete-authority",
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+      creatorToolAllowlistCaptureRef: {},
+    });
+
+    await expect(
+      tool.execute("call-incomplete-authority-update", {
+        action: "update",
+        id: "job-incomplete-authority",
+        patch: { payload: { kind: "agentTurn", toolsAllow: ["future__tool"] } },
+      }),
+    ).rejects.toThrow("fresh authenticated direct-local operator turn");
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(readGatewayCall()).toEqual({
+      method: "cron.get",
+      params: { id: "job-incomplete-authority" },
+    });
   });
 
   it("does not write an update when configured MCP authentication fails", async () => {

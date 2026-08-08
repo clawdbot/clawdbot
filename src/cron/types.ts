@@ -463,7 +463,7 @@ export type CronTriggerEvaluationResult =
   | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
-/** Fully persisted cron job with spec fields and mutable run state. */
+/** Public cron job contract with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
   CronSessionTarget,
@@ -482,19 +482,25 @@ export type CronJob = CronJobBase<
   };
   /** Server-authored provenance for requester-scoped scheduled tool authority. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
-  /** Private proof that the default cap came from the creator's final executable surface. */
-  toolsAllowProvenance?: {
-    version: 1;
-    source: "final-executable-surface";
-  };
   trigger?: CronTrigger;
   state: CronJobState;
+};
+
+/** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
+export type CronToolsAllowProvenance = {
+  version: 1;
+  source: "final-executable-surface";
+};
+
+/** Persisted row shape; public Gateway and wire contracts use CronJob. */
+export type CronStoredJob = CronJob & {
+  toolsAllowProvenance?: CronToolsAllowProvenance;
 };
 
 /** Versioned cron store file shape. */
 export type CronStoreFile = {
   version: 1;
-  jobs: CronJob[];
+  jobs: CronStoredJob[];
 };
 
 type CronJobStateInput = Partial<
@@ -504,7 +510,7 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "toolsAllowProvenance"
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -525,7 +531,6 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
-    | "toolsAllowProvenance"
     | "pacing"
   >
 > & {

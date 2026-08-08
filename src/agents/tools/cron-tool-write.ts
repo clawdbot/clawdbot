@@ -1,7 +1,12 @@
 // Agent cron-tool write safety and optimistic update orchestration.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
-import { planCronJobUpdatePatch } from "./cron-tool-creator-cap.js";
+import {
+  CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE,
+  INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE,
+  isCronCreatorToolCaptureComplete,
+  planCronJobUpdatePatch,
+} from "./cron-tool-creator-cap.js";
 import type {
   CronCreatorToolAllowlistEntry,
   CronCreatorToolAuthoritySnapshot,
@@ -33,15 +38,20 @@ export function assertNoCronShellExecution(value: unknown): void {
 export function assertCronCreatorAuthorityResolutionAvailable(params: {
   required: boolean;
   resolveCreatorToolAuthority?: unknown;
+  creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   unavailableReason?: "queued-local-operator-configured-mcp";
 }): void {
+  if (!params.required || params.resolveCreatorToolAuthority) {
+    return;
+  }
   if (
-    params.required &&
-    !params.resolveCreatorToolAuthority &&
-    params.unavailableReason === "queued-local-operator-configured-mcp"
+    params.unavailableReason === "queued-local-operator-configured-mcp" ||
+    !isCronCreatorToolCaptureComplete(params.creatorToolAllowlistCaptureRef)
   ) {
     throw new Error(
-      "Configured MCP authority is unavailable because this local operator turn was queued. Retry the automation change in a new turn when no prior turn is active; no automation changes were saved.",
+      params.unavailableReason === "queued-local-operator-configured-mcp"
+        ? `Configured MCP authority is unavailable because this local operator turn was queued. ${CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE}`
+        : INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE,
     );
   }
 }
@@ -50,6 +60,7 @@ async function prepareCronJobUpdateForGateway(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
+  creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   creatorAuthorityComplete: boolean;
   resolveCreatorToolAuthority?: (options?: {
     signal?: AbortSignal;
@@ -93,6 +104,7 @@ async function prepareCronJobUpdateForGateway(params: {
     assertCronCreatorAuthorityResolutionAvailable({
       required: true,
       resolveCreatorToolAuthority: params.resolveCreatorToolAuthority,
+      creatorToolAllowlistCaptureRef: params.creatorToolAllowlistCaptureRef,
       unavailableReason: params.creatorAuthorityUnavailableReason,
     });
     if (!params.resolveCreatorToolAuthority) {
@@ -153,6 +165,7 @@ export async function updateCronJobFromAgentTool(params: {
     const prepared = await prepareCronJobUpdateForGateway({
       ...params,
       creatorAuthorityComplete:
+        isCronCreatorToolCaptureComplete(params.creatorToolAllowlistCaptureRef) &&
         resolveCreatorToolAuthority === undefined &&
         params.creatorAuthorityUnavailableReason === undefined,
       resolveCreatorToolAuthority,
@@ -172,9 +185,7 @@ export async function updateCronJobFromAgentTool(params: {
       (prepared.resolvedAuthority || params.creatorToolAllowlistCaptureRef) &&
       captureSource !== "final-executable-surface"
     ) {
-      throw new Error(
-        "The final tool surface is unavailable, so this automation was not updated with an incomplete inherited tool cap. Retry after configured MCP discovery succeeds, or provide an explicit tools list.",
-      );
+      throw new Error(INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE);
     }
     if (prepared.resolvedAuthority && !params.withCreatorAuthorityProvenance) {
       throw new Error(

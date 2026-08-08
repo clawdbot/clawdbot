@@ -343,7 +343,8 @@ export async function startOrResumeThread(
     if (configuredMcpOwnershipChanged && binding?.threadId) {
       const predecessorBinding = binding;
       // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
-      // Rotate legacy or ambiguous bindings so no stale native surface can survive the handoff.
+      // A persistent main/named session has one binding: rotate its exact predecessor instead
+      // of retaining native and scheduled variants that could diverge or widen authority.
       assertCodexBindingMayBeReplaced(predecessorBinding, "changing configured MCP ownership");
       embeddedAgentLog.debug(
         "codex app-server configured MCP ownership changed; starting a new thread",

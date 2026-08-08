@@ -4,10 +4,10 @@ import {
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
 import { cronJobUsesToolRuntime } from "../tools-allow.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 
 export function stampScheduledToolPolicy(
-  job: CronJob,
+  job: CronStoredJob,
   scheduledToolPolicy: CronScheduledToolPolicy | undefined,
 ): void {
   if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
@@ -26,7 +26,7 @@ export function stampScheduledToolPolicy(
 }
 
 export function reconcileScheduledToolPolicy(params: {
-  job: CronJob;
+  job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
   explicitlyMutatesToolsAllow: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
@@ -52,9 +52,9 @@ export function reconcileScheduledToolPolicy(params: {
 }
 
 export function reconcileToolsAllowProvenance(params: {
-  job: CronJob;
+  job: CronStoredJob;
   explicitlyMutatesToolsAllow: boolean;
-  toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+  toolsAllowProvenance?: CronToolsAllowProvenance;
 }): void {
   if (!params.explicitlyMutatesToolsAllow) {
     return;

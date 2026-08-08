@@ -13,6 +13,9 @@ const mcpMocks = vi.hoisted(() => ({
     storedNames: string[];
     provenance?: unknown;
   }>,
+  captureRefs: [] as Array<{
+    value?: { version: 1; source: "final-executable-surface" };
+  }>,
   dispose: vi.fn(async () => undefined),
   captureFacade: vi.fn(),
   staticFacade: vi.fn(),
@@ -98,6 +101,14 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
                 execute,
               },
             ],
+        appTools: [
+          {
+            name: "fake__app_only",
+            description: "App-view-only configured MCP fixture.",
+            parameters: { type: "object", properties: {} },
+            execute,
+          },
+        ],
         ...(mcpMocks.staticDiagnosticNotice
           ? { diagnosticNotice: mcpMocks.staticDiagnosticNotice }
           : {}),
@@ -110,6 +121,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
       ...args: Parameters<typeof actual.captureFinalCodexCronCreatorToolAllowlist>
     ) => {
       const [target, captureRef, tools] = args;
+      mcpMocks.captureRefs.push(captureRef);
       mcpMocks.captureFacade(target, captureRef, tools);
       target.length = 0;
       for (const tool of tools) {
@@ -147,6 +159,7 @@ setupRunAttemptTestHooks();
 beforeEach(() => {
   mcpMocks.authorityResolvers.length = 0;
   mcpMocks.captureCalls.length = 0;
+  mcpMocks.captureRefs.length = 0;
   mcpMocks.staticCalls.length = 0;
   mcpMocks.staticToolExecutes.length = 0;
   mcpMocks.requesterCalls = 0;
@@ -338,6 +351,26 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     });
   });
 
+  it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {
+    const sessionFile = path.join(tempDir, "session-sender-attributed-mcp.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace-sender-attributed-mcp"));
+    configureFakeMcp(params);
+    params.trigger = "user";
+    params.senderIsOwner = true;
+    params.senderId = "external-sender";
+
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+
+    expect(mcpMocks.authorityResolvers).toHaveLength(0);
+    expect(mcpMocks.captureRefs).toHaveLength(1);
+    expect(mcpMocks.captureRefs[0]!.value).toBeUndefined();
+    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+  });
+
   it("lazily snapshots configured MCP through the local-operator resolver without replacing native MCP", async () => {
     const sessionFile = path.join(tempDir, "session-local-operator-mutation.jsonl");
     const params = createParams(
@@ -363,6 +396,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(
       authority.tools.map((entry) => (typeof entry === "string" ? entry : entry.name)),
     ).toContain("fake__show");
+    expect(
+      authority.tools.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    ).not.toContain("fake__app_only");
     expect(mcpMocks.staticCalls).toHaveLength(1);
     expect(mcpMocks.staticCalls[0]).toMatchObject({
       sessionId: `cron-authority:${params.runId}`,
@@ -371,6 +407,31 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     });
     expect(mcpMocks.staticCalls[0]).not.toHaveProperty("sessionKey");
     expect(mcpMocks.captureCalls.at(-1)?.storedNames).toContain("fake__show");
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+  });
+
+  it("offers explicit finite tools when inherited configured MCP discovery is incomplete", async () => {
+    const sessionFile = path.join(tempDir, "session-local-operator-incomplete-mcp.jsonl");
+    const params = createParams(
+      sessionFile,
+      path.join(tempDir, "workspace-local-operator-incomplete-mcp"),
+    );
+    configureFakeMcp(params);
+    params.trigger = "user";
+    params.senderIsOwner = true;
+    mcpMocks.staticDiagnosticNotice =
+      "Configured MCP is incomplete for this scheduled run: fake: authentication required.";
+
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await expect(mcpMocks.authorityResolvers[0]!()).rejects.toThrow(
+      "provide an explicit finite toolsAllow list containing only currently visible tools",
+    );
     expect(mcpMocks.dispose).toHaveBeenCalledOnce();
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -461,7 +522,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     operation.abort(new Error("cron tool call was cancelled"));
     releaseFailure();
 
-    await expect(firstResolution).rejects.toThrow("configured MCP materialization timed out");
+    await expect(firstResolution).rejects.toThrow(
+      "provide an explicit finite toolsAllow list containing only currently visible tools",
+    );
     const secondResolution = resolver({ signal: new AbortController().signal });
     expect(secondResolution).toBe(firstResolution);
     await expect(secondResolution).rejects.toThrow("configured MCP materialization timed out");

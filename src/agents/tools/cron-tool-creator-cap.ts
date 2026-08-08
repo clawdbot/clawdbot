@@ -18,21 +18,26 @@ type CronJobUpdatePatchPlan =
   | { kind: "needs-current-job" }
   | { kind: "needs-creator-authority" };
 
+export const CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE =
+  "Retry from a fresh authenticated direct-local operator turn, or create/edit via the CLI or Gateway with an explicit finite toolsAllow list containing only currently visible tools; no automation changes were saved.";
+export const INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE = `Configured MCP authority is unavailable because this turn did not capture the complete model-callable tool surface. ${CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE}`;
+
+/** No capture marker means this runtime has no deferred configured-MCP surface. */
+export function isCronCreatorToolCaptureComplete(
+  captureRef: CronToolsAllowCaptureRef | undefined,
+): boolean {
+  return captureRef === undefined || captureRef.value?.source === "final-executable-surface";
+}
+
 export function assertInheritedCronToolCaptureReady(
   value: unknown,
   captureRef: CronToolsAllowCaptureRef | undefined,
 ): void {
   const payload = isRecord(value) && isRecord(value.payload) ? value.payload : undefined;
-  if (
-    payload?.toolsAllowIsDefault !== true ||
-    !captureRef ||
-    captureRef.value?.source === "final-executable-surface"
-  ) {
+  if (payload?.toolsAllowIsDefault !== true || isCronCreatorToolCaptureComplete(captureRef)) {
     return;
   }
-  throw new Error(
-    "The final tool surface is unavailable, so this automation was not created with an incomplete inherited tool cap. Retry after configured MCP discovery succeeds, or provide an explicit tools list.",
-  );
+  throw new Error(INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE);
 }
 
 export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(

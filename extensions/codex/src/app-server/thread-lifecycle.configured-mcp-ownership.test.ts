@@ -1,6 +1,4 @@
 // Codex tests cover configured-MCP thread ownership transitions.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -16,6 +14,7 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
 import {
   createAppServerOptions,
@@ -42,18 +41,13 @@ vi.mock("./shared-client.js", async (importOriginal) => {
 });
 
 describe("startOrResumeThread — configured MCP ownership", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tempDir = "";
 
-  beforeEach(async () => {
+  beforeEach(() => {
     sharedClientMocks.retainByInstanceId = undefined;
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-configured-mcp-ownership-"));
+    tempDir = tempDirs.make("openclaw-configured-mcp-ownership-");
     resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
   });
 
   it.each([
@@ -103,7 +97,50 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     });
   });
 
-  it("atomically alternates ordinary and scheduled ownership without evicting siblings", async () => {
+  it("replaces the single persistent main binding when scheduled MCP takes ownership", async () => {
+    const sessionFile = path.join(tempDir, "session-main.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-main");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:main");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-main-ordinary",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      mcpServersFingerprint: "mcp-v1",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method !== "thread/start") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+        threadId: "thread-main-ordinary",
+      });
+      return threadStartResult("thread-main-scheduled");
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:main";
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      configuredMcpOwnershipVersion: 1,
+      mcpServersFingerprintEvaluated: true,
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-main-scheduled",
+      configuredMcpOwnershipVersion: 1,
+    });
+  });
+
+  it("atomically alternates ordinary and scheduled ownership for a persistent named session without dual bindings", async () => {
     const sessionFile = path.join(tempDir, "session-alternating.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-alternating");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");

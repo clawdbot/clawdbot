@@ -24,6 +24,7 @@ import type {
   CronDeliveryTraceTarget,
   CronJob,
   CronRunDiagnostics,
+  CronToolsAllowProvenance,
 } from "../types.js";
 import { logWarn } from "./run.runtime.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
@@ -168,7 +169,7 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   sessionKey?: string;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
   agentRuntime?: string;
-  toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+  toolsAllowProvenance?: CronToolsAllowProvenance;
 }): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
   if (params.agentPayload?.toolsAllowIsDefault === true) {

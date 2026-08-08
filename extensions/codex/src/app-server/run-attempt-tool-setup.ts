@@ -372,6 +372,15 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cronCreatorToolAllowlistCaptureRef,
       toolBridge.availableTools,
     );
+    if (
+      !authenticatedScheduledMode &&
+      bundleMcpThreadConfig.staticServerNames.length > 0 &&
+      !canResolveScheduledConfiguredMcpCreatorAuthority
+    ) {
+      // Native configured MCP is model-visible but absent from this dynamic-tool list.
+      // Keep the names for finite intersections, but never certify a partial default cap.
+      delete cronCreatorToolAllowlistCaptureRef.value;
+    }
     if (canResolveScheduledConfiguredMcpCreatorAuthority) {
       resolveCreatorAuthorityImpl = async (options) => {
         options?.signal?.throwIfAborted();
@@ -379,33 +388,46 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           throw new Error("configured MCP authority resolver lost the active tool bridge");
         }
         const authorityRuntimeId = `cron-authority:${params.runId}`;
-        const materialized = await materializeStaticMcpToolsForScheduledHarnessRun({
-          sessionId: authorityRuntimeId,
-          workspaceDir: effectiveWorkspace,
-          agentDir: policyContext.agentDir,
-          cfg: params.config,
-          manifestRegistry: bundleManifestRegistry,
-          reservedToolNames: toolBridge.availableTools.map((tool) => tool.name),
-          toolsAllow: params.toolsAllow,
-          toolOverrides: codexMcpToolOverrides,
-          autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
-            connection.appServer,
-          ),
-          policyContext,
-          warn: (message) => embeddedAgentLog.warn(message),
-          retireSessionRuntimeAfterDispose: true,
-        });
+        let materialized: Awaited<
+          ReturnType<typeof materializeStaticMcpToolsForScheduledHarnessRun>
+        >;
+        try {
+          materialized = await materializeStaticMcpToolsForScheduledHarnessRun({
+            sessionId: authorityRuntimeId,
+            workspaceDir: effectiveWorkspace,
+            agentDir: policyContext.agentDir,
+            cfg: params.config,
+            manifestRegistry: bundleManifestRegistry,
+            reservedToolNames: toolBridge.availableTools.map((tool) => tool.name),
+            toolsAllow: params.toolsAllow,
+            toolOverrides: codexMcpToolOverrides,
+            autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
+              connection.appServer,
+            ),
+            policyContext,
+            warn: (message) => embeddedAgentLog.warn(message),
+            retireSessionRuntimeAfterDispose: true,
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Configured MCP discovery failed while resolving inherited automation authority: ${detail}. Retry after the server is available, or provide an explicit finite toolsAllow list containing only currently visible tools; no automation changes were saved.`,
+            { cause: error },
+          );
+        }
         try {
           options?.signal?.throwIfAborted();
           if (materialized.diagnosticNotice) {
             throw new Error(
-              `${materialized.diagnosticNotice} Sign in to the affected MCP server, then retry the automation mutation to reauthorize it. No automation changes were saved.`,
+              `${materialized.diagnosticNotice} Sign in to the affected MCP server and retry, or provide an explicit finite toolsAllow list containing only currently visible tools. No automation changes were saved.`,
             );
           }
           const authorityTools: Array<string | { name: string; pluginId?: string }> = [];
           const captureRef: {
             value?: { version: 1; source: "final-executable-surface" };
           } = {};
+          // Default authority contains model-callable tools only. App-only projections
+          // gate view callbacks and must never become headless scheduled capability.
           const projectedConfiguredMcp = projectCodexExecutableDynamicTools({
             tools: filterCodexDynamicTools(materialized.tools, pluginConfig),
             hookContext,

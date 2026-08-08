@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { toPublicCronJob } from "./public-job.js";
+import type { CronStoredJob } from "./types.js";
 
 describe("toPublicCronJob", () => {
   it("strips scheduler-only pacing slots without mutating stored state", () => {
@@ -44,11 +45,12 @@ describe("toPublicCronJob", () => {
   });
 
   it("strips private tool-cap provenance without mutating the stored job", () => {
-    const job = makeCronJob({
+    const job: CronStoredJob = {
+      ...makeCronJob({}),
       toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
-    });
+    };
 
-    expect(toPublicCronJob(job).toolsAllowProvenance).toBeUndefined();
+    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
     expect(job.toolsAllowProvenance).toEqual({
       version: 1,
       source: "final-executable-surface",
