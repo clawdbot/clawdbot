@@ -173,6 +173,21 @@ describe("database verification error coercion", () => {
     expect(error).toMatchObject({ code: "SQLITE_IOERR", details: { database: "state" } });
     expect(Reflect.get(error, detailKey)).toBe("symbol detail");
   });
+
+  it("rejects prototype-mutating structured failure fields", async () => {
+    const failure = { constructor: { polluted: true }, prototype: { polluted: true } };
+    Object.defineProperty(failure, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+    });
+
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
+
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(Object.hasOwn(error, "__proto__")).toBe(false);
+    expect(Object.hasOwn(error, "constructor")).toBe(false);
+    expect(Object.hasOwn(error, "prototype")).toBe(false);
+  });
 });
 
 function createUnsafeIndexDrift(databasePath: string): void {

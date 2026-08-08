@@ -13,6 +13,7 @@ const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "owner-epoch-mismatch",
 ]);
 const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
+const PROTOTYPE_MUTATING_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
@@ -107,22 +108,24 @@ export function toError(error: unknown): Error {
   const normalized = toErrorObject({}, message);
   normalized.cause = error;
   try {
-    const details = Object.fromEntries(
-      Reflect.ownKeys(error)
-        .filter(
-          (key) =>
-            (typeof key !== "string" || !ERROR_OWNED_FIELDS.has(key)) &&
-            Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
-        )
-        .flatMap((key): [PropertyKey, unknown][] => {
-          try {
-            return [[key, Reflect.get(error, key)]];
-          } catch {
-            return [];
-          }
-        }),
+    const detailKeys = Reflect.ownKeys(error).filter(
+      (key) =>
+        (typeof key !== "string" ||
+          (!ERROR_OWNED_FIELDS.has(key) && !PROTOTYPE_MUTATING_FIELDS.has(key))) &&
+        Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
     );
-    Object.assign(normalized, details);
+    for (const key of detailKeys) {
+      try {
+        Object.defineProperty(normalized, key, {
+          value: Reflect.get(error, key),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      } catch {
+        // Skip fields whose getters or property definitions reject access.
+      }
+    }
   } catch {
     // Opaque proxies may reject enumeration; preserve the original failure as the cause.
   }

@@ -246,6 +246,21 @@ describe("worker connection error coercion", () => {
     expect(error).toMatchObject({ code: "ECONNRESET", details: { retryable: true } });
     expect(Reflect.get(error, detailKey)).toBe("symbol detail");
   });
+
+  it("rejects prototype-mutating structured cause fields", () => {
+    const cause = { constructor: { polluted: true }, prototype: { polluted: true } };
+    Object.defineProperty(cause, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+    });
+
+    const error = toError(cause);
+
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(Object.hasOwn(error, "__proto__")).toBe(false);
+    expect(Object.hasOwn(error, "constructor")).toBe(false);
+    expect(Object.hasOwn(error, "prototype")).toBe(false);
+  });
 });
 
 describe("WorkerConnection state listener isolation", () => {
