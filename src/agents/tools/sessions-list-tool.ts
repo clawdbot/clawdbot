@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -47,7 +48,6 @@ import {
   resolveSandboxedSessionToolContext,
   type GatewaySessionListRow,
   type SessionListRow,
-  type SessionRunStatus,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({

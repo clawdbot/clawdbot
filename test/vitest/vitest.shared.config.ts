@@ -160,7 +160,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot, { vitestFsModuleCache: true })],
+  plugins: [createStateSchemaInlinePlugin(repoRoot)],
   resolve: {
     alias: [
       {

@@ -4,17 +4,14 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import {
-  assertAgentRunAttributionCompatible,
   claimAgentRunContext,
   getAgentRunContext,
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
-import { rebindAgentExecutionAttribution } from "../../agent-execution-attribution.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
-import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
@@ -22,9 +19,10 @@ import {
   shouldNoteLaneWait,
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
-type LaneParams = RunEmbeddedAgentInternalParams & {
+type LaneParams = RunEmbeddedAgentParams & {
   sessionFile: string;
 };
 
@@ -149,16 +147,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         }
         lifecycleGeneration = currentLifecycleGeneration;
         options.setLifecycleGeneration(lifecycleGeneration);
-        // Lifecycle rebound preserves the admitted identity snapshot, including
-        // authoritative absence; only a fresh admission may replace identity.
-        const attribution = params.attribution
-          ? rebindAgentExecutionAttribution(params.attribution, lifecycleGeneration)
-          : undefined;
-        params = {
-          ...params,
-          lifecycleGeneration,
-          ...(attribution ? { attribution } : {}),
-        };
+        params = { ...params, lifecycleGeneration };
         options.setParams(params);
       }
       // Queue waits can outlive durable harness and placement bindings.
@@ -179,29 +168,12 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             releaseQueuedContext("admitted");
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
-            // A run ID is correlation, not authority. Only explicit internal
-            // attribution may retain a live generation's private identity.
-            const existingAttribution =
-              existingContext?.lifecycleGeneration === lifecycleGeneration
-                ? existingContext.attribution
-                : undefined;
-            assertAgentRunAttributionCompatible(existingAttribution, params.attribution);
-            const { attribution: _existingAttribution, ...existingContextFields } =
-              existingContext ?? {};
-            const admittedAt = Date.now();
             claimAgentRunContext(params.runId, {
-              ...existingContextFields,
-              ...(params.attribution ? { attribution: params.attribution } : {}),
+              ...existingContext,
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,
-              // A lifecycle rebound starts a new admission window; retaining the
-              // prior timestamp can make stale verbosity changes govern this run.
-              registeredAt:
-                existingContext?.lifecycleGeneration === lifecycleGeneration
-                  ? existingContext.registeredAt
-                  : admittedAt,
-              lastActiveAt: admittedAt,
+              lastActiveAt: Date.now(),
             });
           },
         ),

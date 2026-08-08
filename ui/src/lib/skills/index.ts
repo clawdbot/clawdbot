@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -10,7 +9,7 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-import { redactToolDetail } from "../browser-redact.ts";
+import { formatUiError } from "../format-error.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import {
   normalizeSkillApiKeyReplacement,
@@ -335,7 +334,7 @@ export async function loadSkills(
     if (!isCurrent()) {
       return;
     }
-    state.skillsError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillsError = formatUiError(err);
   } finally {
     // A transient disconnect invalidates the result, not this invocation's
     // loading ownership. Source/scope identity still protects newer loads.
@@ -448,7 +447,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.skillCardErrors = {
         ...state.skillCardErrors,
-        [skillKey]: formatErrorMessage(err, { redact: redactToolDetail }),
+        [skillKey]: formatUiError(err),
       };
     }
   } finally {
@@ -493,7 +492,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       return;
     }
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.clawhubVerdictsError = formatUiError(err);
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.clawhubVerdictsLoading = false;
@@ -546,7 +545,7 @@ async function runSkillMutation(
     ) {
       return;
     }
-    const message = formatErrorMessage(err, { redact: redactToolDetail });
+    const message = formatUiError(err);
     state.skillsError = message;
     setSkillMessage(state, skillKey, {
       kind: "error",
@@ -659,7 +658,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
       state.clawhubDetail = res ?? null;
     },
     (err) => {
-      state.clawhubDetailError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.clawhubDetailError = formatUiError(err);
     },
     () => {
       state.clawhubDetailLoading = false;
@@ -725,10 +724,7 @@ export async function installFromClawHub(
         kind: "error",
         text: needsAcknowledgement
           ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
-          : formatClawHubInstallMessage(
-              formatErrorMessage(err, { redact: redactToolDetail }),
-              trustDetails?.warning,
-            ),
+          : formatClawHubInstallMessage(formatUiError(err), trustDetails?.warning),
         ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }

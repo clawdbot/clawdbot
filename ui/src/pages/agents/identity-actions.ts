@@ -1,10 +1,9 @@
 // Agent identity draft state and persistence, split out of agents-page.ts.
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationNavigationPreferences } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { updateAgentIdentity } from "../../lib/agents/index.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { fileToAvatarDataUrl } from "./avatar-image.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 
@@ -104,14 +103,14 @@ export async function saveIdentityDraft(params: {
       await agents.refreshList();
     } catch (error) {
       refreshErrors.push(
-        `Agent identity was saved, but the agent list refresh failed: ${formatErrorMessage(error, { redact: redactToolDetail })}`,
+        `Agent identity was saved, but the agent list refresh failed: ${formatUiError(error)}`,
       );
     }
     try {
       await agentIdentity.ensure([agentId]);
     } catch (error) {
       refreshErrors.push(
-        `Agent identity was saved, but the identity refresh failed: ${formatErrorMessage(error, { redact: redactToolDetail })}`,
+        `Agent identity was saved, but the identity refresh failed: ${formatUiError(error)}`,
       );
     }
     if (params.isCurrent()) {

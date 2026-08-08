@@ -8,7 +8,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { AgentExecutionAttribution } from "../agent-execution-attribution.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
@@ -50,7 +49,6 @@ export async function runAcpAgentCommand(params: {
   workspaceDir: string;
   runId: string;
   lifecycleGeneration: string;
-  attribution?: AgentExecutionAttribution;
   acpManager: PreparedAgentCommandExecution["acpManager"];
   acpResolution: AcpReadyResolution;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
@@ -59,7 +57,6 @@ export async function runAcpAgentCommand(params: {
   const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
   const startedAt = Date.now();
   registerAgentRunContext(params.runId, {
-    ...(params.attribution ? { attribution: params.attribution } : {}),
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.sessionAgentId,

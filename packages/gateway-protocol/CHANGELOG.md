@@ -7,7 +7,6 @@ version and the additive schema surface. Dates are authoring dates (2026).
 
 ## Unreleased
 
-- Add node protocol-feature negotiation and an authoritative nullable session-key envelope for node invokes.
 - Add semantic `agent` / `system` roster kinds negotiated through the `agent-kind` client capability.
 - Rename structured-question item `id` to `questionId` and flatten keyed answer arrays.
 - Slim worker and session-catalog payloads to the active wire contract.

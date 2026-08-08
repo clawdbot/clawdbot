@@ -3,10 +3,6 @@ import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
-import {
-  getAgentRunExecutionContextLifecycleToken,
-  getAgentRunExecutionLifecycleGeneration,
-} from "./agent-run-execution-context.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
 import { isTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
 import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
@@ -21,7 +17,6 @@ import {
   shouldPrepareDiagnosticTracePropagation,
 } from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import { captureTrustedToolExecutionContext } from "./trusted-tool-execution-context.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -1392,14 +1387,6 @@ function dispatchTrustedToolExecutionEvent(
       `[diagnostic-events] tool execution clone error type=${event.type}: ${String(error)}`,
     );
     return;
-  }
-  const lifecycleGeneration = getAgentRunExecutionLifecycleGeneration();
-  if (typeof event.runId === "string" && event.runId.length > 0 && lifecycleGeneration) {
-    captureTrustedToolExecutionContext(
-      enriched,
-      lifecycleGeneration,
-      getAgentRunExecutionContextLifecycleToken(event.runId),
-    );
   }
   for (const listener of state.toolExecutionListeners) {
     try {

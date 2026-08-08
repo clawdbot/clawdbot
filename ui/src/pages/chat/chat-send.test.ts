@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -1916,7 +1916,7 @@ describe("handleSendChat", () => {
   ])("gates $sendKey on its default-main alias patch", async ({ patchKey, sendKey }) => {
     const settingsPatch = createDeferred<boolean>();
 
-    const agentsList = {
+    const agentsList: AgentsListResult = {
       defaultId: "ops",
       mainKey: "work",
       scope: "per-sender",
@@ -1951,7 +1951,7 @@ describe("handleSendChat", () => {
   it("keeps a real main agent patch separate from a non-main default agent", async () => {
     const settingsPatch = createDeferred<boolean>();
 
-    const agentsList = {
+    const agentsList: AgentsListResult = {
       defaultId: "ops",
       mainKey: "work",
       scope: "per-sender",
@@ -8909,7 +8909,7 @@ describe("handleAbortChat", () => {
         agentId: "work",
       },
     },
-  ])("$name", async ({ scope, expected }) => {
+  ] as const)("$name", async ({ scope, expected }) => {
     const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
     const sessionKey = "agent:work:main";
     const host = makeChatHost({

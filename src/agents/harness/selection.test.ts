@@ -8,13 +8,8 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { createAgentExecutionAttribution } from "../agent-execution-attribution.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
-import {
-  bindEmbeddedAttemptExecutionAttribution,
-  resolveEmbeddedAttemptExecutionAttribution,
-} from "../embedded-agent-runner/run/attempt-execution-attribution.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -829,7 +824,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("preserves private attribution across sanitized and policy-rewritten handoff clones", async () => {
+  it("unwraps sentinels only at the plugin harness handoff", async () => {
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       createAttemptResult("codex"),
     );
@@ -845,20 +840,11 @@ describe("runAgentHarnessAttempt", () => {
     const secret = "plugin-provider-secret";
     const sentinel = mintSecretSentinel(secret, { label: "model-auth:codex" });
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    params.config = { tools: { deny: ["*"] } };
     params.resolvedApiKey = sentinel;
     params.model = {
       ...params.model,
       headers: { Authorization: `Bearer ${sentinel}`, "X-Optional": null } as never,
     };
-    const attribution = createAgentExecutionAttribution({
-      runId: params.runId,
-      lifecycleGeneration: "test-generation",
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-    });
-    bindEmbeddedAttemptExecutionAttribution(params, attribution);
 
     await runAgentHarnessAttempt(params);
 
@@ -866,9 +852,6 @@ describe("runAgentHarnessAttempt", () => {
     expect(handedOff?.resolvedApiKey).toBe(secret);
     expect(handedOff?.model.headers?.Authorization).toBe(`Bearer ${secret}`);
     expect(handedOff?.model.headers?.["X-Optional"]).toBeNull();
-    expect(handedOff?.toolsAllow).toEqual([]);
-    expect(resolveEmbeddedAttemptExecutionAttribution(handedOff!)).toBe(attribution);
-    expect(handedOff).not.toHaveProperty("attribution");
     expect(params.resolvedApiKey).toBe(sentinel);
   });
 

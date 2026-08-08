@@ -285,7 +285,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["node.describe", "nodes", "operator.read", "<=2026.7"],
   ["node.pluginSurface.refresh", "nodes", "node", "<=2026.7"],
   ["node.pluginTools.update", "nodes", "node", "<=2026.7"],
-  ["node.protocolFeatures.update", "nodes", "node", "2026.7"],
   ["node.skills.update", "nodes", "node", "<=2026.7"],
   ["node.pending.drain", "nodes-pending", "node", "<=2026.7"],
   ["node.pending.enqueue", "nodes-pending", "operator.write", "<=2026.7"],

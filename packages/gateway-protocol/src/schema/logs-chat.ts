@@ -109,6 +109,9 @@ const RunToolBindingsSchema = Type.Record(
   { maxProperties: 16 },
 );
 
+const QUEUE_MODES = ["steer", "followup", "collect", "interrupt"] as const;
+export type QueueMode = (typeof QUEUE_MODES)[number];
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -120,7 +123,7 @@ export const ChatSendParamsSchema = closedObject({
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   // One-turn override for active-run queue admission.
-  queueMode: Type.Optional(Type.String({ enum: ["steer", "followup", "collect", "interrupt"] })),
+  queueMode: Type.Optional(Type.String({ enum: [...QUEUE_MODES] })),
   deliver: Type.Optional(Type.Boolean()),
   originatingChannel: Type.Optional(Type.String()),
   originatingTo: Type.Optional(Type.String()),

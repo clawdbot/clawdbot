@@ -26,7 +26,7 @@ import {
   formatThinkingOverrideLabel,
   resolveChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { moveChatModelProviderFocus, selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
@@ -658,7 +658,7 @@ function renderChatModelReasoningSelect(params: {
     const modelMeta = [
       entry.contextWindow
         ? t("chat.modelControls.contextWindow", {
-            count: formatCompactTokenCount(entry.contextWindow),
+            count: formatContextTokenCapacity(entry.contextWindow),
           })
         : "",
       entry.supportsTools === false ? t("chat.modelControls.chatOnly") : "",

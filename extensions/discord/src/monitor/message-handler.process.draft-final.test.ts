@@ -430,7 +430,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
   it("declines failed item progress without updating the Discord draft", async () => {
     const draftStream = createMockDraftStreamForTest();
-    let callbackResult: false | void = undefined;
+    let callbackResult: boolean | void = undefined;
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       callbackResult = await params?.replyOptions?.onItemEvent?.({

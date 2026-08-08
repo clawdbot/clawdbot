@@ -31,7 +31,6 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 // Control UI module implements gateway behavior.
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
@@ -40,7 +39,7 @@ import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
 } from "../../../src/shared/device-bootstrap-profile.js";
-import { redactToolDetail } from "../lib/browser-redact.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -225,7 +224,7 @@ function getErrorName(err: unknown): string | undefined {
 
 function isBrowserWebSocketSecurityError(err: unknown): boolean {
   const name = getErrorName(err)?.toLowerCase();
-  const message = formatErrorMessage(err, { redact: redactToolDetail }).toLowerCase();
+  const message = formatUiError(err).toLowerCase();
   return (
     name === "securityerror" ||
     message.includes("security error") ||
@@ -236,7 +235,7 @@ function isBrowserWebSocketSecurityError(err: unknown): boolean {
 
 function formatBrowserWebSocketConstructorError(err: unknown, url: string): GatewayErrorInfo {
   const securityError = isBrowserWebSocketSecurityError(err);
-  const browserMessage = formatErrorMessage(err, { redact: redactToolDetail });
+  const browserMessage = formatUiError(err);
   const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
   const details = {
     code: securityError
