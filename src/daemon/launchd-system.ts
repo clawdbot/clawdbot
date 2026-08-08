@@ -71,7 +71,8 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
     if openclaw_system_launchd_entries=$(/usr/bin/mktemp "\${TMPDIR:-/tmp}/openclaw-launchd-scan.XXXXXX" 2>&1); then
       if /usr/bin/find "$openclaw_system_launchd_dir" -mindepth 1 -maxdepth 1 -name '*.plist' -print0 >"$openclaw_system_launchd_entries"; then
         while IFS= read -r -d '' openclaw_system_launchd_plist; do
-          # Unreadable plists are foreign; the bracketing launchctl probes catch loaded same-label daemons.
+          # Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
+          # bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
           if [ ! -r "$openclaw_system_launchd_plist" ]; then
             continue
           fi
@@ -187,7 +188,8 @@ async function findInstalledSystemLaunchDaemon(
     if (result.status === "ok" && result.label === label) {
       return { status: "installed", plistPath };
     }
-    // Unreadable plists are foreign; bracketing launchctl probes catch loaded same-label daemons.
+    // Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
+    // bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
     if (result.status === "unreadable") {
       continue;
     }
