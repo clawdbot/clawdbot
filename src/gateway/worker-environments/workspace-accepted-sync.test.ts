@@ -192,7 +192,7 @@ fs.renameSync = function(source, destination) {
     expect(transactionCalls.map((entry) => entry.action)).toEqual(["begin", "apply", "settle"]);
     expect(new Set(transactionCalls.map((entry) => entry.nonce)).size).toBe(1);
     expect(transactionCalls.every((entry) => entry.transportRetry === "never")).toBe(true);
-    expect(manifestCalls).toEqual(["idempotent", "idempotent"]);
+    expect(manifestCalls).toEqual(["idempotent"]);
     expect(publishingSettled).toBe(false);
     await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
     expect(transactionCalls.some((entry) => entry.action === "rollback")).toBe(false);
