@@ -1,12 +1,16 @@
-// End-to-end auth-profile rotation coverage for embedded runner retries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+// End-to-end auth-profile rotation coverage for embedded runner retries.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
-import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import {
+  resolveInlineProviderApiKeyUsageId,
+  type AuthProfileFailureReason,
+} from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import {
@@ -519,12 +523,7 @@ async function withAgentWorkspace<T>(
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireLogRecord(
   records: ReadonlyArray<unknown>,
@@ -932,6 +931,40 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
+  it("marks inline provider api key billing prompt failures without an auth profile", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("insufficient credits") },
+        }),
+      );
+
+      await expect(
+        runEmbeddedAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:inline-api-key-prompt-billing",
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:inline-api-key-prompt-billing",
+        }),
+      ).rejects.toThrow(/insufficient credits/);
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const usageStats = await readUsageStats(agentDir);
+      const usageId = resolveInlineProviderApiKeyUsageId("openai");
+      expect(usageStats[usageId]?.disabledReason).toBe("billing");
+      expect(typeof usageStats[usageId]?.disabledUntil).toBe("number");
+      expect(usageStats["openai:p1"]).toBeUndefined();
+    });
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {

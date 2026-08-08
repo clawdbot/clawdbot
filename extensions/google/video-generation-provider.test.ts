@@ -1,5 +1,6 @@
 // Google tests cover video generation provider plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
@@ -94,39 +95,6 @@ function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): stri
   return input.url;
 }
 
-function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-  wasCanceled: () => boolean;
-} {
-  const chunk = new Uint8Array(params.chunkSize);
-  let readCount = 0;
-  let canceled = false;
-  return {
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= params.chunkCount) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      },
-    ),
-    getReadCount: () => readCount,
-    wasCanceled: () => canceled,
-  };
-}
-
 let ssrfMock: { mockRestore: () => void } | undefined;
 
 describe("google video generation provider", () => {
@@ -157,6 +125,24 @@ describe("google video generation provider", () => {
     expect(provider.capabilities.generate?.supportsAudio).toBe(false);
     expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);
     expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
+  });
+
+  it("advertises Gemini video generation with a config-only Google API key", () => {
+    expect(
+      buildGoogleVideoGenerationProvider().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                apiKey: "google-config-only-key",
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("submits generation and returns inline video bytes", async () => {
@@ -211,9 +197,47 @@ describe("google video generation provider", () => {
     expect(httpOptions).not.toHaveProperty("apiVersion");
   });
 
+  it("returns inline video bytes encoded with URL-safe base64", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const videoBytes = Buffer.from([0xfb, 0xff, 0x6d, 0x70, 0x34]);
+    const videoBase64url = videoBytes.toString("base64url");
+    expect(videoBase64url).toMatch(/[-_]/);
+    expect(videoBase64url).not.toMatch(/[+/]/);
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      name: "operations/123",
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: videoBase64url,
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await buildGoogleVideoGenerationProvider().generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.buffer).toEqual(videoBytes);
+  });
+
   it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
+    ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

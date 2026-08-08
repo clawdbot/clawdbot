@@ -43,6 +43,7 @@ type TerminalOutput = {
   content: Array<TextContent | ThinkingContent | ToolCall>;
   usage: Usage & { reasoningTokens?: number };
   stopReason: string;
+  responseModel?: string;
   responseId?: string;
   errorMessage?: string;
 };
@@ -279,6 +280,7 @@ export function createResponsesTerminalController(params: {
     params.markFinalized();
     backfillReasoning(response.output ?? []);
     output.responseId = response.id || output.responseId;
+    output.responseModel = response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
     if (usage) {

@@ -59,8 +59,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } = state;
@@ -309,6 +309,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
+    ...(opts?.onFollowupQueueDisposition
+      ? { onQueueDisposition: opts.onFollowupQueueDisposition }
+      : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -450,6 +453,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
@@ -458,7 +462,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         latestSessionState.sessionId;
       return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
-    isStreaming,
     opts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,

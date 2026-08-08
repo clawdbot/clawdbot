@@ -2,9 +2,11 @@
  * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginId?: string;
@@ -33,6 +35,93 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   bundled: 3,
 };
+
+const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
+  ChannelHeartbeatVisibilitySchema.unwrap().toJSONSchema({ target: "draft-07" });
+
+function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const normalized = structuredClone(schema);
+  let changed = false;
+  const normalizeNode = (
+    node: Record<string, unknown>,
+    accountMap = false,
+    rootScope = true,
+  ): void => {
+    let withinRootScope = rootScope && (node === normalized || typeof node.$id !== "string");
+    if (typeof node.$ref === "string") {
+      const match = withinRootScope
+        ? /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/.exec(node.$ref)
+        : null;
+      const definitions = match?.[1] ? normalized[match[1]] : undefined;
+      const target = isRecord(definitions) && match?.[2] ? definitions[match[2]] : undefined;
+      if (
+        !isRecord(target) ||
+        Object.keys(node).some(
+          (key) => !["$ref", "$defs", "definitions", "$id", "$schema"].includes(key),
+        ) ||
+        ["$id", "$anchor", "$dynamicAnchor", "$recursiveAnchor", "$schema", "$ref"].some((key) =>
+          Object.hasOwn(target, key),
+        )
+      ) {
+        return;
+      }
+      // Inline only this owner; changing shared definitions would affect unrelated consumers.
+      const owner = { ...node };
+      Object.assign(node, structuredClone(target), owner);
+      delete node.$ref;
+      changed = true;
+      withinRootScope = node === normalized;
+    }
+
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const variants = node[key];
+      for (const variant of Array.isArray(variants) ? variants : []) {
+        if (isRecord(variant)) {
+          normalizeNode(variant, accountMap, withinRootScope);
+        }
+      }
+    }
+
+    if (accountMap) {
+      if (node.additionalProperties === true) {
+        node.additionalProperties = {};
+        changed = true;
+      }
+      const entries = [
+        node.additionalProperties,
+        ...Object.values(isRecord(node.properties) ? node.properties : {}),
+        ...Object.values(isRecord(node.patternProperties) ? node.patternProperties : {}),
+      ];
+      for (const entry of entries) {
+        if (isRecord(entry)) {
+          normalizeNode(entry, false, withinRootScope);
+        }
+      }
+      return;
+    }
+
+    const properties = isRecord(node.properties) ? node.properties : {};
+    if (
+      JSON.stringify(properties.heartbeatVisibility) !==
+      JSON.stringify(CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA)
+    ) {
+      node.properties = {
+        ...properties,
+        heartbeatVisibility: CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA,
+      };
+      changed = true;
+    }
+
+    // Account maps are containers; only each account entry owns heartbeat visibility.
+    const accounts = properties.accounts;
+    if (isRecord(accounts)) {
+      normalizeNode(accounts, true, withinRootScope);
+    }
+  };
+
+  normalizeNode(normalized);
+  return changed ? normalized : schema;
+}
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
@@ -109,7 +198,11 @@ export function collectChannelSchemaMetadataWithOwnership(
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
         description: channelConfig.description ?? rootDescription ?? current?.description,
-        configSchema: channelConfig.schema,
+        // Installed plugin schemas can lag core; bundled schemas share its release and identity.
+        configSchema:
+          record.origin === "bundled" || channelConfig.schema === undefined
+            ? channelConfig.schema
+            : normalizeCoreOwnedChannelSchema(channelConfig.schema),
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
         schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
         schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,

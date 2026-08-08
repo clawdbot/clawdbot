@@ -1,6 +1,5 @@
 // Shell completion generation, cache writing, and install command registration.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { Command, Option } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -23,6 +22,7 @@ import {
   resolveShellFromEnv,
   type CompletionShell,
 } from "./completion-runtime.js";
+import { publishOutputFileAtomically } from "./output-file.runtime.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis-core.js";
@@ -140,13 +140,15 @@ async function writeCompletionCache(params: {
   shells: CompletionShell[];
   binName: string;
 }): Promise<void> {
-  const firstShell = params.shells[0] ?? "zsh";
-  const cacheDir = path.dirname(resolveCompletionCachePath(firstShell, params.binName));
-  await fs.mkdir(cacheDir, { recursive: true });
   for (const shell of params.shells) {
     const script = getCompletionScript(shell, params.program);
-    const targetPath = resolveCompletionCachePath(shell, params.binName);
-    await fs.writeFile(targetPath, script, "utf-8");
+    await publishOutputFileAtomically({
+      filePath: resolveCompletionCachePath(shell, params.binName),
+      tempPrefix: ".openclaw-completion-cache",
+      writeTemp: async (tempPath) => {
+        await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
+      },
+    });
   }
 }
 

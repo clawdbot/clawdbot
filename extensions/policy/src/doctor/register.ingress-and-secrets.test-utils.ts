@@ -1,18 +1,16 @@
 // Imported by register.test.ts to keep its mocked suite in one Vitest module graph.
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
 import { runDoctorLintChecks, type OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence } from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
-  workspaceDir,
   cfgWithPolicy,
   ctx,
   runPolicyChecks,
   runPolicyDoctorLint,
-  describe0BeforeEach0,
-  describe0AfterEach1,
+  setupPolicyDoctorTest,
+  teardownPolicyDoctorTest,
+  writePolicyFixture,
 } from "./register.test-harness.js";
 
 const scanPolicyIngress = (cfg: object) =>
@@ -32,9 +30,7 @@ const INGRESS_POLICY = {
 };
 
 async function runPolicyScenario(cfg: OpenClawConfig, policy: object, mode: PolicyScenarioMode) {
-  const configPath = join(workspaceDir, "openclaw.jsonc");
-  await fs.writeFile(configPath, "{}", "utf-8");
-  await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+  const configPath = await writePolicyFixture(policy);
   const checkContext = ctx(configPath, cfg);
   if (mode === "doctor") {
     return runPolicyDoctorLint(checkContext);
@@ -99,9 +95,9 @@ function policyAgentScope(agentIds: string[], allowedAccess?: string[], allowHos
 }
 
 describe("registerPolicyDoctorChecks", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(setupPolicyDoctorTest);
 
-  afterEach(describe0AfterEach1);
+  afterEach(teardownPolicyDoctorTest);
 
   it("ignores nested groupPolicy when channel ingress is disabled", async () => {
     const { result } = await runIngressPolicyScenario({

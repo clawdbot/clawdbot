@@ -1437,6 +1437,32 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
+  it("migrates a case-preserved Telegram account filename through Doctor", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            HY_RIN_Bot: {},
+          },
+        },
+      },
+    };
+    const oauthDir = ensureCredentialsDir(root);
+    const sourcePath = path.join(oauthDir, "telegram-HY_RIN_Bot-allowFrom.json");
+    fs.writeFileSync(sourcePath, '["1008"]\n', "utf8");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+
+    const detected = await detectLegacyStateMigrations({ cfg, env });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env, now: () => 123 });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      hy_rin_bot: ["1008"],
+    });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
   it("no-ops when nothing detected", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};

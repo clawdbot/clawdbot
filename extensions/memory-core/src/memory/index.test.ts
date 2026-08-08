@@ -35,6 +35,7 @@ import {
   closeMemoryIndexManagersForAgent,
   MemoryIndexManager as RuntimeMemoryIndexManager,
 } from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -90,7 +91,8 @@ function restoreMemoryIndexStateDir(): void {
   }
 }
 
-vi.mock("./embeddings.js", () => {
+vi.mock("./embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embeddings.js")>();
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
     const alpha = lower.split("alpha").length - 1;
@@ -100,6 +102,7 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, image, audio];
   };
   return {
+    ...actual,
     resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
       providerId === "gemini" || providerId === "fallback-provider"
         ? `${providerId}-embed`
@@ -417,7 +420,7 @@ describe("memory index", () => {
       temporalDecay?: { enabled: boolean };
     };
   }): TestCfg {
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         search: {
           ...(params.provider !== undefined ? { provider: params.provider } : {}),
@@ -449,7 +452,7 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
-    };
+    });
   }
 
   async function seedMemoryIndexSessionTranscript(params: {
@@ -3085,6 +3088,44 @@ describe("memory index", () => {
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBeUndefined();
     expect(status.vector?.available).toBeUndefined();
+  });
+
+  it("reports persisted vector index state on the unprobed status path", async () => {
+    const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const emptyManager = await getFreshManager(cfg, "status");
+    try {
+      const emptyStatus = emptyManager.status();
+      expect(emptyStatus.chunks).toBe(0);
+      expect(emptyStatus.vector?.storeAvailable).toBeUndefined();
+      expect(emptyStatus.vector?.index).toEqual({ state: "empty" });
+    } finally {
+      await emptyManager.close?.();
+    }
+
+    const indexingManager = await getFreshManager(cfg);
+    try {
+      await indexingManager.sync({ reason: "test", force: true });
+      expect(indexingManager.status().chunks).toBeGreaterThan(0);
+    } finally {
+      await indexingManager.close?.();
+    }
+
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      expect(Reflect.get(statusManager, "vector")).toMatchObject({ available: null, dims: 4 });
+      expect(statusManager.status().vector).toMatchObject({
+        index: { state: "complete" },
+        storeAvailable: undefined,
+      });
+
+      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
+        "memory_vector_rebuild_v1",
+      );
+      expect(statusManager.status().vector?.index).toEqual({ state: "incomplete" });
+    } finally {
+      await statusManager.close?.();
+    }
   });
 
   it("keeps current vector indexes clean after vector store probing", async () => {

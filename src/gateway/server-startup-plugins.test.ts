@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import "./server-startup-bootstrap.test-support.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -202,6 +203,7 @@ function slackConfig(): OpenClawConfig {
 async function prepareBootstrapWithRuntimeConfig(
   cfg: OpenClawConfig,
   options: {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     workerProviderIds?: readonly string[];
   } = {},
 ) {
@@ -480,9 +482,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     } as OpenClawConfig;
 
     const result = await prepareBootstrapWithRuntimeConfig(cfg, {
+      pluginMetadataSnapshot,
       workerProviderIds: ["static-ssh"],
     });
     expect(result.startupPluginIds).toEqual([]);
+    expect(result.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
     expect(result.pluginLookUpTable).toBeUndefined();
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 

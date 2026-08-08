@@ -21,6 +21,16 @@ const TaskLedgerStatusSchema = Type.Union([
 ]);
 
 const TimestampSchema = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
+const TaskDeliveryStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("delivered"),
+  Type.Literal("session_queued"),
+  Type.Literal("failed"),
+  Type.Literal("dismissed"),
+  Type.Literal("parent_missing"),
+  Type.Literal("not_applicable"),
+]);
+const TaskTerminalOutcomeSchema = Type.Union([Type.Literal("succeeded"), Type.Literal("blocked")]);
 
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = closedObject({
@@ -47,6 +57,10 @@ export const TaskSummarySchema = closedObject({
   progressSummary: Type.Optional(Type.String()),
   terminalSummary: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
+  deliveryStatus: Type.Optional(TaskDeliveryStatusSchema),
+  terminalOutcome: Type.Optional(TaskTerminalOutcomeSchema),
+  /** Bounded canonical completion result. Returned only by tasks.get. */
+  result: Type.Optional(Type.String()),
   /** Bounded task input. Returned by tasks.get; omitted from list/event summaries. */
   prompt: Type.Optional(Type.String()),
 });
@@ -90,6 +104,22 @@ export const TasksCancelResultSchema = closedObject({
   task: Type.Optional(TaskSummarySchema),
 });
 
+export const TasksRecoveryParamsSchema = closedObject({
+  taskIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 10 }),
+});
+
+const TaskRecoveryItemSchema = closedObject({
+  taskId: NonEmptyString,
+  ok: Type.Boolean(),
+  reason: Type.Optional(Type.String()),
+  duplicateRisk: Type.Optional(Type.Boolean()),
+  task: Type.Optional(TaskSummarySchema),
+});
+
+export const TasksRecoveryResultSchema = closedObject({
+  results: Type.Array(TaskRecoveryItemSchema, { maxItems: 10 }),
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type TaskSummary = Static<typeof TaskSummarySchema>;
@@ -99,3 +129,5 @@ export type TasksGetParams = Static<typeof TasksGetParamsSchema>;
 export type TasksGetResult = Static<typeof TasksGetResultSchema>;
 export type TasksCancelParams = Static<typeof TasksCancelParamsSchema>;
 export type TasksCancelResult = Static<typeof TasksCancelResultSchema>;
+export type TasksRecoveryParams = Static<typeof TasksRecoveryParamsSchema>;
+export type TasksRecoveryResult = Static<typeof TasksRecoveryResultSchema>;

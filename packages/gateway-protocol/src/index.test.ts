@@ -27,6 +27,7 @@ import {
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
+  validateTasksRecoveryParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
@@ -908,6 +909,17 @@ describe("validateTasksListParams", () => {
   it("rejects internal task statuses and unknown fields", () => {
     expectRejected(validateTasksListParams, [{ status: "succeeded" }]);
     expectRejected(validateTasksCancelParams, [{ taskId: "task-1", force: true }]);
+  });
+});
+
+describe("validateTasksRecoveryParams", () => {
+  it("accepts one to ten task ids and rejects unbounded recovery batches", () => {
+    expectAccepted(validateTasksRecoveryParams, [{ taskIds: ["task-1", "task-2"] }]);
+    expectRejected(validateTasksRecoveryParams, [
+      { taskIds: [] },
+      { taskIds: Array.from({ length: 11 }, (_, index) => `task-${index}`) },
+      { taskIds: ["task-1"], force: true },
+    ]);
   });
 });
 

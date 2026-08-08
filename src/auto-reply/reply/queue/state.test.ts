@@ -61,6 +61,7 @@ describe("refreshQueuedFollowupSession", () => {
           run: makeRun(),
         },
       ],
+      summaryLines: ["elided summary"],
       sourceRefs: new WeakMap(),
     });
 
@@ -126,6 +127,32 @@ describe("refreshQueuedFollowupSession", () => {
       model: "qwen3.5:27b",
       hasSessionModelOverride: true,
       modelOverrideSource: "user",
+    });
+  });
+
+  it("clears queued model override strictness when retargeting to the configured default", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...makeRun(),
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextRouteResolution: "resolved",
+      nextModelOverrideSource: undefined,
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
     });
   });
 
@@ -232,6 +259,7 @@ describe("getFollowupQueue", () => {
           enqueuedAt: Date.now(),
           run: makeRun(),
         })),
+        summaryLines: Array.from({ length: count }, () => contextKey),
         sourceRefs: new WeakMap(),
       });
     }
@@ -241,6 +269,7 @@ describe("getFollowupQueue", () => {
 
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
     expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
+    expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
     expect(updated.evictedSummaryCount).toBe(13);
   });
 });

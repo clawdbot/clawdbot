@@ -642,32 +642,29 @@ describe("runInstallPolicy", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects symlinked interpreter script args even when command symlinks are allowed",
-    async () => {
-      const dir = await makeTempDir();
-      const realScriptPath = await writePolicyScript(dir);
-      const symlinkScriptPath = path.join(dir, "policy-link.cjs");
-      await fs.symlink(realScriptPath, symlinkScriptPath);
+  it.runIf(process.platform !== "win32")("rejects symlinked interpreter script args", async () => {
+    const dir = await makeTempDir();
+    const realScriptPath = await writePolicyScript(dir);
+    const symlinkScriptPath = path.join(dir, "policy-link.cjs");
+    await fs.symlink(realScriptPath, symlinkScriptPath);
 
-      const validation = await validateInstallPolicyStatic({
-        security: {
-          installPolicy: {
-            enabled: true,
-            exec: {
-              source: "exec",
-              command: process.execPath,
-              args: [symlinkScriptPath],
-            },
+    const validation = await validateInstallPolicyStatic({
+      security: {
+        installPolicy: {
+          enabled: true,
+          exec: {
+            source: "exec",
+            command: process.execPath,
+            args: [symlinkScriptPath],
           },
         },
-      });
+      },
+    });
 
-      expect(validation.issues.map((issue) => issue.message)).toContain(
-        `security.installPolicy.exec.args[0] must not be a symlink: ${symlinkScriptPath}`,
-      );
-    },
-  );
+    expect(validation.issues.map((issue) => issue.message)).toContain(
+      `security.installPolicy.exec.args[0] must not be a symlink: ${symlinkScriptPath}`,
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
     "rejects env policy commands before interpreter resolution can bypass validation",

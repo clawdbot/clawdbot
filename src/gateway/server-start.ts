@@ -11,6 +11,8 @@ import { finishGatewayStartup } from "./server-startup-finish.js";
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
+type ReadPreparedGatewayModelCatalog =
+  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -27,8 +29,6 @@ export async function resetPreparedModelCatalogForTest(): Promise<void> {
     await loadGatewayModelCatalogModule();
   await resetPreparedModelCatalogForTestLocal();
 }
-
-ensureOpenClawCliOnPath();
 
 const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
   () => import("./server-startup-early.js"),
@@ -63,6 +63,10 @@ const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
 const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (...args) => {
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalogSnapshot(...args);
+};
+const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (...args) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.readPreparedGatewayModelCatalog(...args);
 };
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
@@ -102,6 +106,7 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  ensureOpenClawCliOnPath();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
@@ -159,6 +164,7 @@ export async function startGatewayServer(
       loadGatewayPluginBootstrapModule,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalog,
     });
     await finishGatewayStartup({
       coreRuntime,

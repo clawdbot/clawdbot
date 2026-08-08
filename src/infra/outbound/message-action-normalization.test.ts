@@ -423,4 +423,18 @@ describe("normalizeMessageActionInput", () => {
       }),
     ).toThrow(/conflicting target and delivery alias/);
   });
+
+  it("allows a trusted direct operator to use an opaque resource without a conversation", () => {
+    expect(
+      normalizeMessageActionInput({
+        action: "unpin",
+        args: { channel: "pinboard", messageId: "om_123" },
+        targetAliasSpec: {
+          aliases: ["messageId", "chatId"],
+          deliveryTargetAliases: ["chatId"],
+        },
+        allowResourceOnly: true,
+      }),
+    ).toEqual({ channel: "pinboard", messageId: "om_123" });
+  });
 });

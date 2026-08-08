@@ -442,7 +442,7 @@ for the full example.
     ```
 
     Use `--profile-id` for multiple Codex OAuth logins in the same agent, then
-    control them via auth ordering or `/model ...@<profileId>`:
+    control them via auth ordering or `/model ...@<profileId> -s`:
 
     ```bash
     openclaw models auth login --provider openai --profile-id openai:ritsuko
@@ -806,15 +806,16 @@ compatibility fallback when the shared
     | Model        | `tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
     | Voice        | `tts.providers.openai.speakerVoice`           | `coral`                          |
     | Speed        | `tts.providers.openai.speed`                  | (unset)                          |
-    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
+    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` family only)  |
     | Format       | `tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
     | API key      | `tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
     | Base URL     | `tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
     | Extra body   | `tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
 
-    Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices:
-    `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`,
-    `marin`, `onyx`, `nova`, `sage`, `shimmer`, `verse`.
+    Available models: `gpt-4o-mini-tts`, `gpt-4o-mini-tts-2025-12-15`, `tts-1`,
+    `tts-1-hd`. Available voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`,
+    `echo`, `fable`, `juniper`, `marin`, `onyx`, `nova`, `sage`, `shimmer`,
+    `verse`.
 
     `extraBody` is merged into `/audio/speech` request JSON after OpenClaw's
     generated fields, so use it for OpenAI-compatible endpoints that require

@@ -22,6 +22,7 @@ export {
   getCustomProviderApiKey,
   hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
+  isConfigBackedInlineProviderApiKey,
   resolveProviderEntryApiKeyBinding,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,

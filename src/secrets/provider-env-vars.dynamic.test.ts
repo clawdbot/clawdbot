@@ -1,6 +1,8 @@
 /** Tests dynamic provider env-var discovery from plugin metadata. */
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import { resolveLocalProviderAuthEvidence } from "./provider-auth-evidence.js";
 import {
   getProviderEnvVars,
   listKnownProviderAuthEnvVarNames,
@@ -285,6 +287,159 @@ describe("provider env vars dynamic manifest metadata", () => {
     ]);
     const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
     expect(snapshotOptions.preferPersisted).toBe(false);
+  });
+
+  it("expands provider-owned directory variables in manifest credential evidence", () => {
+    useRegistrySetupPlugin("external-cloud", "global", {
+      id: "external-cloud",
+      authEvidence: [
+        {
+          type: "local-file-with-env",
+          fallbackPaths: ["${EXTERNAL_CLOUD_CONFIG}/application_default_credentials.json"],
+          requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
+          credentialMarker: "external-cloud-local-credentials",
+          source: "external cloud credentials",
+        },
+      ],
+    });
+    const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
+    const expectedPath = "/fixture/cloud-sdk/application_default_credentials.json";
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return candidate === expectedPath;
+    });
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(evidence, {
+          EXTERNAL_CLOUD_CONFIG: "/fixture/cloud-sdk",
+          EXTERNAL_CLOUD_PROJECT: "fixture-project",
+        }),
+      ).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "external cloud credentials",
+      });
+      expect(existsSync).toHaveBeenCalledWith(expectedPath);
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("rejects stale home evidence when an explicit provider directory has no credentials", () => {
+    useRegistrySetupPlugin("external-cloud", "global", {
+      id: "external-cloud",
+      authEvidence: [
+        {
+          type: "local-file-with-env",
+          fallbackPaths: [
+            "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+            "${HOME}/credentials.json",
+            "${APPDATA}/credentials.json",
+          ],
+          credentialMarker: "external-cloud-local-credentials",
+        },
+      ],
+    });
+    const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return candidate === "/fixture/home/credentials.json";
+    });
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(evidence, {
+          EXTERNAL_CLOUD_CONFIG: "/fixture/missing-cloud-sdk",
+          HOME: "/fixture/home",
+          APPDATA: "/fixture/appdata",
+        }),
+      ).toBeNull();
+      expect(existsSync).toHaveBeenCalledOnce();
+      expect(existsSync).toHaveBeenCalledWith("/fixture/missing-cloud-sdk/credentials.json");
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("preserves home and appdata fallback when no provider directory is selected", () => {
+    const fallbackPaths = [
+      "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+      "${HOME}/credentials.json",
+      "${APPDATA}/credentials.json",
+    ];
+    const evidence = [
+      {
+        type: "local-file-with-env" as const,
+        fallbackPaths,
+        credentialMarker: "external-cloud-local-credentials",
+      },
+    ];
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return (
+        candidate === "/fixture/home/credentials.json" ||
+        candidate === "/fixture/appdata/credentials.json"
+      );
+    });
+
+    try {
+      expect(resolveLocalProviderAuthEvidence(evidence, { HOME: "/fixture/home" })).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "local auth evidence",
+      });
+      expect(
+        resolveLocalProviderAuthEvidence(evidence, {
+          EXTERNAL_CLOUD_CONFIG: "   ",
+          HOME: "/fixture/missing-home",
+          APPDATA: "/fixture/appdata",
+        }),
+      ).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "local auth evidence",
+      });
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      scenario: "missing variable",
+      fallbackPath: "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+      env: {},
+    },
+    {
+      scenario: "blank variable",
+      fallbackPath: "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+      env: { EXTERNAL_CLOUD_CONFIG: "   " },
+    },
+    {
+      scenario: "invalid variable name",
+      fallbackPath: "${EXTERNAL-CLOUD-CONFIG}/credentials.json",
+      env: { "EXTERNAL-CLOUD-CONFIG": "/fixture/cloud-sdk" },
+    },
+    {
+      scenario: "unterminated placeholder",
+      fallbackPath: "${EXTERNAL_CLOUD_CONFIG/credentials.json",
+      env: { EXTERNAL_CLOUD_CONFIG: "/fixture/cloud-sdk" },
+    },
+  ])("rejects manifest credential evidence with a $scenario", ({ fallbackPath, env }) => {
+    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(
+          [
+            {
+              type: "local-file-with-env",
+              fallbackPaths: [fallbackPath],
+              credentialMarker: "external-cloud-local-credentials",
+            },
+          ],
+          env,
+        ),
+      ).toBeNull();
+      expect(existsSync).not.toHaveBeenCalled();
+    } finally {
+      existsSync.mockRestore();
+    }
   });
 
   it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {

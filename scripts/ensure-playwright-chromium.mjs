@@ -2,12 +2,13 @@
 // Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const playwrightInstallBaseArgs = ["--dir", "ui", "exec", "playwright", "install"];
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const chromiumPackageNames = ["chromium-browser", "chromium"];
@@ -175,6 +176,18 @@ export function isDirectScriptExecution(
  */
 export function ensurePlaywrightChromium(options = {}) {
   const env = options.env ?? process.env;
+  const browserPath = env.PLAYWRIGHT_BROWSERS_PATH;
+  // pnpm --dir ui changes the installer's cwd; keep its cache aligned with the caller.
+  const installEnv =
+    browserPath && browserPath !== "0" && !isAbsolute(browserPath)
+      ? {
+          ...env,
+          PLAYWRIGHT_BROWSERS_PATH: resolve(
+            env.INIT_CWD || options.cwd || process.cwd(),
+            browserPath,
+          ),
+        }
+      : env;
   const requirePlaywrightChromium = options.requirePlaywrightChromium ?? false;
   const executableOverride =
     typeof env[executableOverrideEnvKey] === "string" ? env[executableOverrideEnvKey].trim() : "";
@@ -185,14 +198,14 @@ export function ensurePlaywrightChromium(options = {}) {
   const runPlaywrightInstall = (targets = ["chromium"], withDeps = false) => {
     const runner = resolvePlaywrightInstallRunner({
       comSpec: options.comSpec,
-      env,
+      env: installEnv,
       platform: options.platform,
       targets,
       withDeps,
     });
     const result = spawnSync(runner.command, runner.args, {
       cwd: options.cwd ?? repoRoot,
-      env,
+      env: installEnv,
       shell: runner.shell,
       stdio: options.stdio ?? "inherit",
       windowsVerbatimArguments: runner.windowsVerbatimArguments,

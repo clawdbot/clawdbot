@@ -41,7 +41,7 @@ const LIVE_TIMEOUT_MS = resolvePositiveInteger(
 );
 
 function snapshotAcpSpawnDefaultsLiveEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
+  return snapshotLiveEnv(["CODEX_HOME"]);
 }
 
 function resolvePositiveInteger(raw: string | undefined, fallback: number): number {

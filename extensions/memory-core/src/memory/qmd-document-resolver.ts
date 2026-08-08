@@ -91,11 +91,16 @@ export class QmdDocumentResolver {
       }
       throw err;
     }
-    const location = rows.length > 0 ? this.pickDocLocation(rows, normalizedHints) : null;
-    if (location) {
-      this.docPathCache.set(cacheKey, location);
+    if (rows.length > 0) {
+      const dbLocation = this.pickDocLocation(rows, normalizedHints);
+      if (dbLocation) {
+        this.docPathCache.set(cacheKey, dbLocation);
+        return dbLocation;
+      }
     }
-    return location;
+    // Keep hint-only locations out of the docid cache so a recovered index row
+    // can become authoritative on the next lookup.
+    return this.resolveDocLocationFromHints(normalizedHints);
   }
 
   normalizeDocHints(hints?: QmdDocHints): QmdDocHints {

@@ -177,7 +177,7 @@ export async function handleEmbeddedPromptFailure(input: {
     profileRotated: false,
   });
   if (failoverDecision.action === "rotate_profile" && (await input.advanceAttemptAuthProfile())) {
-    if (failedProfileId && promptProfileFailureReason) {
+    if (promptProfileFailureReason) {
       void input
         .maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
@@ -223,7 +223,7 @@ export async function handleEmbeddedPromptFailure(input: {
       profileRotated: true,
     });
   }
-  if (failedProfileId && promptProfileFailureReason) {
+  if (promptProfileFailureReason) {
     try {
       await input.maybeMarkAuthProfileFailure({
         profileId: failedProfileId,

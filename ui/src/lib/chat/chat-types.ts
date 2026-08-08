@@ -14,7 +14,13 @@ export type ChatAttachment = {
   sizeBytes?: number;
 };
 
-export type ChatQueueSkillWorkshopRevision = { proposalId: string; agentId?: string };
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
+  /** Process-local owner; revision requests must never replay after reconnect. */
+  connectionClient?: object;
+  connectionEpoch?: number;
+};
 
 export type ChatQueueItem = {
   id: string;
@@ -31,6 +37,8 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
+  /** Immutable active run selected when this row first became a steer. */
+  steerTargetRunId?: string;
   sendState?:
     | "waiting-model"
     | "waiting-idle"

@@ -742,10 +742,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = nextStatusLine;
     const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
     if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
-      return;
+      return false;
     }
     startStreaming();
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    return false;
   };
 
   const sendChunkedTextReply = async (paramsLocal: {
@@ -1599,32 +1600,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {
             if (params.abortSignal?.aborted || !payload.text) {
-              return;
+              return false;
             }
             const cleaned = stripReasoningTagsFromText(payload.text, {
               mode: "strict",
               trim: "both",
             });
             if (!cleaned) {
-              return;
+              return false;
             }
             startStreaming();
             queueStreamingUpdate(cleaned, {
               dedupeWithLastPartial: true,
               mode: "snapshot",
             });
+            return false;
           }
         : undefined,
       onReasoningStream: reasoningPreviewEnabled
         ? (payload: ReplyPayload) => {
             if (params.abortSignal?.aborted || !payload.text) {
-              return;
+              return false;
             }
             startStreaming();
             queueReasoningUpdate(formatReasoningMessage(payload.text));
+            return false;
           }
         : undefined,
-      onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
+      onReasoningEnd: reasoningPreviewEnabled ? () => false : undefined,
       onToolStart: previewStreamingEnabled
         ? (payload: {
             name?: string;
@@ -1633,7 +1636,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             detailMode?: "explain" | "raw";
           }) => {
             if (params.abortSignal?.aborted || !isChannelProgressDraftWorkToolName(payload.name)) {
-              return;
+              return false;
             }
             const statusLineLocal = formatChannelProgressDraftLineForEntry(
               account.config,
@@ -1648,32 +1651,33 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
             );
             if (statusLineLocal) {
-              updateStreamingStatusLine(statusLineLocal);
+              return updateStreamingStatusLine(statusLineLocal);
             }
+            return false;
           }
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
         ? () => {
             if (params.abortSignal?.aborted) {
-              return;
+              return false;
             }
-            updateStreamingStatusLine("", { startIfNeeded: false });
+            return updateStreamingStatusLine("", { startIfNeeded: false });
           }
         : undefined,
       onCompactionStart: previewStreamingEnabled
         ? () => {
             if (params.abortSignal?.aborted) {
-              return;
+              return false;
             }
-            updateStreamingStatusLine("📦 **Compacting context...**");
+            return updateStreamingStatusLine("📦 **Compacting context...**");
           }
         : undefined,
       onCompactionEnd: previewStreamingEnabled
         ? () => {
             if (params.abortSignal?.aborted) {
-              return;
+              return false;
             }
-            updateStreamingStatusLine("");
+            return updateStreamingStatusLine("");
           }
         : undefined,
     },

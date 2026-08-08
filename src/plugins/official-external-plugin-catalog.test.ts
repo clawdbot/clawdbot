@@ -12,8 +12,10 @@ import {
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
+  listOfficialExternalChannelEnvVars,
   listOfficialExternalPluginCatalogEntries,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
@@ -22,6 +24,7 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLegacyIds,
 } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
@@ -265,6 +268,21 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/codex",
       defaultChoice: "npm",
     });
+  });
+
+  it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
+    const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
+    expect(entry).toBeDefined();
+    expect(resolveOfficialExternalPluginId(entry!)).toBe("fish-audio-speech");
+    expect(resolveOfficialExternalPluginLegacyIds(entry!)).toEqual(["fish-audio"]);
+    expect(resolveOfficialExternalPluginInstall(entry!)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/fish-audio-speech",
+      npmSpec: "@openclaw/fish-audio-speech",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio-speech")).toBe(entry);
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio")).toBeUndefined();
   });
 
   it("curates featured external plugins with ClawHub install alternatives", () => {
@@ -2243,6 +2261,15 @@ describe("official external plugin catalog", () => {
       minHostVersion: ">=2026.7.2",
       allowInvalidConfigRecovery: true,
     });
+  });
+
+  it("projects channel environment variables from generated configured-state metadata", () => {
+    const envVarsByChannel = new Map(
+      listOfficialExternalChannelEnvVars().map((entry) => [entry.channelId, entry.envVars]),
+    );
+
+    expect(envVarsByChannel.get("clickclack")).toEqual(["CLICKCLACK_BOT_TOKEN"]);
+    expect(envVarsByChannel.get("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]);
   });
 
   it.each([

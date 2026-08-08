@@ -82,6 +82,7 @@ function createBaseParams(
     channelsStatus: null,
     channelIssues: [],
     deliveryDiagnostics: null,
+    exporterDiagnostics: null,
     gatewayReachable: false,
     health: null,
     nodeOnlyGateway: null,
@@ -264,6 +265,38 @@ describe("status-all diagnosis port checks", () => {
       "✓ Inbound delivery telemetry: received 2 · dispatch 2/2 · turns 2 · processed 2",
     );
     expect(output).toContain("latest delivery event:");
+  });
+
+  it("renders the shared redacted telemetry exporter summary", async () => {
+    const params = createBaseParams([]);
+    params.exporterDiagnostics = {
+      events: [
+        {
+          seq: 1,
+          type: "telemetry.exporter",
+          source: "diagnostics-otel",
+          target: "traces",
+          transport: "otlp-http-protobuf",
+          outcome: "failure",
+          reason: "export_failed",
+          mode: "configured",
+          url: "https://collector.example/private",
+          headers: { authorization: "secret" },
+          error: "raw failure",
+        },
+      ],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Telemetry exporters");
+    expect(output).toContain(
+      "diagnostics-otel · traces · failed · OTLP/HTTP protobuf (explicit endpoint) · export failed",
+    );
+    expect(output).not.toContain("collector.example");
+    expect(output).not.toContain("secret");
+    expect(output).not.toContain("raw failure");
   });
 
   it("keeps handled terminal delivery paths healthy without dispatch starts", async () => {

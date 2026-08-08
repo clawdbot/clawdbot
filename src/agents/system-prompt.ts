@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -159,13 +160,7 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
 
   const value = build();
   stablePromptPrefixCache.set(key, { value });
-  while (stablePromptPrefixCache.size > SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT) {
-    const oldestKey = stablePromptPrefixCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    stablePromptPrefixCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 
@@ -660,7 +655,7 @@ function buildMessagingSection(params: {
               : `- After visible \`message(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? "- Inline buttons: `send` with `buttons=[[{text,callback_data,style?}]]`; style primary|success|danger."
+              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""

@@ -1294,6 +1294,10 @@ export async function runMemoryFlushIfNeeded(params: {
         requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
+        userLockedAuthProfileId:
+          params.followupRun.run.authProfileIdSource === "user"
+            ? params.followupRun.run.authProfileId
+            : undefined,
       },
       identity: {
         runId: flushRunId,
@@ -1369,6 +1373,8 @@ export async function runMemoryFlushIfNeeded(params: {
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
+          contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           onAgentEvent: (evt) => {
             if (evt.stream === "tool" && evt.data.name === "write") {
               if (evt.data.phase === "result" && evt.data.isError !== true) {

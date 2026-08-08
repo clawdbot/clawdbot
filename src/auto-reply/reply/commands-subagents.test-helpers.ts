@@ -21,6 +21,7 @@ export function createEmptyInlineDirectives(): InlineDirectives {
     invalidExecNode: false,
     hasStatusDirective: false,
     hasModelDirective: false,
+    modelSessionOnly: false,
     hasQueueDirective: false,
     queueReset: false,
     hasQueueOptions: false,

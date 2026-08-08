@@ -12,6 +12,7 @@ import type {
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
+  PluginPackageChannel,
   PluginPackageInstall,
 } from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
@@ -71,18 +72,20 @@ export type OfficialExternalWebSearchProvider = {
   autoDetectOrder?: number;
 };
 
+type OfficialExternalCatalogChannel = PluginPackageChannel & {
+  /** Older hosted catalogs used a flat env list before configuredState became canonical. */
+  envVars?: readonly string[];
+};
+
 /** Manifest-like metadata stored in official external catalog entries. */
 type OfficialExternalPluginCatalogManifest = {
+  legacyPluginIds?: readonly string[];
   plugin?: {
     id?: string;
     label?: string;
   };
   catalog?: PluginManifestCatalog;
-  channel?: {
-    id?: string;
-    label?: string;
-    envVars?: readonly string[];
-  };
+  channel?: OfficialExternalCatalogChannel;
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   /**
    * Mirrors the plugin manifest's providerEndpoints so endpoint classification
@@ -1451,6 +1454,17 @@ export function resolveOfficialExternalPluginId(
   );
 }
 
+/** Returns legacy plugin ids used only for trusted update migrations. */
+export function resolveOfficialExternalPluginLegacyIds(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  return uniqueStrings(
+    (getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds ?? [])
+      .map((pluginId) => normalizeOptionalString(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+}
+
 function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
@@ -1680,7 +1694,11 @@ export function listOfficialExternalChannelEnvVars(): Array<{
     const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
     const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
     const envVars = uniqueStrings(
-      (channel?.envVars ?? [])
+      [
+        ...(channel?.envVars ?? []),
+        ...(channel?.configuredState?.env?.allOf ?? []),
+        ...(channel?.configuredState?.env?.anyOf ?? []),
+      ]
         .map((envVar) => normalizeOptionalString(envVar))
         .filter((envVar): envVar is string => Boolean(envVar)),
     );

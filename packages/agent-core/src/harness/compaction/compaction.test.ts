@@ -499,6 +499,67 @@ describe("generateSummary thinking options", () => {
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["empty", []],
+    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
+    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
+  ])("rejects %s compaction output", async (_name, content) => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content,
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createUsage(1),
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "low",
+      streamFn,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected empty compaction output to fail");
+    }
+    expect(result.error).toMatchObject({
+      name: "CompactionError",
+      code: "summarization_failed",
+      message: "Summarization failed: model returned no summary text",
+    });
+  });
 });
 
 describe("split-turn compaction", () => {

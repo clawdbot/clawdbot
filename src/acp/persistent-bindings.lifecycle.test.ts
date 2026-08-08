@@ -59,6 +59,7 @@ function createPersistentSpec(
 function mockReadySession(params: {
   spec: ConfiguredAcpBindingSpec;
   cwd: string;
+  model?: string;
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
@@ -70,7 +71,10 @@ function mockReadySession(params: {
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
-      runtimeOptions: { cwd: params.cwd },
+      runtimeOptions: {
+        cwd: params.cwd,
+        ...(params.model ? { model: params.model } : {}),
+      },
       state: params.state ?? "idle",
       lastActivityAt: Date.now(),
     },
@@ -102,6 +106,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const sessionKey = mockReadySession({
       spec,
       cwd: "/workspace/openclaw",
+      model: "manual/selected-model",
     });
 
     const ensured = await ensureConfiguredAcpBindingSession({
@@ -110,6 +115,32 @@ describe("ensureConfiguredAcpBindingSession", () => {
     });
 
     expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).not.toHaveBeenCalled();
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+    expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
+  });
+
+  it("updates a configured model in place for a structurally matching session", async () => {
+    const spec = createPersistentSpec({
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const sessionKey = mockReadySession({
+      spec,
+      cwd: "/workspace/openclaw",
+      model: "anthropic/claude-haiku-4-5",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.updateSessionRuntimeOptions).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      sessionKey,
+      patch: { model: "anthropic/claude-sonnet-4-6" },
+    });
     expect(managerMocks.closeSession).not.toHaveBeenCalled();
     expect(managerMocks.initializeSession).not.toHaveBeenCalled();
   });
@@ -155,10 +186,11 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
-  it("initializes ACP session with runtime agent override when provided", async () => {
+  it("initializes ACP session with runtime agent override and configured model", async () => {
     const spec = createPersistentSpec({
       agentId: "coding",
       acpAgentId: "codex",
+      model: "anthropic/claude-sonnet-4-6",
     });
     managerMocks.resolveSession.mockReturnValue({ kind: "none" });
 
@@ -170,5 +202,9 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(ensured.ok).toBe(true);
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("codex");
+    expect(initializeArgs.runtimeOptions).toEqual({
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(initializeArgs).not.toHaveProperty("modelExplicit");
   });
 });

@@ -46,7 +46,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     termination: result.termination,
   });
 
-  return {
+  const stepResult: UpdateStepResult = {
     name,
     command,
     cwd,
@@ -58,6 +58,8 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     killed: result.killed,
     termination: result.termination,
   };
+  opts.results?.push(stepResult);
+  return stepResult;
 }
 
 export function normalizeFallbackFailureReason(

@@ -1,4 +1,5 @@
 // Applies the package, agent, workspace, and managed-file slices of a consented Claw add plan.
+import type { Stats } from "node:fs";
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -13,6 +14,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
   installClawCronJobs,
@@ -54,6 +56,7 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   installPackages?: typeof installClawPackages;
   installMcpServers?: typeof installClawMcpServers;
   installCronJobs?: typeof installClawCronJobs;
+  seedPackageBootstrap?: typeof seedClawPackageBootstrap;
   cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
   nowMs?: number;
 };
@@ -93,10 +96,26 @@ type ClawAddResult = {
 function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
   return plan.actions.some(
     (action) =>
-      !["agent", "workspace", "workspaceFile", "package", "mcpServer", "cronJob"].includes(
-        action.kind,
-      ),
+      ![
+        "agent",
+        "workspace",
+        "bootstrap",
+        "workspaceFile",
+        "package",
+        "mcpServer",
+        "cronJob",
+      ].includes(action.kind),
   );
+}
+
+function planWithPackageActions(
+  plan: ClawAddPlan,
+  predicate: (action: ClawAddPlan["actions"][number]) => boolean,
+): ClawAddPlan {
+  return {
+    ...plan,
+    actions: plan.actions.filter((action) => action.kind !== "package" || predicate(action)),
+  };
 }
 
 function statusAtLeast(status: ClawInstallStatus, phase: ClawInstallStatus): boolean {
@@ -216,38 +235,124 @@ export async function applyClawAddPlan(
     throw new ClawAddMutationError("provenance_failed", (error as Error).message);
   }
 
-  const installPackages = options.installPackages ?? installClawPackages;
-  let packages: PersistedClawPackageRef[] = [];
-
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
   const workspacePhaseRecorded = statusAtLeast(installRecord.status, "workspace_ready");
-  const workspaceState = workspacePhaseRecorded
-    ? await lstat(workspace).catch((error: unknown) => {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          return undefined;
-        }
-        throw error;
-      })
-    : undefined;
+  let workspaceState: Stats | undefined;
+  try {
+    assertWorkspacePathUnchanged(workspace);
+    workspaceState = await lstat(workspace).catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return undefined;
+      }
+      throw error;
+    });
+  } catch (error) {
+    clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+    if (error instanceof ClawAddMutationError) {
+      throw error;
+    }
+    throw new ClawAddMutationError(
+      "workspace_parent_failed",
+      `Could not inspect workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+    );
+  }
+
+  if (!workspacePhaseRecorded && workspaceState) {
+    markInstallStatus(plan.agent.finalId, "partial", ["pending", "partial"], options);
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated: false,
+      configCommitted: false,
+      packages: [],
+      error: {
+        code: "workspace_collision",
+        message: `Workspace ${JSON.stringify(workspace)} was created after planning.`,
+      },
+      nowMs: options.nowMs,
+    });
+  }
   if (workspaceState && !workspaceState.isDirectory()) {
     throw new ClawAddMutationError(
       "workspace_collision",
       `Workspace ${JSON.stringify(workspace)} is no longer a directory.`,
     );
   }
+
   let workspaceCreated = workspaceState?.isDirectory() ?? false;
   let configCommitted = statusAtLeast(installRecord.status, "config_committed");
+  const installPackages = options.installPackages ?? installClawPackages;
+  let packages: PersistedClawPackageRef[] = [];
+  const preserveRecordedPhaseOrMarkPartial = (): ClawInstallStatus => {
+    if (workspacePhaseRecorded) {
+      return installRecord.status;
+    }
+    markInstallStatus(plan.agent.finalId, "partial", ["pending", "partial"], options);
+    return "partial";
+  };
+
+  const hostRequirementPlan = planWithPackageActions(
+    plan,
+    (action) => action.details?.kind === "plugin",
+  );
+  const hostRequirementActions = hostRequirementPlan.actions.filter(
+    (action) => action.kind === "package",
+  );
+  if (hostRequirementActions.length > 0) {
+    try {
+      packages = await installPackages(hostRequirementPlan, options);
+    } catch (error) {
+      const packageError =
+        error instanceof ClawPackageInstallError
+          ? error
+          : new ClawPackageInstallError(
+              "package_install_failed",
+              error instanceof Error ? error.message : String(error),
+              packages,
+            );
+      const installStatus = preserveRecordedPhaseOrMarkPartial();
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated,
+        configCommitted,
+        packages: packageError.installedPackages,
+        installStatus,
+        error: { code: packageError.code, message: packageError.message },
+        nowMs: options.nowMs,
+      });
+    }
+  }
 
   try {
     assertWorkspacePathUnchanged(workspace);
     await mkdir(dirname(workspace), { recursive: true });
     assertWorkspacePathUnchanged(workspace);
   } catch (error) {
+    if (packages.length > 0) {
+      const installStatus = preserveRecordedPhaseOrMarkPartial();
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated,
+        configCommitted,
+        packages,
+        installStatus,
+        error: {
+          code: error instanceof ClawAddMutationError ? error.code : "workspace_parent_failed",
+          message:
+            error instanceof ClawAddMutationError
+              ? error.message
+              : `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+        },
+        nowMs: options.nowMs,
+      });
+    }
     clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
     if (error instanceof ClawAddMutationError) {
       throw error;
@@ -300,6 +405,40 @@ export async function applyClawAddPlan(
       }
       throw new ClawAddMutationError("provenance_failed", (error as Error).message);
     }
+  }
+
+  // Seed and attest the consented package bootstrap while the workspace is still
+  // private. Committing the agent config first makes the agent routable, so a
+  // concurrent `sessions.create` can stock-seed BOOTSTRAP.md and strand the add at
+  // `config_committed` with a seed conflict that no retry can clear.
+  try {
+    await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
+      ...options,
+      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+    });
+  } catch (error) {
+    const installStatus: ClawInstallStatus = configCommitted
+      ? "config_committed"
+      : "workspace_ready";
+    markInstallStatus(
+      plan.agent.finalId,
+      installStatus,
+      configCommitted ? ["config_committed"] : ["workspace_ready", "config_committed"],
+      options,
+    );
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      packages,
+      installStatus,
+      error: {
+        code: error instanceof ClawBootstrapWriteError ? error.code : "bootstrap_write_failed",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      nowMs: options.nowMs,
+    });
   }
 
   try {
@@ -443,7 +582,17 @@ export async function applyClawAddPlan(
   try {
     // Skills require their workspace. Recurring work is enabled only after all
     // package mutation succeeds.
-    packages = await installPackages(plan, options);
+    const workspacePackagePlan = planWithPackageActions(
+      plan,
+      (action) => action.details?.kind !== "plugin",
+    );
+    const workspacePackageActions = workspacePackagePlan.actions.filter(
+      (action) => action.kind === "package",
+    );
+    if (workspacePackageActions.length > 0) {
+      const workspacePackages = await installPackages(workspacePackagePlan, options);
+      packages = [...packages, ...workspacePackages];
+    }
   } catch (error) {
     const packageError =
       error instanceof ClawPackageInstallError
@@ -451,7 +600,7 @@ export async function applyClawAddPlan(
         : new ClawPackageInstallError(
             "package_install_failed",
             error instanceof Error ? error.message : String(error),
-            packages,
+            [],
           );
     return partialResult({
       plan,
@@ -459,7 +608,7 @@ export async function applyClawAddPlan(
       workspaceCreated,
       configCommitted,
       workspaceFiles,
-      packages: packageError.installedPackages,
+      packages: [...packages, ...packageError.installedPackages],
       installStatus: "config_committed",
       error: { code: packageError.code, message: packageError.message },
       nowMs: options.nowMs,

@@ -230,6 +230,17 @@ export type ChannelOutboundAdapter = {
   }) => Promise<void> | void;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
+  /**
+   * Account- and formatting-aware capability resolution; takes precedence over
+   * the static declaration. Formatting is the delivery's outbound formatting
+   * options, so capabilities that only apply to one text funnel (for example
+   * rich tables on the markdown path) can turn off for HTML-mode sends.
+   */
+  resolvePresentationCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    formatting?: OutboundDeliveryFormattingOptions;
+  }) => ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
   /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {

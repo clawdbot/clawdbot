@@ -291,6 +291,7 @@ export function createWikiGetTool(
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
+        conversationRecall: memoryContext.conversationRecall,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

@@ -105,7 +105,7 @@ function createInput(options?: {
     }
   });
   const activeSession = {
-    agent: { id: "agent" },
+    agent: { id: "agent", subscribe: vi.fn() },
     setActiveToolsByName,
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
@@ -223,7 +223,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       expect.objectContaining({
         resourceLoader: fixture.resourceLoader,
       }),
-      { contextOverflowRecoveryOwner: "caller" },
+      { beforeToolBatch: undefined, contextOverflowRecoveryOwner: "caller" },
     );
     expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[0]).not.toHaveProperty(
       "contextOverflowRecoveryOwner",
@@ -262,6 +262,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
     expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(expect.any(Object), {
+      beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
     });
   });

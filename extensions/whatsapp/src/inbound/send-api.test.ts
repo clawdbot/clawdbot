@@ -1,4 +1,3 @@
-// Whatsapp tests cover send api plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +8,8 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+// Whatsapp tests cover send api plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
@@ -42,12 +43,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 type MockCallSource = {
   mock: {
@@ -813,6 +809,26 @@ describe("createWebSendApi", () => {
     expectRecordFields(requireRecord(quoted.key, "quoted key"), {
       remoteJid: "277038292303944@lid",
       id: "quoted-1",
+    });
+  });
+
+  it("aligns a lookup-proven LID quote with the final PN destination", async () => {
+    await api.sendMessage("+1555", "hello", undefined, undefined, {
+      quotedMessageKey: {
+        id: "quoted-self",
+        remoteJid: "277038292303944@lid",
+        fromMe: true,
+        lookupTargetJid: "1555@s.whatsapp.net",
+        messageText: "quoted body",
+      },
+    });
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    const quoted = requireRecord(requireSendOptions().quoted, "quoted message");
+    expectRecordFields(requireRecord(quoted.key, "quoted key"), {
+      remoteJid: "1555@s.whatsapp.net",
+      id: "quoted-self",
+      fromMe: true,
     });
   });
 });

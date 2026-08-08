@@ -20,6 +20,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
@@ -50,6 +51,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import {
@@ -73,6 +75,8 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
+import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
@@ -384,7 +388,7 @@ async function persistTextTurnTranscript(
   return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
-function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -485,6 +489,7 @@ export async function persistCliTurnTranscript(params: {
   const sessionTarget = await resolveAgentRunSessionTarget({
     agentId: params.sessionAgentId,
     config: params.config,
+    missingSessionKey: "resolve-existing",
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -565,11 +570,13 @@ export function runAgentAttempt(params: {
   fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
-  const sessionAuthProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
   // bound to the configured model replaces a stale automatic session choice.
   const selectedAuthProfile =
@@ -935,10 +942,13 @@ export function runAgentAttempt(params: {
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionEntry: params.sessionEntry,
+            chatType: params.sessionEntry?.chatType,
             agentId: params.sessionAgentId,
             trigger: "user",
             sessionFile: params.sessionFile,
             storePath: params.storePath,
+            persistAssistantTranscript:
+              params.storePath !== undefined && params.sessionStore !== undefined,
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
             config: params.cfg,
@@ -952,6 +962,7 @@ export function runAgentAttempt(params: {
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             lifecycleGeneration: params.lifecycleGeneration,
+            onExecutionStarted: params.opts.onExecutionStarted,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
@@ -1035,6 +1046,8 @@ export function runAgentAttempt(params: {
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
             allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
@@ -1133,6 +1146,7 @@ export function runAgentAttempt(params: {
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    chatType: params.sessionEntry?.chatType,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -1226,8 +1240,11 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
+      params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
         params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
       }
@@ -1246,6 +1263,7 @@ export function runAgentAttempt(params: {
 
 export function buildAcpResult(params: {
   payloadText: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
   startedAt: number;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
@@ -1263,6 +1281,7 @@ export function buildAcpResult(params: {
       durationMs: Date.now() - params.startedAt,
       aborted: abortFields.aborted ?? resultCancelled,
       stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   };
 }
@@ -1625,6 +1644,7 @@ export function emitAcpLifecycleEnd(params: {
   abortSignal?: AbortSignal;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
 }) {
   finalizeAcpToolsForRun(
@@ -1648,6 +1668,7 @@ export function emitAcpLifecycleEnd(params: {
       phase: "end",
       endedAt: Date.now(),
       ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   });
 }

@@ -1,6 +1,7 @@
+import os from "node:os";
 // Subagent spawn tests cover target policy, session patching, runtime model
 // persistence, registry registration, and lifecycle event emission.
-import os from "node:os";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -52,12 +53,7 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
   });
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function gatewayRequestRecords(): Record<string, unknown>[] {
   // Gateway calls are the seam proof for spawn orchestration; assertions inspect
@@ -543,23 +539,28 @@ describe("spawnSubagentDirect seam flow", () => {
     let stopAllowed = false;
     let agentCalls = 0;
     let abortCalls = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-${agentCalls}` };
-      }
-      if (request.method === "chat.abort") {
-        abortCalls += 1;
-        if (!stopAllowed) {
-          throw new Error("abort unavailable");
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          agentCalls += 1;
+          return { runId: `gateway-${agentCalls}` };
+        }
+        if (request.method === "chat.abort") {
+          abortCalls += 1;
+          if (!stopAllowed) {
+            throw new Error("abort unavailable");
+          }
+          return {
+            aborted: true,
+            runIds: [requireRecord(request.params).runId],
+          };
+        }
+        if (request.method === "sessions.delete") {
+          throw new Error("delete unavailable");
         }
         return {};
-      }
-      if (request.method === "sessions.delete") {
-        throw new Error("delete unavailable");
-      }
-      return {};
-    });
+      },
+    );
 
     const first = await spawnSubagentDirect(
       { task: "stop-confirmation-first", collect: true, groupId: "stop-confirmation" },
@@ -1143,6 +1144,8 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
     expect(persistedStore?.[childSessionKey]).toMatchObject({
+      sessionId: expect.any(String),
+      lifecycleRevision: expect.any(String),
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",

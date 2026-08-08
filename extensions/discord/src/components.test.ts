@@ -330,6 +330,10 @@ describe("discord component registry", () => {
   });
 
   const componentsRegistryModuleUrl = new URL("./components-registry.ts", import.meta.url).href;
+  const componentsRegistryStateModuleUrl = new URL(
+    "./components-registry-state.ts",
+    import.meta.url,
+  ).href;
 
   it("registers and consumes component entries", async () => {
     registerDiscordComponentEntries({
@@ -423,6 +427,21 @@ describe("discord component registry", () => {
     expect(typeof sharedEntry?.createdAt).toBe("number");
     expect(typeof sharedEntry?.expiresAt).toBe("number");
 
+    clearDiscordComponentEntriesForTest();
+  });
+
+  it("shares persistent registry state across duplicate state modules", async () => {
+    const first = (await import(
+      `${componentsRegistryStateModuleUrl}?t=first-${Date.now()}`
+    )) as typeof import("./components-registry-state.js");
+    const second = (await import(
+      `${componentsRegistryStateModuleUrl}?t=second-${Date.now()}`
+    )) as typeof import("./components-registry-state.js");
+
+    first.discordComponentRegistryState.persistentRegistryDisabled = true;
+
+    expect(second.discordComponentRegistryState).toBe(first.discordComponentRegistryState);
+    expect(second.discordComponentRegistryState.persistentRegistryDisabled).toBe(true);
     clearDiscordComponentEntriesForTest();
   });
 

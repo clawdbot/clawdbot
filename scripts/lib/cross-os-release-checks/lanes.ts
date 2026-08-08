@@ -82,6 +82,7 @@ import { formatError, trimForSummary } from "./shared.ts";
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
   const cleanup: Cleanup[] = [];
+  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-candidate", async () => {
@@ -143,12 +144,15 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
         logPath: join(params.logsDir, "fresh-gateway.log"),
       }),
     );
-    cleanup.push(() => stopGateway(gateway));
+    gatewayHolder.current = gateway;
+    cleanup.push(() => stopGateway(gatewayHolder.current));
 
     await runTimedLanePhase(lane, "wait-gateway", async () => {
       await waitForGateway({
         lane,
         env,
+        gatewayHolder,
+        gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
         logPath: join(params.logsDir, "fresh-gateway-status.log"),
       });
     });
@@ -200,6 +204,7 @@ export async function runUpgradeLane(
   }
   const lane = createLaneState("upgrade");
   const cleanup: Cleanup[] = [];
+  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-baseline", async () => {
@@ -348,12 +353,15 @@ export async function runUpgradeLane(
         logPath: join(params.logsDir, "upgrade-gateway.log"),
       }),
     );
-    cleanup.push(() => stopGateway(gateway));
+    gatewayHolder.current = gateway;
+    cleanup.push(() => stopGateway(gatewayHolder.current));
 
     await runTimedLanePhase(lane, "wait-gateway", async () => {
       await waitForGateway({
         lane,
         env,
+        gatewayHolder,
+        gatewayLogPath: join(params.logsDir, "upgrade-gateway.log"),
         logPath: join(params.logsDir, "upgrade-gateway-status.log"),
       });
     });
@@ -560,6 +568,8 @@ export async function runInstallerFreshSuite(
         lane,
         cliPath: freshShell.cliPath,
         env,
+        gatewayHolder: manualGateway,
+        gatewayLogPath: join(params.logsDir, "installer-fresh-gateway.log"),
         logPath: join(params.logsDir, "installer-fresh-gateway-status.log"),
       });
     }
@@ -790,6 +800,8 @@ export async function runDevUpdateSuite(
         lane,
         cliPath: verifiedShell.cliPath,
         env,
+        gatewayHolder: manualGateway,
+        gatewayLogPath: join(params.logsDir, "dev-update-gateway.log"),
         logPath: join(params.logsDir, "dev-update-gateway-status.log"),
       });
     } else {
