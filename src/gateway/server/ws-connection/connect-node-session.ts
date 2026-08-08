@@ -1,12 +1,12 @@
 // Gateway WebSocket node connects reconcile the approved command/capability surface.
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
   requestNodePairing,
-} from "../../../infra/node-pairing.js";
+} from "../../../infra/device-pairing-node.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
@@ -31,7 +31,7 @@ async function requestNodePairingFromConnect(params: {
   rateLimiter?: import("../../auth-rate-limit.js").AuthRateLimiter;
   clientIp?: string;
   pairedReconnect?: boolean;
-  cleanupClaim?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
+  cleanupClaim?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   reapprovalCoordinator?: import("../../node-reapproval-coordinator.js").NodeReapprovalCoordinator;
 }): Promise<Awaited<ReturnType<typeof requestNodePairing>> | null> {
   if (params.pairedReconnect) {

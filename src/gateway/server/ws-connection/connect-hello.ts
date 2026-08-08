@@ -11,7 +11,7 @@ import {
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
-} from "../../../infra/node-pairing.js";
+} from "../../../infra/device-pairing-node.js";
 import { listProfiles } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
