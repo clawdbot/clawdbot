@@ -1187,11 +1187,11 @@
     "./plugin-sdk/memory-core-host-embedding-registry": {
       "default": "./dist/plugin-sdk/memory-core-host-embedding-registry.js"
     },
-    "./plugin-sdk/memory-core-host-engine-curated": {
-      "default": "./dist/plugin-sdk/memory-core-host-engine-curated.js"
-    },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-curated": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-curated.js"
     },
     "./plugin-sdk/memory-core-host-engine-foundation": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
