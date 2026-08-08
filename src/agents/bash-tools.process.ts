@@ -77,7 +77,7 @@ function finishedTailNote(tailText: string, aggregated: string) {
   if (tailText.length >= aggregated.length) {
     return "";
   }
-  return `\n\n[showing last ${tailText.length} of ${aggregated.length} chars; pass offset/limit to action=log to page the full output]`;
+  return `\n\n[showing last ${tailText.length} of ${aggregated.length} chars; pass offset/limit to action=log to page the retained output]`;
 }
 
 const MAX_POLL_WAIT_MS = 30_000;

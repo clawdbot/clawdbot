@@ -42,7 +42,7 @@ test("process poll on an exited session announces the retained tail slice", asyn
   expect(poll.details).toMatchObject({ status: "completed" });
   const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
   expect(text).toContain("[showing last 2000 of 6410 chars");
-  expect(text).toContain("pass offset/limit to action=log to page the full output");
+  expect(text).toContain("pass offset/limit to action=log to page the retained output");
   // The full output must still be available to the caller through details.
   expect((poll.details as { aggregated?: string }).aggregated).toHaveLength(6410);
 });
