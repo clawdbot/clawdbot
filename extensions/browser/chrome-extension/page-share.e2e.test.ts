@@ -8,6 +8,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
   copyCopilotSidepanelExtension,
+  createRelayHarness,
+  waitForContextExtensionId,
   waitForLoadedExtensionId,
 } from "./sidepanel.e2e-support.js";
 
@@ -18,9 +20,26 @@ declare const chrome: {
       error?: string;
     }>;
   };
+  storage: {
+    local: {
+      get(keys: string[]): Promise<Record<string, unknown>>;
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+  };
+  tabGroups: {
+    get(groupId: number): Promise<{ title?: string }>;
+  };
   tabs: {
-    get(tabId: number): Promise<{ id?: number; url?: string; windowId?: number }>;
+    get(tabId: number): Promise<{
+      active?: boolean;
+      groupId?: number;
+      id?: number;
+      url?: string;
+      windowId?: number;
+    }>;
     query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>>;
+    remove(tabId: number): Promise<void>;
+    ungroup(tabIds: number[]): Promise<void>;
     update(tabId: number, update: { active: boolean }): Promise<unknown>;
   };
   windows: {
@@ -29,6 +48,7 @@ declare const chrome: {
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
+const PAGE_SHARE_RELAY_SECRET = "c".repeat(64);
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let nextPopupCommandId = 0;
@@ -104,6 +124,148 @@ async function evaluateToolbarPopup<T>(
   }
 }
 
+describe.runIf(runE2E)("Chrome extension relay authorization", () => {
+  it("clears an invalid persisted pairing before reconnecting after restart", async () => {
+    const relay = await createRelayHarness();
+    cleanups.push(relay.close);
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-extension-persisted-auth-profile-");
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      channel: "chromium",
+      headless: true,
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    };
+    const initialContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await initialContext.close());
+    const initialExtensionId = await waitForContextExtensionId(initialContext, unpackedExtension);
+    const initialLauncher = initialContext.pages()[0] ?? (await initialContext.newPage());
+    await initialLauncher.goto(`chrome-extension://${initialExtensionId}/e2e-launcher.html`);
+    await initialLauncher.evaluate(
+      async ({ relayPort }) =>
+        await chrome.storage.local.set({
+          relayUrl: `ws://127.0.0.1:${relayPort}/extension`,
+          token: "legacy-unsafe-token",
+          gatewayUrl: "",
+          groupColor: "orange",
+        }),
+      { relayPort: relay.port },
+    );
+    await initialContext.close();
+
+    const reloadedContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await reloadedContext.close());
+    const extensionId = await waitForContextExtensionId(reloadedContext, unpackedExtension);
+    expect(extensionId).toBe(initialExtensionId);
+    const launcher = reloadedContext.pages()[0] ?? (await reloadedContext.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+
+    await expect
+      .poll(
+        async () =>
+          await launcher.evaluate(
+            async () => await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token"]),
+          ),
+        { timeout: 10_000 },
+      )
+      .toEqual({});
+    expect(
+      await launcher.evaluate(async () => await chrome.runtime.sendMessage({ type: "getStatus" })),
+    ).toMatchObject({ paired: false, relayUrl: "", state: "off" });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    expect(relay.connectionCount).toBe(0);
+  }, 60_000);
+
+  it("enforces pairing and current tab-group consent at the extension edge", async () => {
+    const relay = await createRelayHarness();
+    cleanups.push(relay.close);
+    const fixture = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><title>Authorization fixture</title>");
+    });
+    const fixturePort = await listen(fixture);
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve, reject) => {
+          fixture.close((error) => (error ? reject(error) : resolve()));
+        }),
+    );
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const context = await chromium.launchPersistentContext(
+      tempDirs.make("openclaw-extension-auth-profile-"),
+      {
+        channel: "chromium",
+        headless: true,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        args: [
+          "--enable-unsafe-extension-debugging",
+          `--disable-extensions-except=${unpackedExtension}`,
+          `--load-extension=${unpackedExtension}`,
+        ],
+      },
+    );
+    cleanups.push(async () => await context.close());
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
+    const launcher = context.pages()[0] ?? (await context.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+
+    const invalidPairing = await launcher.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://gateway.example.com/extension#${PAGE_SHARE_RELAY_SECRET}`,
+    );
+    expect(invalidPairing).toEqual({ ok: false, error: "Invalid pairing string." });
+    expect(relay.connectionCount).toBe(0);
+
+    const validPairing = await launcher.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://127.0.0.1:${relay.port}/extension#${PAGE_SHARE_RELAY_SECRET}`,
+    );
+    expect(validPairing).toEqual({ ok: true });
+    await expect.poll(() => relay.connectionCount, { timeout: 10_000 }).toBe(1);
+
+    const created = (await relay.command({
+      type: "createTab",
+      url: `http://127.0.0.1:${fixturePort}/authorization`,
+      background: true,
+    })) as { tabId?: number };
+    if (typeof created.tabId !== "number") {
+      throw new Error("extension did not return a created tab id");
+    }
+    const tabId = created.tabId;
+    const sharedTab = await worker.evaluate(async (targetTabId) => {
+      const tab = await chrome.tabs.get(targetTabId);
+      const group = await chrome.tabGroups.get(tab.groupId ?? -1);
+      return { active: tab.active, title: group.title };
+    }, tabId);
+    expect(sharedTab).toEqual({ active: false, title: "OpenClaw" });
+    await relay.command({ type: "attach", tabId });
+
+    await worker.evaluate(async (targetTabId) => await chrome.tabs.ungroup([targetTabId]), tabId);
+    await expect(
+      relay.command({ type: "cdp", tabId, method: "Runtime.evaluate", params: {} }),
+    ).rejects.toThrow(`tab ${tabId} is not in the OpenClaw tab group`);
+    await expect(relay.command({ type: "activateTab", tabId })).rejects.toThrow(
+      `tab ${tabId} is not in the OpenClaw tab group`,
+    );
+    await expect(relay.command({ type: "closeTab", tabId })).rejects.toThrow(
+      `tab ${tabId} is not in the OpenClaw tab group`,
+    );
+    expect(
+      await worker.evaluate(async (targetTabId) => await chrome.tabs.get(targetTabId), tabId),
+    ).toMatchObject({ active: false, id: tabId });
+
+    await expect(relay.command({ type: "detach", tabId })).resolves.toEqual({});
+    await worker.evaluate(async (targetTabId) => await chrome.tabs.remove(targetTabId), tabId);
+  }, 60_000);
+});
+
 describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay", () => {
   it.each([
     { label: "relay disconnection", unpair: false },
@@ -116,7 +278,7 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
     });
     const relay = await startExtensionRelayServer({
       port: 0,
-      token: "openclaw-autoqa-page-share-relay-placeholder",
+      token: PAGE_SHARE_RELAY_SECRET,
       onPageShare: async (payload) => {
         receivedShares.push({ url: payload.url, content: payload.content });
         await delivery;
@@ -340,7 +502,7 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
   it("keeps a real stale-tab sharing error visible across the popup status poll", async () => {
     const relay = await startExtensionRelayServer({
       port: 0,
-      token: "openclaw-autoqa-popup-consent-relay-placeholder",
+      token: PAGE_SHARE_RELAY_SECRET,
     });
     cleanups.push(async () => await relay.close());
 

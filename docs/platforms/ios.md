@@ -33,10 +33,12 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 
 ## Quick start (pair + connect)
 
-On first launch the app walks through a short pairing explainer and a
-permissions page (notifications, camera, microphone, photos, contacts,
-calendar, reminders, location). Every grant is optional and can be changed
-later in **Settings** -> **Permissions**, or in the iOS Settings app.
+On first launch the app walks through a short pairing explainer, then Gateway
+setup. It does not present an aggregate permissions page. Optional access is
+requested when you use the related feature, or after you tap **Continue** for
+that permission under **Settings** -> **Permissions** -> **Privacy & Access**.
+**Continue** immediately presents the native iOS authorization prompt. You can
+change granted access later in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
    Serve is the recommended remote path:

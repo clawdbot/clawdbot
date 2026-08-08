@@ -29,16 +29,19 @@ Three parts:
 
 - **Browser control service** (Gateway or node host): the API the `browser`
   tool calls.
-- **Extension relay** (loopback WebSocket): a small server the control service
-  starts on `127.0.0.1`. It presents a Chrome DevTools Protocol endpoint to
-  OpenClaw and speaks to the extension. Both sides authenticate with a
-  host-local token (see below).
+- **Extension relay**: a small server the control service exposes on loopback
+  for same-host and browser-node setups, or through the Gateway's relay-authenticated
+  WebSocket route for direct remote setups. It presents a Chrome DevTools
+  Protocol endpoint to OpenClaw and speaks to the extension.
 - **OpenClaw Chrome extension** (MV3): attaches to tabs with `chrome.debugger`,
   forwards CDP traffic, and manages the **OpenClaw tab group**.
 
 OpenClaw only sees and controls tabs that are in the **OpenClaw tab group**. The
-group is the consent boundary: drag a tab in to share it, drag it out (or click
-the toolbar button) to revoke access instantly.
+group is the consent boundary: the relay advertises only grouped tabs, and the
+extension rechecks current group membership before every authority-bearing
+command for an existing tab. Drag a tab in to share it; drag it out (or click
+the toolbar button) to revoke access instantly, even if a relay client still
+has stale tab state.
 
 ## Install and pair
 
@@ -60,11 +63,16 @@ the toolbar button) to revoke access instantly.
 4. Click the OpenClaw toolbar icon and paste the pairing string into the popup.
    The badge turns **ON** when the extension connects to the relay.
 
-The pairing token is a **host-local secret** created on first use and stored
+The pairing token is a **per-host secret** created on first use and stored
 under `credentials/` in the state directory (mode `0600`). Each machine that
 runs a browser — the Gateway host and every browser node host — owns its own
 token, so no credential has to travel between machines. To rotate it, delete the
 `browser-extension-relay.secret` file and pair again.
+
+The secret stays in the pairing string fragment rather than the WebSocket URL
+sent to the server. During connection, the extension presents it as a
+WebSocket subprotocol credential. This keeps it out of normal proxy request
+URLs and access logs; still treat the complete pairing string as a password.
 
 ## Use it
 
@@ -91,12 +99,12 @@ openclaw config set browser.defaultProfile chrome
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
 
-### External CDP clients (chrome-devtools-mcp, Puppeteer)
+### Authenticated external CDP clients
 
-The relay is a standard CDP browser endpoint, so tools other than OpenClaw can
-drive the paired Chrome through it — same consent model (shared tabs only),
-same host-local token, and still no "Allow remote debugging?" prompt. Print the
-endpoint and auth header:
+The relay supports authenticated external CDP clients such as mcporter,
+chrome-devtools-mcp, and Puppeteer. They use the same paired Chrome and the same
+tab-group consent boundary, without Chrome's "Allow remote debugging?" prompt.
+Print the endpoint and bearer-auth header:
 
 ```bash
 openclaw browser extension cdp
@@ -111,12 +119,15 @@ npx chrome-devtools-mcp --wsEndpoint ws://127.0.0.1:18799/cdp \
 ```
 
 `openclaw browser extension cdp --json` emits `{ browserUrl, wsEndpoint,
-headers }` for scripting. The token is the same host-local relay secret the
-pairing string carries: treat it as private, and rotate it by deleting
+headers }` for scripting. External CDP clients authenticate to the local CDP
+endpoint with this header; the extension authenticates its separate relay
+WebSocket with the subprotocol credential described above. Both derive from
+the same per-host relay secret. Treat it as private, and rotate it by deleting
 `credentials/browser-extension-relay.secret` and pairing again.
 
-[mcporter](https://github.com/openclaw/mcporter) needs no wiring at all: when a
-paired relay answers on this host, it transparently rewrites
+[mcporter](https://github.com/openclaw/mcporter) is a supported external CDP
+client and needs no extension-side wiring: when a paired relay answers on this
+host, it transparently rewrites
 `chrome-devtools-mcp --autoConnect` server commands to the relay endpoint, so
 agents calling Chrome DevTools through mcporter skip the remote-debugging
 prompt automatically (set `MCPORTER_DISABLE_CHROME_DEVTOOLS_RELAY=1` there to
@@ -235,12 +246,15 @@ extension popup shows **Connected**.
 
 ## Security model
 
-- The relay binds loopback only; both WebSocket sides are authenticated with the
-  derived token, and the extension side is origin-checked to `chrome-extension://`.
+- Same-host and browser-node relays bind loopback; direct remote pairing uses
+  the Gateway's `wss://` route. Both WebSocket sides authenticate with the
+  per-host secret, and the extension side is origin-checked to
+  `chrome-extension://`.
 - Direct Gateway pairing does not accept the relay token in the request URL;
   the bundled extension carries it in the WebSocket subprotocol list instead.
-- The agent can only see and drive tabs in the **OpenClaw tab group**. Your
-  other tabs stay private.
+- The relay exposes only tabs in the **OpenClaw tab group**, and the extension
+  independently rechecks group membership before each authority-bearing
+  existing-tab command. Your other tabs stay private.
 - Side-panel runs are scoped twice: Gateway delivery uses a per-session
   allowlist, and browser tools enforce the Chrome tab/target binding carried
   outside the prompt.

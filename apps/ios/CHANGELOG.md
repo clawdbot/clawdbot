@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 2026.7.23
+
+- Permission requests now open the native iOS authorization sheet only when you use a related feature, and Calendar and Reminders access completes without relaunching.
+- Chat preserves attachments when a route is unavailable, shared drafts avoid duplicate links, permission actions stay readable, and forced realtime Talk sessions route through your Gateway relay.
+
 ## 2026.7.22
 
 - Prevented stale Watch reconnect recovery from disconnecting a newly selected Gateway, kept delivered Watch messages from reappearing after a crash, and preserved attachments when retrying uncertain offline sends.

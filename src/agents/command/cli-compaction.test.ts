@@ -5,7 +5,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -139,6 +139,7 @@ async function prepareCompactionScenario(params: {
     contextTokens: 1_000,
     totalTokens: 950,
     totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     ...params.sessionEntry,
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -238,6 +239,19 @@ describe("runCliTurnCompactionLifecycle", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("ignores an unversioned fresh total on the first upgraded turn", async () => {
+    const scenario = await prepareCompactionScenario({
+      suffix: "legacy-unversioned-total",
+      tmpDir,
+      sessionEntry: { totalTokens: 950, totalTokensFresh: true, totalTokensVersion: undefined },
+    });
+
+    const updatedEntry = await scenario.run();
+
+    expect(scenario.compactCalls).toEqual([]);
+    expect(updatedEntry).toBe(scenario.sessionEntry);
   });
 
   it("accepts no compactable entries only from a successful compaction result", async () => {

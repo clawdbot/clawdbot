@@ -90,7 +90,7 @@ import { handleAgentEvent, normalizePlanSnapshot, type PlanStatus } from "./tool
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
-const CHAT_HISTORY_REQUEST_LIMIT = 100;
+export const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const SESSION_MESSAGE_RELEASE_RETRY_MS = 250;
 const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
@@ -230,6 +230,12 @@ function shouldHideHistoryMessage(message: unknown): boolean {
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );
+}
+
+export function visibleChatHistoryMessages(messages: unknown): unknown[] {
+  return Array.isArray(messages)
+    ? messages.filter((message) => !shouldHideHistoryMessage(message))
+    : [];
 }
 
 export function materializeVisibleAssistantStreamMessages(
@@ -1433,7 +1439,7 @@ export async function loadChatHistory(
     opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
-  const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
+  const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
   const requests = getChatHistoryPaneRequests(state);
   const inFlight = requests.inFlightHistory;
   // Live events replace the rendered array while their snapshot is pending;
@@ -1503,9 +1509,7 @@ export async function loadOlderChatHistoryPage(
   }
   return {
     ...result,
-    messages: (Array.isArray(result.messages) ? result.messages : []).filter(
-      (message) => !shouldHideHistoryMessage(message),
-    ),
+    messages: visibleChatHistoryMessages(result.messages),
   };
 }
 
@@ -1573,7 +1577,7 @@ async function loadChatHistoryUncached(
   state.chatLoading = true;
   setChatError(state, null);
   try {
-    const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
+    const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
     const res = await requestSharedChatHistory(
       client,
       requestKey,
@@ -1606,7 +1610,7 @@ async function loadChatHistoryUncached(
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = resolveChatHistorySessionId(res);
     applyChatAgentsList(state, res.agentsList, client);
-    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const visibleMessages = visibleChatHistoryMessages(messages);
     const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
       host: state,
       previousMessages,

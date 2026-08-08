@@ -13,6 +13,7 @@ import {
   constrainRestartRecoveryDeliveryPayloads,
   shouldPersistCurrentRunSessionCleanup,
 } from "../agent-command-restart-recovery.js";
+import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
@@ -340,6 +341,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
           NonNullable<Parameters<typeof deliverAgentCommandResult>[0]["onDeliveryResult"]>
         >[0],
       ) => {
+        const deliveryStatus = deliveryResult.deliveryStatus;
+        const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
+          deliveryStatus && {
+            status: deliveryStatus.status,
+            resultCount: deliveryStatus.resultCount ?? 0,
+          },
+        );
+        if (terminalDelivery) {
+          terminal.metadata.terminalDelivery = terminalDelivery;
+        }
         params.onTerminalDeliveryEvidenceChanged(
           buildRestartRecoveryTerminalDeliveryEvidence(deliveryResult),
         );
@@ -396,7 +407,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionReboundDuringRun,
     };
   } catch (error) {
-    lifecycle.emitPostTurnError(error);
+    lifecycle.emitPostTurnError(error, terminal);
     throw error;
   }
 }

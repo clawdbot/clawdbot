@@ -493,6 +493,22 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 
 Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the ack after the final done/error state.
 
+## Active-turn typing
+
+For admitted automatic turns where typing is allowed, WhatsApp sends a
+`composing` presence update when agent execution begins and refreshes it while
+the turn remains active. Refreshing stops when the run completes, including
+terminal failure or cancellation. The controller seals and cleans up when the
+reply dispatcher reports idle, or after a short safety timeout if that signal
+does not arrive. Turns for which the existing typing and suppression policy
+disables typing do not start this activity.
+
+Typing presence is ephemeral, best-effort activity feedback. It is not a
+persisted message, delivery receipt, or guarantee that every WhatsApp client
+will display continuous activity; reconnects and client behavior can make the
+indicator disappear. Lifecycle status reactions remain the persistent-looking
+opt-in status surface described above.
+
 ## Multi-account and credentials
 
 <AccordionGroup>

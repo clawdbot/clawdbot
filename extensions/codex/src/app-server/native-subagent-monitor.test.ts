@@ -333,6 +333,45 @@ function taskRecord(params: {
 }
 
 describe("CodexNativeSubagentMonitor", () => {
+  it("pins a parent subscription until its final independently running child settles", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseParentThread = vi.fn();
+    const retainParentThread = vi.fn(() => releaseParentThread);
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+      retainParentThread,
+    });
+    const parent = registerParent(monitor);
+
+    await notifyChildStarted(client, "parent-thread", "child-a");
+    await notifyChildStarted(client, "parent-thread", "child-b");
+    parent.unregister();
+
+    expect(retainParentThread).toHaveBeenCalledExactlyOnceWith("parent-thread");
+    await client.notify(nativeCompletionNotification({ agentPath: "child-a" }));
+    expect(releaseParentThread).not.toHaveBeenCalled();
+    await client.notify(nativeCompletionNotification({ agentPath: "child-b" }));
+
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+    monitor.dispose();
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+  });
+
+  it("releases detached parent subscription pins when its physical client closes", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releaseParentThread = vi.fn();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+      retainParentThread: () => releaseParentThread,
+    });
+    registerParent(monitor);
+    await notifyChildStarted(client);
+
+    client.close();
+
+    expect(releaseParentThread).toHaveBeenCalledOnce();
+  });
+
   it("keeps native subagent task mirroring on the shared client", async () => {
     const client = createClient();
     const runtime = createRuntime();

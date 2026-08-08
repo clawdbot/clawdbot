@@ -7,7 +7,6 @@ import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { isPlainObject } from "../utils.js";
-import { resolveToolExecutionCorrelation } from "./agent-tools.before-tool-call.attribution.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   buildBlockedToolResult,
@@ -333,7 +332,6 @@ export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  const correlation = resolveToolExecutionCorrelation(hookContext);
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -349,7 +347,7 @@ export function toToolDefinitions(
       executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        recordStructuredReplayTrustForToolCall(toolCallId, tool, correlation.runId);
+        recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
@@ -382,7 +380,7 @@ export function toToolDefinitions(
                   reason: hookOutcome.reason,
                   deniedReason: hookOutcome.deniedReason,
                   toolCallId,
-                  runId: correlation.runId,
+                  runId: hookContext?.runId,
                 });
               }
               throw new Error(hookOutcome.reason);
@@ -406,10 +404,10 @@ export function toToolDefinitions(
                 reason: voiceConfirmation.reason,
                 deniedReason: "client-voice-confirmation",
                 toolCallId,
-                runId: correlation.runId,
+                runId: hookContext?.runId,
               });
             }
-            recordAdjustedParamsForToolCall(toolCallId, executeParams, correlation.runId);
+            recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
@@ -426,7 +424,7 @@ export function toToolDefinitions(
             return buildBlockedToolResult({
               reason: err.reason,
               toolCallId,
-              runId: correlation.runId,
+              runId: hookContext?.runId,
             });
           }
           const described = describeToolExecutionError(err);
@@ -502,7 +500,6 @@ export function toClientToolDefinitions(
   onClientToolCall?: ClientToolCallRecorder,
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  const correlation = resolveToolExecutionCorrelation(hookContext);
   return tools.map((tool) => {
     const func = tool.function;
     return {
@@ -533,7 +530,7 @@ export function toClientToolDefinitions(
                 reason: outcome.reason,
                 deniedReason: outcome.deniedReason,
                 toolCallId,
-                runId: correlation.runId,
+                runId: hookContext?.runId,
               });
             }
             throw new Error(outcome.reason);
@@ -555,7 +552,7 @@ export function toClientToolDefinitions(
               reason: voiceConfirmation.reason,
               deniedReason: "client-voice-confirmation",
               toolCallId,
-              runId: correlation.runId,
+              runId: hookContext?.runId,
             });
           }
           // Notify handler that a client tool was called.

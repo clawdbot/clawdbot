@@ -103,8 +103,8 @@ type ReasoningProgressPayload = {
   progressTokens: number;
 };
 
-/** Return false when a channel intentionally keeps a progress event out of user-visible UI. */
-type ProgressCallbackResult = false | void;
+/** Return false until the channel has accepted operator-visible progress. */
+type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
@@ -128,6 +128,8 @@ export type GetReplyOptions = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Gateway already attempted exact active-run injection for this turn. */
+  messageInjectionAttempted?: true;
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -180,20 +182,29 @@ export type GetReplyOptions = {
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Preserve source-event callback start order for stateful channel progress renderers. */
   preserveProgressCallbackStartOrder?: boolean;
-  onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
-  onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
+  onPartialReply?: (
+    payload: PartialReplyPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onReasoningStream?: (
+    payload: ReasoningStreamPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
-  onReasoningEnd?: () => Promise<void> | void;
+  onReasoningEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
-  onAssistantMessageStart?: () => Promise<void> | void;
+  onAssistantMessageStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called synchronously when a block reply is logically emitted, before async
    * delivery drains. Useful for channels that need to rotate preview state at
    * block boundaries without waiting for transport acks. */
-  onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReplyQueued?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  onToolResult?: (
+    payload: ReplyPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
     itemId?: string;
@@ -202,7 +213,7 @@ export type GetReplyOptions = {
     phase?: string;
     args?: Record<string, unknown>;
     detailMode?: "explain" | "raw";
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
@@ -256,7 +267,7 @@ export type GetReplyOptions = {
     explanation?: string;
     steps?: AgentPlanStep[];
     source?: string;
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when an approval becomes pending or resolves. */
   onApprovalEvent?: (payload: {
     phase?: string;
@@ -272,7 +283,7 @@ export type GetReplyOptions = {
     reason?: string;
     scope?: "turn" | "session";
     message?: string;
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when command output streams or completes. */
   onCommandOutput?: (payload: {
     itemId?: string;
@@ -297,11 +308,11 @@ export type GetReplyOptions = {
     modified?: string[];
     deleted?: string[];
     summary?: string;
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
-  onCompactionStart?: () => Promise<void> | void;
+  onCompactionStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when context auto-compaction completes. */
-  onCompactionEnd?: () => Promise<void> | void;
+  onCompactionEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

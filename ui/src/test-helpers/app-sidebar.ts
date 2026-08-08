@@ -71,6 +71,8 @@ export type SidebarLifecycleState = HTMLElement & {
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
   onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
@@ -489,7 +491,7 @@ export async function mountSidebar(
 export const TWO_AGENTS = {
   defaultId: "main",
   mainKey: "main",
-  scope: "agent",
+  scope: "per-sender",
   agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
 } as AgentsListResult;
 
@@ -497,7 +499,7 @@ export const manyAgents = (count: number) =>
   ({
     defaultId: "agent-1",
     mainKey: "main",
-    scope: "agent",
+    scope: "per-sender",
     agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
   }) as AgentsListResult;
 

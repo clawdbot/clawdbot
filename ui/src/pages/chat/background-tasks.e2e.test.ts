@@ -2,7 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat background-tasks rail mocked Gateway E2E",
@@ -14,6 +14,19 @@ const suite = createControlUiE2eSuite({
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
 const baseTime = Date.now();
 const chatSessionKey = "agent:main:main";
+
+function requestSessionKey(request: MockGatewayRequest): string | undefined {
+  const { params } = request;
+  if (
+    typeof params !== "object" ||
+    params === null ||
+    !("sessionKey" in params) ||
+    typeof params.sessionKey !== "string"
+  ) {
+    return undefined;
+  }
+  return params.sessionKey;
+}
 
 const runningSubagent = {
   id: "task-subagent",
@@ -113,14 +126,46 @@ suite.define(() => {
                     thinkingLevel: null,
                   },
                 },
+                {
+                  match: { sessionKey: finishedCli.sessionKey },
+                  response: {
+                    messages: [
+                      {
+                        content: [
+                          { type: "text", text: "CLI transcript stayed in the task rail." },
+                        ],
+                        role: "assistant",
+                        timestamp: Date.now(),
+                      },
+                    ],
+                    sessionId: "cli-task-transcript",
+                    thinkingLevel: null,
+                  },
+                },
               ],
             },
             "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
             "tasks.get": {
-              task: {
-                ...runningSubagent,
-                prompt: "Trace model routing across provider and session boundaries.",
-              },
+              cases: [
+                {
+                  match: { taskId: runningSubagent.id },
+                  response: {
+                    task: {
+                      ...runningSubagent,
+                      prompt: "Trace model routing across provider and session boundaries.",
+                    },
+                  },
+                },
+                {
+                  match: { taskId: finishedCli.id },
+                  response: {
+                    task: {
+                      ...finishedCli,
+                      prompt: "Generate a searchable media index.",
+                    },
+                  },
+                },
+              ],
             },
             "tasks.cancel": {
               found: true,
@@ -218,13 +263,60 @@ suite.define(() => {
         expect(page.url()).toBe(chatUrl);
         expect(
           (await gateway.getRequests("chat.history")).some(
-            (request) =>
-              (request.params as { sessionKey?: string }).sessionKey ===
-              runningSubagent.childSessionKey,
+            (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
           ),
         ).toBe(false);
         await page.screenshot({
           path: path.join(artifactDir, "04-back-to-list.png"),
+          fullPage: true,
+        });
+
+        const mainTranscript = page.locator(".chat-main .chat-thread");
+        const mainTranscriptBefore = await mainTranscript.textContent();
+        await rail
+          .locator('[data-task-id="task-cli"]')
+          .getByRole("button", { name: "Show details for Generate media index" })
+          .click();
+        await rail.getByText("Generate a searchable media index.").waitFor();
+        await page.screenshot({
+          path: path.join(artifactDir, "05-cli-task-detail.png"),
+          fullPage: true,
+        });
+
+        await rail.getByRole("button", { name: "View transcript" }).click();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("chat.history")).some(
+              (request) => requestSessionKey(request) === finishedCli.sessionKey,
+            ),
+          )
+          .toBe(true);
+        const transcriptRequest = (await gateway.getRequests("chat.history")).find(
+          (request) => requestSessionKey(request) === finishedCli.sessionKey,
+        );
+        expect(transcriptRequest?.params).toEqual({
+          sessionKey: finishedCli.sessionKey,
+          limit: 100,
+        });
+        await rail.getByText("CLI transcript stayed in the task rail.").waitFor();
+        expect(await rail.locator(".chat-thread").textContent()).toContain(
+          "CLI transcript stayed in the task rail.",
+        );
+        expect(page.url()).toBe(chatUrl);
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
+        expect(await rail.getByRole("button", { name: "Back to task details" }).count()).toBe(1);
+        await page.screenshot({
+          path: path.join(artifactDir, "06-cli-task-transcript.png"),
+          fullPage: true,
+        });
+
+        await rail.getByRole("button", { name: "Back to task details" }).click();
+        await rail.locator('[data-task-detail="task-cli"]').waitFor({ state: "visible" });
+        await rail.getByText("Generate a searchable media index.").waitFor();
+        expect(page.url()).toBe(chatUrl);
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
+        await page.screenshot({
+          path: path.join(artifactDir, "07-cli-task-detail-restored.png"),
           fullPage: true,
         });
       },
@@ -279,7 +371,7 @@ suite.define(() => {
         expect(Math.abs(previewCenter - linkCenter)).toBeLessThanOrEqual(2);
         expect(previewBox.y + previewBox.height).toBeLessThanOrEqual(linkBox.y);
         await page.screenshot({
-          path: path.join(artifactDir, "05-running-task-popover-centered.png"),
+          path: path.join(artifactDir, "08-running-task-popover-centered.png"),
           fullPage: true,
         });
 
@@ -289,7 +381,7 @@ suite.define(() => {
         expect(await row.textContent()).toContain("CLI command");
         expect(await row.textContent()).toContain("Command running");
         await page.screenshot({
-          path: path.join(artifactDir, "06-one-background-exec.png"),
+          path: path.join(artifactDir, "09-one-background-exec.png"),
           fullPage: true,
         });
       },
