@@ -7922,18 +7922,25 @@ Update and merge these partial structured summaries.`,
     );
   });
 
-  it("scripts mixed reasoning-plus-blank primary output and a visible fallback", async () => {
+  it.each([
+    { name: "default", primaryModel: "gpt-5.6-luna", fallbackModel: "gpt-5.6-luna-alt" },
+    {
+      name: "explicit",
+      primaryModel: "mock-empty-primary",
+      fallbackModel: "mock-visible-fallback",
+    },
+  ])("scripts mixed reasoning-plus-blank output for the $name model pair", async (models) => {
     const server = await startMockServer();
 
     const primary = await expectOpenAiNonStreamingResponsesJson(server, {
-      model: "mock-empty-primary",
+      model: models.primaryModel,
       input: [makeUserInput(QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT)],
     });
     expect(outputItems(primary).map((item) => item.type)).toEqual(["reasoning", "message"]);
     expect(outputText(primary, 1)).toBe(" ");
 
     const fallback = await expectOpenAiNonStreamingResponsesJson(server, {
-      model: "mock-visible-fallback",
+      model: models.fallbackModel,
       input: [makeUserInput(QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT)],
     });
     expect(outputText(fallback)).toBe("MODEL-FALLBACK-VISIBLE-OK");

@@ -1338,7 +1338,9 @@ async function buildResponsesPayload(
     return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
   }
   if (QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE.test(allInputText)) {
-    if (model === "mock-visible-fallback") {
+    // The catalog's default mock alternate and the explicit proof model both
+    // recover, so the scenario exercises the same fallback path with or without flags.
+    if (model === "gpt-5.6-luna-alt" || model === "mock-visible-fallback") {
       return buildAssistantEvents("MODEL-FALLBACK-VISIBLE-OK");
     }
     return buildReasoningAndAssistantEvents({
