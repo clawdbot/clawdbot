@@ -605,4 +605,29 @@ describe("zai provider plugin", () => {
       await fs.rm(home, { recursive: true, force: true });
     }
   });
+
+  it("rejects an oversized deprecated pi agent auth.json instead of slurping it into memory", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-legacy-auth-oversized-"));
+    try {
+      const authDir = path.join(home, ".pi", "agent");
+      await fs.mkdir(authDir, { recursive: true });
+      // Valid JSON but larger than the 1 MiB bound. The old unbounded
+      // readFileSync read the entire file into memory solely to extract an
+      // access token; the bound treats it as unreadable instead.
+      const oversized = JSON.stringify({
+        "z-ai": { access: `legacy-zai-token-${"x".repeat(2 * 1024 * 1024)}` },
+      });
+      await fs.writeFile(path.join(authDir, "auth.json"), oversized, "utf-8");
+      const provider = await registerSingleProviderPlugin(plugin);
+
+      await expect(
+        provider.resolveUsageAuth?.({
+          env: { HOME: home },
+          resolveApiKeyFromConfigAndStore: () => undefined,
+        } as never),
+      ).resolves.toBeNull();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
 });
