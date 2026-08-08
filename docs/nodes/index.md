@@ -582,8 +582,9 @@ Photos (`jpg`):
 
 ```bash
 openclaw nodes camera list --node <idOrNameOrIp>
-openclaw nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
+openclaw nodes camera snap --node <idOrNameOrIp>            # default: one node-selected photo
 openclaw nodes camera snap --node <idOrNameOrIp> --facing front
+openclaw nodes camera snap --node <idOrNameOrIp> --facing both # front then back (2 saved paths)
 openclaw nodes camera snap --node <idOrNameOrIp> --device-id <id> --max-width 1200 --quality 0.9 --delay-ms 2000
 ```
 

@@ -34,13 +34,16 @@ type CameraSnapTarget = {
 
 type CameraClipTarget = CameraSnapTarget;
 
-/** Resolve one or two snap requests without inventing a facing for Linux V4L2 devices. */
+/** Resolve snap requests without inventing a facing when the CLI or node cannot select one. */
 export function resolveCameraSnapTargets(params: {
-  facing: CameraFacing | "both";
+  facing?: CameraFacing | "both";
   platform?: string;
   deviceId?: string;
 }): CameraSnapTarget[] {
   if (params.platform?.toLowerCase() === "linux") {
+    return [{ artifactFacing: "unknown" }];
+  }
+  if (!params.facing) {
     return [{ artifactFacing: "unknown" }];
   }
   const facings: CameraFacing[] = params.facing === "both" ? ["front", "back"] : [params.facing];

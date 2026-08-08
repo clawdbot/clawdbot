@@ -52,13 +52,14 @@ Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foregroun
 The easiest way to get media files is via the CLI helper, which writes decoded media to a temp file and prints the saved path.
 
 ```bash
-openclaw nodes camera snap --node <id>                 # default: both front + back (2 MEDIA lines)
+openclaw nodes camera snap --node <id>                 # default: one node-selected photo
 openclaw nodes camera snap --node <id> --facing front
+openclaw nodes camera snap --node <id> --facing both   # front then back (2 saved paths)
 openclaw nodes camera clip --node <id> --duration 3000
 openclaw nodes camera clip --node <id> --no-audio
 ```
 
-`nodes camera snap` defaults to `--facing both`, capturing both front and back to give the agent both views; pass `--device-id` with a single explicit facing (`both` is rejected when `--device-id` is set). Output files are temporary (in the OS temp directory) unless you build your own wrapper.
+Without `--facing`, `nodes camera snap` captures one photo using the node's default camera and labels the saved artifact `unknown`. On non-Linux nodes, `--facing both` captures front then back and prints two saved paths. `--device-id` is valid without `--facing`; on non-Linux nodes, it cannot be combined with `--facing both`. Linux always sends one facing-less request and labels the artifact `unknown`, regardless of `--facing`. Output files are temporary (in the OS temp directory) unless you build your own wrapper.
 
 ## Android node
 
