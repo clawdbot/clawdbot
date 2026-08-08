@@ -132,33 +132,31 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
-  it("admits an explicit agentId that matches the rosterless implicit default", () => {
-    // `agent exec` resolves `resolveDefaultAgentId(baseConfig)` itself and
-    // passes it through as an explicit `agentId` (see fix/agent-exec-default-agent
-    // -store-scope, #119765) rather than leaving it unspecified. Against a
-    // rosterless config that value is always the legacy implicit agent, so
-    // this must be admitted the same as an unspecified agentId -- not
-    // rejected as "naming an owner outside the roster".
-    const result = resolveRunWorkspaceDir({
-      workspaceDir: undefined,
-      agentId: "main",
-      config: {},
-    });
-
-    expect(result.agentId).toBe("main");
-    expect(result.agentIdSource).toBe("explicit");
-    expect(result.usedFallback).toBe(true);
+  it("rejects rosterless config even when the explicit agentId matches the implicit default", () => {
+    // This shared resolver is also reachable from raw embedded/SDK callers, so
+    // a rosterless config must never be admitted here regardless of which
+    // agentId it carries -- admitting it would hand those callers a real
+    // workspace despite the isolation contract. A producer that intentionally
+    // runs without a roster (e.g. `agent exec --isolated`) materializes its
+    // own implicit one-agent roster before calling in (see
+    // buildExecRunOverlay / agent-exec.test.ts) rather than relying on this
+    // resolver to invent one.
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        agentId: "main",
+        config: {},
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
-  it("resolves the implicit legacy agent for a rosterless config (agent exec --isolated)", () => {
-    const result = resolveRunWorkspaceDir({
-      workspaceDir: undefined,
-      config: {},
-    });
-
-    expect(result.agentId).toBe("main");
-    expect(result.agentIdSource).toBe("default");
-    expect(result.usedFallback).toBe(true);
+  it("rejects a rosterless config with no explicit agentId (agent exec --isolated, unmaterialized)", () => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        config: {},
+      }),
+    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
   it.each([

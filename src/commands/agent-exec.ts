@@ -6,6 +6,7 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
+import { hasAgentRosterProperty, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -325,6 +326,19 @@ function buildExecRunOverlay(params: {
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
   const entries = Object.keys(params.base.agents?.entries ?? {});
+  // `--isolated`/`--auth-env-only` resolve to a rosterless base config
+  // ({}) by design (see resolveExecBaseConfig). The shared workspace
+  // resolver refuses to admit rosterless input -- that resolver is also
+  // reachable from raw embedded/SDK callers, so it must not invent an
+  // owner for them. Materialize the implicit one-agent roster here instead,
+  // producer-side, the same way `prepareCliRunContext` does for direct
+  // CLI-runner callers.
+  const rosterEntries =
+    entries.length > 0
+      ? Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }]))
+      : hasAgentRosterProperty(params.base)
+        ? undefined
+        : { [resolveDefaultAgentId(params.base)]: { default: true, workspace: params.cwd } };
   return {
     agents: {
       defaults: {
@@ -332,9 +346,7 @@ function buildExecRunOverlay(params: {
         skipBootstrap: true,
         ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
-      ...(entries.length > 0
-        ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
-        : {}),
+      ...(rosterEntries ? { entries: rosterEntries } : {}),
     },
     ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
   } as OpenClawConfig;
