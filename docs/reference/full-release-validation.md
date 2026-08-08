@@ -91,7 +91,7 @@ ordinary progress send terminated the turn.
 
 Use `-f skip_package_telegram_e2e=true` only when the release owner explicitly
 defers the Package Acceptance Telegram E2E to a follow-up beta. The input is
-recorded in validation evidence and does not disable the focused
+rejected for `stable` and `full`, recorded in validation evidence, and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
 ## Top-level stages

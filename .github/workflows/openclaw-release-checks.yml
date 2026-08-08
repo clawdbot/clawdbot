@@ -62,7 +62,7 @@ on:
         default: false
         type: boolean
       skip_package_telegram_e2e:
-        description: Defer the Package Acceptance Telegram E2E
+        description: Defer beta Package Acceptance Telegram E2E
         required: false
         default: false
         type: boolean
@@ -420,6 +420,10 @@ jobs:
             skip_package_telegram_e2e=false
           else
             skip_package_telegram_e2e=true
+          fi
+          if [[ "$skip_package_telegram_e2e" == "true" && "$release_profile" != "beta" ]]; then
+            echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
+            exit 1
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then

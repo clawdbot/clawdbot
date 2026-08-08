@@ -19,7 +19,7 @@ on:
         default: false
         type: boolean
       skip_package_telegram_e2e:
-        description: Defer the Package Acceptance Telegram E2E while preserving focused npm Telegram validation
+        description: Defer beta Package Acceptance Telegram E2E while preserving focused npm Telegram validation
         required: false
         default: false
         type: boolean
@@ -180,6 +180,17 @@ jobs:
             --ref "$TARGET_REF" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Validate release inputs
+        env:
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" && "$RELEASE_PROFILE" != "beta" ]]; then
+            echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
+            exit 1
+          fi
+
       - name: Summarize target
         env:
           TARGET_REF: ${{ inputs.ref }}
@@ -245,10 +256,12 @@ jobs:
               echo "- Published-package Telegram E2E: \`${RELEASE_PACKAGE_SPEC}\`"
             elif [[ "$RERUN_GROUP" == "npm-telegram" ]]; then
               echo "- Package Telegram E2E: focused rerun requires \`release_package_spec\` or \`npm_telegram_package_spec\`"
-            elif [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
-              echo "- Package Telegram E2E: deferred by \`skip_package_telegram_e2e\`"
             elif [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "release-checks" || "$RERUN_GROUP" == "package" ]]; then
-              echo "- Package Telegram E2E: OpenClaw Release Checks Package Acceptance"
+              if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
+                echo "- Package Telegram E2E: deferred by \`skip_package_telegram_e2e\`"
+              else
+                echo "- Package Telegram E2E: OpenClaw Release Checks Package Acceptance"
+              fi
             else
               echo "- Package Telegram E2E: skipped by rerun group"
             fi
