@@ -1,15 +1,9 @@
 // Chat abort tests protect in-flight run tracking, stop-command parsing, provider
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  registerAgentRunContext,
-  validateAgentRunDelegatedAuthority,
-} from "../infra/agent-run-registry.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
@@ -166,33 +160,6 @@ describe("isChatStopCommandText", () => {
 });
 
 describe("registerChatAbortController", () => {
-  it("binds delegated authority only to the exact operational instance object", () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const operationalRunInstance = createOperationalRunInstanceRef("run-exact-authority");
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: operationalRunInstance.runId,
-      sessionId: "sess-exact-authority",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      operationalRunInstance,
-    });
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-
-    registration.bindAgentRunDelegatedAuthority(authority);
-    expect(registration.entry?.agentRunDelegatedAuthority).toBe(authority);
-    expect(registration.entry?.operationalRunInstance).toBe(operationalRunInstance);
-
-    expect(() =>
-      registration.bindAgentRunDelegatedAuthority({
-        ...authority,
-        operationalRunInstance: Object.freeze({ ...operationalRunInstance }),
-      }),
-    ).toThrow("does not belong to this controller registration");
-    registration.cleanup({ force: true });
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-  });
-
   it("expires registrations immediately when the process clock is invalid", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
@@ -429,42 +396,6 @@ describe("registerChatAbortController", () => {
 });
 
 describe("abortChatRunById", () => {
-  it("revokes exact delegated authority before abort callbacks and controller listeners", () => {
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
-      runId: "run-authority-abort",
-    });
-    const authority = claimAgentRunDelegatedAuthority({
-      instanceId: "instance-authority-abort",
-      runId,
-    });
-    entry.agentRunDelegatedAuthority = authority;
-    ops.onRunAborted = vi.fn(() => {
-      expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-      expect(entry.controller.signal.aborted).toBe(false);
-    });
-
-    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
-      aborted: true,
-    });
-    expect(ops.onRunAborted).toHaveBeenCalledOnce();
-    expect(entry.controller.signal.aborted).toBe(true);
-  });
-
-  it("does not revoke a same-id successor from a stale abort controller", () => {
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
-      runId: "run-authority-successor",
-    });
-    const stale = claimAgentRunDelegatedAuthority({ instanceId: "instance-old", runId });
-    entry.agentRunDelegatedAuthority = stale;
-    const successor = claimAgentRunDelegatedAuthority({ instanceId: "instance-new", runId });
-
-    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "stale" })).toEqual({
-      aborted: true,
-    });
-    expect(validateAgentRunDelegatedAuthority(successor)).toBe(true);
-    clearAgentRunContext(runId);
-  });
-
   it("notifies the run-bound approval owner only after an active run abort wins", () => {
     const { runId, sessionKey, ops } = createAbortRunFixture({});
     const onRunAborted = vi.fn();

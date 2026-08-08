@@ -469,8 +469,7 @@ export function claimAgentRunDelegatedAuthority(
     // legitimate run-context owners continue until their own lifecycle exits.
     releaseAgentRunContext(runId, existing.claimId);
   }
-  let claimId: string | undefined;
-  claimId = claimAgentRunContext(
+  const claimId = claimAgentRunContext(
     runId,
     { lifecycleGeneration, lastActiveAt: Date.now() },
     {
