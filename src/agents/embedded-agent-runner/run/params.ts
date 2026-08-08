@@ -32,6 +32,7 @@ import type {
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import type { CommandInventoryPromptInput } from "../../command-inventory-prompt.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
@@ -180,6 +181,8 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
+  /** Trusted run-scoped command inventory; node-mode callers provide one selected node. */
+  commandInventory?: CommandInventoryPromptInput;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
   /** Include the heartbeat response tool for structured heartbeat outcomes. */

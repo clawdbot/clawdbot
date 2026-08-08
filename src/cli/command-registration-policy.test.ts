@@ -67,9 +67,23 @@ describe("command-registration-policy", () => {
     ).toBe(true);
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "tools", "effective"],
+        argv: ["node", "openclaw", "tools", "commands"],
+        primary: "tools",
+        hasBuiltinPrimary: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tools", "partner-plugin", "sync"],
         primary: "tools",
         hasBuiltinPrimary: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tools", "--help"],
+        primary: "tools",
+        hasBuiltinPrimary: true,
       }),
     ).toBe(true);
     expect(

@@ -571,6 +571,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           defaultAgentId,
         }),
         skillsPrompt,
+        codeModeActive: params.codeModeActive,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
         promptMode,
@@ -593,6 +594,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         preparedWatchedSessions,
         promptContribution,
         nativeCommandGuidanceLines,
+        commandInventory: params.commandInventory,
       });
       return transformProviderSystemPrompt({
         provider,

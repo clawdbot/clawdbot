@@ -813,6 +813,51 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("carries command inventory into compacted system prompt rebuilds", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      codeModeActive: true,
+      commandInventory: {
+        scope: "node-operator",
+        nodeCommands: [
+          {
+            id: "node:desk:filesystem.read",
+            command: "filesystem.read",
+            title: "filesystem.read",
+            nodeId: "desk",
+            description: "Live command advertised by paired node Desk.",
+            argumentHints: ["path"],
+            invocationHint: "openclaw nodes invoke --node desk --command filesystem.read",
+            availability: "available",
+            approvalKind: "gateway-allowlist",
+            risk: "high",
+            confirmationRequired: true,
+            effectMode: "mixed",
+            effects: [],
+            trustBoundary: "paired-node",
+            sourceKind: "node-runtime",
+            sourceId: "desk:filesystem.read",
+            discoveryMode: "runtime-node-query",
+            visibility: ["prompt", "audit", "operator"],
+          },
+        ],
+      },
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codeModeActive: true,
+        commandInventory: expect.objectContaining({
+          scope: "node-operator",
+          nodeCommands: [expect.objectContaining({ id: "node:desk:filesystem.read" })],
+        }),
+      }),
+    );
+  });
+
   it("passes resolved agent context to compacted system prompt rebuilds", async () => {
     resolveSessionAgentIdsMock.mockReturnValue({
       defaultAgentId: "main",

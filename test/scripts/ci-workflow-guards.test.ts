@@ -2237,7 +2237,14 @@ NODE
     expect(action).toContain("docs_only=false");
     expect(action).toContain("docs_changed=false");
     expect(action).toContain("test/fixtures/*)");
-    expect(action).toContain("docs/* | *.md | *.mdx)");
+    expect(action).toContain("src/claws/experimental.ts");
+    expect(action).toContain("src/cli/catalog-metadata.ts");
+    expect(action).toContain("src/cli/program/core-command-descriptors.ts");
+    expect(action).toContain("src/cli/program/private-qa-cli.ts");
+    expect(action).toContain("src/cli/program/subcli-descriptors.ts");
+    expect(action).toContain("src/cli-catalog-overlay/list.ts");
+    expect(action).toContain("scripts/generate-command-reference-doc.ts)");
+    expect(action).toContain("*) non_docs=true ;;");
   });
 
   it("bounds matrix fan-out for runner-registration pressure", () => {

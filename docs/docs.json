@@ -1800,6 +1800,7 @@
                 "group": "CLI commands",
                 "pages": [
                   "cli/index",
+                  "cli/commands",
                   {
                     "group": "Gateway and service",
                     "pages": [

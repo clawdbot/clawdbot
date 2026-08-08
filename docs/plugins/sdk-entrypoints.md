@@ -254,7 +254,9 @@ CLI registration:
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).
 - For other nested plugin commands, add `parentPath` and register commands
   on the `program` object passed to the registrar; OpenClaw resolves it to
-  the parent command before calling the plugin.
+  the parent command before calling the plugin. Use only documented
+  plugin-extensible parents; `openclaw tools` is core-owned inventory and is
+  not a plugin command parent.
 - For channel plugins, register CLI descriptors from `registerCliMetadata`
   and keep `registerFull` focused on runtime-only work.
 - If `registerFull` also registers gateway RPC methods, keep them on a
