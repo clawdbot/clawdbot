@@ -5151,6 +5151,7 @@ export const en: TranslationMap = {
     },
     attachments: {
       attachedFile: "Attached file",
+      showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       checking: "Checking...",

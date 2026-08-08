@@ -4408,8 +4408,8 @@ describe("chat attachment picker", () => {
     expect(container.querySelector(".chat-attachment-file__name")?.textContent).toContain(
       "First words from a l...",
     );
-    expect(container.querySelector(".chat-attachment-text-action")?.textContent).toContain(
-      "Restore",
+    expect(container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
+      "Show in text field",
     );
   });
 
@@ -4441,7 +4441,7 @@ describe("chat attachment picker", () => {
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
 
-  it("moves a pasted text attachment back into the composer", async () => {
+  it("shows a pasted text attachment in the composer text field", async () => {
     const onAttachmentsChange = vi.fn();
     const firstRender = renderChatView({ onAttachmentsChange });
     const textarea = getComposerTextarea(firstRender);
@@ -4467,13 +4467,13 @@ describe("chat attachment picker", () => {
       }),
       'renderChatView({ attachments: [attachment], draft: "intro", getDraft:... test invariant',
     );
-    const showButton = requireElement(
+    const showInTextFieldButton = requireElement(
       preview,
-      '[aria-label="Restore"]',
-      "show pasted text button",
+      '[aria-label="Show in text field"]',
+      "show pasted text in text field button",
     ) as HTMLButtonElement;
 
-    showButton.click();
+    showInTextFieldButton.click();
 
     expect(onShowAttachmentsChange).toHaveBeenCalledWith([]);
     expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
