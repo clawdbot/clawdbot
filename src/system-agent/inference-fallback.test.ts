@@ -195,7 +195,41 @@ describe("system-agent inference fallback", () => {
     expect(attempts).toEqual(["requester", "alpha-other"]);
   });
 
-  it("retires the whole provider after a malformed response", async () => {
+  it("tries another route of the same provider after a malformed response", async () => {
+    const attempts: string[] = [];
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "alpha/model" } },
+        list: [
+          { id: "requester", model: "alpha/model" },
+          { id: "alpha-other", model: "alpha/model" },
+          { id: "beta", model: "beta/model" },
+        ],
+      },
+    };
+
+    const result = await verifySystemAgentInferenceWithFallback({
+      requestingAgentId: "requester",
+      runtime,
+      deps: {
+        readConfig: async () => cfg,
+        resolveRoute: async (_cfg, agentId) =>
+          route(agentId, agentId === "beta" ? "beta" : "alpha"),
+        hasAuth: async () => true,
+        verify: async ({ agentId }) => {
+          attempts.push(agentId);
+          return agentId === "alpha-other"
+            ? ({ ok: true, modelRef: "alpha/model", latencyMs: 1, binding: {} } as never)
+            : ({ ok: false, status: "format", error: "bad response" } as const);
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toEqual(["requester", "alpha-other"]);
+  });
+
+  it("retires the whole provider after a provider-wide failure", async () => {
     const attempts: string[] = [];
     const cfg: OpenClawConfig = {
       agents: {
@@ -220,13 +254,12 @@ describe("system-agent inference fallback", () => {
           attempts.push(agentId);
           return agentId === "beta"
             ? ({ ok: true, modelRef: "beta/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "format", error: "bad response" } as const);
+            : ({ ok: false, status: "unavailable", error: "down" } as const);
         },
       },
     });
 
     expect(result.ok).toBe(true);
-    // alpha-other is skipped: the requester's malformed alpha route failed provider-wide.
     expect(attempts).toEqual(["requester", "beta"]);
   });
 
