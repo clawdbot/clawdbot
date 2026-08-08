@@ -63,7 +63,7 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   );
 }
 
-export async function finalizeAcceptedSteer(params: {
+async function finalizeAcceptedSteer(params: {
   activeReplyOperation: ReplyOperation | undefined;
   abortKey: string | undefined;
   cleanupTyping: () => void;
