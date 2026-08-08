@@ -1,6 +1,6 @@
 // Pure-logic tests for the OpenClaw Chrome extension. Runs under the
 // extension-browser vitest glob (extensions/browser/**/*.test.ts).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildRelayWsProtocols,
   createPairingConfigStore,
@@ -29,10 +29,7 @@ describe("parsePairingString", () => {
       throw new Error("expected pairing string to parse");
     }
     expect(parsed.relayUrl).toBe(`ws://127.0.0.1:${port}/extension`);
-    expect(buildRelayWsProtocols(parsed.token)).toEqual([
-      "openclaw-extension-relay",
-      `openclaw-extension-token.${token}`,
-    ]);
+    expect(buildRelayWsProtocols()).toEqual(["openclaw-extension-relay.v2"]);
   });
 
   it("extracts the additive direct Gateway hint without passing it to the relay", () => {
@@ -42,6 +39,15 @@ describe("parsePairingString", () => {
       relayUrl: "ws://127.0.0.1:18797/extension",
       token: RELAY_SECRET,
       gatewayUrl,
+    });
+  });
+
+  it("retains and canonicalizes the profile auth binding while stripping the Gateway hint", () => {
+    const pairing = `ws://127.0.0.1:18797/extension?profile=work&gateway=${encodeURIComponent("wss://gateway.example.com")}#${RELAY_SECRET}`;
+    expect(parsePairingString(pairing)).toEqual({
+      relayUrl: "ws://127.0.0.1:18797/extension?profile=work",
+      token: RELAY_SECRET,
+      gatewayUrl: "wss://gateway.example.com",
     });
   });
 
@@ -65,6 +71,7 @@ describe("parsePairingString", () => {
     ["a short secret", "ws://127.0.0.1/extension#abc123"],
     ["an uppercase secret", `ws://127.0.0.1/extension#${"A".repeat(64)}`],
     ["an unknown query parameter", `ws://127.0.0.1/extension?token=nope#${RELAY_SECRET}`],
+    ["duplicate profiles", `ws://127.0.0.1/extension?profile=one&profile=two#${RELAY_SECRET}`],
     [
       "duplicate Gateway hints",
       `ws://127.0.0.1/extension?gateway=wss%3A%2F%2Fone.example&gateway=wss%3A%2F%2Ftwo.example#${RELAY_SECRET}`,
@@ -126,6 +133,45 @@ describe("persisted pairing storage", () => {
     },
   ])("accepts $label", async ({ stored }) => {
     expect(await readStoredPairing(stored)).toEqual(stored);
+  });
+
+  it("migrates a canonical existing pairing to authVersion 2 without re-pairing", async () => {
+    const stored = {
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: RELAY_SECRET,
+      gatewayUrl: "",
+      groupColor: "orange",
+    };
+    const set = vi.fn(async (values: Record<string, unknown>) => {
+      Object.assign(stored, values);
+    });
+    const config = await createPairingConfigStore({
+      get: async () => stored,
+      set,
+      remove: async () => undefined,
+    }).read();
+    expect(set).toHaveBeenCalledWith({ authVersion: 2 });
+    expect(config).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: RELAY_SECRET,
+      authVersion: 2,
+    });
+  });
+
+  it("rejects and clears an unsupported stored auth version", async () => {
+    const remove = vi.fn(async () => undefined);
+    const config = await createPairingConfigStore({
+      get: async () => ({
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "",
+        authVersion: 1,
+      }),
+      set: async () => undefined,
+      remove,
+    }).read();
+    expect(config.relayUrl).toBe("");
+    expect(remove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token", "authVersion"]);
   });
 
   it.each([

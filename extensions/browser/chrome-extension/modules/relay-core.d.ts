@@ -17,6 +17,7 @@ export function createPairingConfigStore(storage: {
     relayUrl: string;
     token: string;
     gatewayUrl: string;
+    authVersion?: 2;
     groupColor: string;
   }>;
   save(
@@ -26,7 +27,7 @@ export function createPairingConfigStore(storage: {
   clear(): Promise<void>;
 };
 
-export function buildRelayWsProtocols(token: string): string[];
+export function buildRelayWsProtocols(): string[];
 
 export function reconnectDelayMs(attempt: number): number;
 

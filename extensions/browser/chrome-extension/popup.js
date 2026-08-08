@@ -68,6 +68,8 @@ async function refresh() {
   statusLine.textContent =
     actionError ??
     `${label} · ${status.sharedTabCount} tab${status.sharedTabCount === 1 ? "" : "s"} shared`;
+  statusHint.textContent =
+    status.hint || "Relay unreachable — is the OpenClaw gateway running and up to date?";
   statusHint.classList.toggle("hidden", status.state !== "error");
   const tab = await activeTab();
   if (tab?.id === undefined) {

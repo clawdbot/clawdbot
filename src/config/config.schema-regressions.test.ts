@@ -395,6 +395,31 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts the browser extension relay legacy-auth migration gate", () => {
+    const res = validateConfigObject({
+      browser: {
+        extensionRelay: {
+          allowLegacyAuth: false,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown keys under browser.extensionRelay", () => {
+    const res = validateConfigObject({
+      browser: {
+        extensionRelay: {
+          allowLegacyAuth: true,
+          unknownKey: true as unknown,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {

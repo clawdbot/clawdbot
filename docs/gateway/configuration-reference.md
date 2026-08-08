@@ -426,27 +426,25 @@ See [Plugins](/tools/plugin).
     },
     tabCleanup: {
       enabled: true,
-      idleMinutes: 120,
-      maxTabsPerSession: 8,
-      sweepMinutes: 5,
+    },
+    extensionRelay: {
+      allowLegacyAuth: true,
     },
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      openclaw: { cdpPort: 18800 },
       work: {
         cdpPort: 18801,
-        color: "#0066CC",
         executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       },
-      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      chrome: { driver: "extension" },
+      user: { driver: "existing-session", attachOnly: true },
       brave: {
         driver: "existing-session",
         attachOnly: true,
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
-        color: "#FB542B",
       },
-      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+      remote: { cdpUrl: "http://10.0.0.42:9222" },
     },
-    color: "#FF4500",
     // headless: false,
     // noSandbox: false,
     // extraArgs: [],
@@ -457,6 +455,10 @@ See [Plugins](/tools/plugin).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `extensionRelay.allowLegacyAuth` defaults to `true` for one Browser Relay
+  Authentication migration window. It permits old extension and external CDP
+  Bearer, Basic, and token-subprotocol clients. Set it to `false`
+  after all relay clients use auth v2; v2 clients never downgrade.
 - `tabCleanup` controls best-effort periodic cleanup for tracked primary-agent
   tabs after idle time or when a session exceeds its cap. Tracking applies only
   to tabs created by browser tool `action: "open"`; tabs opened by the user or
@@ -487,6 +489,9 @@ See [Plugins](/tools/plugin).
   local managed browser profile and may report local port ownership errors.
 - `existing-session` profiles use Chrome MCP instead of CDP and can attach on
   the selected host or through a connected browser node.
+- `extension` profiles use the authenticated OpenClaw Chrome extension relay.
+  The relay owns its loopback endpoint, so these profiles do not accept
+  `cdpUrl`. See [Chrome extension](/tools/chrome-extension).
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
 - `existing-session` profiles can set `cdpUrl` when Chrome is already running

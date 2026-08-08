@@ -4,10 +4,9 @@
 
 /** Tab group shown to the user; membership == what the agent may touch. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
-const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
-const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
+const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay.v2";
 const RELAY_SECRET_PATTERN = /^[0-9a-f]{64}$/;
-const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token"];
+const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token", "authVersion"];
 
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
@@ -72,7 +71,20 @@ function directGatewayUrlFromRelay(relay) {
   }
   const gateway = new URL(relay.toString());
   gateway.pathname = gateway.pathname.slice(0, -suffix.length) || "/";
+  gateway.search = "";
   return gateway.toString();
+}
+
+function normalizeRelayQuery(relay) {
+  const query = [...relay.searchParams];
+  if (
+    query.some(([key, value]) => key !== "profile" || !/^[a-z0-9-]+$/.test(value)) ||
+    query.filter(([key]) => key === "profile").length > 1
+  ) {
+    return false;
+  }
+  relay.searchParams.sort();
+  return true;
 }
 
 function validatePairingFields(relayUrl, token, gatewayUrl) {
@@ -91,7 +103,7 @@ function validatePairingFields(relayUrl, token, gatewayUrl) {
   if (
     !isAllowedWebSocketUrl(relay) ||
     !relay.pathname.endsWith("/extension") ||
-    relay.search ||
+    !normalizeRelayQuery(relay) ||
     relay.hash
   ) {
     return null;
@@ -137,14 +149,21 @@ export function parsePairingString(raw) {
     return null;
   }
   const query = [...parsed.searchParams];
-  if (query.length > 1 || (query.length === 1 && query[0]?.[0] !== "gateway")) {
+  const gatewayEntries = query.filter(([key]) => key === "gateway");
+  const profileEntries = query.filter(([key]) => key === "profile");
+  if (
+    gatewayEntries.length > 1 ||
+    profileEntries.length > 1 ||
+    query.some(([key]) => key !== "gateway" && key !== "profile")
+  ) {
     return null;
   }
-  const gatewayUrl = query.length === 1 ? query[0]?.[1] : undefined;
-  if (query.length === 1 && !gatewayUrl?.trim()) {
+  const gatewayUrl = gatewayEntries[0]?.[1];
+  if ((gatewayEntries.length === 1 && !gatewayUrl?.trim()) || profileEntries[0]?.[1] === "") {
     return null;
   }
-  parsed.search = "";
+  parsed.searchParams.delete("gateway");
+  parsed.searchParams.sort();
   return validatePairingFields(parsed.toString(), token, gatewayUrl);
 }
 
@@ -156,6 +175,7 @@ function parseStoredPairing(stored) {
   const parsed = validatePairingFields(stored.relayUrl, stored.token, stored.gatewayUrl);
   if (
     !parsed ||
+    (stored.authVersion !== undefined && stored.authVersion !== 2) ||
     parsed.relayUrl !== stored.relayUrl ||
     parsed.token !== stored.token ||
     (parsed.gatewayUrl ?? "") !== (stored.gatewayUrl ?? "")
@@ -192,11 +212,15 @@ export function createPairingConfigStore(storage) {
           await storage.remove(PAIRING_STORAGE_KEYS).catch(() => undefined);
         } else {
           invalidObserved = false;
+          if (pairing && stored.authVersion === undefined) {
+            await storage.set({ authVersion: 2 });
+          }
         }
         return {
           relayUrl: pairing?.relayUrl ?? "",
           token: pairing?.token ?? "",
           gatewayUrl: pairing?.gatewayUrl ?? "",
+          authVersion: pairing ? 2 : undefined,
           groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
         };
       }),
@@ -206,6 +230,7 @@ export function createPairingConfigStore(storage) {
           relayUrl: pairing.relayUrl,
           token: pairing.token,
           gatewayUrl: pairing.gatewayUrl ?? "",
+          authVersion: 2,
           groupColor,
         }),
       ),
@@ -213,9 +238,9 @@ export function createPairingConfigStore(storage) {
   };
 }
 
-/** Build WebSocket subprotocols without putting the relay secret in the request URL. */
-export function buildRelayWsProtocols(token) {
-  return [EXTENSION_RELAY_PROTOCOL, `${EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX}${token}`];
+/** Build the v2 WebSocket subprotocol list; credentials stay in WebCrypto only. */
+export function buildRelayWsProtocols() {
+  return [EXTENSION_RELAY_PROTOCOL];
 }
 
 /** Exponential reconnect backoff: 1s, 2s, 4s ... capped at 30s. */
