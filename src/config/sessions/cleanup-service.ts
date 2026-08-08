@@ -44,6 +44,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import {
+  resolveConfiguredSessionStoreTargets,
   resolveSessionStoreCompatibilityAgentId,
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -503,11 +504,12 @@ export async function runSessionsCleanup(params: {
     });
 
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
+  const configuredTargets = opts.store ? targets : resolveConfiguredSessionStoreTargets(cfg);
   const archiveCleanupCoordinator = new SessionArchiveCleanupPreviewCoordinator({
-    selectedTargets: targets,
+    selectedTargets: opts.allAgents ? configuredTargets : targets,
     // An explicit store is the documented offline-repair scope and owns its directory.
     // Agent-scoped cleanup must account for every configured owner of a shared directory.
-    knownTargets: opts.store ? targets : resolveSessionStoreTargets(cfg, { allAgents: true }),
+    knownTargets: configuredTargets,
   });
   for (const target of targets) {
     const result = await previewStoreCleanup({

@@ -75,6 +75,18 @@ export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[
   return [...ids];
 }
 
+/** Resolves every configured logical owner without deduplicating shared physical stores. */
+export function resolveConfiguredSessionStoreTargets(
+  cfg: OpenClawConfig,
+  params: { env?: NodeJS.ProcessEnv } = {},
+): SessionStoreTarget[] {
+  const env = params.env ?? process.env;
+  return listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
+    agentId,
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
+  }));
+}
+
 /** Lists configured owners plus persisted owners whose registered DB still matches this store. */
 export function listKnownSessionStoreAgentIds(
   cfg: OpenClawConfig,
@@ -670,10 +682,7 @@ export function resolveSessionStoreTargets(
 
   if (allAgents) {
     const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
-    const targets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
-      agentId,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
-    }));
+    const targets = resolveConfiguredSessionStoreTargets(cfg, { env });
     return dedupeSessionStoreTargetsBySqliteTarget(targets, {
       defaultAgentId,
       env,
