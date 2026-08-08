@@ -991,7 +991,7 @@ NODE
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
     const mkdirParentIndex = script.indexOf('mkdir -p "$(dirname "$repo_dir")"');
     const cloneIndex = script.indexOf(
-      'run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"',
+      'run_quiet_step "Cloning OpenClaw" git clone -- "$repo_url" "$repo_dir"',
     );
     expect(mkdirParentIndex).toBeGreaterThan(-1);
     expect(cloneIndex).toBeGreaterThan(-1);
