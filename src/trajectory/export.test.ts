@@ -671,22 +671,28 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts).not.toHaveProperty("lastToolError");
   });
 
-  it("exports session.ended after earlier completion rows are trimmed", async () => {
+  it("bounds a reused-run partial tail at its authoritative terminal", async () => {
     const artifacts = await exportRuntimeArtifacts(
       runtimeAttemptEvents([
-        ["model.completed", "old-run", staleCompletion],
-        ["trace.artifacts", "old-run", staleArtifacts],
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error", startedAt: 100 }],
+        ["model.completed", "shared-run", currentCompletion],
         [
           "session.ended",
-          "partial-run",
+          "shared-run",
           { status: "interrupted", stopReason: "aborted", startedAt: 200 },
         ],
-        ["session.ended", "old-run", { status: "error", stopReason: "length", startedAt: 100 }],
+        ["session.ended", "shared-run", { status: "error", stopReason: "length", startedAt: 100 }],
       ]),
     );
 
-    expect(artifacts).toMatchObject({ finalStatus: "interrupted", stopReason: "aborted" });
-    expect(artifacts).not.toHaveProperty("usage");
+    expect(artifacts).toMatchObject({
+      finalStatus: "interrupted",
+      stopReason: "aborted",
+      usage: { totalTokens: 2 },
+      assistantTexts: ["current completion"],
+    });
     expect(artifacts).not.toHaveProperty("itemLifecycle");
   });
 

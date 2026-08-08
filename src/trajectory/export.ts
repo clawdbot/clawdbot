@@ -1092,9 +1092,18 @@ function buildArtifactsCapture(params: {
     params.runtimeEvents[cohortStart]?.runId ??
     latestTimedEnd?.runId ??
     params.runtimeEvents.at(-1)?.runId;
+  const cohortEnd = latestTimedEnd
+    ? params.runtimeEvents.lastIndexOf(latestTimedEnd) + 1
+    : params.runtimeEvents.length;
+  const partialStart = latestTimedEnd
+    ? params.runtimeEvents.findLastIndex(
+        (event, index) =>
+          index < cohortEnd - 1 && event.type === "session.ended" && event.runId === cohortRunId,
+      ) + 1
+    : cohortStart;
   // The newest start, or latest authoritative terminal in a partial tail, owns the cohort.
   const cohort = params.runtimeEvents
-    .slice(Math.max(0, cohortStart))
+    .slice(Math.max(0, partialStart), cohortEnd)
     .filter((event) => cohortRunId === undefined || event.runId === cohortRunId);
   const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
   const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
