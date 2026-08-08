@@ -88,6 +88,7 @@ interface EmbeddedGatewayRuntime {
   };
   resolveSessionKeyFromResolveParams: (opts: {
     cfg: OpenClawConfig;
+    client: null;
     p: SessionsResolveParams;
   }) => Promise<SessionsResolveResult>;
   loadSessionEntry: (
@@ -215,6 +216,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   const cfg = rt.getRuntimeConfig();
   const resolved = await rt.resolveSessionKeyFromResolveParams({
     cfg,
+    client: null,
     p: params as SessionsResolveParams,
   });
   if (!resolved.ok) {

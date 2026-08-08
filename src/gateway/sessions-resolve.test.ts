@@ -32,7 +32,14 @@ vi.mock("./session-utils.js", async () => {
   };
 });
 
-const { resolveSessionKeyFromResolveParams } = await import("./sessions-resolve.js");
+const { resolveSessionKeyFromResolveParams: resolveSessionKeyFromResolveParamsWithClient } =
+  await import("./sessions-resolve.js");
+
+type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
+
+const resolveSessionKeyFromResolveParams = (
+  params: Omit<ResolveParams, "client"> & { client?: ResolveParams["client"] },
+) => resolveSessionKeyFromResolveParamsWithClient({ client: null, ...params });
 
 describe("resolveSessionKeyFromResolveParams", () => {
   const canonicalKey = "agent:main:canon";

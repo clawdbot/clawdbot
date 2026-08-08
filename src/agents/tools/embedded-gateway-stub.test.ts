@@ -113,6 +113,7 @@ describe("embedded gateway stub", () => {
     expect(result).toEqual({ ok: true, key: "agent:main:main" });
     expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },
+      client: null,
       p: { sessionId: "sess-main", includeGlobal: true },
     });
   });

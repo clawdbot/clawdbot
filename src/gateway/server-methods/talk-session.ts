@@ -193,7 +193,6 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-
     try {
       if (transport === "managed-room") {
         if (brain === "direct-tools" && !canUseTalkDirectTools(client)) {
@@ -217,6 +216,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         }
         const resolvedSession = await resolveSessionKeyFromResolveParams({
           cfg: context.getRuntimeConfig(),
+          client,
           p: {
             key: params.sessionKey,
             ...(spawnedBy ? { spawnedBy } : {}),
@@ -337,14 +337,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           connId,
           relaySessionId: session.relaySessionId,
         });
-        respondOk(respond, {
+        return respondOk(respond, {
           ...session,
           sessionId: session.relaySessionId,
           voiceSessionId: session.relaySessionId,
           mode,
           brain,
         });
-        return;
       }
 
       if (mode === "transcription") {

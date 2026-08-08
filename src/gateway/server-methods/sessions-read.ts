@@ -646,14 +646,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "sessions.resolve": async ({ params, respond, context }) => {
+  "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
 
-    const resolved = await resolveSessionKeyFromResolveParams({ cfg, p });
+    const resolved = await resolveSessionKeyFromResolveParams({ cfg, client, p });
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;

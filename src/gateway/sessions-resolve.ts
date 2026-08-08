@@ -18,6 +18,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
 import {
   buildGatewaySessionInfo,
   filterAndSortSessionEntries,
@@ -96,6 +98,7 @@ function findVisibleSessionIdMatches(params: {
   store: Record<string, SessionEntry>;
   p: SessionsResolveParams;
   sessionId: string;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
 }): Array<[string, SessionEntry]> {
   const now = Date.now();
   const entries = filterAndSortSessionEntries({
@@ -105,7 +108,9 @@ function findVisibleSessionIdMatches(params: {
     opts: resolveSessionVisibilityFilterOptions(params.p),
   });
   return entries.filter(
-    ([key, entry]) => entry?.sessionId === params.sessionId || key === params.sessionId,
+    ([key, entry]) =>
+      (params.entryFilter?.(key, entry) ?? true) &&
+      (entry?.sessionId === params.sessionId || key === params.sessionId),
   );
 }
 
@@ -119,6 +124,7 @@ function findVisibleShortIdMatches(params: {
   store: Record<string, SessionEntry>;
   p: SessionsResolveParams;
   shortId: string;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
 }): SessionsResolveCandidate[] {
   const now = Date.now();
   const entries = filterAndSortSessionEntries({
@@ -128,6 +134,9 @@ function findVisibleShortIdMatches(params: {
     opts: { ...resolveSessionVisibilityFilterOptions(params.p), archived: "all" },
   });
   return entries.flatMap(([key, entry]) => {
+    if (params.entryFilter && !params.entryFilter(key, entry)) {
+      return [];
+    }
     const uuid = parseAgentSessionKey(key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
     if (!uuid?.toLowerCase().replaceAll("-", "").startsWith(params.shortId)) {
       return [];
@@ -149,9 +158,11 @@ function findVisibleShortIdMatches(params: {
 
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
+  client: GatewayClient | null;
   p: SessionsResolveParams;
 }): Promise<SessionsResolveResult> {
-  const { cfg, p } = params;
+  const { cfg, client, p } = params;
+  const entryFilter = createSessionListEntryFilter({ client });
 
   const key = normalizeOptionalString(p.key) ?? "";
   const hasKey = key.length > 0;
@@ -188,6 +199,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
+    // Exact-key lookup follows the proof-of-knowledge read semantics of get/describe/history;
+    // only discovery selectors use list visibility. Incognito keys are gated pre-dispatch.
     const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
     const store = target.store;
     if (store[target.canonicalKey]) {
@@ -219,7 +232,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     // sessionId can collide across stores; delegate selection so exact key
     // matches and ambiguity rules stay shared with other session-id callers.
     const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
+    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId, entryFilter });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
@@ -258,7 +271,14 @@ export async function resolveSessionKeyFromResolveParams(params: {
       };
     }
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const matches = findVisibleShortIdMatches({ cfg, storePath, store, p, shortId });
+    const matches = findVisibleShortIdMatches({
+      cfg,
+      storePath,
+      store,
+      p,
+      shortId,
+      entryFilter,
+    });
     const slugHint = normalizeOptionalString(p.slugHint);
     const slugMatches = slugHint
       ? matches.filter((candidate) => controlUiSessionSlug(candidate.displayName) === slugHint)
@@ -287,6 +307,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
+    ...(entryFilter ? { entryFilter } : {}),
     storePath,
     store,
     lightweightListRows: true,
