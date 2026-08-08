@@ -1214,19 +1214,6 @@ export async function performGatewaySessionReset(params: {
         return;
       }
       preparedResetSessionId = normalizeOptionalString(currentEntry?.sessionId);
-      const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
-        action: "reset",
-        context: workerPlacementContext,
-        key: params.key,
-        sessionId: preparedResetSessionId,
-      });
-      if (placementRetirementError) {
-        resetPreparationError = errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          placementRetirementError.message,
-        );
-        return;
-      }
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1247,6 +1234,8 @@ export async function performGatewaySessionReset(params: {
           ),
         };
       }
+      params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       const { entry, legacyKey, canonicalKey } = loadSessionEntry(
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
@@ -1301,9 +1290,21 @@ export async function performGatewaySessionReset(params: {
           error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
         };
       }
-      // Placement retirement happened before work interruption. A later hook, cleanup,
-      // or session-write failure leaves the session retryable, and local admission can
-      // recreate placement.
+      // Drain first so a legitimate local turn can release its claim. Retire only
+      // after every non-destructive guard is rechecked; a placement race must abort
+      // before hooks, runtime cleanup, or session mutation begins.
+      const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
+        action: "reset",
+        context: workerPlacementContext,
+        key: params.key,
+        sessionId: normalizeOptionalString(entry?.sessionId),
+      });
+      if (placementRetirementError) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, placementRetirementError.message),
+        };
+      }
       const hadExistingEntry = Boolean(entry);
       const resetLifecycleRevision = entry?.lifecycleRevision;
       const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
@@ -1330,8 +1331,6 @@ export async function performGatewaySessionReset(params: {
           workspaceDir,
         },
       );
-      params.assertCurrent?.();
-      params.assertAuthorizedInstance?.();
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();

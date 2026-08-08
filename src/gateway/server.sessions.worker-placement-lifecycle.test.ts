@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -18,6 +19,7 @@ import type { WorkerSessionPlacementReader } from "./worker-environments/placeme
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementRetirementService,
+  WorkerSessionPlacementStore,
 } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
@@ -135,6 +137,46 @@ function sequencedPlacementService(
   };
 }
 
+async function beginClaimedLocalTurn(params: {
+  events: string[];
+  onInterrupt?: () => void;
+  placementStore: WorkerSessionPlacementStore;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<() => void> {
+  const claim = params.placementStore.claimTurn({
+    sessionId: params.sessionId,
+    agentId: "main",
+    sessionKey: params.sessionKey,
+    owner: { kind: "local" },
+    claimId: `${params.sessionId}-claim`,
+    runId: `${params.sessionId}-run`,
+  });
+  let claimReleased = false;
+  let releaseAdmission = () => {};
+  const admission = await beginSessionWorkAdmission({
+    scope: params.storePath,
+    identities: [params.sessionKey, params.sessionId],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      params.events.push("admission:interrupt");
+      params.onInterrupt?.();
+      params.placementStore.releaseTurn(claim);
+      claimReleased = true;
+      params.events.push("claim:released");
+      releaseAdmission();
+    },
+  });
+  releaseAdmission = admission.release;
+  return () => {
+    if (!claimReleased) {
+      params.placementStore.releaseTurn(claim);
+    }
+    admission.release();
+  };
+}
+
 test("sessions.reset rechecks worker placement inside the lifecycle fence", async () => {
   await seedActiveMainSession();
   const placementService = sequencedPlacementService([
@@ -185,6 +227,48 @@ test("sessions.delete rechecks worker placement before destructive cleanup", asy
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
+});
+
+test("sessions.delete drains an active local claim before placement retirement", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "discord:group:active-local-delete";
+  const sessionId = "sess-active-local-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+  const events: string[] = [];
+  const cleanupAdmission = await beginClaimedLocalTurn({
+    events,
+    placementStore,
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  try {
+    const deleted = await directSessionReq(
+      "sessions.delete",
+      { key: sessionKey },
+      {
+        context: {
+          workerSessionPlacementService: {
+            getMany: placementStore.getMany,
+            retireSessionPlacement: (retirement) => {
+              expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
+              events.push("placement:retire");
+              placementStore.retireSessionPlacement(retirement);
+            },
+          },
+        },
+      },
+    );
+
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(events).toEqual(["admission:interrupt", "claim:released", "placement:retire"]);
+    expect(placementStore.get(sessionId)).toBeUndefined();
+    expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
+  } finally {
+    cleanupAdmission();
+  }
 });
 
 test("sessions.delete rejects failed placement while its worker lease remains", async () => {
@@ -303,26 +387,171 @@ test("sessions.delete leaves the session intact when placement retirement fails"
     storePath,
   });
   embeddedRunMock.activeIds.add(sessionId);
-  const placement = placementRecord(sessionId, "local");
-  const placementService = sequencedPlacementService([placement], () => {
-    expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-    throw new Error("placement generation changed before retirement");
+  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+  const events: string[] = [];
+  const cleanupAdmission = await beginClaimedLocalTurn({
+    events,
+    placementStore,
+    sessionId,
+    sessionKey,
+    storePath,
   });
+  const placementService = {
+    getMany: placementStore.getMany,
+    retireSessionPlacement: (
+      retirement: Parameters<typeof placementStore.retireSessionPlacement>[0],
+    ) => {
+      expect(events).toEqual(["admission:interrupt", "claim:released"]);
+      expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+      placementStore.startDispatch({ sessionId, agentId: "main", sessionKey });
+      placementStore.retireSessionPlacement(retirement);
+    },
+  };
 
-  await expect(
-    directSessionReq(
-      "sessions.delete",
-      { key: sessionKey },
-      { context: { workerSessionPlacementService: placementService } },
-    ),
-  ).rejects.toThrow("placement generation changed before retirement");
-  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  expect(await loadSeededTranscriptEvents({ sessionId, sessionKey, storePath })).toEqual(
-    transcriptBefore,
-  );
-  expect(placementService.getMany([sessionId]).get(sessionId)).toEqual(placement);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).not.toHaveBeenCalled();
+  try {
+    await expect(
+      directSessionReq(
+        "sessions.delete",
+        { key: sessionKey },
+        { context: { workerSessionPlacementService: placementService } },
+      ),
+    ).rejects.toThrow(`Worker session placement ${sessionId} changed before retirement`);
+    expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+    expect(await loadSeededTranscriptEvents({ sessionId, sessionKey, storePath })).toEqual(
+      transcriptBefore,
+    );
+    expect(events).toEqual(["admission:interrupt", "claim:released"]);
+    expect(placementStore.get(sessionId)).toMatchObject({ state: "requested", turnClaim: null });
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).not.toHaveBeenCalled();
+  } finally {
+    cleanupAdmission();
+  }
+});
+
+test.each([
+  {
+    name: "ordinary reset",
+    sessionKey: "discord:group:active-local-reset",
+    incognito: false,
+  },
+  {
+    name: "incognito reset",
+    sessionKey: "agent:main:dashboard:incognito-active-local-reset",
+    incognito: true,
+  },
+])(
+  "sessions.reset drains an active local claim before $name placement retirement",
+  async (testCase) => {
+    await createSessionStoreDir();
+    const sessionId = testCase.incognito
+      ? await (async () => {
+          const created = await directSessionReq<{ sessionId?: string }>("sessions.create", {
+            agentId: "main",
+            key: testCase.sessionKey,
+            incognito: true,
+          });
+          if (!created.ok || !created.payload?.sessionId) {
+            throw new Error(`incognito setup failed: ${JSON.stringify(created.error)}`);
+          }
+          return created.payload.sessionId;
+        })()
+      : "sess-active-local-reset";
+    if (!testCase.incognito) {
+      await writeSessionStore({
+        entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
+      });
+    }
+    const storePath = loadSessionEntry(testCase.sessionKey).storePath;
+    const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+    const events: string[] = [];
+    const cleanupAdmission = await beginClaimedLocalTurn({
+      events,
+      placementStore,
+      sessionId,
+      sessionKey: testCase.sessionKey,
+      storePath,
+    });
+
+    try {
+      const reset = await directSessionReq(
+        "sessions.reset",
+        { key: testCase.sessionKey },
+        {
+          context: {
+            workerSessionPlacementService: {
+              getMany: placementStore.getMany,
+              retireSessionPlacement: (retirement) => {
+                expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
+                events.push("placement:retire");
+                placementStore.retireSessionPlacement(retirement);
+              },
+            },
+          },
+        },
+      );
+
+      expect(reset.ok).toBe(true);
+      expect(events).toEqual(["admission:interrupt", "claim:released", "placement:retire"]);
+      expect(placementStore.get(sessionId)).toBeUndefined();
+      expect(loadSessionEntry(testCase.sessionKey).entry === undefined).toBe(testCase.incognito);
+    } finally {
+      cleanupAdmission();
+    }
+  },
+);
+
+test("sessions.reset rechecks lifecycle ownership after draining before placement retirement", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "discord:group:revoked-during-reset-drain";
+  const sessionId = "sess-revoked-during-reset-drain";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const storePath = loadSessionEntry(sessionKey).storePath;
+  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+  const events: string[] = [];
+  let lifecycleCurrent = true;
+  const cleanupAdmission = await beginClaimedLocalTurn({
+    events,
+    onInterrupt: () => {
+      lifecycleCurrent = false;
+    },
+    placementStore,
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+  const retireSessionPlacement = vi.fn(placementStore.retireSessionPlacement);
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  try {
+    await expect(
+      performGatewaySessionReset({
+        key: sessionKey,
+        reason: "reset",
+        commandSource: "gateway:agent",
+        workerPlacementContext: {
+          workerSessionPlacementService: {
+            getMany: placementStore.getMany,
+            retireSessionPlacement,
+          },
+        },
+        assertCurrent: () => {
+          if (!lifecycleCurrent) {
+            throw new Error("stale lifecycle after drain");
+          }
+        },
+      }),
+    ).rejects.toThrow("stale lifecycle after drain");
+    expect(events).toEqual(["admission:interrupt", "claim:released"]);
+    expect(retireSessionPlacement).not.toHaveBeenCalled();
+    expect(placementStore.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
+    expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).not.toHaveBeenCalled();
+  } finally {
+    cleanupAdmission();
+  }
 });
 
 test.each([

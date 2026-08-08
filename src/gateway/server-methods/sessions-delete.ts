@@ -264,17 +264,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return;
         }
         preparedDeleteSessionId = normalizeOptionalString(preparedEntry?.sessionId);
-        const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
-          action: "delete",
-          context,
-          key,
-          sessionId: preparedDeleteSessionId,
-        });
-        if (placementRetirementError) {
-          deleteBlockedByWorkerPlacement = true;
-          respondSessionWorkerPlacementMutationError(placementRetirementError, respond);
-          return;
-        }
         admittedWorkReleased = await interruptSessionWorkAdmissions({
           scope: storePath,
           identities: deleteLifecycleIdentities,
@@ -336,9 +325,19 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         ) {
           return undefined;
         }
-        // Placement retirement happened before work interruption. If later cleanup or
-        // the session write fails, the intact session remains retryable and local
-        // admission can recreate its placement.
+        // Drain first so a legitimate local turn can release its claim. Retire only
+        // after every non-destructive guard is rechecked; a placement race must abort
+        // before runtime cleanup or session mutation begins.
+        const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
+          action: "delete",
+          context,
+          key,
+          sessionId: normalizeOptionalString(entry?.sessionId),
+        });
+        if (placementRetirementError) {
+          respondSessionWorkerPlacementMutationError(placementRetirementError, respond);
+          return undefined;
+        }
         let abortResult:
           | {
               ok: boolean;
