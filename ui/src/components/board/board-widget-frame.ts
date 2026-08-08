@@ -137,7 +137,8 @@ export class BoardWidgetFrameLifecycle {
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
   private lastFrameUrl = "";
-  private listening = false;
+  private messageListening = false;
+  private visibilityListening = false;
   private sandboxOrigin = "";
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
@@ -148,16 +149,22 @@ export class BoardWidgetFrameLifecycle {
   constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
 
   connect(): void {
-    if (!this.host.active() || this.listening) {
-      return;
+    if (!this.messageListening) {
+      window.addEventListener("message", this.handleWindowMessage);
+      this.messageListening = true;
     }
-    window.addEventListener("message", this.handleWindowMessage);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    this.listening = true;
+    if (this.host.active() && !this.visibilityListening) {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.visibilityListening = true;
+    }
   }
 
   disconnect(): void {
     this.stopWork();
+    if (this.messageListening) {
+      window.removeEventListener("message", this.handleWindowMessage);
+      this.messageListening = false;
+    }
     this.sandboxHost?.dispose();
     this.sandboxHost = null;
   }
@@ -168,10 +175,9 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private stopWork(): void {
-    if (this.listening) {
-      window.removeEventListener("message", this.handleWindowMessage);
+    if (this.visibilityListening) {
       document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-      this.listening = false;
+      this.visibilityListening = false;
     }
     this.ticketRefresh.reset();
   }
@@ -439,11 +445,17 @@ export class BoardWidgetFrameLifecycle {
   };
 
   private handleWindowMessage = (event: MessageEvent): void => {
-    if (!this.host.connected() || !this.host.active()) {
+    if (!this.host.connected()) {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
     const widget = this.host.widget();
+    if (!this.host.active()) {
+      if (frame && event.source === frame.contentWindow && event.origin === this.sandboxOrigin) {
+        this.sandboxHost?.handleMessage(event);
+      }
+      return;
+    }
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (
       frame &&
