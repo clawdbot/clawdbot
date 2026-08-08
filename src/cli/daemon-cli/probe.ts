@@ -27,13 +27,15 @@ async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/pr
   return await probeGatewayModuleLoader.load();
 }
 
+function formatProbeCloseFailure(close: { code: number; reason: string }): string {
+  return `gateway closed (${close.code}): ${close.reason}`;
+}
+
 function resolveProbeFailureMessage(result: {
   error?: string | null;
   close?: { code: number; reason: string } | null;
 }): string {
-  const closeHint = result.close
-    ? `gateway closed (${result.close.code}): ${result.close.reason}`
-    : null;
+  const closeHint = result.close ? formatProbeCloseFailure(result.close) : null;
   if (closeHint && (!result.error || result.error === "timeout")) {
     return closeHint;
   }
@@ -44,7 +46,11 @@ function resolveGatewayStatusProbeDetails(result: GatewayStatusProbeResult) {
   return "authProbe" in result ? result.authProbe : result;
 }
 
-function projectGatewayConnectFailure(params: { details?: unknown; message: string }) {
+function projectGatewayConnectFailure(params: {
+  details?: unknown;
+  message: string;
+  reason?: string;
+}) {
   // Daemon status is serialized for diagnostics, so raw gateway details must
   // stop here; only closed classification facts may cross this boundary.
   const failure = classifyGatewayConnectFailure(params);
@@ -159,6 +165,7 @@ export async function probeGatewayStatus(opts: {
       connectFailure: projectGatewayConnectFailure({
         details: probeDetails?.connectErrorDetails,
         message: error,
+        ...(probeDetails?.close ? { reason: formatProbeCloseFailure(probeDetails.close) } : {}),
       }),
       // Probe failure text can echo the credential-bearing target URL (close
       // reasons, transport errors); status renderers print it verbatim.

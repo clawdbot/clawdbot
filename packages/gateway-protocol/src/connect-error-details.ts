@@ -494,17 +494,23 @@ export function classifyGatewayConnectFailure(input: {
   message?: string | null;
 }) {
   const code = readConnectErrorDetailCode(input.details);
-  const message = normalizeOptionalString(input.message) ?? normalizeOptionalString(input.reason);
-  const normalized = message?.toLowerCase() ?? "";
+  const message = normalizeOptionalString(input.message);
+  const reason = normalizeOptionalString(input.reason);
+  const userMessage = message ?? reason;
+  const classificationText = [message, reason]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  const normalized = classificationText.toLowerCase();
   const pairing =
-    readPairingConnectErrorDetails(input.details) ?? readConnectPairingRequiredMessage(message);
+    readPairingConnectErrorDetails(input.details) ??
+    readConnectPairingRequiredMessage(classificationText);
   if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED || pairing) {
     return {
       kind: "pairing-required" as const,
       userMessage:
         code === ConnectErrorDetailCodes.PAIRING_REQUIRED
           ? formatConnectPairingRequiredMessage(input.details)
-          : (message ?? "device pairing required"),
+          : (userMessage ?? "device pairing required"),
       remediation: PAIRING_APPROVAL_REMEDIATION,
     };
   }
@@ -531,7 +537,7 @@ export function classifyGatewayConnectFailure(input: {
       ? ("scope-mismatch" as const)
       : authRejected
         ? ("auth-rejected" as const)
-        : code || (message && GATEWAY_CLOSED_MESSAGE_PATTERN.test(message))
+        : code || GATEWAY_CLOSED_MESSAGE_PATTERN.test(classificationText)
           ? ("gateway-rejected" as const)
           : ("unreachable" as const);
   const remediation = scopeMismatch
@@ -544,7 +550,8 @@ export function classifyGatewayConnectFailure(input: {
   return {
     kind,
     userMessage:
-      message ?? (kind === "unreachable" ? "gateway unreachable" : "gateway rejected connection"),
+      userMessage ??
+      (kind === "unreachable" ? "gateway unreachable" : "gateway rejected connection"),
     ...(remediation ? { remediation } : {}),
   };
 }

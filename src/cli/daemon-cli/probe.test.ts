@@ -137,6 +137,28 @@ describe("probeGatewayStatus", () => {
     expect(json).not.toContain("scope-upgrade");
   });
 
+  it("classifies a legacy pairing close when the probe error is generic", async () => {
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "connect failed",
+      close: { code: 1008, reason: "pairing required" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failed gateway probe");
+    }
+    expect(result.error).toBe("connect failed");
+    expect(result.connectFailure).toEqual({ kind: "pairing-required" });
+    expect(gatewayProbeResultSawGateway(result)).toBe(true);
+  });
+
   it("omits unknown detail codes from serialized daemon status", async () => {
     probeGatewayMock.mockResolvedValueOnce({
       ok: false,
