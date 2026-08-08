@@ -9,6 +9,12 @@ import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript
 const SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS = 200;
 const SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 const SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT = 100;
+// Liveness bound for pathological providers: the item and byte caps only
+// advance on retained items, so a provider that keeps answering with empty
+// (or non-importable) pages and a fresh cursor would paginate forever. Count
+// only consecutive empty pages so honest short-page providers (e.g. one item
+// per page) still import their full history.
+const SESSION_CATALOG_HISTORY_IMPORT_MAX_EMPTY_PAGES = 50;
 
 function importedSessionCatalogMessage(params: {
   catalogId: string;
@@ -105,6 +111,7 @@ async function readBoundedSessionCatalogHistory(params: {
   let cursor: string | undefined;
   let itemCount = 0;
   let bytes = 0;
+  let emptyPageCount = 0;
   while (itemCount < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS) {
     const page = await params.read({
       limit: Math.min(
@@ -148,6 +155,14 @@ async function readBoundedSessionCatalogHistory(params: {
     pages.push(retained);
     if (!page.nextCursor || page.nextCursor === cursor) {
       break;
+    }
+    if (retained.length === 0) {
+      emptyPageCount += 1;
+      if (emptyPageCount >= SESSION_CATALOG_HISTORY_IMPORT_MAX_EMPTY_PAGES) {
+        break;
+      }
+    } else {
+      emptyPageCount = 0;
     }
     cursor = page.nextCursor;
   }

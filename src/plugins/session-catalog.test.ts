@@ -203,6 +203,41 @@ describe("importSessionCatalogHistory", () => {
     expect(transcript.messages.map(messageText)).toEqual(["visible answer"]);
   });
 
+  it("stops paginating when every page is empty but the cursor keeps advancing", async () => {
+    let cursor = 0;
+    const read = vi.fn<Parameters<typeof importSessionCatalogHistory>[0]["read"]>(async () => {
+      cursor += 1;
+      return {
+        hostId: "gateway",
+        threadId: "thread-1",
+        items: [],
+        nextCursor: `page-${String(cursor)}`,
+      };
+    });
+
+    await importHistory([], { read }).result;
+
+    expect(read).toHaveBeenCalledTimes(50);
+    expect(transcript.messages).toEqual([]);
+  });
+
+  it("imports a full 200-item history served one item per page", async () => {
+    // Short pages are valid in the catalog contract: the liveness bound must
+    // count consecutive empty pages, never total pages.
+    const items = Array.from({ length: 200 }, (_, index) => ({
+      id: `m-${String(index)}`,
+      type: "userMessage" as const,
+      text: `message ${String(index)}`,
+    }));
+
+    const { read, result } = importHistory(items, { maxPageSize: 1 });
+    await result;
+
+    expect(read).toHaveBeenCalledTimes(200);
+    expect(transcript.messages).toHaveLength(200);
+    expect(transcript.messages.map(messageText)).toEqual(items.map((item) => item.text));
+  });
+
   it("does not open the transcript write lock when a paged read fails", async () => {
     const read = vi
       .fn<Parameters<typeof importSessionCatalogHistory>[0]["read"]>()
