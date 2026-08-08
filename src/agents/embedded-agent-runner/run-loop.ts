@@ -45,6 +45,7 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
 } from "./run/incomplete-turn.js";
+import { createMemoryPersistenceOutcomeState } from "./run/memory-persistence-outcome-state.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import {
   beginRunAttempt,
@@ -221,6 +222,7 @@ export async function runPreparedEmbeddedLoop(
   const readAttemptTerminalToolPresentation = (): string | undefined =>
     attemptTerminalToolPresentation.value;
   const turnTaintState = createAgentTurnTaintState();
+  const memoryPersistenceState = createMemoryPersistenceOutcomeState();
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     const observationOrdinal =
       observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
@@ -229,6 +231,7 @@ export async function runPreparedEmbeddedLoop(
       attemptTerminalToolPresentation.value = observation.terminalPresentation;
     }
     turnTaintState.observe(observation);
+    memoryPersistenceState.observe(observation);
     if (observation.presentationOnly) {
       return;
     }
@@ -541,6 +544,7 @@ export async function runPreparedEmbeddedLoop(
           usageAccumulator,
           contextRecoveryState,
           resolvedToolResultFormat,
+          unconfirmedMemoryPersistenceCount: memoryPersistenceState.summary()?.unconfirmedCount,
         },
         lastRunPromptUsage,
         finalization: {

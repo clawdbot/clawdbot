@@ -315,50 +315,70 @@ export function wrapToolWithBeforeToolCallHook(
         paramsSummary: summarizeToolParams(toolParams),
         mutatingAction: buildToolMutationState(normalizedToolName, toolParams).mutatingAction,
       });
-      const recordPreExecutionError = (
+      const recordPreExecutionError = async (
         error: unknown,
         toolParams: unknown,
         errorCategory?: string,
-      ) => {
+      ): Promise<void> => {
         recordPreExecutionBlockedToolCall(toolCallId, ctx?.runId);
-        if (!hookOptions.emitDiagnostics) {
-          return;
+        if (hookOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.error",
+            ...buildEventBase(toolParams),
+            durationMs: Date.now() - preExecutionStartedAt,
+            ...resolveToolErrorDiagnostic(error, signal, errorCategory),
+          });
         }
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.error",
-          ...buildEventBase(toolParams),
-          durationMs: Date.now() - preExecutionStartedAt,
-          ...resolveToolErrorDiagnostic(error, signal, errorCategory),
-        });
+        if (tool.memoryPersistenceReceiptVersion === 1) {
+          await recordLoopOutcome({
+            ctx,
+            toolName: normalizedToolName,
+            memoryPersistenceReceiptVersion: 1,
+            toolParams,
+            toolCallId,
+            error,
+            toolCallOrdinal,
+          });
+        }
       };
-      const recordPreExecutionDisposition = (
+      const recordPreExecutionDisposition = async (
         toolParams: unknown,
         disposition: BeforeToolCallFailureDisposition,
         errorCategory: string,
         deniedReason?: HookBlockedReason,
-      ) => {
+      ): Promise<void> => {
         recordPreExecutionBlockedToolCall(toolCallId, ctx?.runId);
-        if (!hookOptions.emitDiagnostics) {
-          return;
+        if (hookOptions.emitDiagnostics) {
+          const eventBase = buildEventBase(toolParams);
+          if (disposition === "blocked") {
+            const reason = deniedReason ?? "plugin-before-tool-call";
+            emitTrustedDiagnosticEvent({
+              type: "tool.execution.blocked",
+              ...eventBase,
+              deniedReason: reason,
+              reason,
+            });
+          } else {
+            emitTrustedDiagnosticEvent({
+              type: "tool.execution.error",
+              ...eventBase,
+              durationMs: Date.now() - preExecutionStartedAt,
+              errorCategory: disposition === "cancelled" ? "aborted" : errorCategory,
+              terminalReason: disposition,
+            });
+          }
         }
-        const eventBase = buildEventBase(toolParams);
-        if (disposition === "blocked") {
-          const reason = deniedReason ?? "plugin-before-tool-call";
-          emitTrustedDiagnosticEvent({
-            type: "tool.execution.blocked",
-            ...eventBase,
-            deniedReason: reason,
-            reason,
+        if (tool.memoryPersistenceReceiptVersion === 1) {
+          await recordLoopOutcome({
+            ctx,
+            toolName: normalizedToolName,
+            memoryPersistenceReceiptVersion: 1,
+            toolParams,
+            toolCallId,
+            error: new Error("memory_store execution was prevented"),
+            toolCallOrdinal,
           });
-          return;
         }
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.error",
-          ...eventBase,
-          durationMs: Date.now() - preExecutionStartedAt,
-          errorCategory: disposition === "cancelled" ? "aborted" : errorCategory,
-          terminalReason: disposition,
-        });
       };
       const blockToolCall = async (blockedCall: {
         reason: string;
@@ -391,6 +411,7 @@ export function wrapToolWithBeforeToolCallHook(
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
+          memoryPersistenceReceiptVersion: tool.memoryPersistenceReceiptVersion,
           toolParams: blockedCall.toolParams,
           toolCallId,
           result: blockedResult,
@@ -408,7 +429,7 @@ export function wrapToolWithBeforeToolCallHook(
           signal,
         });
       } catch (error) {
-        recordPreExecutionError(error, params, "tool_preparation");
+        await recordPreExecutionError(error, params, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
       }
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
@@ -425,12 +446,12 @@ export function wrapToolWithBeforeToolCallHook(
           approvalMode: hookOptions.approvalMode,
         });
       } catch (error) {
-        recordPreExecutionError(error, hookParams, "before_tool_call");
+        await recordPreExecutionError(error, hookParams, "before_tool_call");
         throw tagBeforeToolCallFailure(error, signal);
       }
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
-          recordPreExecutionDisposition(
+          await recordPreExecutionDisposition(
             outcome.params ?? hookParams,
             outcome.disposition,
             outcome.deniedReason === "plugin-approval" ? "plugin_approval" : "before_tool_call",
@@ -465,13 +486,24 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
         });
       } catch (error) {
-        recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
+        await recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
       }
       let onImplementationStart: (() => void) | undefined;
       if (prepareControl) {
         const decision = await prepareControl.pause(executeParams);
         if (!decision.launch) {
+          if (tool.memoryPersistenceReceiptVersion === 1) {
+            await recordLoopOutcome({
+              ctx,
+              toolName: normalizedToolName,
+              memoryPersistenceReceiptVersion: 1,
+              toolParams: executeParams,
+              toolCallId,
+              error: new Error("memory_store execution was not launched"),
+              toolCallOrdinal,
+            });
+          }
           return INTERNAL_DISPOSED_RESULT;
         }
         onImplementationStart = decision.start;
@@ -526,6 +558,7 @@ export function wrapToolWithBeforeToolCallHook(
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
+          memoryPersistenceReceiptVersion: tool.memoryPersistenceReceiptVersion,
           toolParams: executeParams,
           toolCallId,
           result,
@@ -586,6 +619,7 @@ export function wrapToolWithBeforeToolCallHook(
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
+          memoryPersistenceReceiptVersion: tool.memoryPersistenceReceiptVersion,
           toolParams: executeParams,
           toolCallId,
           error: err,

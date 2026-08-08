@@ -23,6 +23,8 @@ type EmbeddedRunReplyItem = {
   interactive?: ReplyPayload["interactive"];
   channelData?: Record<string, unknown>;
   nonTerminalToolErrorWarning?: boolean;
+  /** Host-authored safety copy must bypass message-tool source suppression. */
+  hostOwnedDelivery?: boolean;
   sourceReplyMirror?: { idempotencyKey?: string };
 };
 

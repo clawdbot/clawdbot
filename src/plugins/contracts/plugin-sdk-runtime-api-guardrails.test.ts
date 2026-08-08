@@ -8,6 +8,18 @@ import { bundledPluginFile, getBundledPluginRoots } from "./test-helpers/bundled
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
+describe("private-local Plugin SDK runtime seams", () => {
+  it("keeps the memory file writer behind an async runtime import", () => {
+    const source = readFileSync(
+      resolve(ROOT_DIR, "plugin-sdk/memory-core-host-runtime-files.ts"),
+      "utf8",
+    );
+
+    expect(source).not.toContain('from "../agents/memory-file-store.js";');
+    expect(source).toContain('import("../agents/memory-file-store.js")');
+  });
+});
+
 function runtimeApiPluginFile(pluginId: string): string {
   return bundledPluginFile({ rootDir: ROOT_DIR, pluginId, relativePath: "runtime-api.ts" });
 }

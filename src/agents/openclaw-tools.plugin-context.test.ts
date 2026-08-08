@@ -31,6 +31,19 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.senderIsOwner).toBe(true);
   });
 
+  it("forwards the host-owned current-turn taint reader", () => {
+    const isTurnTainted = vi.fn(() => true);
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        isTurnTainted,
+      },
+    });
+
+    expect(result.context.isTurnTainted).toBe(isTurnTainted);
+    expect(result.context.isTurnTainted?.()).toBe(true);
+  });
+
   it("forwards the trusted native conversation id", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

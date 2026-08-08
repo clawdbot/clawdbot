@@ -157,15 +157,62 @@ inspect or dismiss existing stored rows.
 
 ## Memory tools
 
-The agent has three tools for working with memory:
+With the default `memory-core` plugin, the agent has four tools for working with
+memory:
 
+- **`memory_store`** — commits an explicitly requested fact, preference, or
+  decision to the active memory backend.
 - **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
 - **`memory_get`** — reads a specific memory file or line range.
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-Both tools are provided by the active memory plugin (default: `memory-core`).
+Alternate memory plugins can expose a different tool set; for example,
+`memory-lancedb` provides `memory_recall`, `memory_store`, and `memory_forget`.
+The `memory-core` `memory_store` remains available when semantic search or
+automatic compaction memory flush is disabled.
+
+### Persistence receipts
+
+The bundled memory stores advertise the versioned persistence-receipt contract,
+so their successful `memory_store` results include
+`details.memoryPersistence`. `status: "created"` means the backend acknowledged
+new durable storage. `status: "already_present"` means the requested fact was
+already present as an exact normalized entry or record; semantic similarity
+alone is not enough. In particular, a semantically close or negated LanceDB
+record does not receive an `already_present` receipt.
+
+The exact normalization is backend-specific and deliberately narrow:
+
+- `memory-core` matches the same formatted daily-file entry after line-ending
+  normalization and trimming surrounding whitespace.
+- `memory-lancedb` compares the requested and stored text after Unicode NFC
+  normalization, line-ending normalization, and trimming surrounding
+  whitespace. Case and internal whitespace remain significant.
+
+For `memory-core`, the receipt target is the workspace-relative canonical daily
+path, such as `memory/2026-08-08.md`; the host reads the full file back and
+compares it with the committed content before returning the receipt. The file
+commit survives a process restart; a repeated store request after restart
+returns `already_present` from the file. Sandboxed and incognito sessions do not
+expose or complete this durable host-workspace write.
+
+For `memory-lancedb`, `created` records that the backend store operation
+completed successfully. It is a backend commit acknowledgement, not an
+independent readback verification. Later semantic retrieval remains a separate
+capability.
+
+A persistence receipt proves storage only. It does not prove that embeddings,
+the semantic index, or later `memory_search` retrieval are available. If the
+store tool fails or returns no receipt, the assistant must say the durable save
+was not confirmed. After an embedding provider or index outage recovers, rebuild
+or retry the index and verify recall separately with `memory_search`.
+
+Third-party `memory_store` tools written before the receipt contract remain
+compatible: the host requires receipts only when a tool explicitly advertises
+receipt version 1. Plugin authors should opt in once every successful path emits
+a valid receipt and every rejection or failure remains receiptless.
 
 ## Memory search
 

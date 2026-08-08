@@ -231,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: focused agent scope functions for doctor migration enumeration.
       // +1: shared transcript credential-safety prompt for plugin-owned agent harnesses.
       // +3: channel streaming config reader re-exports and session-agent scope resolver.
-      4844,
+      // +1: shared memory persistence receipt contract for plugin-owned memory backends.
+      4845,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

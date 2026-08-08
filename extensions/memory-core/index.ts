@@ -1,5 +1,6 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
+import type { MemoryPersistenceReceiptV1 } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   jsonResult,
   resolveMemorySearchConfig,
@@ -7,7 +8,10 @@ import {
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
+  appendMemoryFileEntry,
+  resolveMemoryBackendConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   definePluginEntry,
   type AnyAgentTool,
@@ -17,10 +21,15 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateLeaseRunner,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
 import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
-import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import {
+  buildMemoryFileProvenance,
+  buildMemoryFlushPlan,
+  resolveMemoryDailyFilePath,
+} from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
@@ -95,6 +104,15 @@ const MemoryGetSchema = {
   additionalProperties: false,
 } as const satisfies TSchema;
 
+const MemoryStoreSchema = {
+  type: "object",
+  properties: {
+    text: { type: "string", minLength: 1 },
+  },
+  required: ["text"],
+  additionalProperties: false,
+} as const satisfies TSchema;
+
 function createLazyMemoryTool(params: {
   options: MemoryToolOptions;
   label: string;
@@ -154,6 +172,70 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
     parameters: MemoryGetSchema,
     load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
   });
+}
+
+function formatMemoryStoreEntry(text: string): string {
+  const normalized = text.replaceAll("\r\n", "\n").trim();
+  return `- ${normalized.replaceAll("\n", "\n  ")}`;
+}
+
+function createMemoryStoreTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
+  if (ctx.sandboxed === true) {
+    return null;
+  }
+  const options = resolveMemoryToolOptions(ctx, {});
+  const cfg = getToolConfig(options);
+  const workspaceDir = ctx.workspaceDir?.trim();
+  if (!cfg || !workspaceDir) {
+    return null;
+  }
+  const relativePath = resolveMemoryDailyFilePath({ cfg });
+  const provenance = buildMemoryFileProvenance();
+  return {
+    label: "Memory Store",
+    name: "memory_store",
+    memoryPersistenceReceiptVersion: 1,
+    description:
+      "Save an explicit user-requested fact, preference, or decision to the canonical daily memory file. Do not claim persistence unless this call succeeds with details.memoryPersistence; that receipt proves the readback-verified file commit, not semantic recall or embedding-index availability.",
+    parameters: MemoryStoreSchema,
+    execute: async (_toolCallId, params) => {
+      if (isIncognitoSessionKey(ctx.sessionKey)) {
+        return jsonResult({
+          action: "rejected",
+          reason: "incognito_session",
+        });
+      }
+      const text =
+        params &&
+        typeof params === "object" &&
+        !Array.isArray(params) &&
+        typeof (params as { text?: unknown }).text === "string"
+          ? (params as { text: string }).text.trim()
+          : "";
+      if (!text) {
+        throw new Error("memory text required");
+      }
+      const result = await appendMemoryFileEntry({
+        workspaceDir,
+        relativePath,
+        entry: formatMemoryStoreEntry(text),
+        originClass:
+          ctx.senderIsOwner === false || ctx.isTurnTainted?.() !== false ? "untrusted" : "agent",
+        observedAt: Date.now(),
+        recordWriteProvenance: provenance.recordWriteProvenance,
+      });
+      const memoryPersistence = {
+        version: 1,
+        status: result.status,
+        backend: "memory-core",
+        target: { kind: "file", path: relativePath },
+      } as const satisfies MemoryPersistenceReceiptV1;
+      return jsonResult({
+        action: result.status,
+        memoryPersistence,
+      });
+    },
+  };
 }
 
 function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
@@ -306,6 +388,10 @@ export default definePluginEntry({
 
     api.registerTool((ctx) => createLazyMemoryGetTool(resolveMemoryToolOptions(ctx, host)), {
       names: ["memory_get"],
+    });
+
+    api.registerTool((ctx) => createMemoryStoreTool(ctx), {
+      names: ["memory_store"],
     });
 
     api.registerTool((ctx) => createLazyStandingIntentTool(ctx), {

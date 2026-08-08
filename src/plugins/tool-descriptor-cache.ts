@@ -8,7 +8,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 import type { PluginRegistry } from "./registry-types.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 3;
+const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 4;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
 /** Cached display descriptor for one plugin-created tool. */
@@ -17,6 +17,7 @@ export type CachedPluginToolDescriptor = {
   displaySummary?: string;
   requiredClientCaps?: string[];
   resultContentSource?: AnyAgentTool["resultContentSource"];
+  memoryPersistenceReceiptVersion?: 1;
   optional: boolean;
 };
 
@@ -163,6 +164,9 @@ export function capturePluginToolDescriptor(params: {
       : {}),
     ...(params.tool.resultContentSource
       ? { resultContentSource: params.tool.resultContentSource }
+      : {}),
+    ...(params.tool.memoryPersistenceReceiptVersion === 1
+      ? { memoryPersistenceReceiptVersion: 1 as const }
       : {}),
     optional: params.optional,
     descriptor: {

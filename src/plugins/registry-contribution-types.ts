@@ -317,6 +317,14 @@ export type MemoryPluginPublicArtifactsProvider = {
   listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
 };
 
+/** Durable memory commit proof returned by a backend-owned memory_store tool. */
+export type MemoryPersistenceReceiptV1 = Readonly<{
+  version: 1;
+  status: "created" | "already_present";
+  backend: string;
+  target: Readonly<{ kind: "file"; path: string }> | Readonly<{ kind: "record"; id: string }>;
+}>;
+
 export type MemoryPluginCapability = {
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;

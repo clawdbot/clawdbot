@@ -1,9 +1,17 @@
 // Memory Core tests cover index plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type {
+  AnyAgentTool,
+  MemoryPluginRuntime,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
@@ -11,6 +19,10 @@ import { buildPromptSection } from "./src/prompt-section.js";
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
 const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
+const memoryStateRegisterMock = vi.hoisted(() =>
+  vi.fn<PluginStateKeyedStore<unknown>["register"]>(async () => undefined),
+);
+const memoryStateDeleteMock = vi.hoisted(() => vi.fn(async () => undefined));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     authorizeSearchHits: authorizeSearchHitsMock,
@@ -38,13 +50,75 @@ const hostRuntime = {
   state: {
     withLease: vi.fn(),
     openKeyedStore: vi.fn(() => ({
-      lookup: vi.fn(),
-      register: vi.fn(),
-      delete: vi.fn(),
-      list: vi.fn(),
+      lookup: vi.fn(async () => undefined),
+      register: memoryStateRegisterMock,
+      delete: memoryStateDeleteMock,
+      entries: vi.fn(async () => []),
     })),
   },
 } as unknown as OpenClawPluginApi["runtime"];
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function materializeMemoryStoreTool(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+  toolContext?: {
+    sandboxed?: boolean;
+    senderIsOwner?: boolean;
+    isTurnTainted?: () => boolean;
+    sessionKey?: string;
+  };
+}): AnyAgentTool {
+  const tool = resolveMemoryStoreTool(params);
+  if (!tool) {
+    throw new Error("expected materialized memory_store tool");
+  }
+  return tool;
+}
+
+function resolveMemoryStoreTool(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+  toolContext?: {
+    sandboxed?: boolean;
+    senderIsOwner?: boolean;
+    isTurnTainted?: () => boolean;
+    sessionKey?: string;
+  };
+}): AnyAgentTool | null | undefined {
+  let registration: Parameters<OpenClawPluginApi["registerTool"]>[0] | undefined;
+  plugin.register(
+    createTestPluginApi({
+      config: params.cfg,
+      runtime: hostRuntime,
+      registerTool(toolOrFactory, options) {
+        if (options?.names?.includes("memory_store")) {
+          registration = toolOrFactory;
+        }
+      },
+    }),
+  );
+  if (!registration) {
+    throw new Error("expected memory-core to register memory_store");
+  }
+  const materialized =
+    typeof registration === "function"
+      ? registration({
+          agentId: "main",
+          config: params.cfg,
+          runtimeConfig: params.cfg,
+          getRuntimeConfig: () => params.cfg,
+          workspaceDir: params.workspaceDir,
+          sessionKey: "agent:main:main",
+          ...params.toolContext,
+        } as never)
+      : registration;
+  const tool = Array.isArray(materialized)
+    ? materialized.find((candidate) => candidate.name === "memory_store")
+    : materialized;
+  return tool;
+}
 
 function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   let runtime: MemoryPluginRuntime | undefined;
@@ -81,6 +155,16 @@ describe("buildPromptSection", () => {
     expect(result.at(-1)).toBe("");
   });
 
+  it("requires explicit remember requests to use memory_store before claiming persistence", () => {
+    const result = buildPromptSection({
+      availableTools: new Set(["memory_search", "memory_get", "memory_store"]),
+    });
+
+    expect(result.join("\n")).toContain("call memory_store");
+    expect(result.join("\n")).toContain("details.memoryPersistence");
+    expect(result.join("\n")).toContain("does not prove semantic recall");
+  });
+
   it("limits the guidance to memory_search when only search is available", () => {
     const result = buildPromptSection({ availableTools: new Set(["memory_search"]) });
     expect(result[0]).toBe("## Memory Recall");
@@ -104,6 +188,206 @@ describe("buildPromptSection", () => {
     expect(result).toContain(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
+  });
+});
+
+describe("memory-core memory_store", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("persists and readback-verifies an explicit memory without initializing embeddings", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-");
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    } as OpenClawConfig;
+    const relativePath = buildMemoryFlushPlan({ cfg })?.relativePath;
+    if (!relativePath) {
+      throw new Error("expected daily memory path");
+    }
+    const tool = materializeMemoryStoreTool({ cfg, workspaceDir });
+
+    expect(tool.description).toContain("details.memoryPersistence");
+    expect(tool.memoryPersistenceReceiptVersion).toBe(1);
+    const result = await tool.execute("store-1", { text: "The user prefers concise replies." });
+
+    expect(result.details).toEqual({
+      action: "created",
+      memoryPersistence: {
+        version: 1,
+        status: "created",
+        backend: "memory-core",
+        target: { kind: "file", path: relativePath },
+      },
+    });
+    await expect(fs.readFile(path.join(workspaceDir, relativePath), "utf8")).resolves.toContain(
+      "The user prefers concise replies.",
+    );
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["ro", "none"] as const)(
+    "does not expose memory_store in a %s sandbox",
+    (workspaceAccess) => {
+      const workspaceDir = tempDirs.make(`memory-core-store-sandbox-${workspaceAccess}-`);
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            userTimezone: "UTC",
+            sandbox: { workspaceAccess },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveMemoryStoreTool({
+          cfg,
+          workspaceDir,
+          toolContext: { sandboxed: true },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("returns already_present without duplicating an exact daily-memory entry", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-dedupe-");
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    } as OpenClawConfig;
+    const relativePath = buildMemoryFlushPlan({ cfg })?.relativePath;
+    if (!relativePath) {
+      throw new Error("expected daily memory path");
+    }
+    const tool = materializeMemoryStoreTool({ cfg, workspaceDir });
+
+    await tool.execute("store-first", { text: "The user prefers concise replies." });
+    const restartedTool = materializeMemoryStoreTool({ cfg, workspaceDir });
+    const duplicate = await restartedTool.execute("store-duplicate", {
+      text: "The user prefers concise replies.",
+    });
+
+    expect(duplicate.details).toEqual({
+      action: "already_present",
+      memoryPersistence: {
+        version: 1,
+        status: "already_present",
+        backend: "memory-core",
+        target: { kind: "file", path: relativePath },
+      },
+    });
+    const stored = await fs.readFile(path.join(workspaceDir, relativePath), "utf8");
+    expect(stored.match(/The user prefers concise replies\./g)).toHaveLength(1);
+  });
+
+  it("stays available when semantic search and compaction memory flush are disabled", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-disabled-recall-");
+    const cfg = {
+      memory: { search: { enabled: false } },
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+          compaction: { memoryFlush: { enabled: false } },
+        },
+      },
+    } as OpenClawConfig;
+
+    const tool = materializeMemoryStoreTool({ cfg, workspaceDir });
+    const result = await tool.execute("store-with-recall-disabled", {
+      text: "The user uses metric units.",
+    });
+
+    expect(result.details).toMatchObject({
+      action: "created",
+      memoryPersistence: { status: "created" },
+    });
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("records a tainted remember turn as untrusted provenance", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-tainted-");
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    } as OpenClawConfig;
+    const tool = materializeMemoryStoreTool({
+      cfg,
+      workspaceDir,
+      toolContext: {
+        senderIsOwner: true,
+        isTurnTainted: () => true,
+      },
+    });
+
+    await tool.execute("store-tainted", {
+      text: "A network page claimed this is the user's preference.",
+    });
+
+    const provenanceValues = memoryStateRegisterMock.mock.calls.map(
+      ([, value]) => asOptionalRecord(value)?.value,
+    );
+    expect(provenanceValues).toContainEqual(expect.objectContaining({ originClass: "untrusted" }));
+  });
+
+  it("returns no receipt and writes nothing for an incognito remember request", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-incognito-");
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    } as OpenClawConfig;
+    const tool = materializeMemoryStoreTool({
+      cfg,
+      workspaceDir,
+      toolContext: {
+        sessionKey: "agent:main:internal-session-effects:incognito-memory-test",
+      },
+    });
+
+    const result = await tool.execute("store-incognito", {
+      text: "This must not persist.",
+    });
+
+    expect(result.details).toEqual({ action: "rejected", reason: "incognito_session" });
+    expect(result.details).not.toHaveProperty("memoryPersistence");
+    await expect(fs.readdir(path.join(workspaceDir, "memory"))).rejects.toThrow();
+  });
+
+  it("serializes concurrent appends without losing either committed memory", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-concurrent-");
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    } as OpenClawConfig;
+    const relativePath = buildMemoryFlushPlan({ cfg })?.relativePath;
+    if (!relativePath) {
+      throw new Error("expected daily memory path");
+    }
+    const tool = materializeMemoryStoreTool({ cfg, workspaceDir });
+
+    const results = await Promise.all([
+      tool.execute("store-a", { text: "The user prefers concise replies." }),
+      tool.execute("store-b", { text: "The user uses metric units." }),
+    ]);
+
+    expect(
+      results.map((result) => (result.details as { action?: unknown } | undefined)?.action),
+    ).toEqual(["created", "created"]);
+    const stored = await fs.readFile(path.join(workspaceDir, relativePath), "utf8");
+    expect(stored).toContain("The user prefers concise replies.");
+    expect(stored).toContain("The user uses metric units.");
+  });
+
+  it("rejects a symlinked memory directory without writing outside the workspace", async () => {
+    const workspaceDir = tempDirs.make("memory-core-store-symlink-");
+    const outsideDir = tempDirs.make("memory-core-store-outside-");
+    await fs.symlink(outsideDir, path.join(workspaceDir, "memory"), "dir");
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    } as OpenClawConfig;
+    const tool = materializeMemoryStoreTool({ cfg, workspaceDir });
+
+    await expect(
+      tool.execute("store-escape", { text: "This must stay inside the workspace." }),
+    ).rejects.toThrow();
+    await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
   });
 });
 

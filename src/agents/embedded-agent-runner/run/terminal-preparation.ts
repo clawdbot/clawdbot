@@ -42,6 +42,7 @@ export function prepareEmbeddedRunTerminal(input: {
   lastRunPromptUsage?: NormalizedUsage;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
+  unconfirmedMemoryPersistenceCount?: number;
   terminalState: EmbeddedRunTerminalState;
 }): {
   agentMeta: EmbeddedAgentMeta;
@@ -170,6 +171,7 @@ export function prepareEmbeddedRunTerminal(input: {
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     lastToolError: attempt.lastToolError,
+    unconfirmedMemoryPersistenceCount: input.unconfirmedMemoryPersistenceCount,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",

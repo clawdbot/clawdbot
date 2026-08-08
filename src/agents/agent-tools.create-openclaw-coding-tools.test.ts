@@ -1246,6 +1246,34 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("forwards the host-owned current-turn taint reader to plugin-only tools", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    const isTurnTainted = vi.fn(() => true);
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["memory_store"],
+        isTurnTainted,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.isTurnTainted).toBe(isTurnTainted);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
   it("forwards the native channel id through standard tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

@@ -174,9 +174,20 @@ export async function findCleanDuplicateMemory(
   },
   agentId: string,
   vector: number[],
+  requestedText?: string,
 ): Promise<MemorySearchResult | undefined> {
   const existing = await db.search(agentId, vector, DUPLICATE_SEARCH_LIMIT, 0.95);
-  return existing.find((result) => sanitizeRecallMemoryText(result.entry.text) !== null);
+  const clean = existing.filter((result) => sanitizeRecallMemoryText(result.entry.text) !== null);
+  return requestedText === undefined
+    ? clean[0]
+    : (clean.find((result) => isEquivalentStoredFact(requestedText, result.entry.text)) ??
+        clean[0]);
+}
+
+/** Exact fact equivalence for persistence receipts; semantic similarity alone is insufficient. */
+export function isEquivalentStoredFact(requestedText: string, storedText: string): boolean {
+  const normalize = (value: string) => value.replace(/\r\n?/gu, "\n").normalize("NFC").trim();
+  return normalize(requestedText) === normalize(storedText);
 }
 
 export function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{

@@ -2258,6 +2258,7 @@ describe("resolvePluginTools optional tools", () => {
       return {
         ...makeTool("cached_tool"),
         outputSchema,
+        memoryPersistenceReceiptVersion: 1 as const,
         async execute() {
           return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
         },
@@ -2290,6 +2291,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(second[0]).not.toBe(first[0]);
     expect(first[0]?.outputSchema).toBe(outputSchema);
     expect(second[0]?.outputSchema).toBe(outputSchema);
+    expect(second[0]?.memoryPersistenceReceiptVersion).toBe(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({

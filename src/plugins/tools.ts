@@ -819,6 +819,9 @@ function createCachedDescriptorPluginTool(params: {
     ...(params.descriptor.resultContentSource
       ? { resultContentSource: params.descriptor.resultContentSource }
       : {}),
+    ...(params.descriptor.memoryPersistenceReceiptVersion === 1
+      ? { memoryPersistenceReceiptVersion: 1 as const }
+      : {}),
     async execute(toolCallId, executeParams, signal, onUpdate) {
       const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
         activate: false,

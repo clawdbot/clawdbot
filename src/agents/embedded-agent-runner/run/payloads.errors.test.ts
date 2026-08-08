@@ -677,6 +677,76 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
+  it("qualifies an apparent persistence success when memory_store failed", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I saved that to persistent memory."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      unconfirmedMemoryPersistenceCount: 1,
+      lastToolError: {
+        toolName: "memory_store",
+        error: "429 insufficient_quota",
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("I saved that to persistent memory.");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+      text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+    });
+  });
+
+  it.each([
+    {
+      name: "messages.suppressToolErrors",
+      assistantText: "I saved that to persistent memory.",
+      extra: { config: { messages: { suppressToolErrors: true } } },
+    },
+    {
+      name: "suppressToolErrorWarnings",
+      assistantText: "I saved that to persistent memory.",
+      extra: { suppressToolErrorWarnings: true },
+    },
+    {
+      name: "an English failure acknowledgement",
+      assistantText: "I couldn't save that memory because the operation failed.",
+      extra: {},
+    },
+  ])(
+    "always appends the host-owned memory persistence correction despite $name",
+    ({ assistantText, extra }) => {
+      const payloads = buildPayloads({
+        assistantTexts: [assistantText],
+        lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+        lastToolError: {
+          toolName: "memory_store",
+          error: "429 insufficient_quota",
+        },
+        unconfirmedMemoryPersistenceCount: 1,
+        ...extra,
+      });
+
+      expect(payloads.at(-1)).toMatchObject({
+        isError: true,
+        text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+      });
+    },
+  );
+
+  it("does not add a persistence correction for a memory_recall failure", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I could not retrieve related notes."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "memory_recall",
+        error: "429 insufficient_quota",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("I could not retrieve related notes.");
+  });
+
   it("still shows write tool errors when timedOut is true but no fileTarget was recorded", () => {
     // Without `fileTarget` we cannot distinguish a confirmed file write from
     // an unrelated mutating-tool timeout, so the default-visible warning is
@@ -746,6 +816,81 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSinglePayloadSummary(payloads, {
       text: "The script is ready to use and saved in your workspace.",
+    });
+  });
+
+  it("appends the host-owned correction for a receiptless non-error memory_store outcome", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["That memory was handled."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      unconfirmedMemoryPersistenceCount: 1,
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.at(-1)).toMatchObject({
+      isError: true,
+      text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+    });
+  });
+
+  it("does not interpret structured zero as recovery from a final memory_store error", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I saved that to persistent memory."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "memory_store",
+        error: "validation failed before an observed outcome",
+      },
+    });
+
+    expect(payloads.at(-1)).toMatchObject({
+      isError: true,
+      text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+    });
+  });
+
+  it("fails closed before a quiet heartbeat can hide an unobserved memory_store failure", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "memory_store",
+        error: "invalid arguments",
+        mutatingAction: false,
+      },
+    });
+
+    expect(payloads.at(-1)).toMatchObject({
+      isError: true,
+      text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+    });
+  });
+
+  it("delivers the host correction after a false explicit-final message-tool promise", () => {
+    const payloads = buildPayloads({
+      messagingToolSourceReplyPayloads: [
+        {
+          text: "I saved that to persistent memory.",
+          sourceReplyFinal: true,
+        },
+      ],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      unconfirmedMemoryPersistenceCount: 1,
+    });
+
+    const correction = payloads.at(-1);
+    expect(correction).toMatchObject({
+      isError: true,
+      text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+    });
+    expect(getReplyPayloadMetadata(correction as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
     });
   });
 

@@ -500,6 +500,8 @@ describe("tool mutation helpers", () => {
     expect(isLikelyMutatingToolName("mobile_ui")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);
+    expect(isLikelyMutatingToolName("memory_store")).toBe(true);
+    expect(isLikelyMutatingToolName("memory_recall")).toBe(false);
     expect(isLikelyMutatingToolName("browser")).toBe(false);
   });
 });

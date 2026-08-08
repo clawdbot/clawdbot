@@ -7,6 +7,7 @@ import {
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MemoryPersistenceReceiptV1 } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
@@ -41,6 +42,7 @@ import {
   extractUserTextContent,
   findCleanDuplicateMemory,
   formatRelevantMemoriesContext,
+  isEquivalentStoredFact,
   looksLikePromptInjection,
   messageFingerprint,
   normalizeRecallQuery,
@@ -322,8 +324,9 @@ export default definePluginEntry({
         return {
           name: "memory_store",
           label: "Memory Store",
+          memoryPersistenceReceiptVersion: 1,
           description:
-            "Save important information in long-term memory. Use for preferences, facts, decisions.",
+            "Save important information in long-term memory. Use for preferences, facts, decisions. Do not claim persistence unless this call succeeds with details.memoryPersistence; that receipt acknowledges the backend record commit without independent readback and does not prove future semantic recall availability.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
             importance: optionalFiniteNumberSchema({
@@ -372,8 +375,16 @@ export default definePluginEntry({
 
             const vector = await embeddings.embed(agentId, text);
 
-            const existing = await findCleanDuplicateMemory(db, agentId, vector);
+            const existing = await findCleanDuplicateMemory(db, agentId, vector, text);
             if (existing) {
+              const memoryPersistence = isEquivalentStoredFact(text, existing.entry.text)
+                ? ({
+                    version: 1,
+                    status: "already_present",
+                    backend: "memory-lancedb",
+                    target: { kind: "record", id: existing.entry.id },
+                  } as const satisfies MemoryPersistenceReceiptV1)
+                : undefined;
               return {
                 content: [
                   {
@@ -385,6 +396,7 @@ export default definePluginEntry({
                   action: "duplicate",
                   existingId: existing.entry.id,
                   existingText: existing.entry.text,
+                  ...(memoryPersistence ? { memoryPersistence } : {}),
                 },
               };
             }
@@ -396,9 +408,16 @@ export default definePluginEntry({
               category,
             });
 
+            const memoryPersistence = {
+              version: 1,
+              status: "created",
+              backend: "memory-lancedb",
+              target: { kind: "record", id: entry.id },
+            } as const satisfies MemoryPersistenceReceiptV1;
+
             return {
               content: [{ type: "text", text: `Stored: "${truncateUtf16Safe(text, 100)}..."` }],
-              details: { action: "created", id: entry.id },
+              details: { action: "created", id: entry.id, memoryPersistence },
             };
           },
         };

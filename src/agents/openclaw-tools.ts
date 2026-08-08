@@ -167,6 +167,8 @@ export function createOpenClawTools(
     allowMediaInvokeCommands?: boolean;
     /** Trusted sender identity bit for channel action auth. */
     senderIsOwner?: boolean;
+    /** Reads the sticky untrusted-content flag for the current user turn. */
+    isTurnTainted?: () => boolean;
     /** Server-owned operation-local origin for conversation-read visibility policy. */
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     /** Restrict cron operations to the active cron job's self-scoped surface. */

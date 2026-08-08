@@ -9,7 +9,7 @@
   },
   "kind": "memory",
   "contracts": {
-    "tools": ["intent", "memory_get", "memory_search"]
+    "tools": ["intent", "memory_get", "memory_search", "memory_store"]
   },
   "toolMetadata": {
     "memory_get": {

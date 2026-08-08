@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { resolveToolExecutionErrorKind } from "./tool-result-error.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -32,6 +33,122 @@ function createFailingTool(params: {
 }
 
 describe("before-tool-call network execution error boundary", () => {
+  it("projects receiptless memory_store outcomes without diagnostic session state", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "memory_store",
+        label: "Memory store",
+        description: "Store memory",
+        memoryPersistenceReceiptVersion: 1,
+        parameters: { type: "object", properties: {} } as never,
+        execute: vi.fn(async () => ({
+          content: [],
+          details: { action: "rejected", reason: "incognito_session" },
+        })),
+      },
+      { onToolOutcome },
+      { emitDiagnostics: false },
+    );
+
+    await tool.execute("memory-store-incognito", { text: "Keep my preferred editor private." });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "memory_store",
+        memoryPersistence: expect.objectContaining({ status: "not-confirmed" }),
+      }),
+    );
+  });
+
+  it("does not require a receipt from an unmarked legacy memory_store success", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "memory_store",
+        label: "Legacy memory store",
+        description: "Store memory",
+        parameters: { type: "object", properties: {} } as never,
+        execute: vi.fn(async () => ({ content: [], details: { action: "created" } })),
+      },
+      { onToolOutcome },
+      { emitDiagnostics: false },
+    );
+
+    await tool.execute("legacy-memory-store", { text: "The user prefers concise replies." });
+
+    expect(onToolOutcome).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a receipt-aware memory_store is rejected before execution", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn(async () => ({ content: [], details: { action: "created" } }));
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "memory_store",
+        label: "Memory store",
+        description: "Store memory",
+        memoryPersistenceReceiptVersion: 1,
+        parameters: { type: "object", properties: {} } as never,
+        prepareBeforeToolCallParams: () => {
+          throw new ToolInputError("text required");
+        },
+        execute,
+      },
+      { onToolOutcome },
+      { emitDiagnostics: false },
+    );
+
+    await expect(tool.execute("memory-store-malformed", { text: 42 })).rejects.toThrow(
+      "text required",
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "memory_store",
+        memoryPersistence: expect.objectContaining({ status: "not-confirmed" }),
+      }),
+    );
+  });
+
+  it("records a receipt-aware memory_store when private preparation is disposed", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn(async () => ({ content: [], details: { action: "created" } }));
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "memory_store",
+        label: "Memory store",
+        description: "Store memory",
+        memoryPersistenceReceiptVersion: 1,
+        parameters: { type: "object", properties: {} } as never,
+        execute,
+      },
+      { onToolOutcome },
+      { emitDiagnostics: false },
+    );
+    const preparer = getInternalToolExecutionPreparer(tool);
+    if (!preparer) {
+      throw new Error("expected private execution preparer");
+    }
+
+    const prepared = await preparer({
+      toolCallId: "memory-store-disposed",
+      args: { text: "Remember this." },
+    });
+    expect(prepared.kind).toBe("ready");
+    prepared.dispose();
+
+    await vi.waitFor(() => {
+      expect(onToolOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memoryPersistence: expect.objectContaining({ status: "not-confirmed" }),
+        }),
+      );
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["host input", () => new ToolInputError("query required")],
     [

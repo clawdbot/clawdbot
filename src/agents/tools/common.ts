@@ -35,6 +35,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /** Opts a memory_store tool into the host-validated durable receipt contract. */
+  memoryPersistenceReceiptVersion?: 1;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -59,6 +61,8 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
+    /** Opts a memory_store tool into the host-validated durable receipt contract. */
+    memoryPersistenceReceiptVersion?: 1;
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown

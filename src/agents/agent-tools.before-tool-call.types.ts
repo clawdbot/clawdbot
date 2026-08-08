@@ -13,6 +13,7 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
+import type { MemoryPersistenceOutcomeObservation } from "./memory-persistence-outcome.js";
 import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -25,6 +26,8 @@ export type ToolOutcomeObservation = {
   toolCallOrdinal?: number;
   terminalPresentation?: string;
   presentationOnly?: boolean;
+  /** Host-projected durable memory outcome; contains only a non-sensitive fact digest. */
+  memoryPersistence?: MemoryPersistenceOutcomeObservation;
 };
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;

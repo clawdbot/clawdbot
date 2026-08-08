@@ -149,6 +149,7 @@ export type {
   OpenClawPluginSessionsChangedEvent,
 } from "../plugins/gateway-events.js";
 export type {
+  MemoryPersistenceReceiptV1,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,

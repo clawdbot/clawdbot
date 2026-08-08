@@ -512,6 +512,7 @@ function resolveToolErrorWarningPolicy(params: {
     includeDetails,
   };
 }
+
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
  * is the boundary that suppresses duplicate source replies, filters raw API
@@ -527,6 +528,8 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
+  /** Count of fact-scoped memory_store outcomes that still lack a valid receipt. */
+  unconfirmedMemoryPersistenceCount?: number;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
@@ -552,13 +555,27 @@ export function buildEmbeddedRunPayloads(params: {
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
+  const memoryStoreError =
+    normalizeOptionalLowercaseString(params.lastToolError?.toolName) === "memory_store";
+  const hasStructuredMemoryPersistenceOutcome =
+    params.unconfirmedMemoryPersistenceCount !== undefined;
+  const unconfirmedMemoryPersistenceCount = params.unconfirmedMemoryPersistenceCount ?? 0;
+  const requiresMemoryPersistenceCorrection =
+    unconfirmedMemoryPersistenceCount > 0 ||
+    (memoryStoreError && !hasStructuredMemoryPersistenceOutcome);
   const heartbeatTerminalToolFailure =
     params.isHeartbeatTrigger === true &&
     params.lastToolError &&
-    params.lastToolError.mutatingAction === true
+    (memoryStoreError
+      ? requiresMemoryPersistenceCorrection
+      : params.lastToolError.mutatingAction === true)
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
+  if (
+    params.heartbeatToolResponse &&
+    !heartbeatTerminalToolFailure &&
+    !requiresMemoryPersistenceCorrection
+  ) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. Only a
@@ -806,45 +823,55 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
-  if (params.lastToolError) {
-    const warningPolicy = resolveToolErrorWarningPolicy({
-      lastToolError: params.lastToolError,
-      hasUserFacingReply: hasUserFacingAssistantReply,
-      hasUserFacingErrorReply,
-      hasUserFacingFailureAcknowledgement,
-      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
-      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
-      isCronTrigger: params.isCronTrigger,
-      isHeartbeatTrigger: params.isHeartbeatTrigger,
-      sessionKey: params.sessionKey,
-      verboseLevel: params.verboseLevel,
+  if (requiresMemoryPersistenceCorrection) {
+    replyItems.push({
+      text: "Memory Store did not confirm a durable save, so do not rely on this information being available later.",
+      isError: true,
+      nonTerminalToolErrorWarning: hasUserFacingAssistantReply,
+      hostOwnedDelivery: true,
     });
-    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
-    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
-    if (warningPolicy.showWarning) {
-      const warningText = formatToolErrorWarningText({
+  }
+  if (params.lastToolError) {
+    if (!memoryStoreError) {
+      const warningPolicy = resolveToolErrorWarningPolicy({
         lastToolError: params.lastToolError,
-        includeDetails: warningPolicy.includeDetails,
-        useMarkdown,
+        hasUserFacingReply: hasUserFacingAssistantReply,
+        hasUserFacingErrorReply,
+        hasUserFacingFailureAcknowledgement,
+        suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+        suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+        isCronTrigger: params.isCronTrigger,
+        isHeartbeatTrigger: params.isHeartbeatTrigger,
+        sessionKey: params.sessionKey,
+        verboseLevel: params.verboseLevel,
       });
-      const normalizedWarning = normalizeTextForComparison(warningText);
-      const duplicateWarning = normalizedWarning
-        ? replyItems.some((item) => {
-            if (!item.text) {
-              return false;
-            }
-            const normalizedExisting = normalizeTextForComparison(item.text);
-            return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
-          })
-        : false;
-      if (!duplicateWarning) {
-        replyItems.push({
-          text: warningText,
-          isError: true,
-          nonTerminalToolErrorWarning:
-            hasUserFacingAssistantReply &&
-            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
+      // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
+      // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
+      if (warningPolicy.showWarning) {
+        const warningText = formatToolErrorWarningText({
+          lastToolError: params.lastToolError,
+          includeDetails: warningPolicy.includeDetails,
+          useMarkdown,
         });
+        const normalizedWarning = normalizeTextForComparison(warningText);
+        const duplicateWarning = normalizedWarning
+          ? replyItems.some((item) => {
+              if (!item.text) {
+                return false;
+              }
+              const normalizedExisting = normalizeTextForComparison(item.text);
+              return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
+            })
+          : false;
+        if (!duplicateWarning) {
+          replyItems.push({
+            text: warningText,
+            isError: true,
+            nonTerminalToolErrorWarning:
+              hasUserFacingAssistantReply &&
+              shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
+          });
+        }
       }
     }
   }
@@ -873,7 +900,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (
         item.isError === true &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
-        explicitFinalSourceReply === false
+        (item.hostOwnedDelivery === true || explicitFinalSourceReply === false)
       ) {
         markReplyPayloadForSourceSuppressionDelivery(payload);
       }

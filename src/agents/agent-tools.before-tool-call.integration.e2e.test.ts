@@ -58,6 +58,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
+import { digestMemoryPersistenceFact } from "./memory-persistence-outcome.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
@@ -76,6 +77,7 @@ function asAgentTool(tool: {
   description?: string;
   execute: ReturnType<typeof vi.fn>;
   name: string;
+  memoryPersistenceReceiptVersion?: 1;
   parameters?: object;
   resultContentSource?: AnyAgentTool["resultContentSource"];
 }): AnyAgentTool {
@@ -376,6 +378,34 @@ describe("before_tool_call hook integration", () => {
       tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext),
     ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("projects an opted-in memory_store failure when a pre-execution hook throws", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        throw new Error("boom");
+      },
+    });
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { action: "created" } });
+    const tool = wrapToolWithBeforeToolCallHook(
+      asAgentTool({
+        name: "memory_store",
+        memoryPersistenceReceiptVersion: 1,
+        execute,
+      }),
+      { onToolOutcome },
+    );
+
+    await expect(
+      tool.execute("call-memory-hook-failure", { text: "Remember this." }),
+    ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryPersistence: expect.objectContaining({ status: "not-confirmed" }),
+      }),
+    );
   });
 
   it("normalizes non-object params for hook contract", async () => {
@@ -1488,6 +1518,49 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         toolName: "web_fetch",
         resultContentSource: "network",
         terminalPresentation: "Fetched with status 200",
+      }),
+    );
+  });
+
+  it("projects a completed memory_store receipt into privacy-minimized host outcome state", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = wrapToolWithBeforeToolCallHook(
+      asAgentTool({
+        name: "memory_store",
+        description: "store memory",
+        memoryPersistenceReceiptVersion: 1,
+        parameters: {},
+        execute: vi.fn().mockResolvedValue({
+          content: [],
+          details: {
+            action: "created",
+            memoryPersistence: {
+              version: 1,
+              status: "created",
+              backend: "memory-core",
+              target: { kind: "file", path: "memory/2026-08-08.md" },
+            },
+          },
+        }),
+      }),
+      {
+        sessionId: "session-memory-persistence-outcome",
+        onToolOutcome,
+      },
+    );
+
+    await tool.execute("call-memory-store", {
+      text: "The user prefers concise replies.",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "memory_store",
+        memoryPersistence: {
+          attemptDigest: digestMemoryPersistenceFact("call:call-memory-store"),
+          factDigest: digestMemoryPersistenceFact("The user prefers concise replies."),
+          status: "confirmed",
+        },
       }),
     );
   });

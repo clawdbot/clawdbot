@@ -141,6 +141,7 @@ describe("plugin tool descriptor cache keys", () => {
         outputSchema,
         requiredClientCaps: ["inline-widgets"],
         resultContentSource: "network",
+        memoryPersistenceReceiptVersion: 1,
         execute: async () => ({ content: [], details: {} }),
       },
     });
@@ -148,6 +149,7 @@ describe("plugin tool descriptor cache keys", () => {
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
     expect(cached.descriptor.outputSchema).toBe(outputSchema);
     expect(cached).toHaveProperty("resultContentSource", "network");
+    expect(cached).toHaveProperty("memoryPersistenceReceiptVersion", 1);
   });
 
   it("does not add network provenance to descriptors for ordinary plugin tools", () => {

@@ -26,6 +26,7 @@ export type {
   MemoryCorpusSupplement,
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
+  MemoryPersistenceReceiptV1,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,

@@ -47,6 +47,11 @@ import type {
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { BEFORE_TOOL_CALL_SOURCE_TOOL } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
+import {
+  digestMemoryPersistenceFact,
+  type MemoryPersistenceOutcomeObservation,
+  resolveMemoryPersistenceOutcomeObservation,
+} from "./memory-persistence-outcome.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
@@ -624,6 +629,7 @@ export async function reconcileLoopCallExecutionParams(args: {
 export async function recordLoopOutcome(args: {
   ctx?: HookContext;
   toolName: string;
+  memoryPersistenceReceiptVersion?: 1;
   toolParams: unknown;
   toolCallId?: string;
   result?: unknown;
@@ -632,7 +638,28 @@ export async function recordLoopOutcome(args: {
   toolCallOrdinal?: number;
   terminalPresentation?: string;
 }): Promise<void> {
+  const memoryPersistence = resolveMemoryPersistenceOutcomeObservation({
+    toolName: args.toolName,
+    memoryPersistenceReceiptVersion: args.memoryPersistenceReceiptVersion,
+    toolCallId: args.toolCallId,
+    toolParams: args.toolParams,
+    result: args.result,
+    error: args.error,
+  });
+  const buildMemoryPersistenceFallback = (
+    outcome: MemoryPersistenceOutcomeObservation,
+  ): ToolOutcomeObservation => ({
+    toolName: "memory_store",
+    argsHash: `memory_store:${outcome.factDigest ?? outcome.attemptDigest}`,
+    resultHash: digestMemoryPersistenceFact(JSON.stringify(outcome)),
+    ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
+    ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
+    memoryPersistence: outcome,
+  });
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
+    if (memoryPersistence) {
+      args.ctx?.onToolOutcome?.(buildMemoryPersistenceFallback(memoryPersistence));
+    }
     return;
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
@@ -678,10 +705,14 @@ export async function recordLoopOutcome(args: {
         ...(args.resultContentSource ? { resultContentSource: args.resultContentSource } : {}),
         ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
         ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
+        ...(memoryPersistence ? { memoryPersistence } : {}),
       };
     }
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
+  }
+  if (!recordedOutcome && memoryPersistence) {
+    recordedOutcome = buildMemoryPersistenceFallback(memoryPersistence);
   }
   if (recordedOutcome) {
     args.ctx.onToolOutcome?.(recordedOutcome);

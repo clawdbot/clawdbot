@@ -37,6 +37,7 @@ import memoryPlugin, {
   testing,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
+import type { MemoryEntry } from "./lancedb-store.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 // Provenance marker OpenClaw appends to every injected inbound-context header.
@@ -47,6 +48,7 @@ const CTX = "⟦openclaw:ctx⟧";
 const ctxHeader = (label: string): string => `${label} ${CTX}`;
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
+type MemorySearchRow = MemoryEntry & { agentId: string; _distance: number };
 type MemoryPluginTestConfig = {
   embedding?: {
     provider?: string;
@@ -3355,7 +3357,7 @@ describe("memory plugin e2e", () => {
     }));
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const add = vi.fn(async () => undefined);
-    const toArray = vi.fn(async () => []);
+    const toArray = vi.fn<() => Promise<MemorySearchRow[]>>(async () => []);
     const limit = vi.fn(() => ({ toArray }));
     const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
     const openTable = vi.fn(async () => ({
@@ -3391,6 +3393,9 @@ describe("memory plugin e2e", () => {
         if (!storeTool) {
           throw new Error("memory_store tool was not registered");
         }
+        expect.soft(storeTool.description).toContain("details.memoryPersistence");
+        expect.soft(storeTool.description).toContain("Do not claim persistence");
+        expect.soft(storeTool.memoryPersistenceReceiptVersion).toBe(1);
 
         const incognitoStoreTool = materializeRegisteredTool(
           registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
@@ -3403,6 +3408,7 @@ describe("memory plugin e2e", () => {
           action: "rejected",
           reason: "incognito_session",
         });
+        expect(incognitoRejected.details).not.toHaveProperty("memoryPersistence");
         expect(incognitoRejected.content?.[0]?.text).toContain("incognito session");
         expect(embeddingsCreate).not.toHaveBeenCalled();
         expect(loadLanceDbModule).not.toHaveBeenCalled();
@@ -3418,6 +3424,7 @@ describe("memory plugin e2e", () => {
           action: "rejected",
           reason: "prompt_injection_detected",
         });
+        expect(rejected.details).not.toHaveProperty("memoryPersistence");
         expect(rejected.content?.[0]?.text).toContain("not stored");
         expect(embeddingsCreate).not.toHaveBeenCalled();
         expect(loadLanceDbModule).not.toHaveBeenCalled();
@@ -3439,7 +3446,18 @@ describe("memory plugin e2e", () => {
           category: "preference",
         });
 
-        expect(stored.details?.action).toBe("created");
+        const createdId = (stored.details as { id?: unknown } | undefined)?.id;
+        expect(createdId).toBeTypeOf("string");
+        expect.soft(stored.details).toEqual({
+          action: "created",
+          id: createdId,
+          memoryPersistence: {
+            version: 1,
+            status: "created",
+            backend: "memory-lancedb",
+            target: { kind: "record", id: createdId },
+          },
+        });
         expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
         expect(embeddingsCreate).toHaveBeenCalledWith({
           model: "text-embedding-3-small",
@@ -3448,6 +3466,197 @@ describe("memory plugin e2e", () => {
         expect(add).toHaveBeenCalledTimes(1);
         expect(firstAddedMemory(add).text).toBe("The user prefers concise replies");
         expect(firstAddedMemory(add).importance).toBe(0.8);
+
+        const existingId = "existing-memory-id";
+        toArray.mockResolvedValueOnce([
+          {
+            id: existingId,
+            agentId: "main",
+            text: "The user prefers concise replies",
+            category: "preference",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0,
+          },
+        ]);
+        const duplicate = await storeTool.execute("test-call-duplicate", {
+          text: "The user prefers concise replies",
+          importance: 0.8,
+          category: "preference",
+        });
+        expect.soft(duplicate.details).toEqual({
+          action: "duplicate",
+          existingId,
+          existingText: "The user prefers concise replies",
+          memoryPersistence: {
+            version: 1,
+            status: "already_present",
+            backend: "memory-lancedb",
+            target: { kind: "record", id: existingId },
+          },
+        });
+        expect(add).toHaveBeenCalledTimes(1);
+
+        const normalizedExistingId = "normalized-existing-memory-id";
+        toArray.mockResolvedValueOnce([
+          {
+            id: normalizedExistingId,
+            agentId: "main",
+            text: "  \r\nThe user prefers caf\u00e9\rline two\r\n  ",
+            category: "preference",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0.01,
+          },
+        ]);
+        const normalizedEquivalent = await storeTool.execute("test-call-normalized-duplicate", {
+          text: "The user prefers cafe\u0301\nline two",
+          importance: 0.8,
+          category: "preference",
+        });
+        expect(normalizedEquivalent.details).toMatchObject({
+          action: "duplicate",
+          memoryPersistence: {
+            version: 1,
+            status: "already_present",
+            backend: "memory-lancedb",
+            target: { kind: "record", id: normalizedExistingId },
+          },
+        });
+
+        const internalWhitespaceId = "internal-whitespace-memory-id";
+        toArray.mockResolvedValueOnce([
+          {
+            id: internalWhitespaceId,
+            agentId: "main",
+            text: "The user  prefers concise replies",
+            category: "preference",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0.01,
+          },
+        ]);
+        const internalWhitespaceDifferent = await storeTool.execute(
+          "test-call-internal-whitespace-different",
+          {
+            text: "The user prefers concise replies",
+            importance: 0.8,
+            category: "preference",
+          },
+        );
+        expect(internalWhitespaceDifferent.details).toMatchObject({
+          action: "duplicate",
+          existingId: internalWhitespaceId,
+        });
+        expect(internalWhitespaceDifferent.details).not.toHaveProperty("memoryPersistence");
+
+        const caseDifferentId = "case-different-memory-id";
+        toArray.mockResolvedValueOnce([
+          {
+            id: caseDifferentId,
+            agentId: "main",
+            text: "Remember code ALPHA-7",
+            category: "fact",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0.01,
+          },
+        ]);
+        const caseDifferent = await storeTool.execute("test-call-case-different", {
+          text: "Remember code alpha-7",
+          importance: 0.8,
+          category: "fact",
+        });
+        expect(caseDifferent.details).toMatchObject({
+          action: "duplicate",
+          existingId: caseDifferentId,
+        });
+        expect(caseDifferent.details).not.toHaveProperty("memoryPersistence");
+
+        const semanticNearId = "semantic-near-different-memory-id";
+        toArray.mockResolvedValueOnce([
+          {
+            id: semanticNearId,
+            agentId: "main",
+            text: "The user does not prefer concise replies",
+            category: "preference",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0.01,
+          },
+        ]);
+        const semanticNearDifferent = await storeTool.execute("test-call-semantic-near-different", {
+          text: "The user prefers concise replies",
+          importance: 0.8,
+          category: "preference",
+        });
+        expect(semanticNearDifferent.details).toMatchObject({
+          action: "duplicate",
+          existingId: semanticNearId,
+        });
+        expect(semanticNearDifferent.details).not.toHaveProperty("memoryPersistence");
+
+        const laterExactId = "later-exact-memory-id";
+        toArray.mockResolvedValueOnce([
+          {
+            id: "first-semantic-near-memory-id",
+            agentId: "main",
+            text: "The user does not prefer concise replies",
+            category: "preference",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0.001,
+          },
+          {
+            id: laterExactId,
+            agentId: "main",
+            text: "The user prefers concise replies",
+            category: "preference",
+            importance: 0.8,
+            createdAt: Date.now(),
+            vector: [0.1, 0.2, 0.3],
+            _distance: 0.01,
+          },
+        ]);
+        const laterExact = await storeTool.execute("test-call-later-exact", {
+          text: "The user prefers concise replies",
+          importance: 0.8,
+          category: "preference",
+        });
+        expect(laterExact.details).toMatchObject({
+          action: "duplicate",
+          existingId: laterExactId,
+          memoryPersistence: {
+            status: "already_present",
+            target: { kind: "record", id: laterExactId },
+          },
+        });
+        expect(add).toHaveBeenCalledTimes(1);
+
+        embeddingsCreate.mockRejectedValueOnce({
+          status: 429,
+          error: {
+            message: "You exceeded your current quota, please check your plan and billing details.",
+            type: "insufficient_quota",
+            code: "insufficient_quota",
+          },
+        });
+        await expect(
+          storeTool.execute("test-call-quota", {
+            text: "The user uses metric units",
+            category: "preference",
+          }),
+        ).rejects.toMatchObject({
+          status: 429,
+          error: { type: "insufficient_quota", code: "insufficient_quota" },
+        });
+        expect(add).toHaveBeenCalledTimes(1);
       },
     });
   });

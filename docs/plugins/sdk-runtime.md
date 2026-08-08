@@ -36,6 +36,39 @@ Use `api.runtime.config.current()` only when a long-lived handler needs the curr
 
 Tool factories receive `ctx.runtimeConfig` plus `ctx.getRuntimeConfig()`. Use the getter inside a long-lived tool's `execute` callback when config can change after the tool definition was created.
 
+Tool factories also receive the host-owned `ctx.isTurnTainted()` reader. It is
+sticky for the active user turn and becomes true after untrusted network-derived
+tool content enters that turn. Evaluate it at mutation time rather than caching
+the initial value. A missing reader is not proof of a clean turn; persistence
+plugins should classify that origin conservatively.
+
+Plugins that implement `memory_store` can import the
+`MemoryPersistenceReceiptV1` type from `openclaw/plugin-sdk/core`. Opt into host
+receipt enforcement on the tool definition, then return a validated receipt
+only after the backend acknowledges the durable commit:
+
+```typescript
+memoryPersistenceReceiptVersion: 1,
+
+details: {
+  memoryPersistence: {
+    version: 1,
+    status: "created", // or "already_present" for an exact normalized fact
+    backend: "example-memory",
+    target: { kind: "record", id: storedId },
+  } satisfies MemoryPersistenceReceiptV1,
+}
+```
+
+For file storage, readback verification before returning the receipt is
+recommended. A transactional database may instead use its successful commit as
+the acknowledgement; document that distinction. The receipt proves storage,
+not index health or later semantic recall. For an opted-in tool, a rejection,
+semantic-near duplicate, or other completed result without a valid receipt is
+persistence-not-confirmed; do not use a receipt for approximate similarity
+alone. Unmarked legacy `memory_store` tools retain their previous success
+semantics for compatibility.
+
 Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.config.replaceConfigFile(...)`. Each write must choose an explicit `afterWrite` policy:
 
 - `afterWrite: { mode: "auto" }` lets the gateway reload planner decide.
