@@ -35,9 +35,11 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
+import { buildOpenAIResponsesReasoningReplayMetadata } from "../transports/openai-responses-replay-internal.js";
 import {
   processResponsesStream,
   ResponsesStreamFailure,
@@ -50,7 +52,6 @@ import type {
   Model,
   SimpleStreamOptions,
   StreamFunction,
-  StreamOptions,
 } from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -106,7 +107,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // Types
 // ============================================================================
 
-interface OpenAICodexResponsesOptions extends StreamOptions {
+interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -533,6 +534,8 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
 
   const resolvedOptions = {
     ...buildBaseOptions(model, options, apiKey),
+    authProfileId: (options as (SimpleStreamOptions & { authProfileId?: string }) | undefined)
+      ?.authProfileId,
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
   } satisfies OpenAICodexResponsesOptions;
   responsesPromptObserver.copy(options, resolvedOptions);
@@ -551,6 +554,8 @@ function buildRequestBody(
   const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: false,
     replayResponsesItemIds: false,
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
   });
 
   const body: RequestBody = {
@@ -655,6 +660,10 @@ async function processStream(
     abortFirstEventStream,
     onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
     signal: options?.signal,
+    reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+      sessionId: options?.sessionId,
+      authProfileId: options?.authProfileId,
+    }),
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
       applyResponsesServiceTierPricing(usage, serviceTier, model),
@@ -1518,6 +1527,10 @@ async function processWebSocketStream(
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
         signal: options?.signal,
+        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+          sessionId: options?.sessionId,
+          authProfileId: options?.authProfileId,
+        }),
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
           applyResponsesServiceTierPricing(usage, serviceTier, model),
@@ -1533,6 +1546,8 @@ async function processWebSocketStream(
         {
           includeSystemPrompt: false,
           replayResponsesItemIds: false,
+          sessionId: options?.sessionId,
+          authProfileId: options?.authProfileId,
         },
       ).filter((item) => item.type !== "function_call_output");
       entry.continuation = {

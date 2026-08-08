@@ -245,6 +245,11 @@ describe("OpenAI Responses provider prompt observer", () => {
           input: [
             ...((request.input as unknown[]) ?? []),
             { type: "reasoning", encrypted_content: "opaque", summary: [] },
+            {
+              type: "compaction",
+              id: "cmp_invalid",
+              encrypted_content: "opaque-compaction",
+            },
           ],
         }),
       },
@@ -259,6 +264,11 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
     expect(JSON.stringify(run.requests[0])).toContain("encrypted_content");
     expect(JSON.stringify(run.requests[1])).not.toContain("encrypted_content");
+    expect(
+      ((run.requests[1]?.input as Array<{ type?: string }> | undefined) ?? []).some(
+        (item) => item.type === "compaction",
+      ),
+    ).toBe(false);
   });
 
   it("uses cache-boundary and surrogate normalization as the expected prompt owner", async () => {

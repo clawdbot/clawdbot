@@ -31,7 +31,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
             totalTokens: 300_010,
             inputTokens: 300_000,
             cachedInputTokens: 250_000,
+            cacheWriteInputTokens: 5_000,
             outputTokens: 10,
+            reasoningOutputTokens: 4,
           },
         },
       }),
@@ -39,7 +41,16 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "codex_app_server.usage",
-      data: { modelContextWindow: 875_900, promptTokens: 300_000 },
+      data: {
+        activeContextTokens: 300_010,
+        cachedInputTokens: 250_000,
+        cacheWriteInputTokens: 5_000,
+        inputTokens: 300_000,
+        modelContextWindow: 875_900,
+        outputTokens: 10,
+        promptTokens: 300_000,
+        reasoningOutputTokens: 4,
+      },
     });
   });
 

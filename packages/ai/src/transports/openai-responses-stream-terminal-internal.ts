@@ -14,6 +14,7 @@ import {
   resolveResponsesTerminalStopReason,
 } from "../providers/openai-responses-terminal-usage.js";
 import type {
+  AssistantMessage,
   AssistantMessageEvent,
   Model,
   TextContent,
@@ -27,7 +28,10 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
-import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import {
+  captureOpenAIResponsesCompaction,
+  encodeTextSignatureV1,
+} from "./openai-responses-replay-internal.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -41,6 +45,7 @@ export type ResponsesThinkingBlock = ThinkingContent & {
 
 type TerminalOutput = {
   content: Array<TextContent | ThinkingContent | ToolCall>;
+  providerReplay?: AssistantMessage["providerReplay"];
   usage: Usage & { reasoningTokens?: number };
   stopReason: string;
   responseModel?: string;
@@ -259,7 +264,15 @@ export function createResponsesTerminalController(params: {
         params.completedOutputItemIdentities.add(identity);
       } else {
         params.setLastTextBlock(null);
-        if (includeToolCalls && item.type === "function_call") {
+        if (item.type === "compaction" && output.providerReplay?.id !== item.id) {
+          captureOpenAIResponsesCompaction(
+            output,
+            item,
+            blocks.length,
+            model,
+            options?.reasoningReplayMetadata,
+          );
+        } else if (includeToolCalls && item.type === "function_call") {
           const identity = `function_call:${item.call_id}`;
           if (params.completedOutputItemIdentities.has(identity)) {
             continue;

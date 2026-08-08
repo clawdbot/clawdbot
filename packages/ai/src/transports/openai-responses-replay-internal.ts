@@ -16,6 +16,13 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import { transformTransportMessages } from "./host-policy.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  buildOpenAIResponsesReplayContext,
+  createOpenAIResponsesCompactionPrefixPruner,
+  isSafeResponsesReplayItemId,
+  resolveNewestOpenAIResponsesCompactionReplay,
+} from "./openai-responses-compaction-replay.js";
+import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
@@ -33,6 +40,14 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+
+export {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+  createCompactionTracker,
+  createOpenAIResponsesCompactionPrefixPruner,
+  resolveNewestOpenAIResponsesCompactionReplay,
+} from "./openai-responses-compaction-replay.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
 
@@ -60,10 +75,20 @@ function stripEncryptedContentFields(value: unknown): { value: unknown; changed:
   }
   if (Array.isArray(value)) {
     let changed = false;
-    const next = value.map((item) => {
+    const next = value.flatMap((item) => {
+      if (
+        item &&
+        typeof item === "object" &&
+        !Array.isArray(item) &&
+        (item as Record<string, unknown>).type === "compaction" &&
+        "encrypted_content" in item
+      ) {
+        changed = true;
+        return [];
+      }
       const stripped = stripEncryptedContentFields(item);
       changed ||= stripped.changed;
-      return stripped.value;
+      return [stripped.value];
     });
     return changed ? { value: next, changed: true } : { value, changed: false };
   }
@@ -92,36 +117,6 @@ export function stripResponsesRequestEncryptedContent(
   return {
     ...params,
     input: stripped.value as ResponseInput,
-  };
-}
-
-function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? shortHash(normalized) : undefined;
-}
-
-function buildOpenAIResponsesReplayContext(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReplayContext {
-  return {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    baseUrlHash: hashOptionalReplayContextValue(model.baseUrl),
-    sessionHash: hashOptionalReplayContextValue(options?.sessionId),
-    authProfileHash: hashOptionalReplayContextValue(options?.authProfileId),
-  };
-}
-
-export function buildOpenAIResponsesReasoningReplayMetadata(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReasoningReplayMetadata {
-  return {
-    v: 1,
-    source: "openai-responses",
-    ...buildOpenAIResponsesReplayContext(model, options),
   };
 }
 
@@ -270,14 +265,6 @@ function normalizeResponsesReplayItemId(
   return `${prefix}_${shortHash(id)}`;
 }
 
-function isSafeResponsesReplayItemId(id: unknown): id is string {
-  return (
-    typeof id === "string" &&
-    id.length > 0 &&
-    id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH
-  );
-}
-
 export function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
@@ -385,6 +372,11 @@ export function convertResponsesMessages(
     normalizeToolCallId,
     { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
+  const compaction = resolveNewestOpenAIResponsesCompactionReplay(transformedMessages, model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+  });
+  const compactionPruner = createOpenAIResponsesCompactionPrefixPruner(compaction);
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
@@ -403,6 +395,10 @@ export function convertResponsesMessages(
   }
   let msgIndex = 0;
   for (const msg of transformedMessages) {
+    if (compactionPruner.shouldSkipMessage(msg)) {
+      msgIndex += 1;
+      continue;
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push(
@@ -428,11 +424,18 @@ export function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      const assistantCompaction = msg === compaction?.owner ? compaction : undefined;
       let textFallbackOrdinal = 0;
       let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
-      for (const block of msg.content) {
+      for (const [contentIndex, block] of msg.content.entries()) {
+        if (compactionPruner.shouldSkipAssistantBlock(msg, contentIndex)) {
+          continue;
+        }
+        if (assistantCompaction && contentIndex === assistantCompaction.replayIndex) {
+          output.push(assistantCompaction.item);
+        }
         if (block.type === "thinking") {
           if (
             shouldReplayReasoningItems &&
@@ -497,6 +500,7 @@ export function convertResponsesMessages(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
+          compactionPruner.recordToolCall(block.id);
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
@@ -517,6 +521,9 @@ export function convertResponsesMessages(
           previousReplayItemWasReasoning = false;
         }
       }
+      if (assistantCompaction && assistantCompaction.replayIndex >= msg.content.length) {
+        output.push(assistantCompaction.item);
+      }
       if (output.length > 0) {
         messages.push(...output);
       }
@@ -526,6 +533,10 @@ export function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
+      if (!compactionPruner.shouldKeepToolResult(msg.toolCallId)) {
+        msgIndex += 1;
+        continue;
+      }
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);

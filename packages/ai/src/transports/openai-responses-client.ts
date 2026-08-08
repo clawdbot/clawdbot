@@ -57,6 +57,7 @@ import {
   mergeTransportMetadata,
   transportAbortError,
 } from "./transport-stream-shared.js";
+import { redactIdentifier } from "./transport-utils.js";
 
 function resolveProviderTransportTurnState(
   model: Model,
@@ -208,6 +209,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `requestIdHash=${redactIdentifier(options?.requestId, { len: 64 })} ` +
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );

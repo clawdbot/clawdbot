@@ -29,7 +29,10 @@ import {
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent } from "./openai-responses-debug.js";
-import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import {
+  createCompactionTracker,
+  encodeTextSignatureV1,
+} from "./openai-responses-replay-internal.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
@@ -147,7 +150,7 @@ export async function processResponsesStream<TApi extends Api>(
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
-  const blockIndex = () => blocks.length - 1;
+  const compactionTracker = createCompactionTracker(output, model, options);
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
@@ -235,7 +238,7 @@ export async function processResponsesStream<TApi extends Api>(
         : {}),
     };
     blocks.push(slot.block);
-    slot.contentIndex = blockIndex();
+    slot.contentIndex = blocks.length - 1;
     startedTextBlocksByItemId.set(slot.item.id, {
       block: slot.block,
       index: slot.contentIndex,
@@ -299,6 +302,7 @@ export async function processResponsesStream<TApi extends Api>(
       } else if (event.type === "response.output_item.added") {
         materializeDeferredTextSlots();
         const item = event.item;
+        compactionTracker.added(item, blocks.length);
         if (item.type !== "message") {
           // Snapshot collapse only applies to back-to-back message items; any
           // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
@@ -515,6 +519,7 @@ export async function processResponsesStream<TApi extends Api>(
         const existingOutputSlot = resolveOutputItemSlot(event, item);
         materializeDeferredTextSlots(existingOutputSlot);
         const outputSlot = existingOutputSlot ?? getOrCreateOutputSlot(event, item);
+        compactionTracker.completed(item, blocks.length);
         if (item.type === "reasoning" && outputSlot?.type === "thinking") {
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
@@ -584,7 +589,7 @@ export async function processResponsesStream<TApi extends Api>(
                 ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
               };
               blocks.push(outputSlot.block);
-              outputSlot.contentIndex = blockIndex();
+              outputSlot.contentIndex = blocks.length - 1;
               stream.push({
                 type: "text_start",
                 contentIndex: outputSlot.contentIndex,
@@ -663,7 +668,7 @@ export async function processResponsesStream<TApi extends Api>(
             // Some compatible streams only send the completed item. Preserve
             // the normal balanced lifecycle and persist the call for replay.
             blocks.push(toolCall);
-            contentIndex = blockIndex();
+            contentIndex = blocks.length - 1;
             stream.push({ type: "toolcall_start", contentIndex, partial: output });
           }
 

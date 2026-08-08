@@ -27,6 +27,8 @@ vi.mock("../../logging/config.js", async (importOriginal) => {
 const EMAIL_PATTERN = String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`;
 const IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAARcnVOZAAAAKIDABCDEFGHIJKLMNOP8JJRuAAAAABJRU5ErkJggg==";
+const OPAQUE_COMPACTION =
+  "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 
 function readMessages(sessionFile: string) {
   return fs
@@ -450,6 +452,60 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       { sessionId: params.sessionId, updatedAt: Date.now() },
     );
   }
+
+  it("retains validated opaque provider replay state exactly", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "test-session-provider-replay";
+    const sessionKey = "test-channel:test-provider-replay";
+    await seedSessionEntry({ sessionId, sessionKey, storePath });
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath,
+      config: {},
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          id: "cmp_persisted",
+          data: OPAQUE_COMPACTION,
+          replayIndex: 0,
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.6-luna",
+          baseUrlHash: "ozhevd1smnk8s",
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+        },
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    const [stored] = (await readStoredMessages({ sessionId, sessionKey, storePath })) as Array<{
+      providerReplay?: { data?: string; sessionHash?: string; authProfileHash?: string };
+    }>;
+    expect(stored?.providerReplay).toMatchObject({
+      data: OPAQUE_COMPACTION,
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+  });
 
   it("always redacts exact assistant transcript appends", async () => {
     const sessionsDir = fixture.sessionsDir();

@@ -1,5 +1,6 @@
 import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { cloneProviderReplay } from "../../worker/transcript-message.js";
 
 export type WorkerInferenceModelIdentity = {
   api: string;
@@ -51,6 +52,9 @@ export function projectWorkerInferenceTerminalMessage(params: {
     model: params.modelIdentity.model,
     ...(params.message.responseModel ? { responseModel: params.message.responseModel } : {}),
     ...(params.message.responseId ? { responseId: params.message.responseId } : {}),
+    ...(params.message.providerReplay
+      ? { providerReplay: cloneProviderReplay(params.message.providerReplay) }
+      : {}),
     usage: {
       input: usage.input,
       output: usage.output,

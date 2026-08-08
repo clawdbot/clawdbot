@@ -274,6 +274,42 @@ describe("worker protocol schemas", () => {
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
   });
 
+  it("accepts opaque provider replay state on assistant transcript messages", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const providerReplay = {
+      v: 1 as const,
+      type: "openai-responses-compaction",
+      id: "cmp_worker",
+      data: "opaque-worker-compaction",
+      replayIndex: 1,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    };
+    const candidate = transcriptCommit({
+      messages: [{ ...assistantMessage, providerReplay }],
+    });
+
+    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: { ...providerReplay, privateScratch: "drop" },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");

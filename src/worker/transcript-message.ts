@@ -7,7 +7,7 @@ import {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 
@@ -21,6 +21,22 @@ export function cloneTextContent(part: { type: "text"; text: string; textSignatu
 
 export function cloneImageContent(part: { type: "image"; data: string; mimeType: string }) {
   return { type: "image" as const, data: part.data, mimeType: part.mimeType };
+}
+
+export function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
+  return {
+    v: state.v,
+    type: state.type,
+    ...(state.id === undefined ? {} : { id: state.id }),
+    data: state.data,
+    ...(state.replayIndex === undefined ? {} : { replayIndex: state.replayIndex }),
+    provider: state.provider,
+    api: state.api,
+    model: state.model,
+    ...(state.baseUrlHash === undefined ? {} : { baseUrlHash: state.baseUrlHash }),
+    ...(state.sessionHash === undefined ? {} : { sessionHash: state.sessionHash }),
+    ...(state.authProfileHash === undefined ? {} : { authProfileHash: state.authProfileHash }),
+  };
 }
 
 export function cloneUsage(
@@ -54,6 +70,9 @@ export function cloneUsage(
     model: message.model,
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
+    ...(message.providerReplay
+      ? { providerReplay: cloneProviderReplay(message.providerReplay) }
+      : {}),
     ...(message.diagnostics
       ? {
           diagnostics: message.diagnostics.map((diagnostic) => ({

@@ -458,9 +458,23 @@ describe("worker inference provider runtime", () => {
   it("projects provider terminal messages onto the closed worker schema", async () => {
     const runtime = setup();
     const message = finalMessage();
+    message.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      id: "cmp_worker_terminal",
+      data: "opaque-worker-terminal",
+      replayIndex: 1,
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    };
     Object.assign(message.content[0]!, { providerScratch: "text-state" });
     Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
     Object.assign(message.usage, { providerScratch: { requestId: "private" } });
+    Object.assign(message.providerReplay, { providerScratch: "private" });
     runtime.stream.mockImplementation(() => providerStream(message));
 
     const outcome = await runtime.executor(params(request(), vi.fn()));
@@ -469,6 +483,18 @@ describe("worker inference provider runtime", () => {
     expect(JSON.stringify(outcome)).not.toContain("providerScratch");
     expect(JSON.stringify(outcome)).not.toContain("partialArgs");
     expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+    expect(outcome).toMatchObject({
+      type: "done",
+      message: {
+        providerReplay: {
+          type: "openai-responses-compaction",
+          data: "opaque-worker-terminal",
+          replayIndex: 1,
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+        },
+      },
+    });
   });
 
   it("rejects an incomplete final argument stream", async () => {
