@@ -13,12 +13,12 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { suppressOpenAIResponsesCompaction } from "../transports/openai-responses-compaction-replay.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   createOpenAIResponsesCompactionPrefixPruner,
   createResponsesStreamWithEncryptedContentRetry,
   resolveNewestOpenAIResponsesCompactionReplay,
-  suppressOpenAIResponsesCompaction,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";

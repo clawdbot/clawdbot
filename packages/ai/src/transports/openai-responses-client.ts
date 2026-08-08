@@ -15,6 +15,7 @@ import {
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import { suppressOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
   type OpenAIResponsesOptions,
@@ -35,7 +36,6 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
-  suppressOpenAIResponsesCompaction,
 } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,

@@ -47,7 +47,6 @@ export {
   createCompactionTracker,
   createOpenAIResponsesCompactionPrefixPruner,
   resolveNewestOpenAIResponsesCompactionReplay,
-  suppressOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
