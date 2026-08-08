@@ -6,6 +6,7 @@ import { chromium, type CDPSession } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
   startExtensionRelayServer,
   type ExtensionRelayHandle,
 } from "../src/browser/extension-relay/relay-server.js";
@@ -153,6 +154,7 @@ describe.runIf(runE2E)("Chrome extension relay authorization", () => {
     const port = await listen(server);
     const wss = new WebSocketServer({
       noServer: true,
+      maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
       handleProtocols: (protocols) =>
         protocols.has("openclaw-extension-relay.v2") ? "openclaw-extension-relay.v2" : false,
     });
