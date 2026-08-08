@@ -189,23 +189,29 @@ async function reconcilePendingCreateProposal(
   }
   const store = storeOptions(options.env);
   const scope = proposalScope(options);
+  let reconciled:
+    | {
+        read: SkillProposalReadResult;
+        transition?: ReturnType<typeof transitionPendingSkillProposalToStale>;
+      }
+    | undefined;
   try {
-    return await withSkillProposalTargetLock(
+    reconciled = await withSkillProposalTargetLock(
       read.record,
       async () => {
         const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
         if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
-          return current ?? read;
+          return { read: current ?? read };
         }
         assertInsideWorkspace(workspaceDir, current.record.target.skillFile, "skill file");
         if (await readSkillProposalRollback(current.record.id, store)) {
-          return current;
+          return { read: current };
         }
         const targetContent = await readWorkspaceSkillFile(current.record.target.skillFile).catch(
           () => null,
         );
         if (targetContent === null) {
-          return current;
+          return { read: current };
         }
         const transition = transitionPendingSkillProposalToStale({
           record: current.record,
@@ -217,16 +223,13 @@ async function reconcilePendingCreateProposal(
             ...(options.env ? { env: options.env } : {}),
           },
         });
-        await dispatchSkillProposalChanged({
-          event: transition.event,
-          record: transition.record,
-          workspaceDir,
-          ...(options.agentId ? { agentId: options.agentId } : {}),
-        });
         return {
-          ...current,
-          record: transition.record,
-          revisionHash: hashSkillProposalRevision(transition.record),
+          read: {
+            ...current,
+            record: transition.record,
+            revisionHash: hashSkillProposalRevision(transition.record),
+          },
+          transition,
         };
       },
       store,
@@ -234,6 +237,15 @@ async function reconcilePendingCreateProposal(
   } catch {
     return read;
   }
+  if (reconciled.transition) {
+    await dispatchSkillProposalChanged({
+      event: reconciled.transition.event,
+      record: reconciled.transition.record,
+      workspaceDir,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+    });
+  }
+  return reconciled.read;
 }
 
 async function hydrateProposalSupportFiles(
