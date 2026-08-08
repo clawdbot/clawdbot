@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import { runAgentLoop, type StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -402,6 +404,80 @@ describe("toClientToolDefinitions – param coercion", () => {
       type: "text",
       text: "Tool loop warning: Reassess before retrying.",
     });
+  });
+
+  it("preserves a client tool loop warning in the session transcript", async () => {
+    const runId = "run-transcript-warning";
+    const toolCallId = "call-transcript-warning";
+    const tools = toClientToolDefinitions([makeClientTool("update_plan")], undefined, { runId });
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "toolUse",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: toolCallId,
+                name: "update_plan",
+                arguments: { query: "same plan" },
+              },
+            ],
+            api: "faux",
+            provider: "faux",
+            model: "faux-1",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: Date.now(),
+          },
+        });
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "update the plan", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools },
+      {
+        model: {
+          id: "faux-1",
+          name: "Faux",
+          provider: "faux",
+          api: "faux",
+          baseUrl: "http://localhost:0",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 1024,
+        },
+        convertToLlm: (agentMessages) => agentMessages as never,
+      },
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        content: expect.arrayContaining([
+          { type: "text", text: "Tool loop warning: Reassess before retrying." },
+        ]),
+      }),
+    );
   });
 
   it("returns terminal pending results for each client tool in a batch", async () => {
