@@ -6,6 +6,7 @@ set -euo pipefail
 
 HARNESS_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
+DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
@@ -56,6 +57,7 @@ LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 DOCKER_RUN_USER_ARGS=()
+PREPUBLISH_PLUGIN_REGISTRY_ARGS=()
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -69,6 +71,19 @@ fi
 if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED:-}" ]; then
   PROBE_ENV_ARGS+=(
     -e OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED="$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED"
+  )
+fi
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  PREPUBLISH_PLUGIN_REGISTRY_DIR="$(
+    cd "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" && pwd
+  )"
+  if [ ! -f "$PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" ]; then
+    echo "Prepublish plugin registry manifest is missing." >&2
+    exit 1
+  fi
+  PREPUBLISH_PLUGIN_REGISTRY_ARGS=(
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
+    -v "$PREPUBLISH_PLUGIN_REGISTRY_DIR:/tmp/openclaw-prepublish-plugin-registry:ro"
   )
 fi
 cleanup_outer() {
@@ -164,6 +179,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     "${PROBE_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
+    "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     "${DOCKER_RUN_USER_ARGS[@]}" \
     "$IMAGE_NAME" \
@@ -192,6 +208,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
   "${PROBE_ENV_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+  "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${DOCKER_RUN_USER_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -224,7 +241,9 @@ export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
-export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then
+  export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+fi
 export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
@@ -250,6 +269,9 @@ cleanup() {
   if [ -n "${plugin_registry_pid:-}" ]; then
     kill "$plugin_registry_pid" >/dev/null 2>&1 || true
   fi
+  if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+    systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
+  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     openclaw_e2e_terminate_gateways "$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
@@ -257,16 +279,49 @@ cleanup() {
 }
 trap cleanup EXIT
 
-configure_configured_plugin_install_fixture_registry() {
-  [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "configured-plugin-installs" ] || return 0
-
-  local fixture_root="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/configured-plugin-installs-npm-fixture"
+configure_plugin_registry() {
+  local fixture_root="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
   local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
   local port_file="$fixture_root/npm-registry-port"
   local log_file="$fixture_root/npm-registry.log"
-  mkdir -p "$package_dir"
-  FIXTURE_PACKAGE_DIR="$package_dir" node <<'"'"'NODE'"'"'
+  local registry_args=()
+
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    local manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
+    local registry_rows
+    registry_rows="$(
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST="$manifest" node <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+const path = require("node:path");
+const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
+  throw new Error("prepublish plugin registry manifest must contain packages");
+}
+for (const entry of manifest.packages) {
+  if (
+    typeof entry.name !== "string" ||
+    typeof entry.version !== "string" ||
+    typeof entry.tarball !== "string" ||
+    path.basename(entry.tarball) !== entry.tarball
+  ) {
+    throw new Error("invalid prepublish plugin registry package entry");
+  }
+  process.stdout.write(
+    `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
+  );
+}
+NODE
+    )"
+    while IFS=$'"'"'\t'"'"' read -r plugin_package_name plugin_package_version plugin_package_tarball; do
+      registry_args+=("$plugin_package_name" "$plugin_package_version" "$plugin_package_tarball")
+    done <<<"$registry_rows"
+  fi
+
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "configured-plugin-installs" ]; then
+    mkdir -p "$package_dir"
+    FIXTURE_PACKAGE_DIR="$package_dir" node <<'"'"'NODE'"'"'
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.FIXTURE_PACKAGE_DIR;
@@ -316,13 +371,20 @@ fs.writeFileSync(
   `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
 );
 NODE
-  tar -czf "$tarball" -C "$fixture_root" package
+    tar -czf "$tarball" -C "$fixture_root" package
+    registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
+  fi
+
+  if [ "${#registry_args[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  mkdir -p "$fixture_root"
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version" \
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
-    "@openclaw/brave-plugin" \
-    "2026.5.2" \
-    "$tarball" \
+    "${registry_args[@]}" \
     >"$log_file" 2>&1 &
   plugin_registry_pid="$!"
 
@@ -340,7 +402,7 @@ NODE
   done
 
   openclaw_e2e_print_log "$log_file" >&2
-  echo "Timed out waiting for configured plugin install npm fixture registry." >&2
+  echo "Timed out waiting for upgrade survivor npm registry." >&2
   return 1
 }
 
@@ -364,6 +426,7 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"
 fi
 
+configure_plugin_registry
 echo "Running package update against the mounted tarball..."
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
 if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
@@ -384,7 +447,6 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Skipping doctor repair until after restart proof."
 else
   echo "Running non-interactive doctor repair..."
-  configure_configured_plugin_install_fixture_registry
   if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
     echo "openclaw doctor failed" >&2
     openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log >&2

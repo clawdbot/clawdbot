@@ -263,7 +263,8 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (next) => {
+  state.applySettings = (patch) => {
+    const next = { ...state.settings, ...patch };
     state.settings = patchSettings({
       chatShowThinking: next.chatShowThinking,
       chatShowToolCalls: next.chatShowToolCalls,

@@ -173,12 +173,15 @@ describe("Buzz gateway lifecycle", () => {
     expect(setStatus).toHaveBeenCalledWith({
       accountId: account.accountId,
       running: true,
+      connected: true,
       lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
       configured: true,
       enabled: account.enabled,
       baseUrl: account.relayUrl,
       publicKey: BOT_PUBLIC_KEY,
       lastError: null,
+      terminalDisconnect: undefined,
     });
     gatewayMocks.onFatalError?.(new Error("relay failed"));
 

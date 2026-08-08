@@ -1,9 +1,5 @@
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type {
-  ChatAttachment,
-  ChatQueueItem,
-  ChatQueueSkillWorkshopRevision,
-} from "./chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -55,29 +51,14 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-function normalizeSkillWorkshopRevision(
-  value: unknown,
-): ChatQueueSkillWorkshopRevision | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const entry = value as Record<string, unknown>;
-  const proposalId = normalizeOptionalString(entry.proposalId);
-  if (!proposalId) {
-    return undefined;
-  }
-  const agentId = normalizeOptionalString(entry.agentId);
-  return {
-    proposalId,
-    ...(agentId ? { agentId: normalizeAgentId(agentId) } : {}),
-  };
-}
-
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const entry = value as Record<string, unknown>;
+  if (entry.skillWorkshopRevision !== undefined) {
+    return null;
+  }
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt =
@@ -130,6 +111,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (sendRunId) {
     item.sendRunId = sendRunId;
   }
+  const steerTargetRunId = normalizeOptionalString(entry.steerTargetRunId);
+  if (steerTargetRunId) {
+    item.steerTargetRunId = steerTargetRunId;
+  }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }
@@ -148,10 +133,6 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
-  }
-  const skillWorkshopRevision = normalizeSkillWorkshopRevision(entry.skillWorkshopRevision);
-  if (skillWorkshopRevision) {
-    item.skillWorkshopRevision = skillWorkshopRevision;
   }
   return item;
 }

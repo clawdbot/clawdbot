@@ -30,8 +30,6 @@ export async function resetPreparedModelCatalogForTest(): Promise<void> {
   await resetPreparedModelCatalogForTestLocal();
 }
 
-ensureOpenClawCliOnPath();
-
 const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
   () => import("./server-startup-early.js"),
 );
@@ -108,6 +106,7 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  ensureOpenClawCliOnPath();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;

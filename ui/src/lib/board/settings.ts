@@ -1,7 +1,9 @@
 import type { SessionBoardFace } from "../../../../src/shared/session-types.js";
 
 export type BoardFace = SessionBoardFace;
-export type BoardVisibleChatDock = "bottom" | "left" | "right";
+// Persisted-settings union; the render-layer equivalent is VisibleBoardDock
+// (chat-pane-shared.ts), derived from the protocol BoardTab shape.
+type BoardVisibleChatDock = "bottom" | "left" | "right";
 
 export type BoardSessionView = {
   activeTabId?: string;

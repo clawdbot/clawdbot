@@ -233,6 +233,16 @@ export async function noteChromeMcpBrowserReadiness(
   const managedProfiles = collectManagedProfiles(cfg);
   const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  if (resolved.enabled && resolved.extensionRelay.allowLegacyAuth) {
+    noteFn(
+      [
+        "- Legacy Browser Relay Authentication is enabled (browser.extensionRelay.allowLegacyAuth=true).",
+        "- Update paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set browser.extensionRelay.allowLegacyAuth=false.",
+        "- V2 clients never downgrade to legacy authentication.",
+      ].join("\n"),
+      "Browser relay authentication",
+    );
+  }
   const legacyClawdResidue = detectLegacyClawdBrowserProfileResidue(cfg, {
     configDir: deps?.configDir,
     pathExists: deps?.pathExists,

@@ -1,6 +1,10 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   SOURCE_REPO,
   TARGET_REPO,
   WORKSPACE,
@@ -72,8 +76,9 @@ async function chooseCustomFolder(page: Page, gateway: MockGateway) {
 async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
   const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
   await gateway.setOnline(false);
-  await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+  await waitForControlUiGatewayReconnecting(page);
   await gateway.setOnline(true);
+  await waitForControlUiGatewayReady(page);
   await expect
     .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
     .toBe(branchRequests + 1);
@@ -102,8 +107,9 @@ suite.define(() => {
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.deferNext("worktrees.branches");
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequests + 1);
@@ -303,9 +309,10 @@ suite.define(() => {
       const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.deferNext("node.list");
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBe(nodeRequestsBefore + 1);
@@ -456,8 +463,9 @@ suite.define(() => {
         } else {
           const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
-          await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+          await waitForControlUiGatewayReconnecting(page);
           await gateway.setOnline(true);
+          await waitForControlUiGatewayReady(page);
           await expect
             .poll(async () => (await gateway.getRequests("agents.list")).length)
             .toBe(agentRequestsBefore + 1);

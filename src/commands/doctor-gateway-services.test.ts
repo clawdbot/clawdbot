@@ -1,7 +1,8 @@
-// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -308,12 +309,7 @@ function createGatewayCommand(entrypoint: string) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
   const call = mock.mock.calls[index];

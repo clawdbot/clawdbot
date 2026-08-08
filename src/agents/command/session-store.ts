@@ -2,7 +2,11 @@
  * Updates persisted session metadata after agent command runs.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { setSessionRuntimeModel, type SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  setSessionRuntimeModel,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -226,6 +230,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
       next.totalTokensFresh = true;
+      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
       next.inputTokens = undefined;
       next.outputTokens = undefined;
       next.cacheRead = undefined;
@@ -234,9 +239,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     } else if (hasUsageTotalTokens) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
+      next.totalTokensVersion = undefined;
     }
     if (!useCompactionSnapshot) {
       next.cacheRead = usage.cacheRead ?? 0;
@@ -251,6 +258,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } else if (compactionTokensAfter !== undefined && !preserveUserFacingRunState) {
     next.totalTokens = compactionTokensAfter;
     next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
@@ -264,6 +272,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   ) {
     next.totalTokens = entry.totalTokens;
     next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
@@ -514,12 +523,14 @@ export async function recordCliCompactionInStore(params: {
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
     next.cacheWrite = undefined;
   } else {
     next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;

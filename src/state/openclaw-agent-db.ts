@@ -579,6 +579,11 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
     );
 }
 
+/** Returns whether this exact process-held database is incognito/in-memory. */
+export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase): boolean {
+  return incognitoDatabases.has(database);
+}
+
 /** List process-held agent databases without opening or inspecting fixture state. */
 export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
   return [...cachedDatabases.values()]

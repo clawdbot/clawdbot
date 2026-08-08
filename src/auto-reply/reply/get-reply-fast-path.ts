@@ -8,6 +8,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
@@ -222,6 +223,9 @@ export function initFastReplySessionState(params: {
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
   const bodyStripped = resetTriggered ? (resetCommand.payload ?? "") : (ctx.agentText ?? "");
   const now = Date.now();
+  const resetPreservedSelection = resetTriggered
+    ? resolveResetPreservedSelection({ entry: existingEntry })
+    : {};
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -245,28 +249,16 @@ export function initFastReplySessionState(params: {
           subagentControlScope: existingEntry.subagentControlScope,
         }
       : {}),
+    ...resetPreservedSelection,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
     agentStatus: undefined,
-    thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
-    verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
-    reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
-    ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
+    thinkingLevel: existingEntry?.thinkingLevel,
+    verboseLevel: existingEntry?.verboseLevel,
+    reasoningLevel: existingEntry?.reasoningLevel,
+    ttsAuto: existingEntry?.ttsAuto,
     responseUsage: existingEntry?.responseUsage,
-    modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
-    providerOverride: resetTriggered
-      ? existingEntry?.providerOverride
-      : existingEntry?.providerOverride,
-    authProfileOverride: resetTriggered
-      ? existingEntry?.authProfileOverride
-      : existingEntry?.authProfileOverride,
-    authProfileOverrideSource: resetTriggered
-      ? existingEntry?.authProfileOverrideSource
-      : existingEntry?.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: resetTriggered
-      ? existingEntry?.authProfileOverrideCompactionCount
-      : existingEntry?.authProfileOverrideCompactionCount,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
     ...(normalizeOptionalString(ctx.Provider)
       ? { channel: normalizeOptionalString(ctx.Provider) }

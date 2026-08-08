@@ -10,6 +10,7 @@ import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   createStateSchemaInlinePlugin,
@@ -289,6 +290,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-accessor.sqlite-archive.worker":
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
@@ -581,10 +584,13 @@ function buildUnifiedDeclarationPartitions(
     extensionEntriesById.set(extensionId, extensionEntries);
   }
 
-  const pluginSdkPartitions = partitionUnifiedEntryGroups(
-    pluginSdkEntries.map((entry) => [entry]),
-    2,
+  const publicPluginSdkEntryNames = new Set(
+    publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`),
   );
+  const pluginSdkPartitions = [
+    pluginSdkEntries.filter(([name]) => publicPluginSdkEntryNames.has(name)),
+    pluginSdkEntries.filter(([name]) => !publicPluginSdkEntryNames.has(name)),
+  ];
   const extensionPartitions = partitionUnifiedEntryGroups(
     [...extensionEntriesById.entries()]
       .toSorted(([left], [right]) => left.localeCompare(right))

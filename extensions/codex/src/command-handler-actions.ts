@@ -1,5 +1,6 @@
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexComputerUseSetupParams } from "./app-server/computer-use.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -331,9 +332,23 @@ export async function setConversationModel(
     return "Cannot set Codex model because this command did not include a stable binding identity.";
   }
   if (!normalized) {
+    const currentSession =
+      ctx.sessionId && ctx.sessionKey
+        ? getSessionEntry({
+            storePath: resolveStorePath(ctx.config.session?.store, { agentId: target.agentId }),
+            sessionKey: ctx.sessionKey,
+            hydrateSkillPromptRefs: false,
+            readConsistency: "latest",
+          })
+        : undefined;
+    const selectedModel =
+      currentSession && currentSession.sessionId === ctx.sessionId
+        ? currentSession.modelOverride
+        : undefined;
     const binding = await deps.bindingStore.read(target.identity);
-    return binding?.model
-      ? `Codex model: ${formatCodexDisplayText(binding.model)}`
+    const activeModel = selectedModel ?? binding?.model;
+    return activeModel
+      ? `Codex model: ${formatCodexDisplayText(activeModel)}`
       : "Usage: /codex model <model>";
   }
   return await deps.setCodexConversationModel({
@@ -343,6 +358,15 @@ export async function setConversationModel(
     model: normalized,
     agentDir: target.agentDir,
     config: ctx.config,
+    ...(ctx.sessionId && ctx.sessionKey
+      ? {
+          session: {
+            agentId: target.agentId,
+            sessionId: ctx.sessionId,
+            sessionKey: ctx.sessionKey,
+          },
+        }
+      : {}),
   });
 }
 

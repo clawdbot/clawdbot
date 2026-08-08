@@ -109,7 +109,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const params = buildGoalParams("/goal build a 3d game", storePath);
@@ -130,7 +136,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const slashParams = buildGoalParams("/goal start /status", storePath);
@@ -146,7 +158,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath: bangStorePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const bangParams = buildGoalParams("/goal start !npm test", bangStorePath);
@@ -294,6 +312,7 @@ describe("goal commands", () => {
         updatedAt: 1,
         totalTokens: 25,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

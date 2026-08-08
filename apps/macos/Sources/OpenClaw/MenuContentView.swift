@@ -207,6 +207,7 @@ struct MenuContent: View {
     private var connectionLabel: String {
         DashboardGatewayMenuModel.connectionLabel(
             mode: self.state.connectionMode,
+            controlState: self.controlChannel.state,
             entries: self.dashboardManager.gatewayEntries)
     }
 
@@ -386,6 +387,18 @@ struct MenuContent: View {
     }
 
     private var healthStatus: (label: String, color: Color) {
+        if self.state.connectionMode == .remote {
+            let live = GatewayConnectionPresentation(state: self.controlChannel.state)
+            switch live.tone {
+            case .healthy:
+                break
+            case .transient:
+                return (live.generalSubtitle, .orange)
+            case .attention:
+                return (live.generalSubtitle, .red)
+            }
+        }
+
         if let activity = self.activityStore.current {
             let color: Color = activity.role == .main ? .accentColor : .gray
             let roleLabel = activity.role == .main ? "Main" : "Other"

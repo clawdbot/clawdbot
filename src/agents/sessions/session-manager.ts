@@ -67,6 +67,13 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessage(message, options);
   }
 
+  override appendMessageWithTranscriptAnchor(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ) {
+    return super.appendMessageWithTranscriptAnchor(message, options);
+  }
+
   static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
     const header = entries.find(

@@ -331,6 +331,10 @@ export async function prepareSimpleCompletionModel(params: {
             mode: auth.mode,
             availability: true,
             evidence: "runtime",
+            // The credential is already resolved by the caller and wrapped as
+            // required provider-binding ownership below, so it is not an
+            // ambient discovery competing with declared profiles.
+            authorization: "declared",
           });
       const routeAuthDecision = selectOpenAIModelRouteAuth({
         resolution: routeResolution,

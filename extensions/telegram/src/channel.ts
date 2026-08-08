@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelBlockedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
@@ -89,6 +90,7 @@ import {
   createTelegramPluginBase,
   findTelegramTokenOwnerAccountId,
   formatDuplicateTelegramTokenReason,
+  resolveTelegramConfigAccessorAccount,
   telegramConfigAdapter,
 } from "./shared.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
@@ -1133,11 +1135,7 @@ export const telegramPlugin = createChatChannelPlugin({
         }
         if (unauthorizedTokenReason) {
           ctx.log?.error?.(`[${account.accountId}] ${unauthorizedTokenReason}`);
-          setStatus({
-            lifecycle: "blocked",
-            terminalDisconnect: true,
-            lastError: unauthorizedTokenReason,
-          });
+          setStatus(channelBlockedPatch(unauthorizedTokenReason));
           throw new Error(unauthorizedTokenReason);
         }
         ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
@@ -1249,7 +1247,8 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   security: telegramSecurityAdapter,
   threading: {
-    topLevelReplyToMode: "telegram",
+    resolveReplyToMode: ({ cfg, accountId }) =>
+      resolveTelegramConfigAccessorAccount({ cfg, accountId }).config.replyToMode ?? "off",
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
     resolveCurrentChannelId: ({ to, threadId }) => {

@@ -37,11 +37,7 @@ import { createTelegramBot } from "./bot.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError, isTelegramAuthenticationError } from "./network-errors.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
-import {
-  resolveTelegramIngressSpoolDir,
-  telegramSpooledUpdateLaneKey,
-  writeTelegramSpooledUpdate,
-} from "./telegram-ingress-spool.js";
+import { resolveTelegramIngressSpoolDir } from "./telegram-ingress-spool.js";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -347,6 +343,9 @@ export async function startTelegramWebhook(opts: {
     return closeTransportPromise;
   };
   const botAbortController = new AbortController();
+  const accountAbortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, shutdownAbortController.signal])
+    : shutdownAbortController.signal;
   const botFetchAbortSignal = opts.abortSignal
     ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
     : botAbortController.signal;
@@ -355,6 +354,7 @@ export async function startTelegramWebhook(opts: {
     runtime,
     proxyFetch: opts.fetch,
     fetchAbortSignal: botFetchAbortSignal,
+    accountAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
     telegramTransport,
@@ -391,7 +391,6 @@ export async function startTelegramWebhook(opts: {
 
   const log = (line: string) => runtime.log?.(line);
   let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
-  const requestWebhookSpoolDrain = () => webhookIngressMonitor?.requestDrain();
   const startWebhookSpoolDrain = () => {
     if (webhookIngressMonitor) {
       return;
@@ -485,17 +484,16 @@ export async function startTelegramWebhook(opts: {
 
       // Telegram sees 200 only after the update is durable. If SQLite rejects
       // the enqueue, this path returns non-200 so Telegram redelivers.
-      await writeTelegramSpooledUpdate({
-        spoolDir,
-        update: body.value,
-        laneKey: telegramSpooledUpdateLaneKey(body.value, botInfo),
-      });
+      const ingressMonitor = webhookIngressMonitor;
+      if (!ingressMonitor) {
+        throw new Error("Telegram webhook ingress is not ready.");
+      }
+      await ingressMonitor.admit(body.value);
       // Enqueue duplicate detection makes Telegram webhook retries idempotent:
       // re-posted update_ids map to the same spool row and still ack fast.
       res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
       status.noteWebhookUpdateReceived();
-      requestWebhookSpoolDrain();
       if (diagnosticsEnabled) {
         logWebhookProcessed({
           channel: "telegram",

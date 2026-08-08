@@ -47,7 +47,6 @@ type ChatComposerViewContext = {
   showAbortableUi: boolean;
   activeSession: GatewaySessionRow | undefined;
   visibleDraft: string;
-  tokens: string | null;
   contextNotice: TemplateResult | typeof nothing;
   composerControls: TemplateResult | typeof nothing;
   runStatusAnnouncement: string;
@@ -83,7 +82,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     showAbortableUi,
     activeSession,
     visibleDraft,
-    tokens,
     contextNotice,
     composerControls,
     runStatusAnnouncement,
@@ -407,13 +405,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   placeholder=${placeholder}
                   rows="1"
                 ></textarea>
-                ${tokens
-                  ? html`
-                      <div class="agent-chat__token-row">
-                        <span class="agent-chat__token-count">${tokens}</span>
-                      </div>
-                    `
-                  : nothing}
                 <span
                   id=${slashMenuAnnouncementId}
                   class="agent-chat__sr-only"

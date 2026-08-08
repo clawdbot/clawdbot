@@ -224,7 +224,7 @@ async function resolveActiveWakeWithRetries(
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
-  isSourceSessionEffectsAllowed?: () => boolean,
+  isAttemptAllowed?: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
@@ -247,10 +247,13 @@ async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
-  const attemptWake = (options: EmbeddedAgentQueueMessageOptions) =>
-    isSourceSessionEffectsAllowed?.() === false
-      ? SOURCE_OWNER_CHANGED
-      : resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, options);
+  const attemptWake = async (options: EmbeddedAgentQueueMessageOptions) => {
+    if (isAttemptAllowed?.() === false) {
+      return SOURCE_OWNER_CHANGED;
+    }
+    const result = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, options);
+    return isAttemptAllowed?.() === false ? SOURCE_OWNER_CHANGED : result;
+  };
   let outcome = await attemptWake(currentOptions);
   const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
   let compactionRetryIndex = 0;
@@ -261,7 +264,7 @@ async function resolveActiveWakeWithRetries(
     if (outcome.queued || signal?.aborted) {
       break;
     }
-    if (isSourceSessionEffectsAllowed?.() === false) {
+    if (isAttemptAllowed?.() === false) {
       outcome = SOURCE_OWNER_CHANGED;
       break;
     }
@@ -864,6 +867,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
@@ -957,6 +961,20 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "requester session abandoned after timeout",
       };
     }
+    const isCompletionDeliveryAllowed = () =>
+      params.isSourceSessionEffectsAllowed?.() !== false &&
+      !(params.expectsCompletionMessage && params.isCompletionOwnedByRequesterYield?.());
+    if (!isCompletionDeliveryAllowed()) {
+      // sessions_yield owns the post-turn synthesis. Starting or steering a
+      // requester turn here would replay the original fanout during handoff.
+      return {
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_pending",
+        terminal: true,
+        disposition: "intentional_non_delivery",
+      };
+    }
     const tryTextCompletionDirectDelivery = () =>
       deliverCompletionDirect({
         cfg,
@@ -965,7 +983,7 @@ async function sendSubagentAnnounceDirectly(params: {
         deliveryTarget,
         internalEvents: params.internalEvents,
         onDeliveryResult: params.onDeliveryResult,
-        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
@@ -1002,7 +1020,7 @@ async function sendSubagentAnnounceDirectly(params: {
         params.triggerMessage,
         wakeOptions,
         params.signal,
-        params.isSourceSessionEffectsAllowed,
+        isCompletionDeliveryAllowed,
       );
       if (wakeOutcome === SOURCE_OWNER_CHANGED) {
         return sourceOwnerChangedResult();
@@ -1080,9 +1098,9 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        isAttemptAllowed: params.isSourceSessionEffectsAllowed,
+        isAttemptAllowed: isCompletionDeliveryAllowed,
         run: async () => {
-          if (params.isSourceSessionEffectsAllowed?.() === false) {
+          if (!isCompletionDeliveryAllowed()) {
             throw new SourceOwnerChangedError();
           }
           return await runAnnounceAgentCall({
@@ -1108,6 +1126,9 @@ async function sendSubagentAnnounceDirectly(params: {
           });
         },
       });
+      if (!isCompletionDeliveryAllowed()) {
+        return sourceOwnerChangedResult();
+      }
     } catch (err) {
       if (err instanceof SourceOwnerChangedError) {
         return sourceOwnerChangedResult();
@@ -1318,6 +1339,7 @@ export async function deliverSubagentAnnouncement(params: {
   sourceChannel?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
@@ -1474,6 +1496,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
         requireVisibleReply: params.requireVisibleReply,

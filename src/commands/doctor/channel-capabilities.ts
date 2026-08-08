@@ -1,10 +1,10 @@
+import { findBundledChannelCatalogMetadata } from "../../channels/bundled-channel-catalog-read.js";
 // Doctor capability lookup for channel-specific policy and migration behavior.
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ChannelDmAllowFromMode } from "../../channels/plugins/dm-access.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { findBundledPackageChannelMetadata } from "../../plugins/bundled-package-channel-metadata.js";
 import type { PluginPackageChannelDoctorCapabilities } from "../../plugins/manifest.js";
 
 type DoctorGroupModel = "sender" | "route" | "hybrid";
@@ -39,10 +39,10 @@ function mergeDoctorChannelCapabilities(
   };
 }
 
-function getManifestDoctorCapabilities(
+function getCatalogDoctorCapabilities(
   channelId: string,
 ): PluginPackageChannelDoctorCapabilities | undefined {
-  return findBundledPackageChannelMetadata(channelId)?.doctorCapabilities;
+  return findBundledChannelCatalogMetadata(channelId)?.doctorCapabilities;
 }
 
 /** Resolve doctor behavior capabilities from channel metadata, plugin runtime, or defaults. */
@@ -51,9 +51,9 @@ export function getDoctorChannelCapabilities(channelName?: string): DoctorChanne
     return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
   }
 
-  const manifestCapabilities = getManifestDoctorCapabilities(channelName);
-  if (manifestCapabilities) {
-    return mergeDoctorChannelCapabilities(manifestCapabilities);
+  const catalogCapabilities = getCatalogDoctorCapabilities(channelName);
+  if (catalogCapabilities) {
+    return mergeDoctorChannelCapabilities(catalogCapabilities);
   }
 
   const channelId = normalizeAnyChannelId(channelName);
@@ -65,7 +65,7 @@ export function getDoctorChannelCapabilities(channelName?: string): DoctorChanne
   if (pluginDoctor) {
     return mergeDoctorChannelCapabilities(pluginDoctor);
   }
-  return mergeDoctorChannelCapabilities(getManifestDoctorCapabilities(channelId));
+  return mergeDoctorChannelCapabilities(getCatalogDoctorCapabilities(channelId));
 }
 
 type DoctorChannelAccountIds = {

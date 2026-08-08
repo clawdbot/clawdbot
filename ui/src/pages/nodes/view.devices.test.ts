@@ -236,6 +236,7 @@ describe("nodes inventory rendering", () => {
           platform: "linux",
           version: "2026.7.11",
           lastInputSeconds: 5,
+          ts: 1_000,
         },
       ],
       devicesList: {
@@ -269,7 +270,7 @@ describe("nodes inventory rendering", () => {
         ],
         paired: [],
       },
-      presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe" }],
+      presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe", ts: 1_000 }],
     });
 
     const section = getInventorySection(container);
@@ -539,8 +540,15 @@ describe("nodes inventory rendering", () => {
           roles: ["operator"],
           platform: "macos 26.5.2",
           lastInputSeconds: 90,
+          ts: 1_000,
         },
-        { instanceId: "left-1", host: "gone", mode: "webchat", reason: "disconnect" },
+        {
+          instanceId: "left-1",
+          host: "gone",
+          mode: "webchat",
+          reason: "disconnect",
+          ts: 2_000,
+        },
       ],
     });
     const section = getSection(container, "Connected without pairing");

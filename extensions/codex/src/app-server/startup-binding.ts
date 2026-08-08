@@ -501,7 +501,8 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     projectedTurnTokens: params.projectedTurnTokens,
   });
   const sessionTokens =
-    sessionRecord?.totalTokensFresh !== false &&
+    sessionRecord?.totalTokensFresh === true &&
+    sessionRecord.totalTokensVersion === 1 &&
     typeof sessionRecord?.totalTokens === "number" &&
     Number.isFinite(sessionRecord.totalTokens)
       ? sessionRecord.totalTokens

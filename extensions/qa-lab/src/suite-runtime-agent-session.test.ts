@@ -6,6 +6,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
@@ -315,6 +316,49 @@ describe("qa suite runtime agent session helpers", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reports bounded persisted compaction summaries", async () => {
+    const tempRoot = await makeTempDir("qa-session-compaction-summaries-");
+    const sessionId = "compaction-summary";
+    const sessionKey = "agent:qa:compaction-summary";
+    const summaries = Array.from({ length: 18 }, (_, index) => `summary-${index}`);
+    await seedQaSession({ tempRoot, sessionId, sessionKey });
+
+    let parentId: string | null = null;
+    for (const [index, summary] of summaries.entries()) {
+      const id = `compaction-${index}`;
+      await appendSqliteSessionTranscriptEventForTest({
+        agentId: "qa",
+        env: qaSessionEnv(tempRoot),
+        sessionId,
+        sessionKey,
+        event: {
+          type: "compaction",
+          id,
+          parentId,
+          timestamp: new Date(index).toISOString(),
+          summary,
+          firstKeptEntryId: id,
+          tokensBefore: 100,
+        },
+      });
+      parentId = id;
+    }
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionId,
+      sessionKey,
+      message: { role: "assistant", content: "done" },
+    });
+
+    const result = await readSessionTranscriptSummary(
+      { gateway: { tempRoot } } as never,
+      sessionKey,
+    );
+
+    expect(result.compactionSummaries).toEqual(summaries.slice(-16));
+    expect(result.finalText).toBe("done");
+  });
+
   it("rejects an empty QA session transcript seed", async () => {
     const tempRoot = await makeTempDir("qa-session-seed-empty-");
 
@@ -363,6 +407,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 2,
       userMessageCount: 0,
@@ -391,6 +436,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 3,
       userMessageCount: 0,
@@ -447,6 +493,7 @@ describe("qa suite runtime agent session helpers", () => {
       ),
     ).resolves.toEqual({
       assistantToolCallCounts: { message: 1 },
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 4,
       userMessageCount: 1,
@@ -734,6 +781,7 @@ describe("qa suite runtime agent session helpers", () => {
       }),
     ).resolves.toEqual({
       assistantToolCallCounts: {},
+      compactionSummaries: [],
       completedToolCallCounts: {},
       eventCursor: 0,
       userMessageCount: 0,

@@ -178,6 +178,38 @@ describe("calculateContextTokens", () => {
     expect(estimate.lastUsageIndex).toBe(0);
   });
 
+  it("does not scan past a zero unavailable context marker", () => {
+    const messages: AgentMessage[] = [
+      createAssistant("old cumulative turn", createUsage(950), 0),
+      {
+        ...createAssistant("usage unavailable", createUsage(0), 1),
+        usage: {
+          ...createUsage(0),
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    ];
+    const estimate = estimateContextTokens(messages);
+
+    expect(estimate.usageTokens).toBe(0);
+    expect(estimate.lastUsageIndex).toBeNull();
+    expect(estimate.tokens).toBeGreaterThan(0);
+    expect(estimate.tokens).toBeLessThan(950);
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
+  });
+
+  it("treats legacy CLI usage without context provenance as a barrier", () => {
+    const legacyCli = {
+      ...createAssistant("legacy CLI", createUsage(950), 1),
+      api: "cli",
+      usage: { ...createUsage(950), contextUsage: undefined },
+    };
+    const messages = [createAssistant("old", createUsage(900), 0), legacyCli];
+
+    expect(estimateContextTokens(messages).usageTokens).toBe(0);
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
+  });
+
   it("ignores an all-zero terminal usage block", () => {
     const validUsage = createUsage(20);
     const messages: AgentMessage[] = [
@@ -498,6 +530,67 @@ describe("generateSummary thinking options", () => {
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["empty", []],
+    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
+    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
+  ])("rejects %s compaction output", async (_name, content) => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content,
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createUsage(1),
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "low",
+      streamFn,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected empty compaction output to fail");
+    }
+    expect(result.error).toMatchObject({
+      name: "CompactionError",
+      code: "summarization_failed",
+      message: "Summarization failed: model returned no summary text",
+    });
   });
 });
 

@@ -1,27 +1,26 @@
 // Control UI tests prove locale chunk recovery through a real browser reconnect.
-import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page, Route } from "playwright";
+import { expect, it } from "vitest";
 import { SUPPORTED_LOCALES } from "../i18n/lib/registry.ts";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI offline locale retry",
+  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
+
 const frenchLocaleModule = /\/src\/i18n\/locales\/fr\.ts(?:\?.*)?$/;
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
 async function createContext(): Promise<BrowserContext> {
-  return browser.newContext({
+  return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1280 },
@@ -55,22 +54,7 @@ async function reconnect(page: Page, gateway: MockGatewayControls): Promise<void
   await expect.poll(() => gatewayPhase(page)).toBe("connected");
 }
 
-describeControlUiE2e("Control UI offline locale retry", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not available at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer(undefined, { source: true });
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("lazy-loads each registered locale only after the operator selects it", async () => {
     const context = await createContext();
     const page = await context.newPage();
@@ -84,7 +68,7 @@ describeControlUiE2e("Control UI offline locale retry", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}settings/appearance`);
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
       const picker = page.locator("#settings-language wa-select");
       await picker.waitFor();
       expect(requests.size).toBe(0);
@@ -116,7 +100,7 @@ describeControlUiE2e("Control UI offline locale retry", () => {
     let navigationCount = 0;
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) {

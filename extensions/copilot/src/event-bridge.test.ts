@@ -129,6 +129,7 @@ function createFakeSession(
     },
     off,
     on,
+    send: vi.fn().mockResolvedValue("sdk-user"),
     sendAndWait: vi.fn().mockResolvedValue(undefined),
     sessionId: "sdk-session-id",
   };
@@ -194,7 +195,9 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
-    expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
+    expect(bridge.snapshot().toolMetas).toEqual([
+      { meta: "child write", toolName: "write", isError: false },
+    ]);
     expect(
       bridge.recordSendResult({
         ...makeAssistantMessageEvent("child final"),
@@ -796,7 +799,7 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().toolMetas).toEqual([
-      { meta: "details", toolName: "bash" },
+      { meta: "details", toolName: "bash", isError: false },
       { meta: "failed", toolName: "read", isError: true },
     ]);
   });

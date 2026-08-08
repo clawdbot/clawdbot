@@ -33,6 +33,12 @@ export type McpOAuthCredentialsStatus = {
   hasLastAuthorizationUrl: boolean;
 };
 
+/** Attempt-scoped PKCE facts captured before the login lease is released. */
+export type McpOAuthAuthorizationSession = {
+  codeVerifier: string;
+  redirectUrl: string;
+};
+
 const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
 const TOKEN_EXPIRY_SKEW_MS = 30_000;
 const MCP_OAUTH_LEASE_MS = 60_000;
@@ -292,30 +298,44 @@ async function runMcpOAuthLoginAttempt(
     serverUrl: string;
     config?: McpOAuthConfig;
     authorizationCode?: string;
+    codeVerifier?: string;
     fetchFn?: FetchLike;
     onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+    onAuthorizationSession?: (session: McpOAuthAuthorizationSession) => void;
     resourceMetadataUrl?: URL;
     scope?: string;
     forceAuthorization?: boolean;
   },
   lease: OpenClawStateLeaseContext,
 ): Promise<"authorized" | "redirect"> {
-  const result = await auth(
-    createMcpOAuthClientProvider({
-      ...params,
-      allowAuthorizationRedirect: true,
-      suppressStoredTokens: params.forceAuthorization,
-      lease,
-    }),
-    {
-      serverUrl: params.serverUrl,
-      authorizationCode: normalizeOptionalString(params.authorizationCode),
-      resourceMetadataUrl: params.resourceMetadataUrl,
-      scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
-      fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
-    },
-  );
+  const provider = createMcpOAuthClientProvider({
+    ...params,
+    allowAuthorizationRedirect: true,
+    suppressStoredTokens: params.forceAuthorization,
+    lease,
+  });
+  if (params.codeVerifier) {
+    const codeVerifier = params.codeVerifier;
+    provider.codeVerifier = () => codeVerifier;
+  }
+  const result = await auth(provider, {
+    serverUrl: params.serverUrl,
+    authorizationCode: normalizeOptionalString(params.authorizationCode),
+    resourceMetadataUrl: params.resourceMetadataUrl,
+    scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
+    fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
+  });
   lease.assertOwned();
+  if (result === "REDIRECT" && params.onAuthorizationSession) {
+    const redirectUrl = provider.redirectUrl;
+    if (!redirectUrl) {
+      throw new Error("Missing MCP OAuth redirect URL after authorization started.");
+    }
+    params.onAuthorizationSession({
+      codeVerifier: await provider.codeVerifier(),
+      redirectUrl: String(redirectUrl),
+    });
+  }
   return result === "AUTHORIZED" ? "authorized" : "redirect";
 }
 
@@ -325,8 +345,10 @@ export async function runMcpOAuthLogin(params: {
   serverUrl: string;
   config?: McpOAuthConfig;
   authorizationCode?: string;
+  codeVerifier?: string;
   fetchFn?: FetchLike;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+  onAuthorizationSession?: (session: McpOAuthAuthorizationSession) => void;
 }): Promise<"authorized" | "redirect"> {
   const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
   return await withMcpOAuthLease(storeKey, async (lease) => {

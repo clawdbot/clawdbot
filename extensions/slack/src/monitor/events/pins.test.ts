@@ -9,9 +9,6 @@ type PinOverrides = import("./system-event-test-harness.js").SlackSystemEventTes
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => pinEnqueueMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => pinEnqueueMock(...args),
-}));
 type PinHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type PinCase = {

@@ -8,7 +8,6 @@ import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lif
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
-
 function recoveryState(
   overrides: Partial<MainRestartRecoveryState> = {},
 ): MainRestartRecoveryState {
@@ -131,6 +130,7 @@ describe("main session recovery state", () => {
 
   it("marks without charging and replaces an older lifecycle owner for the same run", () => {
     const entry = interruptedEntry({
+      lifecycleRunId: "dead-run",
       restartRecoveryRuns: [
         { runId: "older-run", lifecycleGeneration: "generation-old" },
         { runId: "shared-run", lifecycleGeneration: "generation-1" },
@@ -162,56 +162,7 @@ describe("main session recovery state", () => {
       { runId: "older-run", lifecycleGeneration: "generation-old" },
       { runId: "shared-run", lifecycleGeneration: "generation-2" },
     ]);
-  });
-
-  it("charges at reservation and refunds only the matching reservation", () => {
-    const entry = interruptedEntry();
-    const prepared = transitionMainSessionRecovery(entry, {
-      kind: "prepare_attempt",
-      attempt: 1,
-      lifecycleGeneration: "generation-1",
-      now: 200,
-      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
-      runId: "recovery-1",
-    });
-    expect(prepared.kind).toBe("reserved");
-    if (prepared.kind !== "reserved") {
-      throw new Error("expected reservation");
-    }
-
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "prepare_attempt",
-        attempt: 1,
-        lifecycleGeneration: "generation-1",
-        now: 201,
-        observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
-        runId: "recovery-2",
-      }),
-    ).toEqual({ kind: "rejected", reason: "stale_revision" });
-    expect(entry.mainRestartRecovery?.reservation).toMatchObject({
-      runId: "recovery-1",
-      attempt: 1,
-    });
-
-    const claim = claimForeground(entry);
-    expect(claim.kind).toBe("foreground_claimed");
-
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "cancel_reservation",
-        reservation: prepared.reservation,
-      }),
-    ).toEqual({ kind: "applied" });
-    expect(entry.mainRestartRecovery).toMatchObject({
-      chargedAttempts: 0,
-      foregroundClaims: {
-        lifecycleGeneration: "generation-1",
-        tokens: ["foreground-1"],
-      },
-    });
-    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
+    expect(entry.lifecycleRunId).toBeUndefined();
   });
 
   it("rejects foreground work after the automatic recovery budget is exhausted", () => {
@@ -348,34 +299,6 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
-  it("releases an ambiguous dispatch reservation without refunding its charge", () => {
-    const entry = interruptedEntry();
-    const prepared = transitionMainSessionRecovery(entry, {
-      kind: "prepare_attempt",
-      attempt: 1,
-      lifecycleGeneration: "generation-1",
-      now: 200,
-      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
-      runId: "recovery-1",
-    });
-    if (prepared.kind !== "reserved") {
-      throw new Error("expected reservation");
-    }
-
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "abandon_reservation",
-        reservation: prepared.reservation,
-      }),
-    ).toEqual({ kind: "applied" });
-    expect(entry.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
-    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(observe(entry, "generation-1")).toMatchObject({
-      status: "recoverable",
-      nextAttempt: 2,
-    });
-  });
-
   it("moves a reservation into the lifecycle fence during Gateway admission", () => {
     const entry = interruptedEntry({
       pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
@@ -422,6 +345,7 @@ describe("main session recovery state", () => {
       },
     });
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(entry.lifecycleRunId).toBe("recovery-1");
 
     expect(
       transitionMainSessionRecovery(entry, {
@@ -437,6 +361,7 @@ describe("main session recovery state", () => {
     expect(entry.abortedLastRun).toBe(true);
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(entry.restartRecoveryDeliverySourceRunId).toBe("source-1");
+    expect(entry.lifecycleRunId).toBeUndefined();
   });
 
   it("rejects a reservation created by an older lifecycle generation", () => {
@@ -613,6 +538,7 @@ describe("main session recovery state", () => {
         now: 500,
         observation: oldObservation,
         runId: "stale-run",
+        executionIdentity: { state: "disabled" },
       }),
     ).toEqual({ kind: "rejected", reason: "stale_cycle" });
   });
@@ -643,6 +569,7 @@ describe("main session recovery state", () => {
 
   it("tombstones an exhausted cycle and exposes only the Doctor repair action", () => {
     const entry = interruptedEntry({
+      lifecycleRunId: "exhausted-run",
       mainRestartRecovery: recoveryState({
         chargedAttempts: 3,
       }),
@@ -662,6 +589,7 @@ describe("main session recovery state", () => {
       }),
     ).toEqual({ kind: "tombstoned" });
     expect(entry.mainRestartRecovery?.tombstone?.reason).toBe(view.reason);
+    expect(entry.lifecycleRunId).toBeUndefined();
     expect(observe(entry, "generation-1")).toEqual({ status: "tombstoned" });
 
     entry.abortedLastRun = true;

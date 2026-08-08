@@ -1,8 +1,13 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
-import { type AuthProfileFailureReason, markAuthProfileFailure } from "../../auth-profiles.js";
+import {
+  type AuthProfileFailureReason,
+  markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+} from "../../auth-profiles.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -29,6 +34,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   getLastProfileId: () => string | undefined;
   getSessionId: () => string;
   harnessOwnsTransport: () => boolean;
+  getApiKeyInfo: () => ResolvedProviderAuth | null;
 }) {
   const {
     runParams: params,
@@ -109,15 +115,42 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return;
       }
       const { profileId, reason } = failure;
-      if (!profileId || !reason) {
+      if (!reason) {
         return;
       }
       if (input.harnessOwnsTransport() && reason === "timeout") {
         return;
       }
-      await markAuthProfileFailure({
+      if (profileId) {
+        await markAuthProfileFailure({
+          store: profileFailureStore,
+          profileId,
+          reason,
+          cfg: params.config,
+          agentDir,
+          runId: params.runId,
+          modelId: failure.modelId,
+        });
+        return;
+      }
+      // Inline provider API keys have no auth profile, so record their
+      // billing/auth failures under the provider-scoped inline cooldown so the
+      // resolver stops handing back the exhausted key on the next turn.
+      const apiKeyInfo = input.getApiKeyInfo();
+      if (
+        apiKeyInfo?.mode !== "api-key" ||
+        !isConfigBackedInlineProviderApiKey({
+          cfg: params.config,
+          provider,
+          source: apiKeyInfo.source,
+          store: profileFailureStore,
+        })
+      ) {
+        return;
+      }
+      await markInlineProviderApiKeyFailure({
         store: profileFailureStore,
-        profileId,
+        provider,
         reason,
         cfg: params.config,
         agentDir,

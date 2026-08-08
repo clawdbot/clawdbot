@@ -10,6 +10,7 @@
  * returning so the timer correctly skips the system-event fallback.
  */
 
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
@@ -267,12 +268,7 @@ function makeBaseParams(overrides: {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function outboundDeliveryCall(callIndex = 0) {
   const call = vi.mocked(deliverOutboundPayloads).mock.calls[callIndex];

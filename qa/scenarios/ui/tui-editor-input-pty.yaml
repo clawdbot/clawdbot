@@ -1,0 +1,52 @@
+title: TUI editor input PTY contracts
+scenario:
+  id: tui-editor-input-pty
+  surface: tui
+  category: tui.input-and-commands
+  coverage:
+    primary:
+      - tui.message-composition
+      - tui.input-history
+      - tui.keyboard-shortcuts
+      - tui.paste-and-busy-submit-handling
+      - tui.ime-and-altgr-handling
+  risk: medium
+  objective: Prove editor input behavior through the real runTui terminal loop and literal PTY bytes.
+  successCriteria:
+    - Typed and fragmented Unicode input reaches the backend unchanged.
+    - Terminal navigation recalls submitted input history.
+    - Literal keyboard shortcuts mutate editor state before submission.
+    - Bracketed paste submits normally and is rejected while a run is busy.
+    - Fragmented IME text and Kitty AltGr printable bytes reach the backend unchanged.
+  codeRefs:
+    - src/tui/tui-pty-harness.e2e.test.ts
+    - src/tui/tui.ts
+    - src/tui/components/custom-editor.ts
+    - src/tui/tui-submit.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    summary: Runs independently matched real-PTY editor assertions and authenticates their fresh Vitest results.
+    timeoutMs: 180000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --scenario-id
+      - ${scenarioId}
+    config:
+      tuiPtyCases:
+        - coverageId: tui.message-composition
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness drives the real TUI terminal loop through typed and fragmented Unicode input$
+        - coverageId: tui.input-history
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness recalls submitted input history through literal terminal navigation$
+        - coverageId: tui.keyboard-shortcuts
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness applies literal terminal shortcuts before submitting editor input$
+        - coverageId: tui.paste-and-busy-submit-handling
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness handles bracketed paste and rejects the pasted submit while busy$
+        - coverageId: tui.ime-and-altgr-handling
+          testFile: src/tui/tui-pty-harness.e2e.test.ts
+          testNamePattern: ^TUI PTY harness submits fragmented IME text and Kitty AltGr printable bytes$

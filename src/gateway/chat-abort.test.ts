@@ -757,7 +757,7 @@ describe("resolveInFlightRunSnapshot", () => {
 
   // Most cases request with requestedKey === canonicalKey; default canonical to
   // the requested key unless a case exercises the requested/canonical split.
-  const snap = (p: {
+  const resolveSnap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
     chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
@@ -782,14 +782,21 @@ describe("resolveInFlightRunSnapshot", () => {
       defaultAgentId: p.defaultAgentId,
     });
   };
+  const snap = (p: Parameters<typeof resolveSnap>[0]) => {
+    const result = resolveSnap(p);
+    if (result) {
+      Reflect.deleteProperty(result, "startedAt");
+    }
+    return result;
+  };
 
-  it("returns the live assistant text of a matching active run", () => {
-    const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:tui-x")]]),
+  it("returns live assistant text with the authoritative run start timestamp", () => {
+    const result = resolveSnap({
+      chatAbortControllers: new Map([["run-1", inFlightEntry("s", { startedAtMs: 1_234 })]]),
       chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
-      sessionKey: "agent:main:tui-x",
+      sessionKey: "s",
     });
-    expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+    expect(result).toEqual({ runId: "run-1", text: "partial answer so far", startedAt: 1_234 });
   });
 
   it("returns the active run plan snapshot with buffered text", () => {
@@ -1006,11 +1013,11 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial", plan },
+        snapshot: { runId: "run-1", text: "partial", startedAt: 1_000, plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial", plan });
+    ).toEqual({ runId: "run-1", text: "partial", startedAt: 1_000, plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {
@@ -1019,11 +1026,24 @@ describe("resolveInFlightRunSnapshot", () => {
     };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), startedAt: 1_000, plan },
         messages: [],
         maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "", plan });
+    ).toEqual({ runId: "run-1", text: "", startedAt: 1_000, plan });
+  });
+
+  it("drops startedAt when the former minimal fallback exactly fills the budget", () => {
+    const messages = [{ role: "user", content: "near budget" }];
+    const minimal = { runId: "run-1", text: "" };
+    const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(minimal);
+    const result = boundInFlightRunSnapshotForChatHistory({
+      snapshot: { runId: "run-1", text: "x", startedAt: 1_000 },
+      messages,
+      maxBytes,
+    });
+    expect(result).toEqual(minimal);
+    expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(result)).toBeLessThanOrEqual(maxBytes);
   });
 
   it("drops an oversized plan after dropping text", () => {

@@ -1,4 +1,3 @@
-// Anthropic tests cover index plugin behavior.
 import { calculateCost, type Usage } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderResolveDynamicModelContext,
@@ -9,6 +8,8 @@ import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+// Anthropic tests cover index plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
@@ -53,12 +54,7 @@ function createModelRegistry(models: ProviderRuntimeModel[]) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectFields(value: unknown, fields: Record<string, unknown>) {
   const record = requireRecord(value, "record");
@@ -99,6 +95,7 @@ describe("anthropic provider replay hooks", () => {
   it("lets native session discovery be disabled without disabling Anthropic", () => {
     const registerCliBackend = vi.fn();
     const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
     const registerProvider = vi.fn();
     const registerSessionCatalog = vi.fn();
     anthropicPlugin.register(
@@ -110,12 +107,14 @@ describe("anthropic provider replay hooks", () => {
         pluginConfig: { sessionCatalog: { enabled: false } },
         registerCliBackend,
         registerNodeHostCommand,
+        registerNodeInvokePolicy,
         registerProvider,
         registerSessionCatalog,
       }),
     );
 
     expect(registerCliBackend).toHaveBeenCalledOnce();
+    expect(registerNodeInvokePolicy).toHaveBeenCalledOnce();
     expect(registerProvider).toHaveBeenCalledOnce();
     expect(registerNodeHostCommand).not.toHaveBeenCalled();
     expect(registerSessionCatalog).not.toHaveBeenCalled();

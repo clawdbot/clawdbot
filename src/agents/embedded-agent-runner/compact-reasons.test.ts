@@ -61,6 +61,14 @@ describe("classifyCompactionReason", () => {
     ).toBe("guard_blocked");
   });
 
+  it("classifies transcript persistence failures without losing them as unknown", () => {
+    expect(
+      classifyCompactionReason(
+        "Session transcript entry was not persisted: compaction-1: session-rebound",
+      ),
+    ).toBe("transcript_persistence_failed");
+  });
+
   it("keeps unclassified provider errors in the stable unknown bucket", () => {
     expect(classifyCompactionReason("No API provider registered for api: ollama")).toBe("unknown");
   });
