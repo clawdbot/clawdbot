@@ -176,7 +176,6 @@ export async function waitForLocalOAuthCallback(params: {
    */
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
-  const hostname = params.hostname ?? "localhost";
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const escapedSuccessTitle = escapeHtml(params.successTitle);
   const callbackUrl = new URL(params.redirectUri);
@@ -189,7 +188,7 @@ export async function waitForLocalOAuthCallback(params: {
     redirectUrl: callbackUrl,
     expectedState: params.expectedState,
     timeoutMs,
-    bindHostname: hostname,
+    ...(params.hostname ? { bindHostname: params.hostname } : {}),
     createServer,
     ...(params.signal ? { signal: params.signal } : {}),
     resolveCorsOrigin: hasCorsOriginAllowlist
