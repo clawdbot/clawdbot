@@ -1,5 +1,6 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
@@ -48,7 +49,55 @@ const ACTIONS = [
 const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
+// Bound protocol-owned catalog text before it becomes model-visible JSON.
+// Eight entries retain the complete built-in thinking catalog.
+const RESOLVED_MODEL_PROVIDER_MAX_LENGTH = 48;
+const RESOLVED_MODEL_MAX_LENGTH = 96;
+const RESOLVED_AGENT_RUNTIME_ID_MAX_LENGTH = 48;
+const RESOLVED_THINKING_LEVEL_MAX_LENGTH = 16;
+const RESOLVED_THINKING_LEVEL_ID_MAX_LENGTH = 12;
+const RESOLVED_THINKING_LEVEL_LABEL_MAX_LENGTH = 16;
+const RESOLVED_THINKING_LEVELS_MAX_ITEMS = 8;
 const log = createSubsystemLogger("agents/sessions");
+
+type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
+
+function normalizeSessionsToolResolved(resolved: SessionsResolved): SessionsResolved {
+  const normalized: SessionsResolved = {};
+  if (resolved.modelProvider !== undefined) {
+    normalized.modelProvider = truncateUtf16Safe(
+      resolved.modelProvider,
+      RESOLVED_MODEL_PROVIDER_MAX_LENGTH,
+    );
+  }
+  if (resolved.model !== undefined) {
+    normalized.model = truncateUtf16Safe(resolved.model, RESOLVED_MODEL_MAX_LENGTH);
+  }
+  if (resolved.agentRuntime) {
+    normalized.agentRuntime = {
+      id: truncateUtf16Safe(resolved.agentRuntime.id, RESOLVED_AGENT_RUNTIME_ID_MAX_LENGTH),
+      ...(resolved.agentRuntime.fallback !== undefined
+        ? { fallback: resolved.agentRuntime.fallback }
+        : {}),
+      source: resolved.agentRuntime.source,
+    };
+  }
+  if (resolved.thinkingLevel !== undefined) {
+    normalized.thinkingLevel = truncateUtf16Safe(
+      resolved.thinkingLevel,
+      RESOLVED_THINKING_LEVEL_MAX_LENGTH,
+    );
+  }
+  if (resolved.thinkingLevels !== undefined) {
+    normalized.thinkingLevels = resolved.thinkingLevels
+      .slice(0, RESOLVED_THINKING_LEVELS_MAX_ITEMS)
+      .map((level) => ({
+        id: truncateUtf16Safe(level.id, RESOLVED_THINKING_LEVEL_ID_MAX_LENGTH),
+        label: truncateUtf16Safe(level.label, RESOLVED_THINKING_LEVEL_LABEL_MAX_LENGTH),
+      }));
+  }
+  return normalized;
+}
 
 const SessionsToolSchema = Type.Object(
   {
@@ -453,7 +502,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
               sessionKey: key,
               message: "Session will be archived after the current agent run finishes.",
               ...(includeResolved && immediateResult?.resolved
-                ? { resolved: immediateResult.resolved }
+                ? { resolved: normalizeSessionsToolResolved(immediateResult.resolved) }
                 : {}),
             });
           }
@@ -465,7 +514,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         status: "updated",
         sessionKey: key,
         updated: Object.keys(patch).filter((field) => field !== "key"),
-        ...(includeResolved && result.resolved ? { resolved: result.resolved } : {}),
+        ...(includeResolved && result.resolved
+          ? { resolved: normalizeSessionsToolResolved(result.resolved) }
+          : {}),
       });
     },
   };
