@@ -2879,13 +2879,29 @@ describe("agent event handler", () => {
     expect(loadSessionEntry).not.toHaveBeenCalled();
     expect(chatBroadcastCalls(broadcast).length).toBeGreaterThanOrEqual(1);
 
-    // Lifecycle events still resolve restart-recovery state through the store.
+    // Unrelated lifecycle notifications (e.g. fallback) are not recovery
+    // phases, so they must stay off the session store as well.
+    emitAgentEvent(
+      handler,
+      "run-lazy",
+      "lifecycle",
+      {
+        phase: "fallback",
+        selectedProvider: "fireworks",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+      },
+      { seq: 6, sessionKey: "session-recovery-lazy" },
+    );
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+
+    // Recovery lifecycle events still resolve restart-recovery state through
+    // the store.
     emitAgentEvent(
       handler,
       "run-lazy",
       "lifecycle",
       { phase: "end", endedAt: Date.now() },
-      { seq: 6, sessionKey: "session-recovery-lazy" },
+      { seq: 7, sessionKey: "session-recovery-lazy" },
     );
     expect(loadSessionEntry).toHaveBeenCalled();
   });
