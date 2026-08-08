@@ -11,8 +11,11 @@ function parseContentLength(headers: Headers): number | null {
   if (!raw) {
     return null;
   }
+  if (!/^\d+$/u.test(raw)) {
+    return null;
+  }
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 export async function readResponseTextWithLimit(

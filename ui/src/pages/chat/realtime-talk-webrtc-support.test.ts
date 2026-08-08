@@ -108,34 +108,37 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     expect(body.locked).toBe(false);
   });
 
-  it("rejects a declared oversized SDP answer before acquiring its body reader", async () => {
-    const cancel = vi.fn(() => Promise.resolve());
-    const getReader = vi.fn(() => {
-      throw new Error("reader should not be acquired");
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            headers: new Headers({
-              "content-length": String(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + 1),
-            }),
-            body: { cancel, getReader },
-            text: vi.fn(),
-          }) as unknown as Response,
-      ),
-    );
-    const exchange = new RealtimeTalkWebRtcOfferExchange();
+  it.each([String(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + 1), "9007199254740993"])(
+    "rejects a declared oversized SDP answer of %s before acquiring its body reader",
+    async (contentLength) => {
+      const cancel = vi.fn(() => Promise.resolve());
+      const getReader = vi.fn(() => {
+        throw new Error("reader should not be acquired");
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            ({
+              ok: true,
+              status: 200,
+              headers: new Headers({
+                "content-length": contentLength,
+              }),
+              body: { cancel, getReader },
+              text: vi.fn(),
+            }) as unknown as Response,
+        ),
+      );
+      const exchange = new RealtimeTalkWebRtcOfferExchange();
 
-    await expect(readAnswer(exchange)).rejects.toThrow(
-      "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
-    );
-    expect(getReader).not.toHaveBeenCalled();
-    expect(cancel).toHaveBeenCalledOnce();
-  });
+      await expect(readAnswer(exchange)).rejects.toThrow(
+        "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
+      );
+      expect(getReader).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("cancels a non-2xx SDP response body without waiting for cancellation", async () => {
     const cancel = vi.fn(() => new Promise<void>(() => {}));
