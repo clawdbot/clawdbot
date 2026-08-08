@@ -31,7 +31,7 @@ import {
   createChatSendDispatchErrorLifecycle,
   handleChatSendSetupError,
 } from "./chat-send-dispatch-errors.js";
-import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-entry.js";
+import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
   beginChatSendMessageInjection,
   finalizeAcceptedChatSendMessageInjection,

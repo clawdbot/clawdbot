@@ -1,4 +1,5 @@
 import path from "node:path";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mcpMocks = vi.hoisted(() => ({
@@ -144,6 +145,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
 });
 
 import {
+  assistantMessage,
   createParams,
   createCodexRuntimePlanFixture,
   createStartedThreadHarness,
@@ -151,8 +153,13 @@ import {
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
+  userMessage,
 } from "./run-attempt-test-harness.js";
-import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -289,6 +296,79 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(binding).toMatchObject({ configuredMcpOwnershipVersion: 1 });
     expect(binding).not.toHaveProperty("mcpServersFingerprint");
     expect(binding).not.toHaveProperty("userMcpServersFingerprint");
+  });
+
+  it("preserves bounded canonical continuity when scheduled MCP replaces ordinary ownership", async () => {
+    const sessionFile = path.join(tempDir, "session-scheduled-mcp-ownership-continuity.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-scheduled-mcp-ownership-continuity");
+    const cutoff = Date.now();
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-ordinary",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      mcpServersFingerprint: "configured-mcp-test-fixture",
+      historyCoveredThrough: new Date(cutoff).toISOString(),
+    });
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+    });
+    sessionManager.appendMessage(userMessage("ordinary-thread covered context", cutoff - 1_000));
+    for (let index = 0; index < 10; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `scheduled ownership continuity block ${index}: ${"x".repeat(128_000)}`,
+          cutoff + 2_000 + index,
+        ),
+      );
+    }
+    sessionManager.appendMessage(userMessage("new scheduled ownership question", cutoff + 20_000));
+    sessionManager.appendMessage(
+      assistantMessage("recent scheduled ownership answer", cutoff + 21_000),
+    );
+
+    const params = createParams(sessionFile, workspaceDir);
+    configureFakeMcp(params);
+    params.prompt = "continue after the scheduled ownership transition";
+    params.trigger = "cron";
+    params.toolsAllow = ["*"];
+    params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "thread-ordinary",
+        });
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { approvalPolicy: "never", sandbox: "danger-full-access" },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(inputText.length).toBeLessThanOrEqual(1 << 20);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("new scheduled ownership question");
+    expect(inputText).toContain("recent scheduled ownership answer");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue after the scheduled ownership transition");
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-1",
+      configuredMcpOwnershipVersion: 1,
+    });
   });
 
   it("keeps ordinary configured MCP native without probing or stamping its inventory", async () => {
