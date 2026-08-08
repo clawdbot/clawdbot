@@ -106,7 +106,7 @@ function stripEncryptedReasoningContentFields(value: unknown): {
 
 type ResponsesEncryptedContentRequest = { input?: ResponseInput };
 
-export type ResponsesEncryptedContentAttemptKind =
+type ResponsesEncryptedContentAttemptKind =
   | "initial"
   | "reasoning-stripped"
   | "compaction-stripped";
