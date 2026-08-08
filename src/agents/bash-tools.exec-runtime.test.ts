@@ -56,6 +56,7 @@ let listRunningSessions: typeof import("./bash-process-registry.js").listRunning
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
+let buildExecForegroundResult: typeof import("./bash-tools.exec-support.js").buildExecForegroundResult;
 let prepareGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").prepareGatewaySuspend;
 let resetGatewaySuspendCoordinatorForLifecycleRestart: typeof import("../infra/gateway-suspend-coordinator.js").resetGatewaySuspendCoordinatorForLifecycleRestart;
 let resumeGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").resumeGatewaySuspend;
@@ -65,6 +66,7 @@ beforeAll(async () => {
     await import("./bash-process-registry.js"));
   ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
   ({ resolveExecTarget, runExecProcess } = await import("./bash-tools.exec-runtime.js"));
+  ({ buildExecForegroundResult } = await import("./bash-tools.exec-support.js"));
   ({
     prepareGatewaySuspend,
     resetGatewaySuspendCoordinatorForLifecycleRestart,
@@ -83,6 +85,28 @@ beforeEach(() => {
 
 afterEach(() => {
   resetProcessRegistryForTests();
+});
+
+describe("exec foreground retention", () => {
+  it("discloses output discarded at the aggregate cap", () => {
+    const result = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "retained output",
+        timedOut: false,
+      },
+      aggregateOutputDropped: true,
+    });
+
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("discarded at the retention cap and cannot be recovered"),
+    });
+    expect((result.details as { aggregated?: string }).aggregated).toBe("retained output");
+  });
 });
 
 function createDeferred<T>() {
