@@ -21,7 +21,9 @@ async function getFreeIpv6Port(): Promise<number> {
     server.listen(0, "::1", resolve);
   });
   const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   return port;
 }
 
@@ -139,7 +141,9 @@ describe("MCP OAuth loopback callback", () => {
       );
       expect(onReady).toHaveBeenCalledOnce();
     } finally {
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
     }
   });
 

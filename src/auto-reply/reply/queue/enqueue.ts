@@ -149,9 +149,13 @@ export function enqueueFollowupRun(
     return false;
   }
   if (options.steerCandidate) {
-    if (!markFollowupRunEnqueued(run)) return false;
+    if (!markFollowupRunEnqueued(run)) {
+      return false;
+    }
     let settle = (_accepted: boolean) => {};
-    const acceptance = new Promise<boolean>((resolve) => (settle = resolve));
+    const acceptance = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
     run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
     appendQueueItem({
@@ -169,7 +173,9 @@ export function enqueueFollowupRun(
   // deciding between same-turn delivery and fallback. Append it behind the
   // anchor; ordinary overflow policy resumes as soon as the gate resolves.
   if (queue.items.some((item) => item.steerPending)) {
-    if (!markFollowupRunEnqueued(run)) return false;
+    if (!markFollowupRunEnqueued(run)) {
+      return false;
+    }
     appendQueueItem({
       key,
       queue,
@@ -299,10 +305,14 @@ function isParkedFollowupRunOwned(key: string, run: FollowupRun): boolean {
 
 function reapplyDeferredOverflow(key: string): void {
   const queue = getExistingFollowupQueue(key);
-  if (!queue || queue.items.some((item) => item.steerPending)) return;
+  if (!queue || queue.items.some((item) => item.steerPending)) {
+    return;
+  }
   const lastAnchor = queue.items.findLastIndex((item) => item.steerAnchor === true);
   const suffix = queue.items.splice(lastAnchor + 1);
-  if (suffix.length === 0) return;
+  if (suffix.length === 0) {
+    return;
+  }
   const originalCap = queue.cap;
   const settings: QueueSettings = {
     mode: queue.mode,
@@ -349,7 +359,7 @@ function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
 
 type ParkedSteerReservation = {
   admit(): Promise<"steer" | "fallback" | "cancelled">;
-  accepted(accepted: boolean): void;
+  accepted: (accepted: boolean) => void;
   fallback(): void;
   consume(): void;
 };
@@ -379,7 +389,9 @@ export function parkSteerCandidate(
   return {
     async admit() {
       const predecessorAccepted = (await run.steerPending?.predecessor) ?? true;
-      if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) return "cancelled";
+      if (isFollowupRunAborted(run) || !isParkedFollowupRunOwned(key, run)) {
+        return "cancelled";
+      }
       return predecessorAccepted ? "steer" : "fallback";
     },
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
