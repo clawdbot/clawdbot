@@ -1649,6 +1649,25 @@ describe("callGateway error details", () => {
     });
   });
 
+  it("redacts credential-bearing URLs echoed in remote close reasons", async () => {
+    startMode = "close";
+    closeCode = 1008;
+    closeReason = "rejected ws://user:secret@gw.example.com:18789?token=abc123";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const json = formatGatewayTransportErrorJson(err);
+    const serialized = JSON.stringify(json);
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("abc123");
+    expect(json?.error.reason).toContain("ws://***:***@gw.example.com:18789?token=***");
+    expect(json?.error.message).toContain("ws://***:***@gw.example.com:18789?token=***");
+  });
+
   it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
     startMode = "close";
     closeCode = 1006;

@@ -139,14 +139,15 @@ The `check-dependencies` shard runs production Knip dependency, unused-file, and
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
 
-The workflow has four lanes:
+The workflow has three lanes:
 
 - `clawsweeper_item` for exact issue and pull request review requests;
 - `clawsweeper_comment` for explicit ClawSweeper commands in issue comments;
-- `clawsweeper_commit_review` for commit-level review requests on `main` pushes;
 - `github_activity` for general GitHub activity that the ClawSweeper agent may inspect.
 
 The `github_activity` lane forwards normalized metadata only: event type, action, actor, repository, item number, URL, title, state, and short excerpts for comments or reviews when present. It intentionally avoids forwarding the full webhook body. The receiving workflow in `openclaw/clawsweeper` is `.github/workflows/github-activity.yml`, which posts the normalized event to the OpenClaw Gateway hook for the ClawSweeper agent.
+
+Main pushes remain `github_activity` observations. They do not produce hosted per-commit reports or commit Check Runs.
 
 General activity is observation, not delivery-by-default. The ClawSweeper agent receives the Discord target in its prompt and should post to `#clawsweeper` only when the event is surprising, actionable, risky, or operationally useful. Routine opens, edits, bot churn, duplicate webhook noise, and normal review traffic should result in `NO_REPLY`.
 

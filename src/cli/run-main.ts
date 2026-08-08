@@ -3,7 +3,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
@@ -87,6 +89,7 @@ const CLI_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
 
 const loadRootHelpLiveConfigModule = async () => await import("./root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./root-help-metadata.js");
@@ -1029,9 +1032,15 @@ async function resolveUnownedCliPrimaryMessage(params: {
   if (pluginPolicyMessage) {
     return pluginPolicyMessage;
   }
-  const suggestion = formatCliCommandSuggestions(params.primary);
+  const sanitizedPrimary = sanitizeTerminalText(params.primary);
+  const displayPrimary =
+    sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
+      ? sanitizedPrimary
+      : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
+  const suggestion =
+    displayPrimary === params.primary ? formatCliCommandSuggestions(params.primary) : "";
   return [
-    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`,
+    `Unknown command: openclaw ${displayPrimary}. No built-in command or plugin CLI metadata owns "${displayPrimary}".`,
     suggestion,
   ]
     .filter(Boolean)

@@ -264,7 +264,6 @@ describe("Gateway queued session rotation", () => {
       const client = new GatewayChatClient({
         url: instance.url,
         token: "secret-token",
-        allowInsecureLocalOperatorUi: false,
       });
       client.start();
       await client.waitForReady();

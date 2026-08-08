@@ -133,11 +133,12 @@ export function validatePrepublishPluginRegistryArtifact(params) {
     throw new Error("prepublish plugin registry version differs from the root package candidate");
   }
   const requiredPackages = normalizeRequiredPackages(params.requiredPackages);
-  if (
-    JSON.stringify(manifest.packages.map((entry) => entry.name)) !==
-    JSON.stringify(requiredPackages)
-  ) {
-    throw new Error("prepublish plugin registry package set differs from the Docker plan");
+  const manifestPackageNames = new Set(manifest.packages.map((entry) => entry.name));
+  const missingRequiredPackage = requiredPackages.find((name) => !manifestPackageNames.has(name));
+  if (missingRequiredPackage) {
+    throw new Error(
+      `prepublish plugin registry is missing Docker-plan package ${missingRequiredPackage}`,
+    );
   }
   const expectedFiles = new Set([
     PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,

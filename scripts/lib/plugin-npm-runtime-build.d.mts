@@ -33,7 +33,7 @@ export type PluginNpmRuntimeBuildPlan = {
 };
 /** Resolve the package-local runtime build plan for one publishable plugin package. */
 export function resolvePluginNpmRuntimeBuildPlan(params: unknown): PluginNpmRuntimeBuildPlan | null;
-/** List built host SDK imports unavailable through package exports or owner-restricted aliases. */
+/** List built host SDK imports that are absent from the OpenClaw package exports. */
 export function listMissingPluginNpmRuntimeHostExports(plan: PluginNpmRuntimeBuildPlan): string[];
 /** Build package-local runtime files and static assets for one plugin package. */
 export function buildPluginNpmRuntime(params: unknown): Promise<

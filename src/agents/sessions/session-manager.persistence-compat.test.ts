@@ -125,6 +125,23 @@ describe("SessionManager persistence compatibility", () => {
     expect(manager.getSessionDir()).toBe(dir);
   });
 
+  it("keeps requested file fixture session identities aligned", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const manager = openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+      sessionDir: dir,
+      cwd: dir,
+    });
+
+    expect(manager.getSessionId()).toBe("session-1");
+    expect(manager.getCwd()).toBe(dir);
+    expect(await fs.readFile(sessionFile, "utf8")).toContain('"id":"session-1"');
+    expect(() =>
+      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-2" }),
+    ).toThrow("belongs to session-1, not session-2");
+  });
+
   it("separates appended records from a final unterminated JSONL record", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "unterminated.jsonl");

@@ -325,7 +325,6 @@ src/acp/control-plane/manager.turn-results.test.ts
 src/acp/event-ledger.ts
 src/acp/translator.ts
 src/agents/acp-spawn-parent-stream.test.ts
-src/agents/acp-spawn-parent-stream.ts
 src/agents/acp-spawn.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts

@@ -536,10 +536,12 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("accepts completed agent wait status as a successful terminal run", async () => {
+    const terminalReply = { disposition: "visible" as const, text: "completed reply" };
+    const terminalDelivery = { status: "sent" as const, resultCount: 1 };
     const gatewayCall = vi
       .fn()
       .mockResolvedValueOnce({ runId: "run-completed" })
-      .mockResolvedValueOnce({ status: "completed" });
+      .mockResolvedValueOnce({ status: "completed", terminalDelivery, terminalReply });
     const env = createAgentPromptEnv(gatewayCall);
 
     await expect(
@@ -549,7 +551,7 @@ describe("qa suite runtime agent process helpers", () => {
       }),
     ).resolves.toEqual({
       started: { runId: "run-completed" },
-      waited: { status: "completed" },
+      waited: { status: "completed", terminalDelivery, terminalReply },
     });
   });
 

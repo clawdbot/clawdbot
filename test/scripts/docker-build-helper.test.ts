@@ -1,5 +1,5 @@
 // Docker Build Helper tests cover docker build helper script behavior.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -171,6 +171,55 @@ function expectTextToIncludeAll(text: string, snippets: readonly string[]): void
   for (const snippet of snippets) {
     expect(text).toContain(snippet);
   }
+}
+
+function extractUpgradeSurvivorSupervisor(script: string): string {
+  const match = script.match(
+    /cat >"\$supervisor_script" <<'SUPERVISOR'\n(?<source>[\s\S]*?)\nSUPERVISOR/u,
+  );
+  const source = match?.groups?.source;
+  if (!source) {
+    throw new Error("upgrade survivor supervisor source not found");
+  }
+  return source;
+}
+
+async function waitForProcessExit(child: ChildProcess, timeoutMs = 5_000): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return child.exitCode;
+  }
+  return await new Promise<number | null>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("process did not exit before its test deadline"));
+    }, timeoutMs);
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeTermIgnoringDescendant(workDir: string): string {
+  const descendantPath = join(workDir, "descendant.mjs");
+  writeFileSync(
+    descendantPath,
+    `import fs from "node:fs";
+process.on("SIGTERM", () => {});
+fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));
+setInterval(() => {}, 1_000);
+`,
+  );
+  return descendantPath;
 }
 
 function cleanupSmokeLogTailHelpers(): string {
@@ -2231,6 +2280,8 @@ docker_e2e_docker_run_cmd run demo
       expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
       expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
     }
+    expect(runner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"');
+    expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');
   });
 
   it("starts the upgrade survivor plugin registry before updates without ambient Feishu config", () => {
@@ -2423,6 +2474,7 @@ docker_e2e_docker_run_cmd run demo
     expect(upgradeSurvivor).toContain(
       'ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"',
     );
+    expect(upgradeSurvivor).toContain('DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"');
     expect(upgradeSurvivor).toContain(
       '-v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
     );
@@ -2608,6 +2660,291 @@ fi
     expect(successIndex).toBeGreaterThan(manualSummaryIndex);
   });
 
+  it("models systemd restart supervision in update-restart auth fixtures", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
+
+    for (const script of [publishedRunner, updateRestartAuth]) {
+      expectTextToIncludeAll(script, [
+        'supervisor_script="${pid_file}.supervisor.mjs"',
+        'process_state="$(awk \'{ print $3 }\' "/proc/$pid/stat" 2>/dev/null || true)"',
+        'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
+        'nohup node "$supervisor_script"',
+        'if (key.startsWith("OPENCLAW_UPDATE_")) {',
+        "delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;",
+        'process.on("SIGTERM", stop);',
+        "const stopTimeoutMs = 30_000;",
+        "process.kill(-pid, signal);",
+        'signalProcessGroup(pid, "SIGTERM");',
+        'signalProcessGroup(pid, "SIGKILL");',
+        "drainProcessGroup(childGroupPid, () => {",
+        "detached: true,",
+        "if (code === 78) return finish();",
+        "const restartDelayMs = 5_000;",
+        "const restartWindowMs = 60_000;",
+        "const restartBurst = 5;",
+        "if (starts.length >= restartBurst) {",
+        "setTimeout(start, restartDelayMs);",
+        "for _ in $(seq 1 350)",
+      ]);
+    }
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("systemctl --user stop openclaw-gateway.service");
+    }
+  });
+
+  it("stops supervised gateway restarts after the systemd burst limit", async () => {
+    const workDir = tempDirs.make("openclaw-update-restart-supervisor-");
+    const scripts = [
+      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+    ];
+
+    for (const [index, script] of scripts.entries()) {
+      const supervisorPath = join(workDir, `supervisor-${index}.mjs`);
+      const countPath = join(workDir, `starts-${index}`);
+      const logPath = join(workDir, `daemon-${index}.log`);
+      const source = extractUpgradeSurvivorSupervisor(script)
+        .replace("const restartDelayMs = 5_000;", "const restartDelayMs = 5;")
+        .replace("const restartWindowMs = 60_000;", "const restartWindowMs = 5_000;");
+      writeFileSync(supervisorPath, source);
+
+      const command =
+        'node -e \'require("node:fs").appendFileSync(process.env.COUNT_FILE, "x"); process.exit(1)\'';
+      const supervisor = spawn(process.execPath, [supervisorPath], {
+        env: {
+          ...process.env,
+          COUNT_FILE: countPath,
+          OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
+        },
+        stdio: "ignore",
+      });
+      const exitCode = await waitForProcessExit(supervisor);
+
+      expect(exitCode).toBe(0);
+      expect(readFileSync(countPath, "utf8")).toBe("xxxxx");
+      expect(readFileSync(logPath, "utf8")).toContain(
+        "[systemctl-shim] gateway restart limit reached",
+      );
+    }
+  });
+
+  it("allows a supervised gateway to drain within the systemd stop timeout", async () => {
+    const workDir = tempDirs.make("openclaw-update-restart-graceful-stop-");
+    const scripts = [
+      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+    ];
+
+    for (const [index, script] of scripts.entries()) {
+      const supervisorPath = join(workDir, `graceful-supervisor-${index}.mjs`);
+      const statePath = join(workDir, `graceful-state-${index}`);
+      const logPath = join(workDir, `graceful-daemon-${index}.log`);
+      const source = extractUpgradeSurvivorSupervisor(script).replace(
+        "const stopTimeoutMs = 30_000;",
+        "const stopTimeoutMs = 200;",
+      );
+      writeFileSync(supervisorPath, source);
+
+      const command =
+        'node -e \'const fs=require("node:fs"); process.on("SIGTERM",()=>setTimeout(()=>{fs.appendFileSync(process.env.STATE_FILE, "-graceful"); process.exit(0)},50)); fs.writeFileSync(process.env.STATE_FILE, "ready"); setInterval(()=>{},1000)\'';
+      const supervisor = spawn(process.execPath, [supervisorPath], {
+        env: {
+          ...process.env,
+          OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
+          STATE_FILE: statePath,
+        },
+        stdio: "ignore",
+      });
+      try {
+        for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
+          await delay(10);
+        }
+        expect(existsSync(statePath)).toBe(true);
+
+        supervisor.kill("SIGTERM");
+        expect(await waitForProcessExit(supervisor)).toBe(0);
+        expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
+      } finally {
+        if (supervisor.exitCode === null && supervisor.signalCode === null) {
+          supervisor.kill("SIGTERM");
+          await waitForProcessExit(supervisor).catch(() => undefined);
+        }
+      }
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates supervised gateway descendants at the systemd stop timeout",
+    async () => {
+      const workDir = tempDirs.make("openclaw-update-restart-process-group-");
+      const descendantPath = writeTermIgnoringDescendant(workDir);
+      const gatewayPath = join(workDir, "gateway.mjs");
+      writeFileSync(
+        gatewayPath,
+        `import fs from "node:fs";
+import { spawn } from "node:child_process";
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.appendFileSync(process.env.STATE_FILE, "-graceful");
+    process.exit(0);
+  }, 50);
+});
+spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], { stdio: "ignore" });
+const ready = setInterval(() => {
+  if (!fs.existsSync(process.env.DESCENDANT_PID_FILE)) return;
+  clearInterval(ready);
+  fs.writeFileSync(process.env.STATE_FILE, "ready");
+}, 5);
+setInterval(() => {}, 1_000);
+`,
+      );
+      const scripts = [
+        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+      ];
+
+      for (const [index, script] of scripts.entries()) {
+        const supervisorPath = join(workDir, `process-group-supervisor-${index}.mjs`);
+        const statePath = join(workDir, `process-group-state-${index}`);
+        const descendantPidPath = join(workDir, `process-group-descendant-${index}.pid`);
+        const logPath = join(workDir, `process-group-daemon-${index}.log`);
+        const source = extractUpgradeSurvivorSupervisor(script).replace(
+          "const stopTimeoutMs = 30_000;",
+          "const stopTimeoutMs = 200;",
+        );
+        writeFileSync(supervisorPath, source);
+
+        const supervisor = spawn(process.execPath, [supervisorPath], {
+          env: {
+            ...process.env,
+            DESCENDANT_PID_FILE: descendantPidPath,
+            DESCENDANT_SCRIPT: descendantPath,
+            OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
+            STATE_FILE: statePath,
+          },
+          stdio: "ignore",
+        });
+        let descendantPid: number | undefined;
+        try {
+          for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
+            await delay(10);
+          }
+          expect(existsSync(statePath)).toBe(true);
+          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(descendantPid).toBeGreaterThan(1);
+          expect(isProcessRunning(descendantPid)).toBe(true);
+
+          supervisor.kill("SIGTERM");
+          expect(await waitForProcessExit(supervisor)).toBe(0);
+          expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
+          for (let attempt = 0; attempt < 100 && isProcessRunning(descendantPid); attempt += 1) {
+            await delay(10);
+          }
+          expect(isProcessRunning(descendantPid)).toBe(false);
+        } finally {
+          if (supervisor.exitCode === null && supervisor.signalCode === null) {
+            supervisor.kill("SIGTERM");
+            await waitForProcessExit(supervisor).catch(() => undefined);
+          }
+          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
+            try {
+              process.kill(descendantPid, "SIGKILL");
+            } catch {}
+          }
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "drains the previous gateway process group before restarting",
+    async () => {
+      const workDir = tempDirs.make("openclaw-update-restart-process-group-restart-");
+      const descendantPath = writeTermIgnoringDescendant(workDir);
+      const gatewayPath = join(workDir, "restart-gateway.mjs");
+      writeFileSync(
+        gatewayPath,
+        `import fs from "node:fs";
+import { spawn } from "node:child_process";
+fs.appendFileSync(process.env.STARTS_FILE, "x");
+const starts = fs.readFileSync(process.env.STARTS_FILE, "utf8").length;
+if (starts === 1) {
+  spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], { stdio: "ignore" });
+  const ready = setInterval(() => {
+    if (!fs.existsSync(process.env.DESCENDANT_PID_FILE)) return;
+    clearInterval(ready);
+    process.exit(1);
+  }, 5);
+  setInterval(() => {}, 1_000);
+} else {
+  const pid = Number.parseInt(fs.readFileSync(process.env.DESCENDANT_PID_FILE, "utf8"), 10);
+  let running = false;
+  try {
+    process.kill(pid, 0);
+    running = true;
+    const statPath = "/proc/" + pid + "/stat";
+    if (fs.existsSync(statPath)) running = fs.readFileSync(statPath, "utf8").split(" ")[2] !== "Z";
+  } catch {}
+  fs.writeFileSync(process.env.REPLACEMENT_FILE, running ? "overlap" : "drained");
+  process.exit(78);
+}
+`,
+      );
+      const scripts = [
+        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+      ];
+
+      for (const [index, script] of scripts.entries()) {
+        const supervisorPath = join(workDir, `restart-group-supervisor-${index}.mjs`);
+        const startsPath = join(workDir, `restart-group-starts-${index}`);
+        const descendantPidPath = join(workDir, `restart-group-descendant-${index}.pid`);
+        const replacementPath = join(workDir, `restart-group-replacement-${index}`);
+        const logPath = join(workDir, `restart-group-daemon-${index}.log`);
+        const source = extractUpgradeSurvivorSupervisor(script)
+          .replace("const restartDelayMs = 5_000;", "const restartDelayMs = 5;")
+          .replace("const stopTimeoutMs = 30_000;", "const stopTimeoutMs = 200;");
+        writeFileSync(supervisorPath, source);
+
+        const supervisor = spawn(process.execPath, [supervisorPath], {
+          env: {
+            ...process.env,
+            DESCENDANT_PID_FILE: descendantPidPath,
+            DESCENDANT_SCRIPT: descendantPath,
+            OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
+            REPLACEMENT_FILE: replacementPath,
+            STARTS_FILE: startsPath,
+          },
+          stdio: "ignore",
+        });
+        let descendantPid: number | undefined;
+        try {
+          expect(await waitForProcessExit(supervisor)).toBe(0);
+          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(descendantPid).toBeGreaterThan(1);
+          expect(readFileSync(startsPath, "utf8")).toBe("xx");
+          expect(readFileSync(replacementPath, "utf8")).toBe("drained");
+        } finally {
+          if (supervisor.exitCode === null && supervisor.signalCode === null) {
+            supervisor.kill("SIGTERM");
+            await waitForProcessExit(supervisor).catch(() => undefined);
+          }
+          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
+            try {
+              process.kill(descendantPid, "SIGKILL");
+            } catch {}
+          }
+        }
+      }
+    },
+  );
+
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
     ["status budget", "OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS", "30s"],
@@ -2652,6 +2989,7 @@ fi
     expect(runner).not.toContain('cat "$GATEWAY_LOG"');
     expect(runner).not.toContain('cat "$SYSTEMCTL_SHIM_DAEMON_LOG"');
     expect(runner).not.toContain('cat "$log_file"');
+    expect(runner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG"');
 
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG"');
@@ -2675,6 +3013,8 @@ fi
     expect(publishedRunner).not.toContain('cat "$STATUS_ERR"');
     expect(publishedRunner).not.toContain('cat "$STATUS_JSON"');
     expect(publishedRunner).not.toContain('cat "$log_file"');
+    expect(publishedRunner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG"');
+    expect(publishedRunner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
   });
 
   it("preserves caller-owned file descriptors around harness runs", () => {
@@ -3723,10 +4063,11 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
     expectTextToIncludeAll(helper, [
       "--allow-unreleased-changelog",
-      '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
-      '-v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
-      '-v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
-      '-v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"',
+      'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
+      '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+      '-v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
+      '-v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
+      '-v "$harness_root/test/helpers:/app/test/helpers:ro"',
     ]);
   });
 

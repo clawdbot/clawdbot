@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  createPayloadPatchStreamWrapper,
   readProviderPromptAccountingContext,
-  streamWithPayloadPatch,
   withProviderPromptAccountingContext,
   type ProviderPromptAccountingContext,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -145,16 +145,16 @@ export function createOpenAINativeWebSearchWrapper(
   },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
+  const patchingStream = createPayloadPatchStreamWrapper(underlying, ({ payload }) => {
+    patchOpenAINativeWebSearchPayload(payload);
+  });
   return (model, context, options) => {
-    if (!shouldEnableOpenAINativeWebSearch({ config: params.config, model })) {
+    if (
+      params.nativeWebSearchAllowedByToolPolicy === false ||
+      !shouldEnableOpenAINativeWebSearch({ config: params.config, model })
+    ) {
       return underlying(model, context, options);
     }
-    if (params.nativeWebSearchAllowedByToolPolicy === false) {
-      return underlying(model, context, options);
-    }
-    const accountingOptions = withOpenAINativeWebSearchAccounting(options, context);
-    return streamWithPayloadPatch(underlying, model, context, accountingOptions, (payload) => {
-      patchOpenAINativeWebSearchPayload(payload);
-    });
+    return patchingStream(model, context, withOpenAINativeWebSearchAccounting(options, context));
   };
 }

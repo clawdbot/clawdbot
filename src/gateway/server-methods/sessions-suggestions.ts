@@ -32,6 +32,7 @@ import {
 } from "../session-sharing.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
@@ -47,11 +48,7 @@ import type {
 import { assertValidParams } from "./validation.js";
 
 function suggestionScope(target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>) {
-  return {
-    agentId: target.agentId,
-    sessionKey: target.storeKey,
-    storePath: target.storePath,
-  };
+  return { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath };
 }
 
 function protocolSuggestion(
@@ -225,13 +222,44 @@ async function dispatchSuggestion(params: {
   suggestion: StoredSessionSuggestion;
   resolution: "send" | "queue";
 }): Promise<{ ok: true } | { ok: false; error: Parameters<RespondFn>[2] }> {
+  const activeRunState =
+    params.resolution === "send"
+      ? resolveVisibleActiveSessionRunState({
+          context: params.context,
+          requestedKey: params.target.canonicalKey,
+          canonicalKey: params.target.storeKey,
+          sessionId: params.target.entry.sessionId,
+          agentId: params.target.agentId,
+        })
+      : undefined;
+  if (activeRunState?.active && activeRunState.runIds.length !== 1) {
+    const message =
+      activeRunState.runIds.length === 0
+        ? "active session run has no exact dispatch identity; refresh and retry"
+        : "session has multiple active runs; choose the target run before sending the suggestion";
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
+        retryable: false,
+        details: {
+          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
+          sessionKey: params.target.canonicalKey,
+        },
+      }),
+    };
+  }
+  const activeRunId = activeRunState?.active ? activeRunState.runIds[0] : undefined;
   let response: Parameters<RespondFn> | undefined;
   const chatParams = {
     sessionKey: params.target.canonicalKey,
     agentId: params.target.agentId,
     sessionId: params.target.entry.sessionId,
     message: params.suggestion.text,
-    queueMode: params.resolution === "send" ? "steer" : "followup",
+    ...(params.resolution === "queue"
+      ? { queueMode: "followup" as const }
+      : activeRunId
+        ? { queueMode: "steer" as const, expectedRunId: activeRunId }
+        : {}),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({

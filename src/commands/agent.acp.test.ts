@@ -52,10 +52,7 @@ const attemptExecutionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => agentEventMocks);
-vi.mock("../infra/agent-run-registry.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/agent-run-registry.js")>(
-    "../infra/agent-run-registry.js",
-  )),
+vi.mock("../infra/agent-run-registry.js", () => ({
   clearAgentRunContext: agentEventMocks.clearAgentRunContext,
   registerAgentRunContext: agentEventMocks.registerAgentRunContext,
 }));

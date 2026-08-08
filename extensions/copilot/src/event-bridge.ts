@@ -350,7 +350,7 @@ export function attachEventBridge(
       toolMetas[toolMetaIndex] = {
         ...(meta ? { meta } : {}),
         toolName,
-        ...(event.data.success ? {} : { isError: true }),
+        isError: !event.data.success,
       };
     }
     const projection = options.transcriptProjection;
