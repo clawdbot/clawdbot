@@ -326,12 +326,12 @@ function stopTrackedPostReadySidecarsAfterCloseStarted(
 }
 
 async function cleanupGatewayTestState(): Promise<void> {
-  let firstError: unknown;
+  let firstError: Error | undefined;
   const cleanup = async (run: () => void | Promise<void>) => {
     try {
       await run();
     } catch (error) {
-      firstError ??= error;
+      firstError ??= error instanceof Error ? error : new Error(String(error));
     }
   };
 
@@ -354,8 +354,12 @@ async function cleanupGatewayTestState(): Promise<void> {
   transferredSidecars.clear();
   await cleanup(() => resetGatewayWorkAdmission());
   await cleanup(() => closeOpenClawStateDatabaseForTest());
-  await cleanup(() => vi.useRealTimers());
-  await cleanup(() => vi.unstubAllEnvs());
+  await cleanup(() => {
+    vi.useRealTimers();
+  });
+  await cleanup(() => {
+    vi.unstubAllEnvs();
+  });
 
   if (firstError !== undefined) {
     throw firstError;
