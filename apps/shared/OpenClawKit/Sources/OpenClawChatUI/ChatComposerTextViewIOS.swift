@@ -31,9 +31,11 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         textView.isSelectable = self.isEnabled
         self.configureHistoryHandlers(textView)
 
+        // UIKit owns user-initiated focus. Treat shouldFocus as a request to focus,
+        // not a mirror whose stale false value can cancel a tap before SwiftUI updates.
         if self.shouldFocus, self.isEnabled, !textView.isFirstResponder {
             textView.becomeFirstResponder()
-        } else if !self.shouldFocus || !self.isEnabled, textView.isFirstResponder {
+        } else if !self.isEnabled, textView.isFirstResponder {
             textView.resignFirstResponder()
         }
 

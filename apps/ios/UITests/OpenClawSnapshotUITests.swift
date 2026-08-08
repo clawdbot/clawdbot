@@ -494,6 +494,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-keyboard-focused")
         input.typeText("first line\nsecond line")
 
         XCTAssertEqual(input.value as? String, "first line\nsecond line")
