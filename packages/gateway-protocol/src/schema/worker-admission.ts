@@ -49,6 +49,9 @@ export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
 export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
+// Reserve at least 12 KiB for the complete transcript commit envelope and
+// assistant content. A 60 KiB replay leaves effectively no safe frame headroom.
+export const WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES = 48 * 1024;
 
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
 const WorkerProtocolFeatureSchema = Type.String({
@@ -225,7 +228,7 @@ export const WorkerProviderReplayStateSchema = closedObject({
   v: Type.Literal(1),
   type: WorkerIdentifierSchema,
   id: Type.Optional(Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES }),
   replayIndex: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
   provider: WorkerIdentifierSchema,
   api: WorkerIdentifierSchema,

@@ -145,12 +145,35 @@ export async function processResponsesStream<TApi extends Api>(
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
-  const completedOutputItemIdentities = new Set<string>();
+  const outputItemContentIndexes = new Map<string, number>();
   const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
+  const outputItemIdentity = (
+    item: ResponseOutputItem | ResponsesStreamOutputMessage,
+  ): string | undefined => {
+    if (item.type === "reasoning" || item.type === "message") {
+      return `${item.type}:${item.id}`;
+    }
+    return item.type === "function_call" ? `function_call:${item.call_id}` : undefined;
+  };
+  const getOutputItemContentIndex = (
+    item: ResponseOutputItem | ResponsesStreamOutputMessage,
+  ): number | undefined => {
+    const identity = outputItemIdentity(item);
+    return identity === undefined ? undefined : outputItemContentIndexes.get(identity);
+  };
+  const setOutputItemContentIndex = (
+    item: ResponseOutputItem | ResponsesStreamOutputMessage,
+    contentIndex: number,
+  ): void => {
+    const identity = outputItemIdentity(item);
+    if (identity !== undefined) {
+      outputItemContentIndexes.set(identity, contentIndex);
+    }
+  };
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
@@ -165,6 +188,7 @@ export async function processResponsesStream<TApi extends Api>(
       } satisfies ResponsesOutputSlot;
       blocks.push(block);
       reasoningBlocksById.set(item.id, block);
+      setOutputItemContentIndex(item, slot.contentIndex);
       outputSlots.register(event, slot);
       stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
       return slot;
@@ -191,6 +215,7 @@ export async function processResponsesStream<TApi extends Api>(
       } satisfies ResponsesOutputSlot;
       if (block) {
         blocks.push(block);
+        setOutputItemContentIndex(messageItem, slot.contentIndex ?? blocks.length - 1);
         startedTextBlocksByItemId.set(messageItem.id, {
           block,
           index: slot.contentIndex ?? blocks.length - 1,
@@ -239,6 +264,7 @@ export async function processResponsesStream<TApi extends Api>(
     };
     blocks.push(slot.block);
     slot.contentIndex = blocks.length - 1;
+    setOutputItemContentIndex(slot.item, slot.contentIndex);
     startedTextBlocksByItemId.set(slot.item.id, {
       block: slot.block,
       index: slot.contentIndex,
@@ -271,8 +297,9 @@ export async function processResponsesStream<TApi extends Api>(
     model,
     options,
     reasoningBlocksById,
-    completedOutputItemIdentities,
     startedTextBlocksByItemId,
+    getOutputItemContentIndex,
+    setOutputItemContentIndex,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
@@ -330,6 +357,7 @@ export async function processResponsesStream<TApi extends Api>(
             outputSlots.register(event, { type: "toolCall", toolCall: toolCallState });
           }
           output.content.push(toolCallBlock);
+          setOutputItemContentIndex(item, contentIndex);
           stream.push({ type: "toolcall_start", contentIndex, partial: output });
         }
       } else if (event.type === "response.reasoning_summary_part.added") {
@@ -579,6 +607,7 @@ export async function processResponsesStream<TApi extends Api>(
               partial: output,
             });
             lastTextBlock = outputSlot.collapseCandidate;
+            setOutputItemContentIndex(item, outputSlot.collapseCandidate.index);
           } else {
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
@@ -603,6 +632,7 @@ export async function processResponsesStream<TApi extends Api>(
               throw new Error("Responses stream finalized text without a content index");
             }
             lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+            setOutputItemContentIndex(item, contentIndex);
             stream.push({
               type: "text_end",
               contentIndex,
@@ -612,7 +642,6 @@ export async function processResponsesStream<TApi extends Api>(
           }
           outputSlots.forget(outputSlot);
           startedTextBlocksByItemId.delete(item.id);
-          completedOutputItemIdentities.add(`message:${item.id}`);
         } else if (item.type === "function_call") {
           const streamingToolCall = streamingToolCalls.resolve(
             event,
@@ -686,7 +715,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall,
             partial: output,
           });
-          completedOutputItemIdentities.add(`function_call:${item.call_id}`);
+          setOutputItemContentIndex(item, contentIndex);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         if (streamingToolCalls.hasActive()) {

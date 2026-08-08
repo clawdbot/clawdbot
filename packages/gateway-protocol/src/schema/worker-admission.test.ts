@@ -11,6 +11,7 @@ import {
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
@@ -304,6 +305,34 @@ describe("worker protocol schemas", () => {
           {
             ...assistantMessage,
             providerReplay: { ...providerReplay, privateScratch: "drop" },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+            },
           },
         ],
       }),

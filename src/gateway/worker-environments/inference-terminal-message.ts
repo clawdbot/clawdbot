@@ -1,6 +1,9 @@
 import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import { cloneProviderReplay } from "../../worker/transcript-message.js";
+import {
+  projectWorkerProviderReplay,
+  type WorkerProviderReplayOmission,
+} from "../../worker/transcript-message.js";
 
 export type WorkerInferenceModelIdentity = {
   api: string;
@@ -12,6 +15,7 @@ export function projectWorkerInferenceTerminalMessage(params: {
   message: AssistantMessage;
   modelIdentity: WorkerInferenceModelIdentity;
   stopReason: Extract<AssistantMessage["stopReason"], "stop" | "length" | "toolUse">;
+  onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void;
 }): Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] {
   const content = params.message.content.map((part) => {
     switch (part.type) {
@@ -42,7 +46,7 @@ export function projectWorkerInferenceTerminalMessage(params: {
     }
   });
   const usage = params.message.usage;
-  return {
+  const projected: Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] = {
     role: "assistant",
     // Provider adapters may retain transport scratch fields. Project the exact
     // closed worker schema so those fields cannot invalidate the terminal frame.
@@ -52,9 +56,6 @@ export function projectWorkerInferenceTerminalMessage(params: {
     model: params.modelIdentity.model,
     ...(params.message.responseModel ? { responseModel: params.message.responseModel } : {}),
     ...(params.message.responseId ? { responseId: params.message.responseId } : {}),
-    ...(params.message.providerReplay
-      ? { providerReplay: cloneProviderReplay(params.message.providerReplay) }
-      : {}),
     usage: {
       input: usage.input,
       output: usage.output,
@@ -84,4 +85,9 @@ export function projectWorkerInferenceTerminalMessage(params: {
     stopReason: params.stopReason,
     timestamp: params.message.timestamp,
   };
+  return projectWorkerProviderReplay({
+    message: projected,
+    providerReplay: params.message.providerReplay,
+    onOmitted: params.onProviderReplayOmitted,
+  });
 }

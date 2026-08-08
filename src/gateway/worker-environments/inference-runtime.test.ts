@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   validateWorkerInferenceTerminalOutcome,
   type WorkerInferenceStartParams,
@@ -19,6 +20,7 @@ import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
@@ -495,6 +497,67 @@ describe("worker inference provider runtime", () => {
         },
       },
     });
+  });
+
+  it("keeps inference successful while omitting over-budget replay with a redacted diagnostic", async () => {
+    const runtime = setup();
+    const message = finalMessage();
+    message.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+    };
+    runtime.stream.mockImplementation(() => providerStream(message));
+    const payloadEvents: unknown[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "payload.large" && event.surface === "worker.provider-replay") {
+        payloadEvents.push(event);
+      }
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn())).finally(unsubscribe);
+
+    expect(outcome).toMatchObject({ type: "done", message: { stopReason: "stop" } });
+    expect(outcome.type === "done" ? outcome.message.providerReplay : undefined).toBeUndefined();
+    expect(payloadEvents).toEqual([
+      expect.objectContaining({
+        type: "payload.large",
+        surface: "worker.provider-replay",
+        action: "rejected",
+        bytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1,
+        limitBytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
+        reason: "provider-replay-data-budget",
+      }),
+    ]);
+    expect(JSON.stringify(payloadEvents)).not.toContain(message.providerReplay.data);
+  });
+
+  it("keeps a maximum-budget replay frame-safe through the terminal projection", async () => {
+    const runtime = setup();
+    const message = finalMessage();
+    message.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+    };
+    runtime.stream.mockImplementation(() => providerStream(message));
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    expect(outcome.type).toBe("done");
+    if (outcome.type !== "done") {
+      throw new Error("expected successful worker inference");
+    }
+    expect(outcome.message.providerReplay?.data).toHaveLength(
+      WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
+    );
+    expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
   });
 
   it("rejects an incomplete final argument stream", async () => {

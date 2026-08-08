@@ -69,48 +69,45 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
   );
 }
 
-function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
+function stripEncryptedReasoningContentFields(value: unknown): {
+  value: unknown;
+  changed: boolean;
+} {
   if (!value || typeof value !== "object") {
     return { value, changed: false };
   }
   if (Array.isArray(value)) {
     let changed = false;
-    const next = value.flatMap((item) => {
-      if (
-        item &&
-        typeof item === "object" &&
-        !Array.isArray(item) &&
-        (item as Record<string, unknown>).type === "compaction" &&
-        "encrypted_content" in item
-      ) {
-        changed = true;
-        return [];
-      }
-      const stripped = stripEncryptedContentFields(item);
+    const next = value.map((item) => {
+      const stripped = stripEncryptedReasoningContentFields(item);
       changed ||= stripped.changed;
-      return [stripped.value];
+      return stripped.value;
     });
     return changed ? { value: next, changed: true } : { value, changed: false };
   }
 
+  const source = value as Record<string, unknown>;
+  if (source.type === "compaction") {
+    return { value, changed: false };
+  }
   let changed = false;
   const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, child] of Object.entries(source)) {
     if (key === "encrypted_content") {
       changed = true;
       continue;
     }
-    const stripped = stripEncryptedContentFields(child);
+    const stripped = stripEncryptedReasoningContentFields(child);
     changed ||= stripped.changed;
     next[key] = stripped.value;
   }
   return changed ? { value: next, changed: true } : { value, changed: false };
 }
 
-export function stripResponsesRequestEncryptedContent(
+function stripResponsesRequestEncryptedReasoning(
   params: OpenAIResponsesRequestParams,
 ): OpenAIResponsesRequestParams {
-  const stripped = stripEncryptedContentFields(params.input);
+  const stripped = stripEncryptedReasoningContentFields(params.input);
   if (!stripped.changed) {
     return params;
   }
@@ -120,17 +117,21 @@ export function stripResponsesRequestEncryptedContent(
   };
 }
 
-function requestContainsEncryptedCompaction(params: OpenAIResponsesRequestParams): boolean {
-  return (
-    Array.isArray(params.input) &&
-    params.input.some(
-      (item) =>
+function stripResponsesRequestCompaction(
+  params: OpenAIResponsesRequestParams,
+): OpenAIResponsesRequestParams {
+  if (!Array.isArray(params.input)) {
+    return params;
+  }
+  const input = params.input.filter(
+    (item) =>
+      !(
         item !== null &&
         typeof item === "object" &&
-        (item as { type?: unknown }).type === "compaction" &&
-        "encrypted_content" in item,
-    )
+        (item as { type?: unknown }).type === "compaction"
+      ),
   );
+  return input.length === params.input.length ? params : { ...params, input };
 }
 
 export function tagOpenAIResponsesReasoningReplayItem(
@@ -219,7 +220,7 @@ export function prepareOpenAIResponsesReasoningItemForReplay(
   if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
-  const stripped = stripEncryptedContentFields(rest);
+  const stripped = stripEncryptedReasoningContentFields(rest);
   return normalizeOpenAIResponsesReasoningReplayItem(
     stripped.value as ReplayableResponseReasoningItem,
   );
@@ -233,35 +234,57 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   onCompactionRejected?: () => void;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
-  try {
-    params.observePrompt?.(params.request, {
+  type Attempt =
+    | { kind: "initial"; request: OpenAIResponsesRequestParams }
+    | { kind: "without-encrypted-reasoning"; request: OpenAIResponsesRequestParams }
+    | { kind: "without-compaction"; request: OpenAIResponsesRequestParams };
+
+  const sendAttempt = async (attempt: Attempt) => {
+    params.observePrompt?.(attempt.request, {
       egress: "responses-sdk",
-      payloadVariant: "initial",
+      payloadVariant: attempt.kind === "initial" ? "initial" : "encrypted-content-retry",
     });
     const { data, response } = await params.client.responses
-      .create(params.request as never, params.requestOptions as never)
+      .create(attempt.request as never, params.requestOptions as never)
       .withResponse();
-    return { stream: data as unknown as AsyncIterable<unknown>, response };
-  } catch (error) {
-    const retryRequest = stripResponsesRequestEncryptedContent(params.request);
-    if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
-      throw error;
-    }
-    if (requestContainsEncryptedCompaction(params.request)) {
+    if (attempt.kind === "without-compaction") {
       params.onCompactionRejected?.();
     }
-    log.warn(
-      `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-        `api=${params.model.api} model=${params.model.id}`,
-    );
-    params.observePrompt?.(retryRequest, {
-      egress: "responses-sdk",
-      payloadVariant: "encrypted-content-retry",
-    });
-    const { data, response } = await params.client.responses
-      .create(retryRequest as never, params.requestOptions as never)
-      .withResponse();
     return { stream: data as unknown as AsyncIterable<unknown>, response };
+  };
+
+  let attempt: Attempt = { kind: "initial", request: params.request };
+  while (true) {
+    try {
+      return await sendAttempt(attempt);
+    } catch (error) {
+      if (!isInvalidEncryptedContentError(error)) {
+        throw error;
+      }
+      if (attempt.kind === "without-compaction") {
+        throw error;
+      }
+
+      const withoutReasoning = stripResponsesRequestEncryptedReasoning(attempt.request);
+      if (attempt.kind === "initial" && withoutReasoning !== attempt.request) {
+        log.warn(
+          `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
+            `api=${params.model.api} model=${params.model.id}`,
+        );
+        attempt = { kind: "without-encrypted-reasoning", request: withoutReasoning };
+        continue;
+      }
+
+      const withoutCompaction = stripResponsesRequestCompaction(attempt.request);
+      if (withoutCompaction === attempt.request) {
+        throw error;
+      }
+      log.warn(
+        `[responses] retrying without encrypted compaction content provider=${params.model.provider} ` +
+          `api=${params.model.api} model=${params.model.id}`,
+      );
+      attempt = { kind: "without-compaction", request: withoutCompaction };
+    }
   }
 }
 

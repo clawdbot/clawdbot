@@ -8,12 +8,10 @@ import type {
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
 import { suppressOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
-import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   convertResponsesMessages,
-  stripResponsesRequestEncryptedContent,
 } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
@@ -125,6 +123,16 @@ function createAssistant(
   providerReplay?: ProviderReplayState,
 ): AssistantMessage {
   return { ...createOutput(), content, ...(providerReplay ? { providerReplay } : {}) };
+}
+
+function responseMessage(id: string, text: string) {
+  return {
+    type: "message" as const,
+    id,
+    role: "assistant" as const,
+    status: "completed" as const,
+    content: [{ type: "output_text" as const, text, annotations: [] }],
+  };
 }
 
 describe("OpenAI Responses compaction replay", () => {
@@ -382,6 +390,126 @@ describe("OpenAI Responses compaction replay", () => {
       },
     ]);
 
+    expect(output.providerReplay?.replayIndex).toBe(0);
+    expect(replayTypes(output)).toEqual(["compaction", "message"]);
+  });
+
+  it("places terminal compaction before an already streamed message", async () => {
+    const message = responseMessage("msg_streamed_after", "answer after compaction");
+    const output = await processEvents([
+      { type: "response.output_item.done", output_index: 1, item: message },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_terminal_before_streamed",
+          status: "completed",
+          output: [
+            {
+              type: "compaction",
+              id: "cmp_before_streamed",
+              encrypted_content: "opaque-before-streamed",
+            },
+            message,
+          ],
+        },
+      },
+    ]);
+
+    expect(output.providerReplay?.replayIndex).toBe(0);
+    expect(replayTypes(output)).toEqual(["compaction", "message"]);
+  });
+
+  it("places terminal compaction between two completed normalized outputs", async () => {
+    const first = responseMessage("msg_before_terminal", "first answer");
+    const second = responseMessage("msg_after_terminal", "second answer");
+    const output = await processEvents([
+      { type: "response.output_item.done", output_index: 0, item: first },
+      { type: "response.output_item.done", output_index: 2, item: second },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_terminal_between",
+          status: "completed",
+          output: [
+            first,
+            {
+              type: "compaction",
+              id: "cmp_between_completed",
+              encrypted_content: "opaque-between-completed",
+            },
+            second,
+          ],
+        },
+      },
+    ]);
+
+    expect(output.content).toHaveLength(2);
+    expect(output.providerReplay?.replayIndex).toBe(1);
+    expect(replayTypes(output)).toEqual(["compaction", "message"]);
+    expect(
+      JSON.stringify(
+        convertResponsesMessages(
+          model,
+          { messages: [output] },
+          new Set(["openai"]),
+          replayIdentity,
+        ),
+      ),
+    ).not.toContain("first answer");
+  });
+
+  it("places terminal compaction after completed output at the append boundary", async () => {
+    const message = responseMessage("msg_before_tail", "answer before compaction");
+    const output = await processEvents([
+      { type: "response.output_item.done", output_index: 0, item: message },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_terminal_after",
+          status: "completed",
+          output: [
+            message,
+            {
+              type: "compaction",
+              id: "cmp_after_completed",
+              encrypted_content: "opaque-after-completed",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(output.providerReplay?.replayIndex).toBe(1);
+    expect(replayTypes(output)).toEqual(["compaction"]);
+  });
+
+  it("uses the collapsed message index as the terminal compaction boundary", async () => {
+    const first = responseMessage("msg_snapshot_first", "answer");
+    const cumulative = responseMessage("msg_snapshot_second", "answer extended");
+    const output = await processEvents([
+      { type: "response.output_item.done", output_index: 0, item: first },
+      { type: "response.output_item.done", output_index: 2, item: cumulative },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_terminal_collapsed",
+          status: "completed",
+          output: [
+            first,
+            {
+              type: "compaction",
+              id: "cmp_before_collapsed_snapshot",
+              encrypted_content: "opaque-before-collapsed",
+            },
+            cumulative,
+          ],
+        },
+      },
+    ]);
+
+    expect(output.content).toEqual([
+      expect.objectContaining({ type: "text", text: "answer extended" }),
+    ]);
     expect(output.providerReplay?.replayIndex).toBe(0);
     expect(replayTypes(output)).toEqual(["compaction", "message"]);
   });
@@ -797,29 +925,5 @@ describe("OpenAI Responses compaction replay", () => {
     expect(stringifyRedactedPayload(value)).not.toContain(secret);
     expect(stringifyRedactedEvent(value)).not.toContain(secret);
     expect(stringifyRedactedPayload(value)).toContain("<opaque data omitted>");
-  });
-
-  it("drops a compaction item during the existing encrypted-content recovery", () => {
-    const request = {
-      model: model.id,
-      input: [
-        {
-          type: "compaction",
-          id: "cmp_invalid",
-          encrypted_content: "opaque-invalid-compaction",
-        },
-        {
-          type: "reasoning",
-          id: "rs_invalid",
-          encrypted_content: "opaque-invalid-reasoning",
-          summary: [],
-        },
-      ],
-      stream: true,
-    } as OpenAIResponsesRequestParams;
-
-    expect(stripResponsesRequestEncryptedContent(request).input).toEqual([
-      { type: "reasoning", id: "rs_invalid", summary: [] },
-    ]);
   });
 });

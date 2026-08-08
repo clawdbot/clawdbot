@@ -3,6 +3,7 @@ import type {
   WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -10,6 +11,12 @@ import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+type WorkerTranscriptAssistantMessage = Extract<WorkerTranscriptMessage, { role: "assistant" }>;
+export type WorkerProviderReplayOmission = {
+  bytes: number;
+  limitBytes: number;
+  reason: "provider-replay-data-budget" | "transcript-commit-frame-budget";
+};
 
 export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
   return {
@@ -39,10 +46,64 @@ export function cloneProviderReplay(state: ProviderReplayState): ProviderReplayS
   };
 }
 
+function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): number | undefined {
+  const frame: WorkerTranscriptCommitRequestFrame = {
+    type: "req",
+    id: SIZE_FRAME_ID,
+    method: "worker.transcript.commit",
+    params: {
+      runEpoch: Number.MAX_SAFE_INTEGER,
+      seq: Number.MAX_SAFE_INTEGER,
+      baseLeafId: "x".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH),
+      messages: [message],
+    },
+  };
+  try {
+    return Buffer.byteLength(JSON.stringify(frame), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+export function projectWorkerProviderReplay<
+  TMessage extends WorkerTranscriptAssistantMessage,
+>(params: {
+  message: TMessage;
+  providerReplay: ProviderReplayState | undefined;
+  onOmitted?: (omission: WorkerProviderReplayOmission) => void;
+}): TMessage {
+  if (!params.providerReplay) {
+    return params.message;
+  }
+  const dataBytes = Buffer.byteLength(params.providerReplay.data, "utf8");
+  if (dataBytes > WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES) {
+    params.onOmitted?.({
+      bytes: dataBytes,
+      limitBytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
+      reason: "provider-replay-data-budget",
+    });
+    return params.message;
+  }
+  const candidate = {
+    ...params.message,
+    providerReplay: cloneProviderReplay(params.providerReplay),
+  };
+  const frameBytes = workerTranscriptMessageFrameBytes(candidate);
+  if (frameBytes === undefined || frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+    params.onOmitted?.({
+      bytes: frameBytes ?? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1,
+      limitBytes: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+      reason: "transcript-commit-frame-budget",
+    });
+    return params.message;
+  }
+  return candidate;
+}
+
 export function cloneUsage(
   message: AssistantMessage,
 ): WorkerTranscriptMessage & { role: "assistant" } {
-  return {
+  const projected: WorkerTranscriptAssistantMessage = {
     role: "assistant",
     content: message.content.map((part) => {
       if (part.type === "text") {
@@ -70,9 +131,6 @@ export function cloneUsage(
     model: message.model,
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
-    ...(message.providerReplay
-      ? { providerReplay: cloneProviderReplay(message.providerReplay) }
-      : {}),
     ...(message.diagnostics
       ? {
           diagnostics: message.diagnostics.map((diagnostic) => ({
@@ -117,6 +175,10 @@ export function cloneUsage(
     ...(message.errorBody ? { errorBody: message.errorBody } : {}),
     timestamp: message.timestamp,
   };
+  return projectWorkerProviderReplay({
+    message: projected,
+    providerReplay: message.providerReplay,
+  });
 }
 
 export function toWorkerTranscriptMessage(
@@ -151,20 +213,6 @@ export function toWorkerTranscriptMessage(
 }
 
 export function isWorkerTranscriptMessageFrameSafe(message: WorkerTranscriptMessage): boolean {
-  const frame: WorkerTranscriptCommitRequestFrame = {
-    type: "req",
-    id: SIZE_FRAME_ID,
-    method: "worker.transcript.commit",
-    params: {
-      runEpoch: Number.MAX_SAFE_INTEGER,
-      seq: Number.MAX_SAFE_INTEGER,
-      baseLeafId: "x".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH),
-      messages: [message],
-    },
-  };
-  try {
-    return Buffer.byteLength(JSON.stringify(frame), "utf8") <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
-  } catch {
-    return false;
-  }
+  const frameBytes = workerTranscriptMessageFrameBytes(message);
+  return frameBytes !== undefined && frameBytes <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
 }

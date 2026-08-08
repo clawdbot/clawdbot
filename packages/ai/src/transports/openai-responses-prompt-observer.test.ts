@@ -238,7 +238,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     });
     const run = await runObservedRequest({
       context: createContext(prompt),
-      errors: [invalidEncryptedContent, new Error("stop after retry")],
+      errors: [invalidEncryptedContent, invalidEncryptedContent, new Error("stop after retry")],
       options: {
         onPayload: (request: Record<string, unknown>) => ({
           ...request,
@@ -255,17 +255,32 @@ describe("OpenAI Responses provider prompt observer", () => {
       },
     });
 
-    expect(run.order).toEqual(["observe", "openai.create", "observe", "openai.create"]);
+    expect(run.order).toEqual([
+      "observe",
+      "openai.create",
+      "observe",
+      "openai.create",
+      "observe",
+      "openai.create",
+    ]);
     expect(run.observations.map((entry) => entry.payloadVariant)).toEqual([
       "initial",
+      "encrypted-content-retry",
       "encrypted-content-retry",
     ]);
     expect(run.observations.every((entry) => entry.egress === "responses-sdk")).toBe(true);
     expect(run.observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
     expect(JSON.stringify(run.requests[0])).toContain("encrypted_content");
-    expect(JSON.stringify(run.requests[1])).not.toContain("encrypted_content");
+    expect(JSON.stringify(run.requests[1])).toContain("opaque-compaction");
+    expect(JSON.stringify(run.requests[1])).not.toContain('"opaque"');
     expect(
       ((run.requests[1]?.input as Array<{ type?: string }> | undefined) ?? []).some(
+        (item) => item.type === "compaction",
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(run.requests[2])).not.toContain("encrypted_content");
+    expect(
+      ((run.requests[2]?.input as Array<{ type?: string }> | undefined) ?? []).some(
         (item) => item.type === "compaction",
       ),
     ).toBe(false);
