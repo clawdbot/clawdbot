@@ -38,9 +38,12 @@ import {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 import {
+  appendLoopWarningToError,
+  appendLoopWarningToToolResult,
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
+  consumeLoopWarningForToolCall,
   preExecutionBlockedToolCallIds,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
@@ -414,7 +417,7 @@ export function wrapToolWithBeforeToolCallHook(
           result: blockedResult,
           toolCallOrdinal,
         });
-        return blockedResult;
+        return appendLoopWarningToToolResult(blockedResult, toolCallId, ctx?.runId);
       };
       let preparedParams: unknown;
       try {
@@ -493,6 +496,7 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         const decision = await prepareControl.pause(executeParams);
         if (!decision.launch) {
+          consumeLoopWarningForToolCall(toolCallId, ctx?.runId);
           return INTERNAL_DISPOSED_RESULT;
         }
         onImplementationStart = decision.start;
@@ -600,7 +604,7 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return result;
+        return appendLoopWarningToToolResult(result, toolCallId, ctx?.runId);
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
@@ -628,7 +632,11 @@ export function wrapToolWithBeforeToolCallHook(
               : tool.resultContentSource,
           toolCallOrdinal,
         });
-        throw err;
+        if (signal?.aborted) {
+          consumeLoopWarningForToolCall(toolCallId, ctx?.runId);
+          throw err;
+        }
+        throw appendLoopWarningToError(err, toolCallId, ctx?.runId);
       }
     },
   };

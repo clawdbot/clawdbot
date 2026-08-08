@@ -11,6 +11,7 @@ import {
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
   recordBatchAdmittedToolCall,
+  recordLoopWarningForToolCall,
   releaseBatchAdmittedToolCalls,
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
@@ -28,13 +29,18 @@ type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 };
 
+type ToolLoopEvaluation = {
+  intervention?: ToolLoopIntervention;
+  warning?: string;
+};
+
 async function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
   stateOverride?: SessionState,
-): Promise<ToolLoopIntervention | undefined> {
+): Promise<ToolLoopEvaluation> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return undefined;
+    return {};
   }
   const toolName = normalizeToolPolicyName(call.toolName || "tool");
   const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
@@ -53,7 +59,7 @@ async function evaluateToolLoopCall(
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
   if (!result.stuck) {
-    return undefined;
+    return {};
   }
   if (result.level === "critical") {
     log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
@@ -69,13 +75,15 @@ async function evaluateToolLoopCall(
       pairedToolName: result.pairedToolName,
     });
     return {
-      kind: "critical-tool-loop",
-      toolCallId: call.toolCallId ?? "",
-      toolName,
-      actionKey: hashToolCall(toolName, call.params),
-      detector: result.detector,
-      count: result.count,
-      reason: result.message,
+      intervention: {
+        kind: "critical-tool-loop",
+        toolCallId: call.toolCallId ?? "",
+        toolName,
+        actionKey: hashToolCall(toolName, call.params),
+        detector: result.detector,
+        count: result.count,
+        reason: result.message,
+      },
     };
   }
   const baseWarningKey = result.warningKey ?? `${result.detector}:${toolName}`;
@@ -93,8 +101,9 @@ async function evaluateToolLoopCall(
       message: result.message,
       pairedToolName: result.pairedToolName,
     });
+    return { warning: result.message };
   }
-  return undefined;
+  return {};
 }
 
 async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise<void> {
@@ -117,11 +126,14 @@ export async function admitSingleToolCallLoop(
   call: ToolLoopCall,
   ctx: HookContext,
 ): Promise<ToolLoopIntervention | undefined> {
-  const intervention = await evaluateToolLoopCall(call, ctx);
-  if (!intervention) {
+  const evaluation = await evaluateToolLoopCall(call, ctx);
+  if (!evaluation.intervention) {
+    if (evaluation.warning && call.toolCallId) {
+      recordLoopWarningForToolCall(call.toolCallId, evaluation.warning, ctx.runId);
+    }
     await recordToolLoopCall(call, ctx);
   }
-  return intervention;
+  return evaluation.intervention;
 }
 
 /**
@@ -181,9 +193,10 @@ export async function admitToolCallBatch(
       projectedState.toolCallHistory?.push(projectedCall);
     }
   };
+  const warnings: Array<{ toolCallId: string; message: string }> = [];
   for (const call of calls) {
     const toolName = normalizeToolPolicyName(call.toolCall.name || "tool");
-    const intervention = await evaluateToolLoopCall(
+    const evaluation = await evaluateToolLoopCall(
       {
         toolName,
         params: call.args,
@@ -192,7 +205,7 @@ export async function admitToolCallBatch(
       ctx,
       projectedState,
     );
-    if (intervention) {
+    if (evaluation.intervention) {
       // Preserve only denial evidence. No call in this batch executed, but a
       // recovery retry must still see same-action siblings that crossed the
       // threshold. Unrelated skipped actions remain valid recovery choices.
@@ -201,14 +214,20 @@ export async function admitToolCallBatch(
           normalizeToolPolicyName(rejectedCall.toolCall.name || "tool"),
           rejectedCall.args,
         );
-        if (rejectedActionKey === intervention.actionKey) {
+        if (rejectedActionKey === evaluation.intervention.actionKey) {
           recordLoopVeto(sessionState, rejectedCall);
         }
       }
-      return { intervention };
+      return { intervention: evaluation.intervention };
+    }
+    if (evaluation.warning) {
+      warnings.push({ toolCallId: call.toolCall.id, message: evaluation.warning });
     }
     // A later sibling must assume this candidate makes no progress.
     projectLoopVeto(call);
+  }
+  for (const warning of warnings) {
+    recordLoopWarningForToolCall(warning.toolCallId, warning.message, ctx.runId);
   }
   for (const call of calls) {
     recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);

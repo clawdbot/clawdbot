@@ -17,6 +17,7 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { recordLoopWarningForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
@@ -380,6 +381,29 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("includes a pending loop warning in the client tool result", async () => {
+    const [tool] = toClientToolDefinitions([makeClientTool("update_plan")], undefined, {
+      runId: "run-warning",
+    });
+    if (!tool) {
+      throw new Error("missing client tool definition");
+    }
+    recordLoopWarningForToolCall("call-warning", "Reassess before retrying.", "run-warning");
+
+    const result = await tool.execute(
+      "call-warning",
+      { query: "same plan" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "Tool loop warning: Reassess before retrying.",
+    });
+  });
+
   it("returns terminal pending results for each client tool in a batch", async () => {
     const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
     const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {

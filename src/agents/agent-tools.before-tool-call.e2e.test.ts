@@ -1000,9 +1000,19 @@ describe("before_tool_call loop detection behavior", () => {
       const { readTool, listTool } = createPingPongTools();
       await runPingPongSequence(readTool, listTool, 9);
 
-      await listTool.execute("list-9", { dir: "/workspace" }, undefined, undefined);
+      const warningResult = await listTool.execute(
+        "list-9",
+        { dir: "/workspace" },
+        undefined,
+        undefined,
+      );
       await readTool.execute("read-10", { path: "/a.txt" }, undefined, undefined);
       await listTool.execute("list-11", { dir: "/workspace" }, undefined, undefined);
+
+      expect(warningResult.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining("Tool loop warning:"),
+      });
 
       const pingPongWarns = emitted.filter(
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
