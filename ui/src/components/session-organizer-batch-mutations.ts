@@ -3,6 +3,7 @@ import {
   type SessionsArchiveManyParams,
   type SessionsArchiveManyResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions-archive-many.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -12,6 +13,14 @@ import type {
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+
+function isLegacyArchiveManyMethodRejection(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown method: sessions.archiveMany")
+  );
+}
 
 export function sessionRowAgentId(
   session: SidebarRecentSession,
@@ -104,6 +113,15 @@ export async function archiveSessionRows(
       }
       dispatched.push({ rows: chunkRows, result });
     } catch (error) {
+      // Metadata-less legacy Gateways allow the optimistic request, then identify
+      // this one unsupported method through the canonical Gateway error contract.
+      if (
+        dispatched.length === 0 &&
+        options.fallback &&
+        isLegacyArchiveManyMethodRejection(error)
+      ) {
+        return options.fallback();
+      }
       terminalError = error;
       host.sessionData.publishSessionMutationError(scope, error);
       break;
