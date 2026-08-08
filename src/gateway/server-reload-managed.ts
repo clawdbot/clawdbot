@@ -387,7 +387,10 @@ export function startManagedGatewayConfigReloader(
             retireRejectedRestart: acceptedRestart.retireRejectedRestart,
           });
           publishDeferredAppliedConfigHash();
-          return undefined;
+          // Report coordinator-confirmed debt retirement back to the reloader so
+          // its pending-restart provenance does not outlive the retired debt: a
+          // later ordinary revert to the running config must cancel, not re-arm.
+          return { retireRestartDebt: acceptedRestart.retireRejectedRestart };
         }
         if (acceptedRestart.debt) {
           await runManagedRestart(
@@ -427,7 +430,13 @@ export function startManagedGatewayConfigReloader(
           retireRejectedRestart: acceptedRestart.retireRejectedRestart && !lateConservativeDebt,
         });
         publishDeferredAppliedConfigHash();
-        return rollbackSource;
+        // Same coordinator-confirmed retirement handoff as the source-only
+        // branch: when the accepted transaction retains no restart debt, the
+        // reloader must drop its pending-restart provenance.
+        return {
+          rollback: rollbackSource,
+          retireRestartDebt: acceptedRestart.retireRejectedRestart && !lateConservativeDebt,
+        };
       } catch (error) {
         if (lateConservativeDebt) {
           restoreConservativeRestartDebt(lateConservativeDebt);

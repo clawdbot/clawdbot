@@ -180,7 +180,25 @@ export function startGatewayConfigReloader(opts: {
       runtimeApplied: boolean;
       publishSource?: () => Promise<() => Promise<void>>;
     },
-  ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
+  ) =>
+    | void
+    | (() => Promise<void>)
+    | {
+        rollback?: () => Promise<void>;
+        /** Coordinator-confirmed retirement of the deferred restart debt. When
+         *  true, the reloader must drop its pending-restart provenance so a
+         *  later ordinary revert to the running config cancels instead of
+         *  re-arming an unnecessary restart. */
+        retireRestartDebt?: boolean;
+      }
+    | Promise<
+        | void
+        | (() => Promise<void>)
+        | {
+            rollback?: () => Promise<void>;
+            retireRestartDebt?: boolean;
+          }
+      >;
   /** Publishes a newer source snapshot when effective runtime bytes are unchanged. */
   onEffectiveConfigUnchanged?: (
     nextConfig: OpenClawConfig,
@@ -612,7 +630,7 @@ export function startGatewayConfigReloader(opts: {
       };
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
-        const acceptedSourceRollback = await opts.onConfigAccepted?.(
+        const acceptedSourceResult = await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,
           ownership,
           nextSourceConfig,
@@ -621,8 +639,21 @@ export function startGatewayConfigReloader(opts: {
             ...(options.publishSource ? { publishSource: options.publishSource } : {}),
           },
         );
-        if (typeof acceptedSourceRollback === "function") {
-          rollbackAcceptedSource = acceptedSourceRollback;
+        if (typeof acceptedSourceResult === "function") {
+          rollbackAcceptedSource = acceptedSourceResult;
+        } else if (acceptedSourceResult && typeof acceptedSourceResult === "object") {
+          if (acceptedSourceResult.retireRestartDebt) {
+            // The managed restart coordinator confirmed that the deferred
+            // restart debt is retired (e.g. a mode-none or reload-off write
+            // superseded it). Drop the reloader-local provenance so a later
+            // ordinary revert to the running config is treated as a real
+            // revert-cancel instead of re-arming an unnecessary restart.
+            pendingRestartWasExplicit = false;
+            pendingRestartBaseCompareConfig = null;
+          }
+          if (typeof acceptedSourceResult.rollback === "function") {
+            rollbackAcceptedSource = acceptedSourceResult.rollback;
+          }
         }
         assertCurrent();
         rollbackAcceptedSource ??= await options.publishSource?.();

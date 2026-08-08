@@ -716,7 +716,21 @@ function createReloaderHarness(
         runtimeApplied: boolean;
         publishSource?: () => Promise<() => Promise<void>>;
       },
-    ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
+    ) =>
+      | void
+      | (() => Promise<void>)
+      | {
+          rollback?: () => Promise<void>;
+          retireRestartDebt?: boolean;
+        }
+      | Promise<
+          | void
+          | (() => Promise<void>)
+          | {
+              rollback?: () => Promise<void>;
+              retireRestartDebt?: boolean;
+            }
+        >;
     onEffectiveConfigUnchanged?: (
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
@@ -3600,6 +3614,76 @@ describe("startGatewayConfigReloader", () => {
     harness.emitWrite(makeWrite(configB, "hash-b2"));
     await vi.runAllTimersAsync();
     expect(harness.onRestart).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+  });
+
+  it("drops pending-restart provenance when the coordinator retires the deferred debt on a source-only write", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18793 } } satisfies OpenClawConfig;
+    const configC = { gateway: { reload: {}, port: 18794 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    // The managed coordinator confirms debt retirement only for source-only
+    // (runtime-skipped) acceptance: a later planner A -> B -> A revert must
+    // cancel instead of re-arming the unnecessary restart.
+    const onConfigAccepted = vi.fn(
+      async (
+        _nextConfig: OpenClawConfig,
+        _ownership: GatewayConfigReloadTransactionOwnership,
+        _sourceConfig: OpenClawConfig,
+        acceptance: { runtimeApplied: boolean },
+      ) => (acceptance.runtimeApplied ? undefined : { retireRestartDebt: true }),
+    );
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+        onConfigAccepted,
+      },
+    );
+
+    // Explicit writer-required restart A -> B plans a restart and arms
+    // explicit provenance.
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    onConfigAccepted.mockClear();
+
+    // A source-only (mode none) write reaches managed acceptance; the
+    // coordinator retires the deferred restart debt and reports it back.
+    harness.emitWrite(makeWrite(configC, "hash-c", { mode: "none", reason: "source-only" }));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(onConfigAccepted.mock.calls.some((call) => call[3]?.runtimeApplied === false)).toBe(
+      true,
+    );
+
+    // The provenance is gone, so an ordinary revert to the running config
+    // cancels the (already retired) pending restart instead of re-arming it.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
 
     await harness.reloader.stop();
   });
