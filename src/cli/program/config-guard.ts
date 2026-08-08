@@ -237,6 +237,7 @@ export async function ensureConfigReady(
     commandName !== "health" &&
     commandName !== "logs" &&
     commandName !== "sessions" &&
+    // Remote RPC clients must not migrate state owned by the running gateway.
     !(commandName === "gateway" && subcommandName === "call") &&
     !(commandName === "update" && subcommandName === "status");
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
