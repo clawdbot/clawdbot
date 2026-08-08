@@ -161,7 +161,7 @@ test("sessions.delete rechecks worker placement before destructive cleanup", asy
   expect(embeddedRunMock.abortCalls).toEqual([]);
 });
 
-test("sessions.delete rejects failed placement with unresolved worker ownership", async () => {
+test("sessions.delete rejects failed placement while its worker lease remains", async () => {
   await createSessionStoreDir();
   const sessionKey = "discord:group:failed-worker-session";
   const sessionId = "sess-failed-worker-delete";
@@ -174,7 +174,7 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
     {
       context: {
         workerEnvironmentService: {
-          get: () => ({ state: "attached" }),
+          get: () => ({ state: "failed", leaseId: "lease-1" }),
           resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementReader,
@@ -186,6 +186,33 @@ test("sessions.delete rejects failed placement with unresolved worker ownership"
   expect(deleted.error?.message).toContain("cloud worker placement is failed");
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([]);
+});
+
+test("sessions.delete allows failed placement after proven bootstrap teardown", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "discord:group:torn-down-failed-worker-session";
+  const sessionId = "sess-torn-down-failed-worker-delete";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placementReader = sequencedPlacementReader([terminalPlacementRecord(sessionId, "failed")]);
+
+  const deleted = await directSessionReq(
+    "sessions.delete",
+    { key: sessionKey },
+    {
+      context: {
+        workerEnvironmentService: {
+          get: () => ({ state: "failed", leaseId: null }),
+          hasInferenceForSession: () => false,
+          resolveInferenceSessionForRunId: () => undefined,
+        } as never,
+        workerSessionPlacementService: placementReader,
+      },
+    },
+  );
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
+  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
 });
 
 test("sessions.delete allows failed placement after its worker is destroyed", async () => {

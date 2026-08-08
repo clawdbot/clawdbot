@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { probeTcpPort, selectSshEndpoint, type TcpProbe } from "./crabbox-worker-endpoint.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   identityRefId,
@@ -69,6 +70,7 @@ type CrabboxWorkerProviderDependencies = {
   openclawRoot?: string;
   pathEnv?: string;
   platform?: NodeJS.Platform;
+  probeTcpPort?: TcpProbe;
   runCommand?: CrabboxCommandRunner;
   sleep?: (milliseconds: number) => Promise<void>;
 };
@@ -366,11 +368,13 @@ async function leaseFromProvisionInspect(params: {
   deadline: number;
   inspect: ParsedInspect;
   provider: string;
+  probeTcpPort: TcpProbe;
   runCommand: CrabboxCommandRunner;
 }): Promise<WorkerLease> {
   try {
     assertProvisionSecurityPolicy(params);
-    return leaseFromInspect(params.inspect);
+    const lease = leaseFromInspect(params.inspect);
+    return await selectSshEndpoint(lease, params.inspect.sshFallbackPorts, params.probeTcpPort);
   } catch (error) {
     await stopProvisionInspect(params);
     throw error;
@@ -504,6 +508,7 @@ export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies = {},
 ): WorkerProvider {
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
+  const tcpPortProbe = dependencies.probeTcpPort ?? probeTcpPort;
   const sleep =
     dependencies.sleep ??
     ((milliseconds) =>
@@ -595,6 +600,7 @@ export function createCrabboxWorkerProvider(
           deadline,
           inspect: existing.inspect,
           provider: parsed.provider,
+          probeTcpPort: tcpPortProbe,
           runCommand,
         };
         if (!LEASE_ID_PATTERN.test(existing.inspect.id)) {
@@ -686,6 +692,7 @@ export function createCrabboxWorkerProvider(
         deadline,
         inspect: inspected.inspect,
         provider: parsed.provider,
+        probeTcpPort: tcpPortProbe,
         runCommand,
       };
       if (isUnusableProvisionState(inspected.inspect.state)) {

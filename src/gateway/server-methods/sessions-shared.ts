@@ -53,13 +53,17 @@ export function resolveSessionWorkerPlacementMutationError(params: {
   const placement = params.context.workerSessionPlacementService
     ?.getMany([params.sessionId])
     .get(params.sessionId);
-  // Failed placement normally keeps destructive mutation fenced. Missing worker identity or an
-  // authoritative destroyed environment proves cleanup cannot orphan a live worker.
+  const environment = placement?.environmentId
+    ? params.context.workerEnvironmentService?.get(placement.environmentId)
+    : undefined;
+  // finishProvenDestroy clears leaseId only after provider teardown succeeds. Failed environments
+  // that retain a lease stay fenced because their teardown is pending or indeterminate.
   const failedPlacementCanDelete =
     params.action === "delete" &&
     placement?.state === "failed" &&
     (placement.environmentId === null ||
-      params.context.workerEnvironmentService?.get(placement.environmentId)?.state === "destroyed");
+      environment?.state === "destroyed" ||
+      (environment?.state === "failed" && environment.leaseId === null));
   if (
     !placement ||
     placement.state === "local" ||

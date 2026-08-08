@@ -8,6 +8,7 @@ type CrabboxInspect = {
   sshHost?: unknown;
   sshHostKey?: unknown;
   sshKey?: unknown;
+  sshFallbackPorts?: unknown;
   sshPort?: unknown;
   sshUser?: unknown;
   state?: unknown;
@@ -21,6 +22,7 @@ export type ParsedInspect = {
   ready?: boolean;
   sshHostKey?: string;
   sshKey?: string;
+  sshFallbackPorts: number[];
   sshPort?: number;
   sshUser?: string;
   state: string;
@@ -79,10 +81,12 @@ export function parseInspectJson(stdout: string): ParsedInspect {
   const sshHostKey = inspectString(value.sshHostKey, "sshHostKey");
   const sshKey = inspectString(value.sshKey, "sshKey");
   const sshPort = inspectPort(value.sshPort);
+  const sshFallbackPorts = inspectFallbackPorts(value.sshFallbackPorts, sshPort);
   return {
     id,
     state,
     tailscaleEnabled,
+    sshFallbackPorts,
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
     ...(host ? { host } : {}),
     ...(sshUser ? { sshUser } : {}),
@@ -107,12 +111,35 @@ function inspectPort(value: unknown): number | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
+  return inspectRequiredPort(value, "sshPort");
+}
+
+function inspectFallbackPorts(value: unknown, primaryPort: number | undefined): number[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Crabbox inspect returned invalid sshFallbackPorts");
+  }
+  const seen = new Set(primaryPort === undefined ? [] : [primaryPort]);
+  const ports: number[] = [];
+  for (const entry of value) {
+    const port = inspectRequiredPort(entry, "sshFallbackPorts");
+    if (!seen.has(port)) {
+      seen.add(port);
+      ports.push(port);
+    }
+  }
+  return ports;
+}
+
+function inspectRequiredPort(value: unknown, field: "sshPort" | "sshFallbackPorts"): number {
   if (typeof value !== "number" && (typeof value !== "string" || !/^\d+$/u.test(value))) {
-    throw new Error("Crabbox inspect returned an invalid sshPort");
+    throw new Error(`Crabbox inspect returned an invalid ${field}`);
   }
   const port = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("Crabbox inspect returned an invalid sshPort");
+    throw new Error(`Crabbox inspect returned an invalid ${field}`);
   }
   return port;
 }
