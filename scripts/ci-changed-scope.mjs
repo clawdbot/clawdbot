@@ -48,6 +48,10 @@ const IOS_BUILD_RE =
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
+// Native and QA owners need explicit Node activation; src owners such as
+// node-host/runner.ts already enter through NODE_SCOPE_RE.
+const GATEWAY_NODE_PLATFORM_TOPOLOGY_SOURCE_RE =
+  /^(?:qa\/contracts\/gateway-node-platform-topologies\.json|apps\/macos\/Sources\/OpenClaw\/NodeMode\/MacNodeModeCoordinator\.swift|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Gateway(?:Channel|NodeSession)\.swift|apps\/ios\/Sources\/Model\/NodeAppModel\.swift|apps\/ios\/WatchApp\/Sources\/WatchDirectNode\.swift|src\/gateway\/watch-node-http\.ts|apps\/android\/app\/src\/main\/(?:AndroidManifest\.xml|java\/ai\/openclaw\/app\/gateway\/GatewaySession\.kt|java\/ai\/openclaw\/app\/wear\/WearProxy(?:Bridge|ListenerService)\.kt)|apps\/android\/wear\/src\/main\/(?:AndroidManifest\.xml|java\/ai\/openclaw\/wear\/(?:WearProxy(?:Client|ListenerService)|WearRealtimeTalkClient)\.kt))$/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 const WINDOWS_SCOPE_RE =
   /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mjs|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:direct-run\.mjs|format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
@@ -151,7 +155,7 @@ export function detectChangedScope(changedPaths) {
       runAndroid = true;
     }
 
-    if (NODE_SCOPE_RE.test(path)) {
+    if (NODE_SCOPE_RE.test(path) || GATEWAY_NODE_PLATFORM_TOPOLOGY_SOURCE_RE.test(path)) {
       runNode = true;
     }
 

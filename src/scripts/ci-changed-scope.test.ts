@@ -54,6 +54,26 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
   fs.writeFileSync(absolutePath, contents, "utf8");
 }
 
+function gatewayNodePlatformTopologySourcePaths(): string[] {
+  const inventory = JSON.parse(
+    fs.readFileSync("qa/contracts/gateway-node-platform-topologies.json", "utf8"),
+  ) as {
+    platforms: Array<{
+      sourceAnchors: Array<{ repository: string; path: string }>;
+    }>;
+  };
+  return [
+    "qa/contracts/gateway-node-platform-topologies.json",
+    ...new Set(
+      inventory.platforms.flatMap((row) =>
+        row.sourceAnchors
+          .filter((anchor) => anchor.repository === "openclaw/openclaw")
+          .map((anchor) => anchor.path),
+      ),
+    ),
+  ];
+}
+
 function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(repoDir);
@@ -232,6 +252,22 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
+  });
+
+  it("runs the Node topology validator for its contract and local source owners", () => {
+    for (const changedPath of gatewayNodePlatformTopologySourcePaths()) {
+      const scope = detectChangedScope([changedPath]);
+      expect(scope.runNode, changedPath).toBe(true);
+      if (changedPath.startsWith("apps/android/")) {
+        expect(scope.runAndroid, changedPath).toBe(true);
+      }
+      if (changedPath.startsWith("apps/macos/")) {
+        expect(scope.runMacos, changedPath).toBe(true);
+      }
+      if (changedPath.startsWith("apps/ios/") || changedPath.startsWith("apps/shared/")) {
+        expect(scope.runIosBuild, changedPath).toBe(true);
+      }
+    }
   });
 
   it("runs both Apple lanes for shared Swift tooling changes", () => {

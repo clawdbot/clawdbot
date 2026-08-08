@@ -217,6 +217,26 @@ function expectChangedTargets(changedPaths: string[], targets: string[]): void {
   });
 }
 
+function gatewayNodePlatformTopologySourcePaths(): string[] {
+  const inventory = JSON.parse(
+    fs.readFileSync("qa/contracts/gateway-node-platform-topologies.json", "utf8"),
+  ) as {
+    platforms: Array<{
+      sourceAnchors: Array<{ repository: string; path: string }>;
+    }>;
+  };
+  return [
+    "qa/contracts/gateway-node-platform-topologies.json",
+    ...new Set(
+      inventory.platforms.flatMap((row) =>
+        row.sourceAnchors
+          .filter((anchor) => anchor.repository === "openclaw/openclaw")
+          .map((anchor) => anchor.path),
+      ),
+    ),
+  ];
+}
+
 function expectSingleVitestRunPlan(
   actual: ReturnType<typeof buildVitestRunPlans>,
   expected: {
@@ -1543,6 +1563,21 @@ describe("scripts/test-projects changed-target routing", () => {
       ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"],
     );
   });
+
+  it.each(gatewayNodePlatformTopologySourcePaths())(
+    "routes Gateway/node topology owner path %s to its contract test",
+    (changedPath) => {
+      const behavioralTarget = new Map([
+        ["src/gateway/watch-node-http.ts", "src/gateway/watch-node-http.test.ts"],
+        ["src/node-host/runner.ts", "src/node-host/runner.test.ts"],
+      ]).get(changedPath);
+      const targets = [
+        ...(behavioralTarget ? [behavioralTarget] : []),
+        "test/scripts/gateway-node-platform-topologies.test.ts",
+      ];
+      expectChangedTargets([changedPath], targets);
+    },
+  );
 
   it("keeps extensionless helper script edits on owner tests", () => {
     const expectedTargets = Object.entries({

@@ -523,6 +523,33 @@ const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
   "extensions/openai/openai-provider.test.ts",
   "test/scripts/codex-client-version-contract.test.ts",
 ];
+const GATEWAY_NODE_PLATFORM_TOPOLOGY_TEST_TARGETS = [
+  "test/scripts/gateway-node-platform-topologies.test.ts",
+];
+const GATEWAY_NODE_PLATFORM_TOPOLOGY_SOURCE_PATHS = [
+  "qa/contracts/gateway-node-platform-topologies.json",
+  "apps/macos/Sources/OpenClaw/NodeMode/MacNodeModeCoordinator.swift",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift",
+  "apps/ios/Sources/Model/NodeAppModel.swift",
+  "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
+  "src/gateway/watch-node-http.ts",
+  "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+  "apps/android/app/src/main/AndroidManifest.xml",
+  "apps/android/wear/src/main/java/ai/openclaw/wear/WearProxyClient.kt",
+  "apps/android/wear/src/main/java/ai/openclaw/wear/WearRealtimeTalkClient.kt",
+  "apps/android/wear/src/main/java/ai/openclaw/wear/WearProxyListenerService.kt",
+  "apps/android/wear/src/main/AndroidManifest.xml",
+  "apps/android/app/src/main/java/ai/openclaw/app/wear/WearProxyBridge.kt",
+  "apps/android/app/src/main/java/ai/openclaw/app/wear/WearProxyListenerService.kt",
+  "src/node-host/runner.ts",
+];
+const ADDITIONAL_SOURCE_TEST_TARGETS = new Map(
+  GATEWAY_NODE_PLATFORM_TOPOLOGY_SOURCE_PATHS.map((sourcePath) => [
+    sourcePath,
+    GATEWAY_NODE_PLATFORM_TOPOLOGY_TEST_TARGETS,
+  ]),
+);
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
@@ -2841,16 +2868,22 @@ function resolveAppcastTargets(changedPath) {
 
 function resolvePreciseChangedTestTargets(changedPath, options) {
   const cwd = options.cwd ?? process.cwd();
+  const withAdditionalTargets = (targets) => {
+    const additionalTargets = ADDITIONAL_SOURCE_TEST_TARGETS.get(changedPath) ?? [];
+    return targets || additionalTargets.length > 0
+      ? uniqueOrdered([...(targets ?? []), ...additionalTargets])
+      : null;
+  };
   const mappedTargets =
     SOURCE_TEST_TARGETS.get(changedPath) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
     resolvePromptSnapshotFixtureTargets(changedPath);
   if (mappedTargets) {
-    return mappedTargets;
+    return withAdditionalTargets(mappedTargets);
   }
   if (isRoutableChangedTarget(changedPath) && isTestFileTarget(changedPath)) {
-    return [changedPath];
+    return withAdditionalTargets([changedPath]);
   }
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
   if (
@@ -2858,13 +2891,13 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
     !shouldCombineSiblingTestWithImportGraph(changedPath) &&
     options.combineSiblingWithImportGraph !== true
   ) {
-    return [siblingTest];
+    return withAdditionalTargets([siblingTest]);
   }
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
-    return changedPath.startsWith("ui/src/") ? [changedPath] : null;
+    return withAdditionalTargets(changedPath.startsWith("ui/src/") ? [changedPath] : null);
   }
   if (options.skipImportGraph === true) {
-    return null;
+    return withAdditionalTargets(null);
   }
   const facts = getChangedPathFacts(changedPath);
   if (
@@ -2879,10 +2912,12 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
       forceFull: options.forceFullImportGraph === true,
     });
     if (affectedTests.length > 0) {
-      return siblingTest ? uniqueOrdered([siblingTest, ...affectedTests]) : affectedTests;
+      return withAdditionalTargets(
+        siblingTest ? uniqueOrdered([siblingTest, ...affectedTests]) : affectedTests,
+      );
     }
   }
-  return siblingTest ? [siblingTest] : null;
+  return withAdditionalTargets(siblingTest ? [siblingTest] : null);
 }
 
 function isDeletedChangedTestTarget(changedPath, cwd) {

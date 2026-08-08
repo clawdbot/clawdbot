@@ -1,0 +1,359 @@
+{
+  "kind": "openclaw.gateway-node-platform-topology-reference",
+  "scope": "advisory-source-topology",
+  "releaseEvidence": "none",
+  "consumers": [],
+  "platforms": [
+    {
+      "platform": "macos",
+      "topology": {
+        "kind": "direct-ws",
+        "gatewayNegotiator": "macos",
+        "edges": [
+          {
+            "from": "macos",
+            "to": "gateway",
+            "transport": "websocket"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "macos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeModeCoordinator.swift",
+          "symbols": [
+            "MacNodeModeCoordinator",
+            "GatewayNodeSession",
+            "self.session.connect("
+          ]
+        },
+        {
+          "platform": "macos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift",
+          "symbols": [
+            "GatewayNodeSession",
+            "GatewayChannelActor(",
+            "try await channel.connect()"
+          ]
+        },
+        {
+          "platform": "macos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift",
+          "symbols": [
+            "makeWebSocketTask",
+            "sendConnect("
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "ios",
+      "topology": {
+        "kind": "direct-ws",
+        "gatewayNegotiator": "ios",
+        "edges": [
+          {
+            "from": "ios",
+            "to": "gateway",
+            "transport": "websocket"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "ios",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/ios/Sources/Model/NodeAppModel.swift",
+          "symbols": [
+            "NodeAppModel",
+            "GatewayNodeSession",
+            "self.nodeGateway.connect("
+          ]
+        },
+        {
+          "platform": "ios",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayNodeSession.swift",
+          "symbols": [
+            "GatewayNodeSession",
+            "GatewayChannelActor(",
+            "try await channel.connect()"
+          ]
+        },
+        {
+          "platform": "ios",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift",
+          "symbols": [
+            "makeWebSocketTask",
+            "sendConnect("
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "watchos",
+      "topology": {
+        "kind": "watch-http",
+        "gatewayNegotiator": "watchos",
+        "edges": [
+          {
+            "from": "watchos",
+            "to": "gateway",
+            "transport": "bounded-https-challenge-connect-poll"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "watchos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
+          "symbols": [
+            "WatchDirectNode",
+            "path: \"challenge\"",
+            "path: \"connect\"",
+            "path: \"poll\""
+          ]
+        },
+        {
+          "platform": "watchos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "src/gateway/watch-node-http.ts",
+          "symbols": [
+            "createWatchNodeHttpRuntime",
+            "CHALLENGE_PATH",
+            "CONNECT_PATH",
+            "POLL_PATH"
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "android",
+      "topology": {
+        "kind": "direct-ws",
+        "gatewayNegotiator": "android",
+        "edges": [
+          {
+            "from": "android",
+            "to": "gateway",
+            "transport": "websocket"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "android",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+          "symbols": [
+            "GatewaySession",
+            "client.newWebSocket(",
+            "sendConnect("
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "wearos",
+      "topology": {
+        "kind": "wear-two-hop",
+        "gatewayNegotiator": "android-phone",
+        "edges": [
+          {
+            "from": "wearos",
+            "to": "android-phone",
+            "transport": "wear-message-api-data-layer"
+          },
+          {
+            "from": "wearos",
+            "to": "android-phone",
+            "transport": "wear-channel-api-data-layer"
+          },
+          {
+            "from": "android-phone",
+            "to": "gateway",
+            "transport": "websocket"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/wear/src/main/java/ai/openclaw/wear/WearProxyClient.kt",
+          "symbols": [
+            "WearProxyClient",
+            "Wearable.getMessageClient",
+            "messageClient.sendMessage("
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/wear/src/main/java/ai/openclaw/wear/WearRealtimeTalkClient.kt",
+          "symbols": [
+            "WearRealtimeTalkClient",
+            "Wearable.getChannelClient(",
+            ".openChannel("
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/wear/src/main/java/ai/openclaw/wear/WearProxyListenerService.kt",
+          "symbols": [
+            "WearProxyListenerService",
+            "WearableListenerService",
+            "WearProtocol.RESPONSE_PATH",
+            "app.proxyClient.handleMessage("
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/wear/src/main/AndroidManifest.xml",
+          "symbols": [
+            ".WearProxyListenerService",
+            "com.google.android.gms.wearable.MESSAGE_RECEIVED",
+            "com.google.android.gms.wearable.CAPABILITY_CHANGED"
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/wear/WearProxyBridge.kt",
+          "symbols": [
+            "WearProxyBridge",
+            "Wearable.getMessageClient",
+            "messageClient.sendMessage("
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/wear/WearProxyListenerService.kt",
+          "symbols": [
+            "WearProxyListenerService",
+            "WearableListenerService",
+            "WearProtocol.REQUEST_PATH",
+            "app.wearProxyBridge.handleMessage(",
+            "onChannelOpened(",
+            "app.wearRealtimeChannels.accept("
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/app/src/main/AndroidManifest.xml",
+          "symbols": [
+            ".wear.WearProxyListenerService",
+            "com.google.android.gms.wearable.MESSAGE_RECEIVED",
+            "android:pathPrefix=\"/openclaw/wear/v1/request\"",
+            "com.google.android.gms.wearable.CHANNEL_EVENT",
+            "android:pathPrefix=\"/openclaw/wear/v1/realtime/audio/\""
+          ]
+        },
+        {
+          "platform": "wearos",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+          "symbols": [
+            "GatewaySession",
+            "client.newWebSocket("
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "windows",
+      "topology": {
+        "kind": "direct-ws",
+        "gatewayNegotiator": "windows",
+        "edges": [
+          {
+            "from": "windows",
+            "to": "gateway",
+            "transport": "websocket"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "windows",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "src/node-host/runner.ts",
+          "symbols": [
+            "case \"win32\":",
+            "return \"windows\"",
+            "new GatewayClient({",
+            "role: \"node\""
+          ]
+        },
+        {
+          "platform": "windows",
+          "repository": "openclaw/openclaw-windows-node",
+          "verification": "unverified-external-reference",
+          "path": "src/OpenClaw.Shared/WebSocketClientBase.cs",
+          "revision": "9f9a8eda6340c7ec6f0acbc410de4f6b7d24a3ce",
+          "symbols": [
+            "WebSocketClientBase",
+            "ClientWebSocket",
+            "ConnectAsync("
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "linux",
+      "topology": {
+        "kind": "direct-ws",
+        "gatewayNegotiator": "linux",
+        "edges": [
+          {
+            "from": "linux",
+            "to": "gateway",
+            "transport": "websocket"
+          }
+        ]
+      },
+      "sourceAnchors": [
+        {
+          "platform": "linux",
+          "repository": "openclaw/openclaw",
+          "verification": "tracked-source-markers",
+          "path": "src/node-host/runner.ts",
+          "symbols": [
+            "case \"linux\":",
+            "return \"linux\"",
+            "new GatewayClient({",
+            "role: \"node\"",
+            "startGatewayClientWhenEventLoopReady(client)"
+          ]
+        }
+      ]
+    }
+  ]
+}
