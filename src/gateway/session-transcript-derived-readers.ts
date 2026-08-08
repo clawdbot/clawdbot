@@ -50,6 +50,9 @@ function extractSqliteUsageSnapshot(message: unknown): SessionTranscriptUsageSna
     ...(typeof normalizedUsage.cacheWrite === "number"
       ? { cacheWrite: normalizedUsage.cacheWrite }
       : {}),
+    // The unavailable-context marker must reach the aggregator; without it a
+    // later CLI turn cannot retire an earlier cumulative total (JSONL parity).
+    ...(usage?.contextUsage ? { contextUsage: usage.contextUsage } : {}),
     ...(typeof totalTokens === "number" ? { totalTokens, totalTokensFresh: true } : {}),
     ...(typeof costUsd === "number" && Number.isFinite(costUsd) ? { costUsd } : {}),
   };
@@ -98,7 +101,18 @@ export function aggregateSqliteUsageSnapshots(
       cacheWrite += snapshot.cacheWrite;
       sawCacheWrite = true;
     }
-    if (typeof snapshot.totalTokens === "number") {
+    // Mirror the JSONL aggregate reader: an unavailable context marker retires
+    // any earlier total, or a stale cumulative value resurfaces as fresh
+    // session context once the Gateway row consumes this aggregate.
+    if (snapshot.contextUsage) {
+      aggregate.contextUsage = snapshot.contextUsage;
+    } else {
+      delete aggregate.contextUsage;
+    }
+    if (snapshot.contextUsage?.state === "unavailable") {
+      delete aggregate.totalTokens;
+      delete aggregate.totalTokensFresh;
+    } else if (typeof snapshot.totalTokens === "number") {
       aggregate.totalTokens = snapshot.totalTokens;
       aggregate.totalTokensFresh = true;
     }
