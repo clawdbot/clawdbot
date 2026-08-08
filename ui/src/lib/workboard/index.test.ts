@@ -28,6 +28,7 @@ import {
   type WorkboardTaskSummary,
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
+import { getWorkboardRuntime } from "./runtime.ts";
 import { getWorkboardTaskPollBatch, listWorkboardTasks } from "./task-links.ts";
 import {
   createDeferred,
@@ -60,6 +61,19 @@ function createSequencedClient(routes: Record<string, readonly unknown[]>, fallb
       throw reply;
     }
     return reply;
+  });
+}
+
+function createForeignGatewayRequestError(params: {
+  code: string;
+  message: string;
+  details?: unknown;
+}): Error {
+  return Object.assign(new Error(params.message), {
+    name: "GatewayRequestError",
+    code: params.code,
+    gatewayCode: params.code,
+    details: params.details,
   });
 }
 
@@ -2164,7 +2178,7 @@ describe("workboard controller", () => {
           };
         }
         if (taskListCalls === 2) {
-          throw new GatewayRequestError({
+          throw createForeignGatewayRequestError({
             code: "INVALID_REQUEST",
             message: "stale tasks.list cursor",
             details: { code: "TASKS_LIST_CURSOR_STALE" },
@@ -2187,33 +2201,50 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: "task-1" });
   });
 
-  it("restarts a saved discovery cursor from the first page when stale", async () => {
-    const staleError = new GatewayRequestError({
+  it("replaces a saved numeric discovery cursor after a foreign stale error", async () => {
+    const linkedCard = makeCard({
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    });
+    const staleError = createForeignGatewayRequestError({
       code: "INVALID_REQUEST",
       message: "stale tasks.list cursor",
       details: { code: "TASKS_LIST_CURSOR_STALE" },
     });
+    let firstPageRequests = 0;
     const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return listResult([linkedCard], ["todo", "running", "done"]);
+      }
       if (method !== "tasks.list") {
         return {};
       }
-      if ((params as { cursor?: string }).cursor) {
+      const cursor = (params as { cursor?: string }).cursor;
+      if (cursor === "500") {
         throw staleError;
       }
-      return { tasks: [sampleTask], nextCursor: "fresh-page" };
+      firstPageRequests += 1;
+      return firstPageRequests === 1
+        ? { tasks: [], nextCursor: "500" }
+        : {
+            tasks: [makeTask({ childSessionKey: `agent:main:${sampleTaskSessionKey}` })],
+            nextCursor: "fresh-page",
+          };
     });
 
-    const result = await getWorkboardTaskPollBatch(client, [], [{ cursor: "stale-page" }]);
+    await refreshBoard(client, "live");
+    expect(getWorkboardRuntime(host).defaultTaskDiscoveryCursor).toBe("500");
 
-    expect(result).toMatchObject({
-      tasks: [sampleTask],
-      nextUnfilteredCursor: "fresh-page",
-      error: null,
-    });
-    expect(requestCalls(client, "tasks.list")).toEqual([
-      ["tasks.list", { cursor: "stale-page", limit: 500 }],
-      ["tasks.list", { limit: 500 }],
+    await refreshBoard(client, "live");
+
+    expect(requestCalls(client, "tasks.list").map(([, params]) => params)).toEqual([
+      { limit: 500 },
+      { cursor: "500", limit: 500 },
+      { limit: 500 },
     ]);
+    expect(getWorkboardRuntime(host).defaultTaskDiscoveryCursor).toBe("fresh-page");
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
   });
 
   it("fails after bounded stale task pagination attempts", async () => {

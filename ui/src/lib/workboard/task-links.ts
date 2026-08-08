@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isTasksListCursorStaleError } from "../gateway-errors.ts";
 import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   isActiveWorkboardCard,
@@ -18,15 +19,6 @@ const WORKBOARD_TASKS_LIST_MAX_ATTEMPTS = 3;
 const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
 const WORKBOARD_TASK_DISCOVERY_BATCH_SIZE = 4;
 export const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
-
-function isStaleTasksListCursorError(error: unknown): boolean {
-  return (
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    isRecord(error.details) &&
-    error.details.code === "TASKS_LIST_CURSOR_STALE"
-  );
-}
 
 export async function listWorkboardTasks(
   client: GatewayBrowserClient,
@@ -50,7 +42,7 @@ export async function listWorkboardTasks(
         cursor = page.nextCursor;
       }
     } catch (error) {
-      if (!isStaleTasksListCursorError(error) || attempt + 1 >= WORKBOARD_TASKS_LIST_MAX_ATTEMPTS) {
+      if (!isTasksListCursorStaleError(error) || attempt + 1 >= WORKBOARD_TASKS_LIST_MAX_ATTEMPTS) {
         throw error;
       }
     }
@@ -283,7 +275,7 @@ export async function getWorkboardTaskPollBatch(
           limit: WORKBOARD_TASKS_LIST_LIMIT,
         });
       } catch (error) {
-        if (!query.cursor || !isStaleTasksListCursorError(error)) {
+        if (!query.cursor || !isTasksListCursorStaleError(error)) {
           throw error;
         }
         effectiveQuery = query.sessionKey ? { sessionKey: query.sessionKey } : {};

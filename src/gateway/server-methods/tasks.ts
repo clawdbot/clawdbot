@@ -61,16 +61,21 @@ function encodeCursor(cursor: TasksListCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
-function parseCursor(cursor: string | undefined): TasksListCursor | null | undefined {
+function parseCursor(cursor: string | undefined): TasksListCursor | "legacy" | null | undefined {
   if (!cursor) {
     return undefined;
   }
   const normalized = cursor.trim();
-  if (
-    !normalized ||
-    normalized.length > MAX_TASKS_LIST_CURSOR_LENGTH ||
-    !/^[A-Za-z0-9_-]+$/.test(normalized)
-  ) {
+  if (!normalized || normalized.length > MAX_TASKS_LIST_CURSOR_LENGTH) {
+    return null;
+  }
+  // The previous Gateway emitted decimal offsets. Never resume one against the
+  // mutable task order, but preserve its upgrade path through the stale-cursor
+  // response that clients already know how to restart.
+  if (/^\d+$/.test(normalized) && Number.isSafeInteger(Number(normalized))) {
+    return "legacy";
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(normalized)) {
     return null;
   }
   try {
@@ -124,6 +129,16 @@ export const tasksHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "invalid tasks.list cursor"),
+      );
+      return;
+    }
+    if (cursor === "legacy") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "stale tasks.list cursor", {
+          details: { code: GatewayErrorDetailCodes.TASKS_LIST_CURSOR_STALE },
+        }),
       );
       return;
     }

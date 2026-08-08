@@ -878,8 +878,7 @@ return sanitized task summaries, not raw runtime state.
   - Cursors are opaque and bound to the normalized query and filtered task order.
     If task activity changes that order between pages, the Gateway returns
     `INVALID_REQUEST` with detail code `TASKS_LIST_CURSOR_STALE`. Discard any
-    partial pages and restart the traversal without a cursor; retrying the same
-    stale cursor cannot succeed.
+    partial pages and restart the traversal without a cursor.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.
   - Result: `{ "task": TaskSummary }`.

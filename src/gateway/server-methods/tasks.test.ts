@@ -303,8 +303,19 @@ describe("tasks gateway handlers", () => {
     });
   });
 
-  it("rejects legacy numeric task cursors", async () => {
-    const result = await runTaskHandler("tasks.list", { cursor: "2" });
+  it.each(["2", " 002 "])("treats a legacy numeric task cursor %j as stale", async (cursor) => {
+    const result = await runTaskHandler("tasks.list", { cursor });
+
+    expect(result.calls[0]?.[0]).toBe(false);
+    expect(result.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "stale tasks.list cursor",
+      details: { code: "TASKS_LIST_CURSOR_STALE" },
+    });
+  });
+
+  it("rejects malformed task cursors as invalid input", async () => {
+    const result = await runTaskHandler("tasks.list", { cursor: "2x" });
 
     expect(result.calls[0]?.[0]).toBe(false);
     expect(result.calls[0]?.[2]).toMatchObject({

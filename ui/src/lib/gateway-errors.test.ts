@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
-import { isMissingOperatorReadScopeError, isWizardNotFoundError } from "./gateway-errors.ts";
+import {
+  isMissingOperatorReadScopeError,
+  isTasksListCursorStaleError,
+  isWizardNotFoundError,
+} from "./gateway-errors.ts";
 
 function gatewayRequestError(params: { code: string; message: string; details?: unknown }): Error {
   return Object.assign(new Error(params.message), {
@@ -50,6 +54,23 @@ describe("gateway error helpers", () => {
     for (const details of [null, "WIZARD_NOT_FOUND", [], { code: 42 }]) {
       expect(isWizardNotFoundError({ gatewayCode: "INVALID_REQUEST", details })).toBe(false);
     }
+  });
+
+  it("classifies stale task cursors across Gateway error constructors", () => {
+    const error = gatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "stale tasks.list cursor",
+      details: { code: "TASKS_LIST_CURSOR_STALE" },
+    });
+
+    expect(error).not.toBeInstanceOf(GatewayRequestError);
+    expect(isTasksListCursorStaleError(error)).toBe(true);
+    expect(
+      isTasksListCursorStaleError({
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "UNKNOWN_AGENT_ID" },
+      }),
+    ).toBe(false);
   });
 
   it("classifies structured read-scope failures without message parsing", () => {
