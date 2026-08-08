@@ -7281,7 +7281,28 @@ describe("handleSendChat", () => {
     expect(sends[1]).toMatchObject({ expectedLeafEntryId: "leaf-before-queue" });
   });
 
-  it("parks an active-leaf rejection, restores the draft, and refreshes branch state", async () => {
+  it("waits for authoritative history before retrying an active-leaf rejection", async () => {
+    const staleHistory = createDeferred<unknown>();
+    const refreshedHistory = createDeferred<unknown>();
+    const preRejectionHistory = {
+      messages: [],
+      sessionInfo: row("agent:main", {
+        activeLeafEntryId: "leaf-from-pre-send-load",
+        hasActiveRun: false,
+        sessionId: "session-from-pre-send-load",
+        status: "done",
+      }),
+    };
+    const authoritativeHistory = {
+      messages: [],
+      sessionInfo: row("agent:main", {
+        activeLeafEntryId: "leaf-after-switch",
+        hasActiveRun: false,
+        sessionId: "session-after-switch",
+        status: "done",
+      }),
+    };
+    let historyRequests = 0;
     let sendAttempts = 0;
     const host = makeChatHost({
       requestHandlers: {
@@ -7297,7 +7318,13 @@ describe("handleSendChat", () => {
           const payload = requireRecord(params, "retried branch send payload");
           return { runId: payload.idempotencyKey, status: "started" };
         },
-        "chat.history": idleChatHistory(),
+        "chat.history": () => {
+          historyRequests += 1;
+          if (historyRequests === 1) {
+            return staleHistory.promise;
+          }
+          return historyRequests === 2 ? refreshedHistory.promise : authoritativeHistory;
+        },
         "sessions.branches.list": { branches: [] },
       },
       chatDisplayedLeafEntryId: "leaf-stale",
@@ -7309,12 +7336,11 @@ describe("handleSendChat", () => {
       currentSessionId: "session-before-switch",
     });
 
+    const staleLoad = loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+    await waitForFast(() => expect(historyRequests).toBe(1));
     await handleSendChat(host);
     await waitForFast(() => {
-      expect(host.request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: "agent:main",
-        limit: 100,
-      });
+      expect(historyRequests).toBe(2);
       expect(host.request).toHaveBeenCalledWith("sessions.branches.list", {
         sessionKey: "agent:main",
       });
@@ -7329,15 +7355,34 @@ describe("handleSendChat", () => {
     ]);
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
 
-    host.chatDisplayedLeafEntryId = "leaf-after-switch";
-    host.currentSessionId = "session-after-switch";
-    await retryQueuedChatMessage(host, host.chatQueue[0]!.id);
+    const retry = retryQueuedChatMessage(host, host.chatQueue[0]!.id);
+    expect(await raceWithMacrotask(retry)).toBe("pending");
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue[0]?.transcriptRevision).toEqual({
+      expectedLeafEntryId: "leaf-stale",
+      sessionId: "session-before-switch",
+    });
+
+    staleHistory.resolve(preRejectionHistory);
+    await staleLoad;
+    expect(await raceWithMacrotask(retry)).toBe("pending");
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatDisplayedLeafEntryId).toBe("leaf-stale");
+    expect(host.currentSessionId).toBe("session-before-switch");
+
+    refreshedHistory.resolve(authoritativeHistory);
+    await retry;
 
     const sends = host.request.mock.calls
       .filter(([method]) => method === "chat.send")
       .map(([, params]) => requireRecord(params, "branch send payload"));
     expect(sends).toHaveLength(2);
     expect(sends[1]).toMatchObject({
+      expectedLeafEntryId: "leaf-after-switch",
+      sessionId: "session-after-switch",
+    });
+    expect(historyRequests).toBe(3);
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.transcriptRevision).toEqual({
       expectedLeafEntryId: "leaf-after-switch",
       sessionId: "session-after-switch",
     });

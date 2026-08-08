@@ -3615,6 +3615,30 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
+  it("starts a fresh shared history request when forced", async () => {
+    const staleHistory = createDeferred<HistoryResult>();
+    const freshHistory = createDeferred<HistoryResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleHistory.promise)
+      .mockImplementationOnce(() => freshHistory.promise);
+    const client = createTestClient(request);
+    const staleState = createHistoryStateForClient(client, { sessionKey: "agent:main:main" });
+    const freshState = createHistoryStateForClient(client, { sessionKey: "agent:main:main" });
+
+    const staleLoad = loadChatHistory(staleState);
+    const freshLoad = loadChatHistory(freshState, { force: true });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleHistory.resolve(createAssistantHistory("stale"));
+    freshHistory.resolve(createAssistantHistory("fresh"));
+    await Promise.all([staleLoad, freshLoad]);
+
+    expect(freshState.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
+  });
+
   it("preserves a first send appended while the startup history request is in flight", async () => {
     const { history, request, state } = createDeferredHistoryState();
 

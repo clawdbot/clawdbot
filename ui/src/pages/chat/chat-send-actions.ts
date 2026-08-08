@@ -16,6 +16,7 @@ import {
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
+  readQueuedMessageById,
   updateQueuedMessage,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
@@ -45,7 +46,7 @@ function applyChatSendError(state: ChatState, err: unknown, canApplyError: () =>
   if (canApplyError()) {
     setChatError(state, error);
     if (isActiveLeafChangedError(err)) {
-      void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+      void Promise.all([loadChatHistory(state, { force: true }), loadChatBranches(state)]);
     }
   }
   return error;
@@ -133,7 +134,7 @@ export const flushChatQueueForEvent = (host: ChatHost) =>
 export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
-  const item = host.chatQueue.find((entry) => entry.id === id);
+  let item = host.chatQueue.find((entry) => entry.id === id);
   if (
     !item ||
     item.pendingRunId ||
@@ -162,6 +163,30 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     }
     await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
     return;
+  }
+  if (
+    item.sendState === "failed" &&
+    item.transcriptRevision &&
+    !item.localCommandName &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId)
+  ) {
+    const failedRunId = item.sendRunId;
+    const failedAttempts = item.sendAttempts;
+    // A revision-bound retry is a new user-approved attempt. Wait for authoritative
+    // history before capturing its revision so Retry cannot reuse a rejected token.
+    if (!(await loadChatHistory(host as unknown as ChatState))) {
+      return;
+    }
+    const refreshed = readQueuedMessageById(host, id);
+    if (
+      !refreshed ||
+      refreshed.sendState !== "failed" ||
+      refreshed.sendRunId !== failedRunId ||
+      refreshed.sendAttempts !== failedAttempts
+    ) {
+      return;
+    }
+    item = refreshed;
   }
   const transcriptRevision =
     !item.localCommandName &&
