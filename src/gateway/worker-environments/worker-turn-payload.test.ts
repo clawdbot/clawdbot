@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
@@ -127,6 +128,28 @@ describe("assertSupportedTurn", () => {
 });
 
 describe("windowInitialMessages", () => {
+  it("reports oversized replay through the typed unavailable result", () => {
+    const project = vi.fn(windowInitialMessages);
+    const message = assistantMessage(1, true);
+    if (message.role !== "assistant" || !message.providerReplay) {
+      throw new Error("expected replay carrier");
+    }
+    message.providerReplay = {
+      ...message.providerReplay,
+      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+    };
+
+    expect(project([message])).toEqual({
+      kind: "provider-replay-unavailable",
+      details: {
+        bytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1,
+        limitBytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
+        reason: "provider-replay-data-budget",
+      },
+    });
+    expect(project).toHaveBeenCalledOnce();
+  });
+
   it("pins the newest replay carrier when the normal cutoff would pass it", () => {
     const history = [userMessage("old", 1), assistantMessage(2, true)];
     history.push(

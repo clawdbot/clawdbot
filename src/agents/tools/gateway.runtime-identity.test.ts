@@ -7,6 +7,11 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import {
   withGatewayToolApprovalOwner,
@@ -31,6 +36,24 @@ vi.mock("../../gateway/call.js", () => ({
 function capturedGatewayCall(): CallGatewayOptions {
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   return mocks.callGateway.mock.calls[0]?.[0] as CallGatewayOptions;
+}
+
+type GatewayToolCallerIdentity = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+
+async function withActiveGatewayToolCallerIdentity<T>(
+  identity: GatewayToolCallerIdentity & {
+    operationalRunInstance: NonNullable<GatewayToolCallerIdentity["operationalRunInstance"]>;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
+  expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+  try {
+    return await withGatewayToolCallerIdentity(identity, run);
+  } finally {
+    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+  }
 }
 
 describe("gateway tool runtime identity", () => {
@@ -62,7 +85,7 @@ describe("gateway tool runtime identity", () => {
     async (method, params, result) => {
       mocks.callGateway.mockResolvedValueOnce(result);
 
-      await withGatewayToolCallerIdentity(
+      await withActiveGatewayToolCallerIdentity(
         {
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
@@ -78,7 +101,7 @@ describe("gateway tool runtime identity", () => {
   it("scopes signed session-spawn authority to its Gateway call", async () => {
     mocks.callGateway.mockResolvedValueOnce({ key: "agent:ops:dashboard:child" });
 
-    await withGatewayToolCallerIdentity(
+    await withActiveGatewayToolCallerIdentity(
       {
         agentId: "ops",
         sessionKey: "agent:ops:main",
@@ -145,7 +168,7 @@ describe("gateway tool runtime identity", () => {
       sourceReplyToolCallId: "message-call-1",
     };
 
-    await withGatewayToolCallerIdentity(
+    await withActiveGatewayToolCallerIdentity(
       {
         agentId: "ops",
         sessionKey: capabilityInput.sessionKey,
@@ -223,7 +246,7 @@ describe("gateway tool runtime identity", () => {
         ? createExecutionIdentityAdmissionToken(operationalRunInstance.runId)
         : undefined;
 
-      await withGatewayToolCallerIdentity(
+      await withActiveGatewayToolCallerIdentity(
         {
           agentId: "ops",
           sessionKey: "agent:ops:main",
@@ -265,7 +288,7 @@ describe("gateway tool runtime identity", () => {
       ),
     ).rejects.toThrow("trusted agent runtime identity required");
 
-    await withGatewayToolCallerIdentity(
+    await withActiveGatewayToolCallerIdentity(
       {
         agentId: "ops",
         sessionKey: "agent:ops:main",
@@ -289,7 +312,7 @@ describe("gateway tool runtime identity", () => {
     mocks.callGateway.mockResolvedValueOnce({ id: "approval-1" });
     const operationalRunInstance = createOperationalRunInstanceRef("run-1");
 
-    await withGatewayToolCallerIdentity(
+    await withActiveGatewayToolCallerIdentity(
       {
         agentId: "ops",
         sessionKey: "agent:ops:main",
