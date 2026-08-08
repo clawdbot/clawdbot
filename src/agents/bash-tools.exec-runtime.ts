@@ -485,7 +485,8 @@ function formatExecFailureReason(params: {
         "OpenClaw selected its Linux OOM-score wrapper, which attempts to set this child's oom_score_adj to 1000. " +
         "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
         "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits. " +
-        "Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to skip this adjustment attempt."
+        "Only if those checks show no OOM evidence and you need a controlled comparison, retry with OPENCLAW_CHILD_OOM_SCORE_ADJ=0. " +
+        "This removes the child-first OOM preference and can make the Gateway more likely to be killed under real memory pressure."
       );
     }
     case "aborted":

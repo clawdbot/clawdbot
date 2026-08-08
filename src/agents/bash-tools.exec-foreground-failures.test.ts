@@ -306,7 +306,11 @@ describe("exec foreground failures", () => {
     expect(text).toContain("Check cgroup memory events or kernel logs");
     expect(text).toContain("If they show memory pressure, narrow the command");
     expect(text).toContain("adjust memory, concurrency, or resource limits");
-    expect(text).toContain("Set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 to skip this adjustment attempt");
+    expect(text).toContain("Only if those checks show no OOM evidence");
+    expect(text).toContain("need a controlled comparison");
+    expect(text).toContain("retry with OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+    expect(text).toContain("removes the child-first OOM preference");
+    expect(text).toContain("make the Gateway more likely to be killed under real memory pressure");
   });
 
   it.each([

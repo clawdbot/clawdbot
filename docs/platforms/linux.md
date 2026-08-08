@@ -256,6 +256,9 @@ Covered child process surfaces:
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
 the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
 `off`.
+Use this opt-out only for controlled diagnosis: it removes child-first OOM
+protection and makes the Gateway more likely to be selected as the victim under
+real memory pressure.
 
 Verify a child process:
 
