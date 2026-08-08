@@ -117,6 +117,24 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
     });
   });
 
+  it("lets a newer post-restore cleanup outcome supersede the removal fact", async () => {
+    const created = await materialize("restore-generation");
+    await service.acquire(created.id);
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+    expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toMatchObject({
+      outcome: "removed-lossless",
+    });
+
+    const restored = await service.restore({ id: created.id });
+    await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
+    await service.acquire(created.id);
+    await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
+
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      runEndCleanup: { outcome: "retained-dirty", at: now },
+    });
+  });
+
   it("records dirty retention and keeps the checkout intact", async () => {
     const created = await materialize("dirty");
     await service.acquire(created.id);

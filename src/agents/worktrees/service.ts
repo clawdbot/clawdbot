@@ -59,6 +59,7 @@ import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
 } from "./types.js";
@@ -909,6 +910,7 @@ export class ManagedWorktreeService {
     reason: string;
     force?: boolean;
     claimToken?: string;
+    runEndCleanup?: ManagedWorktreeRunEndCleanup;
   }): Promise<RemoveManagedWorktreeResult> {
     const record = this.requireLiveRecord(params.id);
     const force = params.force ?? false;
@@ -973,7 +975,13 @@ export class ManagedWorktreeService {
       await requireGit(record.repoRoot, ["worktree", "prune"]);
       await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
       const removedAt = this.now();
-      updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
+      // Persist the run-end outcome atomically with finalization: a post-finalize
+      // write could race a restore plus newer cleanup and overwrite the newer fact.
+      updateRegistryWorktree(this.env, record.id, {
+        removedAt,
+        snapshotRef,
+        ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+      });
       finalizeWorktreeRemoval(this.env, record.id);
       return {
         removed: true,
@@ -1048,10 +1056,11 @@ export class ManagedWorktreeService {
     const record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
-      // Retained/failed writes happen after this remover released its claim, so a
-      // racing remover may have finalized the row; the live-row condition keeps the
-      // winner's removed-lossless authoritative. Only our own removed-lossless write
-      // targets a row this remover just finalized.
+      // Retained/failed writes happen after this remover released or aborted its
+      // claim, so a racing remover may have finalized the row; the live-row
+      // condition keeps a winner's removed-lossless authoritative. The winning
+      // removal itself persists its outcome atomically inside remove()'s
+      // finalization update, never through this path.
       updateRegistryWorktree(
         this.env,
         id,
@@ -1064,7 +1073,7 @@ export class ManagedWorktreeService {
               : {}),
           },
         },
-        { onlyIfLive: outcome !== "removed-lossless" },
+        { onlyIfLive: true },
       );
     };
     // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
@@ -1122,13 +1131,17 @@ export class ManagedWorktreeService {
     }
     try {
       await this.release(id);
-      await this.remove({ id, reason: "run-end", claimToken });
+      await this.remove({
+        id,
+        reason: "run-end",
+        claimToken,
+        runEndCleanup: { outcome: "removed-lossless", at: this.now() },
+      });
     } catch (error) {
       abortWorktreeRemoval(this.env, id, claimToken);
       recordOutcome("failed", error);
       throw error;
     }
-    recordOutcome("removed-lossless");
     return true;
   }
 
