@@ -189,6 +189,18 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
+  it("keeps the removed deactivate hook alias as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "legacy-deactivate-hook-alias",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement: "`gateway_stop` hook",
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);
   });

@@ -576,6 +576,23 @@ Provider plugins should register text-inference providers through
 `ApiRegistry` should register directly on that registry so provider ownership
 and teardown stay scoped to the prepared runtime.
 
+### Deactivate hook alias
+
+The `api.on("deactivate", handler)` compatibility alias was removed. Register
+the same shutdown cleanup with `gateway_stop`:
+
+```typescript
+// Before
+api.on("deactivate", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+
+// After
+api.on("gateway_stop", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+```
+
 ### Private testing barrel
 
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
@@ -660,29 +677,6 @@ timeline for current status.
 
     Affected areas: `inbound_claim`, `message_received`, and any custom
     channel plugin that post-processed the old envelope text.
-
-  </Accordion>
-
-  <Accordion title="deactivate hook -> gateway_stop">
-    **Old**: `api.on("deactivate", handler)`.
-
-    **New**: `api.on("gateway_stop", handler)`. Same shutdown cleanup
-    contract; only the hook name changes.
-
-    ```typescript
-    // Before
-    api.on("deactivate", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-
-    // After
-    api.on("gateway_stop", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-    ```
-
-    `deactivate` remains wired as a deprecated compatibility alias until it is
-    removed after 2026-08-16.
 
   </Accordion>
 
