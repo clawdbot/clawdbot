@@ -937,11 +937,17 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
+          // Some backends deliver the complete tool input on the start block
+          // instead of streaming it as input_json_delta chunks; seed the parts
+          // so the stop event emits a start delta with real args. An empty
+          // input object is the streaming placeholder, so only seed non-empty
+          // inputs to avoid corrupting subsequent delta concatenation.
+          const completeInput = isRecord(block.input) && Object.keys(block.input).length > 0;
           tracker.pendingByIndex.set(event.index, {
             toolCallId,
             name,
             kind: block.type,
-            inputJsonParts: [],
+            inputJsonParts: completeInput ? [JSON.stringify(block.input)] : [],
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
