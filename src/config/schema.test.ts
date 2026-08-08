@@ -10,6 +10,32 @@ import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
+  it("keeps the core channels keys that ChannelsSchema owns", () => {
+    // `channels` mixes plugin channel entries with core keys. The strip that
+    // clears per-channel entries used to take these with it, so they vanished
+    // from the schema surface while the runtime still accepted them.
+    const schema = baseSchema.schema as { properties?: Record<string, unknown> };
+    const channels = expectDefined(schema.properties?.channels, "channels schema node") as {
+      properties?: Record<string, unknown>;
+    };
+    expect(Object.keys(channels.properties ?? {})).toEqual(
+      expect.arrayContaining(["defaults", "modelByChannel"]),
+    );
+    const defaults = expectDefined(
+      channels.properties?.defaults,
+      "channels.defaults schema node",
+    ) as { properties?: Record<string, unknown> };
+    expect(Object.keys(defaults.properties ?? {})).toEqual(
+      expect.arrayContaining([
+        "groupPolicy",
+        "contextVisibility",
+        "heartbeatVisibility",
+        "botLoopProtection",
+        "implicitMentions",
+      ]),
+    );
+  });
+
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchema>;
   let pluginUiHintInput: SchemaInput;
