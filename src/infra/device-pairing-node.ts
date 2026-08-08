@@ -1,10 +1,6 @@
-// Node capability-surface approvals, stored on paired device records.
-// Device pairing (device-pairing.ts) owns connection auth; this module owns
-// which capabilities/commands an operator approved for a node-role device
-// (node command gating). Both share the devices store and its lock through
-// withPairedDeviceRecords. The former standalone nodes/{pending,paired}.json
-// store and its per-node token were retired; state-migrations.ts folds old
-// rows into device records once.
+// Node-role capability approvals and generation fencing for paired devices.
+// Device pairing owns connection auth and storage; this module owns the node
+// surface projected from those canonical paired-device records.
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
@@ -78,7 +74,7 @@ type NodePairingPendingEntry = NodePairingPendingRequest & {
 };
 
 /** Approved node record projected from the device's node surface (no auth material). */
-export type NodePairingPairedNode = NodeDeclaredSurface & {
+export type PairedDeviceNode = NodeDeclaredSurface & {
   bins?: string[];
   createdAtMs: number;
   approvedAtMs: number;
@@ -89,11 +85,11 @@ export type NodePairingPairedNode = NodeDeclaredSurface & {
 
 type NodePairingList = {
   pending: NodePairingPendingEntry[];
-  paired: NodePairingPairedNode[];
+  paired: PairedDeviceNode[];
 };
 
 type NodePairingListWithGeneration = Omit<NodePairingList, "paired"> & {
-  paired: Array<NodePairingPairedNode & { pairingGeneration?: string }>;
+  paired: Array<PairedDeviceNode & { pairingGeneration?: string }>;
 };
 
 const OPERATOR_ROLE = "operator";
@@ -161,7 +157,7 @@ function toPendingEntry(
 function toPairedNode(
   device: PairedDevice,
   options?: { includePairingGeneration?: boolean },
-): NodePairingPairedNode | null {
+): PairedDeviceNode | null {
   const surface = device.nodeSurface;
   if (!surface) {
     return null;
@@ -361,7 +357,7 @@ export function projectNodePairing(
   options?: { includePairingGeneration?: boolean },
 ): NodePairingListWithGeneration {
   const pending: NodePairingPendingEntry[] = [];
-  const paired: NodePairingPairedNode[] = [];
+  const paired: PairedDeviceNode[] = [];
   for (const device of pairedDevices) {
     if (device.pendingNodeSurface) {
       pending.push(toPendingEntry(device, device.pendingNodeSurface));
@@ -381,11 +377,11 @@ export async function beginNodePairingConnect(
   nodeId: string,
   baseDir?: string,
 ): Promise<{
-  pairedNode: NodePairingPairedNode | null;
+  pairedNode: PairedDeviceNode | null;
   cleanupClaim?: NodePairingCleanupClaim;
 }> {
   return await withPairedDeviceRecords<{
-    pairedNode: NodePairingPairedNode | null;
+    pairedNode: PairedDeviceNode | null;
     cleanupClaim?: NodePairingCleanupClaim;
   }>(baseDir, (pairedByDeviceId) => {
     const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
@@ -522,7 +518,7 @@ export async function reusePendingNodePairingForReconnect(
 
 type ApprovedNodePairingResult = {
   requestId: string;
-  node: NodePairingPairedNode;
+  node: PairedDeviceNode;
   pairingIdentity: string;
   nextPairingGeneration: string;
   previousPairingGeneration?: string;
@@ -724,7 +720,7 @@ export async function renamePairedNode(
   nodeId: string,
   displayName: string,
   baseDir?: string,
-): Promise<NodePairingPairedNode | null> {
+): Promise<PairedDeviceNode | null> {
   const trimmed = displayName.trim();
   if (!trimmed) {
     throw new Error("displayName required");

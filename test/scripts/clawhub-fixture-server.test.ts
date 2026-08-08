@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureClawHubPackageTrustAcknowledged } from "../../src/infra/clawhub-install-trust.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
@@ -16,6 +17,7 @@ type FixtureServerChild = ChildProcessByStdio<null, Readable, Readable>;
 const servers: FixtureServerChild[] = [];
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await Promise.all(servers.splice(0).map(stopServer));
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -163,6 +165,8 @@ describe("ClawHub fixture server", () => {
     execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
     const archive = readFileSync(tarballPath);
     const sha256 = createHash("sha256").update(archive).digest("hex");
+    const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+    const npmShasum = createHash("sha1").update(archive).digest("hex");
     const manifestPath = path.join(root, "prepublish-plugin-registry.json");
     writeFileSync(
       manifestPath,
@@ -188,8 +192,57 @@ describe("ClawHub fixture server", () => {
       artifactKind: "npm-pack",
       artifactSha256: sha256,
     });
-    const security = await fetchJson(baseUrl, `${whatsappPath}/versions/${version}/security`);
-    expect(security.trust).toMatchObject({ blockedFromDownload: false, pending: false });
+    const securityUrl = `${baseUrl}${whatsappPath}/versions/${version}/security`;
+    const fetchImpl = globalThis.fetch;
+    let security: unknown;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const response = await fetchImpl(input, init);
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (requestUrl === securityUrl) {
+        security = await response.clone().json();
+      }
+      return response;
+    });
+    const trust = await ensureClawHubPackageTrustAcknowledged({
+      subject: { kind: "plugin", packageName: "@openclaw/whatsapp" },
+      version,
+      baseUrl,
+      mode: "update",
+    });
+    expect(security).toEqual({
+      package: {
+        name: "@openclaw/whatsapp",
+        displayName: "@openclaw/whatsapp",
+        family: "code-plugin",
+      },
+      release: {
+        releaseId: `fixture:@openclaw/whatsapp@${version}`,
+        version,
+        artifactKind: "npm-pack",
+        artifactSha256: sha256,
+        npmIntegrity,
+        npmShasum,
+        npmTarballName: tarball,
+        createdAt: 0,
+      },
+      trust: {
+        scanStatus: "clean",
+        moderationState: null,
+        blockedFromDownload: false,
+        reasons: [],
+        pending: false,
+        stale: false,
+      },
+    });
+    expect(trust).toEqual({
+      ok: true,
+      trustInstallRecordFields: {
+        clawhubTrustDisposition: "clean",
+        clawhubTrustScanStatus: "clean",
+        clawhubTrustCheckedAt: expect.any(String),
+      },
+    });
     const download = await fetch(`${baseUrl}${whatsappPath}/versions/${version}/artifact/download`);
     expect(download.headers.get("x-clawhub-artifact-sha256")).toBe(sha256);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);

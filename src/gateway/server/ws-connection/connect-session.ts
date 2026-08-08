@@ -13,7 +13,7 @@ import {
   captureAuthenticatedNodePairingState,
   type NodePairingGeneration,
   type NodePairingIdentity,
-} from "../../../infra/node-pairing-state.js";
+} from "../../../infra/device-pairing-node-state.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";

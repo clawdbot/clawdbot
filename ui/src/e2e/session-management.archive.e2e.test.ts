@@ -213,7 +213,7 @@ suite.define(() => {
           sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
           sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
         ]),
-        "sessions.archiveMany": {
+        "sessions.patchMany": {
           outcomes: [
             { ok: true, key: batchKeys[0], agentId: "main" },
             {
@@ -251,12 +251,12 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
       await activateMenuItem(archiveItem);
 
-      const archive = await gateway.waitForRequest("sessions.archiveMany");
-      const archiveParams = requireRecord(archive.params);
-      expect(archiveParams.archived).toBe(true);
-      expect((archiveParams.targets as Array<{ key: string }>).map((target) => target.key)).toEqual(
-        [...batchKeys],
-      );
+      const patchMany = await gateway.waitForRequest("sessions.patchMany");
+      const patchManyParams = requireRecord(patchMany.params);
+      expect(patchManyParams.patch).toEqual({ archived: true });
+      expect(
+        (patchManyParams.targets as Array<{ key: string }>).map((target) => target.key),
+      ).toEqual([...batchKeys]);
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
@@ -301,7 +301,7 @@ suite.define(() => {
           sessionRow("agent:main:main", "Main", baseTime),
           ...sessionRows,
         ]),
-        "sessions.archiveMany": {
+        "sessions.patchMany": {
           outcomes: batchRows.map((row) => ({ ok: true, key: row.key, agentId: "main" })),
         },
         "sessions.patch": {},
@@ -339,7 +339,7 @@ suite.define(() => {
       await activateMenuItem(
         batchMenu.getByRole("menuitem", { name: `Archive ${batchRows.length}` }),
       );
-      await gateway.waitForRequest("sessions.archiveMany");
+      await gateway.waitForRequest("sessions.patchMany");
       for (const row of batchRows) {
         await gateway.emitGatewayEvent("sessions.changed", {
           ...row,

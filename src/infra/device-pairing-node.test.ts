@@ -1,15 +1,8 @@
-// Tests node capability-surface approvals stored on paired device records.
+// Tests node-role capability approvals stored on canonical paired-device records.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createDeferred } from "../test-utils/deferred.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-  resolveNodePairingGeneration,
-  withPairedDeviceRecords,
-} from "./device-pairing.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -21,7 +14,14 @@ import {
   requestNodePairing,
   reusePendingNodePairingForReconnect,
   updatePairedNodeBins,
-} from "./node-pairing.js";
+} from "./device-pairing-node.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+  resolveNodePairingGeneration,
+  withPairedDeviceRecords,
+} from "./device-pairing.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
 
@@ -31,7 +31,13 @@ async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Prom
 
 async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
   const request = await requestDevicePairing(
-    { deviceId: nodeId, publicKey: `pk-${nodeId}`, role: "node", roles: ["node"], scopes: [] },
+    {
+      deviceId: nodeId,
+      publicKey: `test-key-${nodeId}`,
+      role: "node",
+      roles: ["node"],
+      scopes: [],
+    },
     baseDir,
   );
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
@@ -763,7 +769,7 @@ describe("node surface approvals", () => {
       const repair = await requestDevicePairing(
         {
           deviceId: "node-1",
-          publicKey: "pk-node-1-rotated",
+          publicKey: "fake",
           role: "node",
           roles: ["node"],
           scopes: [],

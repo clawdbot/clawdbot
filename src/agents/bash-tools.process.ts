@@ -9,6 +9,7 @@ import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.j
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
+  acknowledgeNotifyOnExit,
   type ProcessSession,
   deleteSession,
   drainSession,
@@ -16,6 +17,7 @@ import {
   getSession,
   listFinishedSessions,
   listRunningSessions,
+  markTerminalPollObserved,
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
@@ -391,6 +393,7 @@ export function createProcessTool(
           if (!scopedSession) {
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
+              acknowledgeNotifyOnExit(scopedFinished);
               // Finished polls render a bounded tail; disclose retained content so the
               // model can recover it through paged logs instead of treating it as complete.
               const retainedOutputNote =
@@ -457,6 +460,8 @@ export function createProcessTool(
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
+            markTerminalPollObserved(scopedSession);
+            acknowledgeNotifyOnExit(scopedSession);
             const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
               scopedSession,

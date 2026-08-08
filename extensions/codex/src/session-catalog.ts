@@ -101,6 +101,7 @@ import {
   openCodexCatalogTerminal,
   requireCatalogEligibleThread,
   resolveLocalCodexTerminalExecutable,
+  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
@@ -667,6 +668,7 @@ async function listCodexSessionCatalog(params: {
 /** Builds the node-local read-only Codex app-server catalog command. */
 export function createCodexSessionCatalogNodeHostCommands(
   control: CodexSessionCatalogControl,
+  configSources: CodexTerminalConfigSources,
 ): OpenClawPluginNodeHostCommand[] {
   return [
     {
@@ -713,7 +715,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
-    createCodexTerminalNodeHostCommand(control),
+    createCodexTerminalNodeHostCommand(control, configSources),
   ];
 }
 
@@ -1434,6 +1436,7 @@ function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControl;
+  getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): void {
   const provider: SessionCatalogProvider = {
@@ -1531,6 +1534,8 @@ function registerCodexSessionCatalog(params: {
       openCodexCatalogTerminal({
         api: params.api,
         control: params.control,
+        getPluginConfig: params.getPluginConfig,
+        getRuntimeConfig: params.getRuntimeConfig,
         parseCatalogPage,
         ...request,
       }),

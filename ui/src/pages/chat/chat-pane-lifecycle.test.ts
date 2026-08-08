@@ -696,13 +696,13 @@ describe("chat pane session suggestion lifecycle", () => {
 
 function createConfirmationOwner() {
   const owner = document.createElement("span");
-  owner.className = "chat-delete-wrap";
+  owner.className = "chat-confirm-wrap";
   const trigger = document.createElement("button");
   owner.appendChild(trigger);
   document.body.appendChild(owner);
   confirmationOwners.add(owner);
   openChatRewindConfirmation(trigger, vi.fn());
-  const popover = [...document.querySelectorAll<HTMLElement>(".chat-delete-confirm")].at(-1);
+  const popover = [...document.querySelectorAll<HTMLElement>(".chat-confirm-popover")].at(-1);
   expect(popover).toBeInstanceOf(HTMLElement);
   return { owner, popover: popover! };
 }

@@ -10,12 +10,15 @@ import {
 
 export type { NodePairingGeneration, NodePairingIdentity } from "./device-pairing.js";
 
-export type NodePairingBinding = {
+/** Registry projection of a paired device's authenticated node-role state. */
+export type PairedDeviceNodeBinding = {
   identity: string;
   generation?: string;
 };
 
-function toNodePairingBinding(state: NodePairingState | null): NodePairingBinding | undefined {
+function toPairedDeviceNodeBinding(
+  state: NodePairingState | null,
+): PairedDeviceNodeBinding | undefined {
   return state
     ? {
         identity: state.identity.key,
@@ -24,7 +27,6 @@ function toNodePairingBinding(state: NodePairingState | null): NodePairingBindin
     : undefined;
 }
 
-/** Captures the persistent authenticated pairing and optional approved surface. */
 export async function captureNodePairingState(
   nodeId: string,
   baseDir?: string,
@@ -32,16 +34,17 @@ export async function captureNodePairingState(
   return resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
 }
 
-/** Registry projection of the current persistent pairing owner. */
-export async function resolveCurrentNodePairingBinding(
+export async function resolveCurrentPairedDeviceNodeBinding(
   nodeId: string,
-): Promise<NodePairingBinding | undefined> {
-  return toNodePairingBinding(await captureNodePairingState(nodeId));
+): Promise<PairedDeviceNodeBinding | undefined> {
+  return toPairedDeviceNodeBinding(await captureNodePairingState(nodeId));
 }
 
-/** Synchronous registry projection for non-yielding process-local reads. */
-export function isNodePairingBindingCurrent(nodeId: string, expected: NodePairingBinding): boolean {
-  const current = toNodePairingBinding(
+export function isPairedDeviceNodeBindingCurrent(
+  nodeId: string,
+  expected: PairedDeviceNodeBinding,
+): boolean {
+  const current = toPairedDeviceNodeBinding(
     resolveNodePairingState(loadPairedDevicePairingStoreRecord(nodeId)),
   );
   return Boolean(
@@ -51,14 +54,13 @@ export function isNodePairingBindingCurrent(nodeId: string, expected: NodePairin
   );
 }
 
-/** Captures the persistent node pairing generation admitted for new work. */
 export async function captureNodePairingGeneration(
   nodeId: string,
 ): Promise<NodePairingGeneration | null> {
   return (await captureNodePairingState(nodeId))?.generation ?? null;
 }
 
-/** Binds a connected session to the exact device key and node token it authenticated with. */
+/** Binds a connected session to the exact device key and node token used for authentication. */
 export async function captureAuthenticatedNodePairingState(params: {
   nodeId: string;
   publicKey: string;
@@ -77,7 +79,6 @@ export async function captureAuthenticatedNodePairingState(params: {
   return resolveNodePairingState(device);
 }
 
-/** Revalidates that asynchronous work still belongs to the admitted pairing. */
 export async function isNodePairingGenerationCurrent(
   generation: NodePairingGeneration,
 ): Promise<boolean> {

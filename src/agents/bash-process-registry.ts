@@ -42,6 +42,9 @@ type SessionStdin = {
   writableFinished?: boolean;
 };
 
+/** Removes one queued notify-on-exit event, if it is still pending. */
+type NotifyOnExitRemoval = () => boolean;
+
 /** Mutable session state for a running bash exec process. */
 export interface ProcessSession {
   id: string;
@@ -65,6 +68,9 @@ export interface ProcessSession {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
+  /** Set when process poll observed the terminal result before notification. */
+  terminalPollObserved?: boolean;
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;
@@ -111,6 +117,8 @@ interface FinishedSession {
   tail: string;
   truncated: boolean;
   totalOutputChars: number;
+  terminalPollObserved?: boolean;
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
 }
 
 const runningSessions = new Map<string, ProcessSession>();
@@ -256,6 +264,43 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
+/** Records that a terminal process poll consumed the process result. */
+export function markTerminalPollObserved(session: ProcessSession): void {
+  session.terminalPollObserved = true;
+  const finished = finishedSessions.get(session.id);
+  if (finished) {
+    finished.terminalPollObserved = true;
+  }
+}
+
+/** Retains the precise event removal handle across the finished-session move. */
+export function recordNotifyOnExitRemoval(
+  session: ProcessSession,
+  remove: NotifyOnExitRemoval,
+): void {
+  if (session.terminalPollObserved) {
+    remove();
+    return;
+  }
+  session.notifyOnExitRemoval = remove;
+  const finished = finishedSessions.get(session.id);
+  if (finished) {
+    finished.notifyOnExitRemoval = remove;
+  }
+}
+
+/** Acknowledges one completion event without touching unrelated queue entries. */
+export function acknowledgeNotifyOnExit(record: {
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
+}): void {
+  const remove = record.notifyOnExitRemoval;
+  if (!remove) {
+    return;
+  }
+  remove();
+  record.notifyOnExitRemoval = undefined;
+}
+
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
   return activeBackgroundExecSessionIds.size;
@@ -319,6 +364,8 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     tail: session.tail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
+    ...(session.terminalPollObserved ? { terminalPollObserved: true } : {}),
+    ...(session.notifyOnExitRemoval ? { notifyOnExitRemoval: session.notifyOnExitRemoval } : {}),
   });
   finishedSessionOutputChars += session.aggregated.length;
   while (
