@@ -710,7 +710,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(/^focus retention message 200\n/).waitFor();
     const thread = page.locator(".chat-thread");
-    const action = thread.locator("button.chat-group-delete").last();
+    const action = thread.locator("button.chat-reply-btn").last();
     await action.focus();
     const focusedRowKey = await action.evaluate(
       (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",

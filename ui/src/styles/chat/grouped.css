@@ -336,10 +336,6 @@
   stroke-linejoin: round;
 }
 
-.chat-group-delete:hover {
-  color: var(--danger) !important;
-}
-
 /* Chat divider (e.g., compaction marker) */
 .chat-divider {
   display: grid;
@@ -680,7 +676,6 @@ img.chat-avatar.chat-avatar--logo {
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-reply-btn,
-  .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;

@@ -2592,28 +2592,6 @@ describe("chat loading skeleton", () => {
     ).toBeDefined();
   });
 
-  it("keeps live status standalone when the preceding response is hidden", () => {
-    const sessionKey = "deleted-active-status";
-    renderChatView({
-      sessionKey,
-      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
-    });
-    const onDelete = renderMessageGroupMock.mock.calls[0]?.[1].onDelete;
-    expect(onDelete).toBeTypeOf("function");
-    onDelete?.();
-    renderMessageGroupMock.mockClear();
-
-    const container = renderChatView({
-      canAbort: true,
-      sessionKey,
-      messages: [{ role: "assistant", content: "Hidden answer", timestamp: 1 }],
-      stream: null,
-    });
-
-    expect(renderMessageGroupMock).not.toHaveBeenCalled();
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
-  });
-
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
@@ -6190,7 +6168,7 @@ describe("right-click Reply", () => {
     const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
       button.textContent?.trim(),
     );
-    expect(labels).toEqual(["Reply", "Rewind to here", "Hide message", "Fork from here"]);
+    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
     document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
@@ -6209,7 +6187,7 @@ describe("right-click Reply", () => {
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply", "Hide message", "Copy as markdown"]);
+    ).toEqual(["Reply", "Copy as markdown"]);
     expect(
       document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
     ).toBeNull();
@@ -6217,37 +6195,6 @@ describe("right-click Reply", () => {
     dispatchContextMenu(bubble);
     document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
     expect(onCopy).toHaveBeenCalledOnce();
-  });
-
-  it("confirms Hide before hiding every member of an aggregate activity row", () => {
-    const storedValues = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      clear: () => storedValues.clear(),
-      getItem: (key: string) => storedValues.get(key) ?? null,
-      key: (index: number) => [...storedValues.keys()][index] ?? null,
-      get length() {
-        return storedValues.size;
-      },
-      removeItem: (key: string) => storedValues.delete(key),
-      setItem: (key: string, value: string) => storedValues.set(key, value),
-    } satisfies Storage);
-    const onRequestUpdate = vi.fn();
-    const { bubble, group } = renderChatBubble(
-      { sessionKey: "context-hide-test", onRequestUpdate },
-      { groupClass: "chat-group assistant" },
-    );
-    group.dataset.chatRowKey = "group:tool:first";
-    group.dataset.chatRowKeys = JSON.stringify(["group:tool:first", "group:tool:second"]);
-
-    dispatchContextMenu(bubble);
-    document.querySelector<HTMLButtonElement>('[aria-label="Hide message"]')!.click();
-    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
-    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
-
-    expect(storedValues.get("openclaw:deleted:context-hide-test")).toBe(
-      JSON.stringify(["group:tool:first", "group:tool:second"]),
-    );
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
   });
 
   it("dismisses an inline confirmation before opening the reply context menu", () => {
