@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -13,11 +12,10 @@ import { createChatRunState } from "../server-chat-state.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "exec-approval-id-")));
-  tempDirs.push(stateDir);
+  const stateDir = fs.realpathSync(tempDirs.make("exec-approval-id-"));
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -82,9 +80,6 @@ function requestOptions(runtimeIdentity: AgentRuntimeIdentity): GatewayRequestHa
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 describe("exec approval signed agent runtime", () => {

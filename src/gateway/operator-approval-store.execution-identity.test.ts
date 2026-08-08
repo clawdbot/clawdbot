@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,11 +14,10 @@ import {
 } from "./operator-approval-store.js";
 
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-id-")));
-  tempDirs.push(stateDir);
+  const stateDir = fs.realpathSync(tempDirs.make("openclaw-approval-id-"));
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -68,9 +66,6 @@ const token = (runId = "run-1"): NonNullable<NewOperatorApproval["executionIdent
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 describe("operator approval execution identity", () => {

@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -13,11 +12,10 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-approval-id-")));
-  tempDirs.push(stateDir);
+  const stateDir = fs.realpathSync(tempDirs.make("plugin-approval-id-"));
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -66,9 +64,6 @@ function requestHandler(
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 describe("plugin approval signed agent runtime", () => {
