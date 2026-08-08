@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     clearMcpOAuthCredentials: vi.fn(),
     readMcpOAuthCredentialsStatus: vi.fn(),
     runMcpOAuthLogin: vi.fn(),
+    requestExitAfterOneShotOutput: vi.fn(() => true),
   };
 });
 
@@ -30,9 +31,17 @@ const defaultRuntime = mocks.runtime;
 const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;
 const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
+const requestExitAfterOneShotOutput = mocks.requestExitAfterOneShotOutput;
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
+}));
+
+// Post-connect failures hand their exit code to the shared finalizer instead of
+// calling process.exit() inline, so assert the request rather than a throw.
+vi.mock("./one-shot-exit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./one-shot-exit.js")>()),
+  requestExitAfterOneShotOutput: mocks.requestExitAfterOneShotOutput,
 }));
 
 vi.mock("../mcp/channel-server.js", () => ({
@@ -303,7 +312,8 @@ describe("mcp cli call", () => {
           toolFilter: { include: ["echo"] },
         }),
       ]);
-      await expect(runMcpCommand(["mcp", "call", "docs", "ping"])).rejects.toThrow("__exit__:1");
+      await runMcpCommand(["mcp", "call", "docs", "ping"]);
+      expect(requestExitAfterOneShotOutput).toHaveBeenCalledWith(defaultRuntime, 1);
       expect(lastErrorLine()).toContain(
         `MCP tool "ping" is unavailable on server "docs" (unknown, filtered, or not advertised)`,
       );
@@ -330,12 +340,15 @@ describe("mcp cli call", () => {
       ]);
       mockLog.mockClear();
 
-      await expect(runMcpCommand(["mcp", "call", "docs", "ping"])).rejects.toThrow("__exit__:1");
+      await runMcpCommand(["mcp", "call", "docs", "ping"]);
       expect(JSON.parse(lastLogLine())).toMatchObject({
         isError: true,
         content: [{ type: "text", text: "tool failed" }],
       });
       expect(lastErrorLine()).toBe(`MCP tool "ping" on server "docs" returned isError=true.`);
+      // The exit is deferred so the finalizer can drain stdout first.
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(requestExitAfterOneShotOutput).toHaveBeenCalledWith(defaultRuntime, 1);
     });
   });
 

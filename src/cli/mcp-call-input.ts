@@ -1,6 +1,7 @@
 // Parse and bound JSON object inputs for `openclaw mcp call`.
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 
@@ -24,10 +25,6 @@ type McpCallInputParseResult =
   | { ok: true; value: Record<string, unknown> }
   | { ok: false; error: string };
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseMcpCallJsonObject(raw: string, sourceLabel: string): McpCallInputParseResult {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -42,7 +39,7 @@ function parseMcpCallJsonObject(raw: string, sourceLabel: string): McpCallInputP
       error: `${sourceLabel} must be valid JSON containing exactly one object.`,
     };
   }
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return {
       ok: false,
       error: `${sourceLabel} must be a JSON object, not an array or scalar.`,

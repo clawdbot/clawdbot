@@ -40,6 +40,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { resolveMcpCallInput } from "./mcp-call-input.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 function fail(message: string): never {
@@ -910,7 +911,12 @@ export function registerMcpCli(program: Command) {
           await disposeRuntime();
         }
         if (failure) {
-          fail(failure);
+          // The tool result is already on stdout by this point, and
+          // defaultRuntime.exit() runs process.exit() synchronously, which
+          // truncates a large piped JSON body. Hand the nonzero code to the
+          // shared finalizer so it exits only after both streams drain.
+          defaultRuntime.error(failure);
+          requestExitAfterOneShotOutput(defaultRuntime, 1);
         }
       },
     );
