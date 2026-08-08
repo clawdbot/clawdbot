@@ -94,7 +94,7 @@ function forceFsSafeNativeFallback(env: NodeJS.ProcessEnv): void {
   env.OPENCLAW_FS_SAFE_NATIVE_MODE = "off";
 }
 
-export function forceWindowsAclVerificationUnavailable(
+function forceWindowsAclVerificationUnavailable(
   env: NodeJS.ProcessEnv,
   missingSystemRoot: string,
 ): void {
