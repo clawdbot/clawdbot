@@ -899,6 +899,53 @@ describe("handleChatGatewayEvent", () => {
     });
   });
 
+  it("retires an exact-target steer chip without ending a different pane run", () => {
+    const foregroundChip = {
+      id: "foreground-steer-chip",
+      text: "Keep the foreground pending",
+      createdAt: 2,
+      kind: "steered" as const,
+      pendingRunId: "stale-pane-run",
+      steerTargetRunId: "stale-pane-run",
+      sessionKey: "main",
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "stale-pane-run",
+      chatMessages: [createTextChatMessage("assistant", "Foreground answer", undefined, 1)],
+      chatQueue: [
+        foregroundChip,
+        {
+          id: "target-steer-chip",
+          text: "/steer update the target run",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "target-run",
+          steerTargetRunId: "target-run",
+          sessionKey: "main",
+        },
+      ],
+      chatStream: "Foreground stream",
+      chatStreamStartedAt: 1,
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "target-run",
+        sessionKey: "main",
+        state: "final",
+        message: createTextChatMessage("assistant", "Target answer", undefined, 4),
+      }),
+    ).toBeNull();
+
+    expect(state.chatQueue).toEqual([foregroundChip]);
+    expect(state.chatRunId).toBe("stale-pane-run");
+    expect(state.chatStream).toBe("Foreground stream");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Foreground answer");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Target answer");
+  });
+
   it("uses an already-persisted steer to recover the active stream boundary", () => {
     const state = createState({
       sessionKey: "main",
