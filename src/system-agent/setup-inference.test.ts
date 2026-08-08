@@ -13,6 +13,7 @@ import {
   fingerprintResolvedProviderAuth,
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
+import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,6 +30,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -4417,6 +4422,63 @@ describe("activateSetupInference", () => {
         },
       },
     });
+  });
+
+  it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const stagedRegistry = createEmptyPluginRegistry();
+    stagedRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(stagedRegistry);
+    let ownerArtifactRegistry: unknown;
+    const captureSystemAgentOwnerPluginArtifacts = vi.fn(() => {
+      ownerArtifactRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
+    });
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      const pluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      expect(pluginRegistry).toBe(stagedRegistry);
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/work",
+        pluginRegistry,
+      });
+      return successfulRun("openai", "gpt-5.6-sol", params);
+    });
+
+    await withPluginRuntimeGatewayRequestScope(
+      { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
+      async () => {
+        const result = await activateCodexSetup({
+          workspace: "/tmp/work",
+          deps: {
+            captureSystemAgentOwnerPluginArtifacts,
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            transformConfigWithPendingPluginInstalls: createPreRosterConfigTransformHarness()
+              .transform as never,
+          },
+        });
+
+        expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(oldRegistry);
+      },
+    );
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    expect(ownerArtifactRegistry).toBe(stagedRegistry);
+    expect(captureSystemAgentOwnerPluginArtifacts).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("commits only the refreshed codex record when authored install metadata is stale", async () => {
