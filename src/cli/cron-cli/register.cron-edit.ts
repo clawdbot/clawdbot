@@ -262,9 +262,6 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.wakeMode = wakeMode;
           }
-          // Match cron list / pacing: blank values are errors, not silent no-ops.
-          // An empty Commander string is falsy, so it skipped the clear-* mutex
-          // and still reached --clear-agent; whitespace-only values were ignored.
           const agentId = normalizeOptionalString(opts.agent);
           if (typeof opts.agent === "string" && !agentId) {
             throw new Error("--agent must not be blank");
