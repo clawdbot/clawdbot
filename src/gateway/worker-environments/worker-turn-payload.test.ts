@@ -1,18 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { AgentMessage } from "../../agents/runtime/index.js";
+import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import {
   assertSupportedTurn,
-  fitLaunchDescriptor,
+  fitLaunchDescriptorWithRuntimeIdentity,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+
+const runtimeIdentityToken = vi.hoisted(() => ({
+  value: "fixture-runtime-identity-token",
+  measure: vi.fn(() => Buffer.byteLength("fixture-runtime-identity-token", "utf8")),
+  mint: vi.fn(
+    async (_params: { operationalRunInstance: OperationalRunInstanceRef }) =>
+      "fixture-runtime-identity-token",
+  ),
+}));
+
+vi.mock("../agent-runtime-identity-token.js", () => ({
+  measureAgentRuntimeIdentityTokenBytes: runtimeIdentityToken.measure,
+  mintAgentRuntimeIdentityToken: runtimeIdentityToken.mint,
+}));
 
 const PROVIDER_REPLAY = {
   v: 1 as const,
@@ -63,6 +78,8 @@ function toolResultMessage(details: unknown, timestamp: number): AgentMessage {
 
 function buildDescriptor(
   initialMessages: WorkerLaunchDescriptor["assignment"]["initialMessages"],
+  agentRuntimeIdentityToken: string,
+  operationalRunInstance: OperationalRunInstanceRef,
 ): WorkerLaunchDescriptor {
   return {
     version: 2,
@@ -80,6 +97,8 @@ function buildDescriptor(
       },
     },
     assignment: {
+      operationalRunInstance,
+      agentRuntimeIdentityToken,
       runId: "run",
       turnId: "turn",
       prompt: "prompt",
@@ -94,6 +113,27 @@ function buildDescriptor(
     },
   };
 }
+
+function fitLaunchDescriptor(messages: WorkerLaunchDescriptor["assignment"]["initialMessages"]) {
+  const operationalRunInstance = createTestAdmittedRunContext("run").operationalRunInstance;
+  return {
+    operationalRunInstance,
+    plan: fitLaunchDescriptorWithRuntimeIdentity({
+      build: (identityToken, initialMessages) =>
+        buildDescriptor(initialMessages, identityToken, operationalRunInstance),
+      messages,
+      runtimeIdentity: {
+        agentId: "main",
+        sessionKey: "worker:session",
+        operationalRunInstance,
+      },
+    }),
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("assertSupportedTurn", () => {
   it("accepts scheduled authority for the worker launch envelope", () => {
@@ -233,7 +273,7 @@ describe("windowInitialMessages", () => {
 });
 
 describe("fitLaunchDescriptor", () => {
-  it("drops complete old turns while retaining the replay anchor", () => {
+  it("drops complete old turns while retaining the replay anchor", async () => {
     const large = "x".repeat(13 * 1024 * 1024);
     const projected = windowInitialMessages([
       userMessage(large, 1),
@@ -244,7 +284,8 @@ describe("fitLaunchDescriptor", () => {
       throw new Error("expected complete projection");
     }
 
-    const plan = fitLaunchDescriptor(buildDescriptor, projected.messages);
+    const fitted = fitLaunchDescriptor(projected.messages);
+    const plan = await fitted.plan;
 
     expect(plan.kind).toBe("launch");
     if (plan.kind !== "launch") {
@@ -255,9 +296,15 @@ describe("fitLaunchDescriptor", () => {
       role: "assistant",
       providerReplay: PROVIDER_REPLAY,
     });
+    expect(plan.descriptor.assignment.agentRuntimeIdentityToken).toBe(runtimeIdentityToken.value);
+    expect(plan.descriptor.assignment.operationalRunInstance).toBe(fitted.operationalRunInstance);
+    expect(runtimeIdentityToken.mint).toHaveBeenCalledOnce();
+    expect(runtimeIdentityToken.mint.mock.calls[0]?.[0].operationalRunInstance).toBe(
+      fitted.operationalRunInstance,
+    );
   });
 
-  it("drops a non-user prefix directly to the replay owner", () => {
+  it("drops a non-user prefix directly to the replay owner", async () => {
     const projected = windowInitialMessages([
       toolResultMessage({ payload: "x".repeat(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) }, 1),
       assistantMessage(2, true),
@@ -266,7 +313,8 @@ describe("fitLaunchDescriptor", () => {
       throw new Error("expected complete projection");
     }
 
-    const plan = fitLaunchDescriptor(buildDescriptor, projected.messages);
+    const fitted = fitLaunchDescriptor(projected.messages);
+    const plan = await fitted.plan;
 
     expect(plan.kind).toBe("launch");
     if (plan.kind !== "launch") {
@@ -275,9 +323,13 @@ describe("fitLaunchDescriptor", () => {
     expect(plan.descriptor.assignment.initialMessages).toEqual([
       expect.objectContaining({ role: "assistant", providerReplay: PROVIDER_REPLAY }),
     ]);
+    expect(plan.descriptor.assignment.operationalRunInstance).toBe(fitted.operationalRunInstance);
+    expect(runtimeIdentityToken.mint.mock.calls[0]?.[0].operationalRunInstance).toBe(
+      fitted.operationalRunInstance,
+    );
   });
 
-  it("requires local fallback when the replay unit cannot fit the descriptor", () => {
+  it("requires local fallback when the replay unit cannot fit the descriptor", async () => {
     const projected = windowInitialMessages([
       assistantMessage(1, true),
       toolResultMessage({ payload: "x".repeat(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) }, 2),
@@ -286,10 +338,12 @@ describe("fitLaunchDescriptor", () => {
       throw new Error("expected complete projection");
     }
 
-    expect(fitLaunchDescriptor(buildDescriptor, projected.messages)).toMatchObject({
+    const fitted = fitLaunchDescriptor(projected.messages);
+    await expect(fitted.plan).resolves.toMatchObject({
       kind: "local-fallback",
       reason: "provider-replay-launch-payload-limit",
       limitBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
     });
+    expect(runtimeIdentityToken.mint).not.toHaveBeenCalled();
   });
 });

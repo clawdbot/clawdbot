@@ -10,12 +10,10 @@ import type {
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { mintAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -36,7 +34,8 @@ import {
   assertSupportedTurn,
   assistantText,
   buildWorkerAgentMeta,
-  fitLaunchDescriptor,
+  emitProviderReplayRejected,
+  fitLaunchDescriptorWithRuntimeIdentity,
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
@@ -84,20 +83,6 @@ type WorkerTurnLauncherOptions = {
 
 class WorkerTurnExecutionError extends Error {}
 class WorkerWorkspaceReconciliationError extends Error {}
-
-function emitProviderReplayRejected(
-  config: SessionPlacementTurnParams["config"],
-  details: { reason: string; bytes?: number; limitBytes?: number; count?: number },
-): void {
-  if (isDiagnosticsEnabled(config)) {
-    emitTrustedDiagnosticEvent({
-      type: "payload.large",
-      surface: "worker.provider-replay",
-      action: "rejected",
-      ...details,
-    });
-  }
-}
 
 async function executeLocalTurn<T>(params: {
   claim: LocalTurnPlacementClaim;
@@ -336,15 +321,17 @@ async function executeWorkerTurn(params: {
     preparedRunAdmission: turn.preparedRunAdmission,
   });
   const workerSessionKey = `worker:${placement.sessionId}`;
-  const agentRuntimeIdentityToken = await mintAgentRuntimeIdentityToken({
+  const runtimeIdentityParams = {
     agentId: turn.agentId ?? "main",
     sessionKey: workerSessionKey,
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     executionIdentityToken: admittedRunContext.executionIdentityToken,
     workerTurnClaim: params.turnClaim,
-  });
-  const launchPlan = fitLaunchDescriptor(
-    (windowedMessages) =>
+  };
+  const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
+    runtimeIdentity: runtimeIdentityParams,
+    messages: initialMessages,
+    build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchDescriptor({
         version: 2,
         socketPath: tunnel.remoteSocketPath,
@@ -380,8 +367,7 @@ async function executeWorkerTurn(params: {
           ...(browser ? { browser } : {}),
         },
       }),
-    initialMessages,
-  );
+  });
   if (launchPlan.kind === "local-fallback") {
     emitProviderReplayRejected(turn.config, {
       bytes: launchPlan.bytes,

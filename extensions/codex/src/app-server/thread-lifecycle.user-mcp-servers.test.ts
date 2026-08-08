@@ -15,6 +15,7 @@ import {
 import {
   createAppServerOptions,
   createParams,
+  resetThreadLifecycleTestFixtures,
   startOrResumeThread,
   threadResumeResult,
   threadStartResult,
@@ -31,6 +32,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   });
 
   afterEach(async () => {
+    resetThreadLifecycleTestFixtures();
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

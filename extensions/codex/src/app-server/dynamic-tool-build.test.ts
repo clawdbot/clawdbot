@@ -171,6 +171,35 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("binds a resolver-backed constructed tool surface exactly once", async () => {
+    const workspaceDir = path.join(tempDir, "resolver-bound-workspace");
+    const params = createParams(path.join(tempDir, "resolver-bound-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const bindToolSurface = vi.fn(params.hostCapabilities.bindToolSurface);
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      bindToolSurface,
+    });
+    const factory = vi.fn(() => [createRuntimeDynamicTool("read")]);
+    setOpenClawCodingToolsFactoryForTests(factory);
+    const resolveCronCreatorToolAuthority = vi.fn(async () => ({
+      tools: ["read"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    }));
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      resolveCronCreatorToolAuthority,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(bindToolSurface).toHaveBeenCalledOnce();
+    expect(bindToolSurface).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "read" })]),
+    );
+    expect(tools).toEqual([]);
+  });
+
   it("uses the prepared explicit-policy fact to disable the native surface", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     params.disableTools = false;

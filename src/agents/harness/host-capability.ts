@@ -1,12 +1,17 @@
 import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -59,18 +64,40 @@ function cloneSnapshot<T>(value: T): T {
 }
 
 function gateBoundTool(tool: AnyAgentTool, assertActive: () => void): AnyAgentTool {
-  if (!tool.execute) {
+  const execute = tool.execute;
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (!execute && !sourcePreparer) {
     return tool;
   }
-  const execute = tool.execute;
   const gated: AnyAgentTool = {
     ...tool,
-    execute: async (...args) => {
-      assertActive();
-      return await execute(...args);
-    },
+    ...(execute
+      ? {
+          execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
+            assertActive();
+            return await execute(...args);
+          },
+        }
+      : {}),
   };
-  return copyAgentToolMetadata(tool, gated);
+  copyAgentToolMetadata(tool, gated);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
+      assertActive();
+      const prepared = await sourcePreparer(preparationParams);
+      if (prepared.kind === "immediate") {
+        return prepared;
+      }
+      return {
+        ...prepared,
+        execute: (onImplementationStart) => {
+          assertActive();
+          return prepared.execute(onImplementationStart);
+        },
+      };
+    });
+  }
+  return gated;
 }
 
 function createBoundCallerIdentity(params: AgentHarnessHostAttempt) {
@@ -92,9 +119,17 @@ export function createAgentHarnessHostCapabilities(params: {
 }): { capabilities: AgentHarnessHostCapabilities; close: () => void } {
   const attempt = params.attempt;
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
+  const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+  if (!delegatedAuthority) {
+    throw new Error("agent harness host capability requires active admitted run authority");
+  }
   let active = true;
   const assertActive = () => {
-    if (!active || attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance) {
+    if (
+      !active ||
+      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
+      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority
+    ) {
       throw new Error("agent harness host capability is no longer active");
     }
   };

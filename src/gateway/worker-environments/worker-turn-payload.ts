@@ -21,6 +21,7 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
@@ -31,6 +32,11 @@ import {
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
+import {
+  measureAgentRuntimeIdentityTokenBytes,
+  mintAgentRuntimeIdentityToken,
+  type AgentRuntimeIdentityTokenParams,
+} from "../agent-runtime-identity-token.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -38,6 +44,20 @@ type WorkerInitialMessagePlan =
       kind: "provider-replay-unavailable";
       details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
     };
+
+export function emitProviderReplayRejected(
+  config: SessionPlacementTurnParams["config"],
+  details: { reason: string; bytes?: number; limitBytes?: number; count?: number },
+): void {
+  if (isDiagnosticsEnabled(config)) {
+    emitTrustedDiagnosticEvent({
+      type: "payload.large",
+      surface: "worker.provider-replay",
+      action: "rejected",
+      ...details,
+    });
+  }
+}
 
 export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMessagePlan {
   const windowed = windowWorkerReplayMessages(messages, WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1);
@@ -67,7 +87,34 @@ type WorkerLaunchPlan =
       limitBytes: number;
     };
 
-export function fitLaunchDescriptor(
+/** Fits replay context before minting the exact worker-bound identity bearer. */
+export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
+  build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchDescriptor;
+  messages: WorkerTranscriptMessage[];
+  runtimeIdentity: AgentRuntimeIdentityTokenParams;
+}): Promise<WorkerLaunchPlan> {
+  const tokenBytes = measureAgentRuntimeIdentityTokenBytes(params.runtimeIdentity);
+  const plan = fitLaunchDescriptor(
+    (messages) => params.build("x".repeat(tokenBytes), messages),
+    params.messages,
+  );
+  if (plan.kind !== "launch") {
+    return plan;
+  }
+  const token = await mintAgentRuntimeIdentityToken(params.runtimeIdentity);
+  if (Buffer.byteLength(token, "utf8") !== tokenBytes) {
+    throw new Error("Agent runtime identity changed while preparing worker launch");
+  }
+  return {
+    kind: "launch",
+    descriptor: {
+      ...plan.descriptor,
+      assignment: { ...plan.descriptor.assignment, agentRuntimeIdentityToken: token },
+    },
+  };
+}
+
+function fitLaunchDescriptor(
   build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchDescriptor,
   messages: WorkerTranscriptMessage[],
 ): WorkerLaunchPlan {

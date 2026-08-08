@@ -248,16 +248,19 @@ describe("agent runtime identity token", () => {
   it("round-trips final cron-cap capture provenance", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
+    const run = operationalRun();
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
       cronToolsAllowCapture: "final-executable-surface",
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
       cronToolsAllowCapture: "final-executable-surface",
     });
   });
@@ -265,10 +268,12 @@ describe("agent runtime identity token", () => {
   it("round-trips a signed private cron creator grant only with final provenance", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
+    const run = operationalRun();
     const cronCreatorAuthorityGrant = { runId: "run-1", token: "opaque-grant" };
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
       cronToolsAllowCapture: "final-executable-surface",
       cronCreatorAuthorityGrant,
     });
@@ -281,6 +286,7 @@ describe("agent runtime identity token", () => {
       runtimeToken.mintAgentRuntimeIdentityToken({
         agentId: "main",
         sessionKey: "agent:main:main",
+        operationalRunInstance: run.operationalRunInstance,
         cronCreatorAuthorityGrant,
       }),
     ).rejects.toThrow("require final tool-surface provenance");

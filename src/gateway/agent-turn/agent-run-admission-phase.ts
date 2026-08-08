@@ -196,11 +196,12 @@ export async function prepareAgentRunDispatch(params: {
         clone: false,
       }).storePath
     : `agent:${params.activeSessionAgentId}`;
-  const operationalRunInstance = createOperationalRunInstanceRef(params.runId);
+  let operationalRunInstance: OperationalRunInstanceRef | undefined;
   try {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
     params.assertGatewayWorkAdmissionAllowed();
     if (!params.hasGatewayAdmissionOutcome()) {
+      operationalRunInstance = createOperationalRunInstanceRef(params.runId);
       const now = Date.now();
       params.setAdmittedRunAbort(
         registerChatAbortController({
@@ -249,7 +250,8 @@ export async function prepareAgentRunDispatch(params: {
     return undefined;
   }
   const activeRunAbort = params.getAdmittedRunAbort();
-  if (!activeRunAbort) {
+  if (!activeRunAbort || !operationalRunInstance) {
+    activeRunAbort?.cleanup({ force: true });
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
       false,

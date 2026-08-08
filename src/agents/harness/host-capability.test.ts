@@ -1,10 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { Type } from "typebox";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetAgentRunRegistryForTest,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+  type InternalToolExecutionPreparer,
+} from "../runtime/internal-hooks.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
@@ -15,23 +31,79 @@ vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
 
 const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
+type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
-function attempt(): EmbeddedRunAttemptParams {
-  const runId = "run-1";
-  return {
-    admittedRunContext: {
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
+const admissions: PreparedAgentRunAdmission[] = [];
+
+async function admittedAttempt(
+  runId = "run-1",
+  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
+): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
+  const admission = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId,
+      agentId: "main",
+      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
     },
-    agentId: "main",
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    runId,
-    cwd: "/attempt/worktree",
-    workspaceDir: "/workspace",
-    currentChannelId: "chat-1",
-    messageChannel: "telegram",
-  } as unknown as EmbeddedRunAttemptParams;
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+  });
+  admissions.push(admission);
+  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
+  return {
+    admission,
+    attempt: {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId,
+      cwd: "/attempt/worktree",
+      workspaceDir: "/workspace",
+      currentChannelId: "chat-1",
+      messageChannel: "telegram",
+      ...overrides,
+      admittedRunContext,
+    },
+  };
 }
+
+function testTool(execute = vi.fn(async () => ({ content: [], details: {} }))): {
+  tool: AnyAgentTool;
+  execute: typeof execute;
+} {
+  return {
+    execute,
+    tool: {
+      name: "read",
+      label: "Read",
+      description: "read",
+      parameters: Type.Object({}),
+      execute,
+    },
+  };
+}
+
+function bindTool(
+  attempt: HostAttempt,
+  tool: AnyAgentTool,
+): {
+  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+  bound: AnyAgentTool;
+} {
+  const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+  const [bound] = host.capabilities.bindToolSurface([tool]);
+  if (!bound) {
+    throw new Error("expected bound tool");
+  }
+  return { host, bound };
+}
+
+afterEach(() => {
+  for (const admission of admissions.splice(0)) {
+    admission.close();
+  }
+  resetAgentRunRegistryForTest();
+});
 
 describe("agent harness host capability", () => {
   beforeEach(() => {
@@ -39,12 +111,11 @@ describe("agent harness host capability", () => {
     mockRunBefore.mockClear();
   });
 
-  it("overwrites plugin policy fields with the host snapshot and revokes after the attempt", async () => {
-    const host = createAgentHarnessHostCapabilities({ attempt: attempt(), pluginId: "codex" });
-    const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const tool = { name: "read", description: "read", parameters: {}, execute } as never;
-
-    const [bound] = host.capabilities.bindToolSurface([tool]);
+  it("overwrites plugin policy fields with the host snapshot and revokes lexically", async () => {
+    const { attempt, admission } = await admittedAttempt();
+    const authority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
+    const { tool, execute } = testTool();
+    const { host, bound } = bindTool(attempt, tool);
     expect(mockRewrap).toHaveBeenCalledWith(
       tool,
       expect.objectContaining({
@@ -55,12 +126,13 @@ describe("agent harness host capability", () => {
       }),
     );
 
-    await host.capabilities.runBeforeToolCall({
+    const forgedRequest = {
       toolName: "exec",
       params: { command: "true" },
-      approvalMode: "deny",
+      approvalMode: "deny" as const,
       ctx: { agentId: "forged" },
-    } as never);
+    };
+    await host.capabilities.runBeforeToolCall(forgedRequest);
     expect(mockRunBefore).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalMode: "request",
@@ -69,40 +141,23 @@ describe("agent harness host capability", () => {
     );
 
     host.close();
+    expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(authority);
     expect(() => host.capabilities.bindToolSurface([tool])).toThrow("no longer active");
-    await expect((bound as never as { execute: () => Promise<unknown> }).execute()).rejects.toThrow(
-      "no longer active",
-    );
+    await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
+
+    admission.close();
+    expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBeUndefined();
   });
 
   it("keeps policy snapshots independent from later attempt mutation", async () => {
-    const source = attempt() as EmbeddedRunAttemptParams & {
-      config: { tools: { loopDetection: { enabled: boolean } } };
-      skillsSnapshot: { prompt: string; version: number; skills: Array<{ name: string }> };
-    };
-    source.config = { tools: { loopDetection: { enabled: true } } };
-    source.skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };
-    const skillUsagePaths = [
-      {
-        readPath: "/sandbox/safe/SKILL.md",
-        skillFile: "/skills/safe/SKILL.md",
-        skillName: "safe",
-        skillSource: "workspace" as const,
-      },
-    ];
-    source.sandbox = {
-      enabled: true,
-      workspaceAccess: "rw",
-      workspaceDir: "/sandbox",
-      fsBridge: {} as never,
-      skillUsagePaths,
-    } as unknown as NonNullable<EmbeddedRunAttemptParams["sandbox"]>;
-    const host = createAgentHarnessHostCapabilities({ attempt: source, pluginId: "codex" });
+    const config = { tools: { loopDetection: { enabled: true } } };
+    const skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };
+    const { attempt } = await admittedAttempt("run-snapshot", { config, skillsSnapshot });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
 
-    source.config.tools.loopDetection.enabled = false;
-    source.skillsSnapshot.skills[0]!.name = "forged";
-    skillUsagePaths[0]!.skillFile = "/skills/forged/SKILL.md";
+    config.tools.loopDetection.enabled = false;
+    skillsSnapshot.skills[0]!.name = "forged";
     await host.capabilities.runBeforeToolCall({ toolName: "read", params: {} });
 
     expect(mockRunBefore).toHaveBeenLastCalledWith(
@@ -110,32 +165,28 @@ describe("agent harness host capability", () => {
         ctx: expect.objectContaining({
           config: { tools: { loopDetection: { enabled: true } } },
           skillsSnapshot: expect.objectContaining({ skills: [{ name: "safe" }] }),
-          skillUsagePaths: [
-            expect.objectContaining({
-              readPath: "/sandbox/safe/SKILL.md",
-              skillFile: "/skills/safe/SKILL.md",
-            }),
-          ],
         }),
       }),
     );
   });
 
   it("derives a bounded native action cwd without accepting forged host authority", async () => {
-    const host = createAgentHarnessHostCapabilities({ attempt: attempt(), pluginId: "codex" });
+    const { attempt } = await admittedAttempt("run-native");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
 
-    await host.capabilities.runBeforeToolCall({
+    const forgedRequest = {
       toolName: "exec",
       params: { command: "pwd" },
       nativeOperation: { cwd: " ./native/../action " },
       ctx: { agentId: "forged", cwd: "/forged" },
-    } as never);
+    };
+    await host.capabilities.runBeforeToolCall(forgedRequest);
 
     expect(mockRunBefore).toHaveBeenLastCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
           agentId: "main",
-          runId: "run-1",
+          runId: "run-native",
           sessionKey: "agent:main:session-1",
           cwd: "/attempt/worktree/action",
         }),
@@ -150,5 +201,98 @@ describe("agent harness host capability", () => {
       }),
     ).rejects.toThrow("must not exceed 4096 bytes");
     expect(mockRunBefore).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {
+    const first = await admittedAttempt("run-replaced");
+    const { tool, execute } = testTool();
+    const { bound } = bindTool(first.attempt, tool);
+
+    await admittedAttempt("run-replaced");
+
+    await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("revokes a retained bound tool after lifecycle rotation", async () => {
+    const { attempt } = await admittedAttempt("run-rotated");
+    const { tool, execute } = testTool();
+    const { bound } = bindTool(attempt, tool);
+
+    rotateAgentRunRegistryLifecycleGeneration();
+
+    await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("revokes retained tools on exact release and outer abort", async () => {
+    const released = await admittedAttempt("run-released");
+    const releasedTool = testTool();
+    const releasedBound = bindTool(released.attempt, releasedTool.tool).bound;
+    expect(closeAdmittedRunDelegatedAuthority(released.attempt.admittedRunContext)).toBe(true);
+    await expect(releasedBound.execute("call-release", {})).rejects.toThrow("no longer active");
+    expect(releasedTool.execute).not.toHaveBeenCalled();
+
+    const aborted = await admittedAttempt("run-aborted");
+    const abortedTool = testTool();
+    const abortedBound = bindTool(aborted.attempt, abortedTool.tool).bound;
+    aborted.admission.close();
+    await expect(abortedBound.execute("call-abort", {})).rejects.toThrow("no longer active");
+    expect(abortedTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when constructing a host after admission authority closes", async () => {
+    const { attempt, admission } = await admittedAttempt("run-closed-before-host");
+    admission.close();
+
+    expect(() => createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" })).toThrow(
+      "requires active admitted run authority",
+    );
+  });
+
+  it("rejects a retained execution preparer before preparation after revocation", async () => {
+    const { attempt, admission } = await admittedAttempt("run-prepare-revoked");
+    const { tool } = testTool();
+    const prepare = vi.fn<InternalToolExecutionPreparer>(async () => ({
+      kind: "immediate",
+      outcome: { kind: "error", error: new Error("not reached") },
+      dispose() {},
+    }));
+    attachInternalToolExecutionPreparer(tool, prepare);
+    const { bound } = bindTool(attempt, tool);
+    const boundPreparer = getInternalToolExecutionPreparer(bound);
+    admission.close();
+
+    await expect(boundPreparer?.({ toolCallId: "call-prepare", args: {} })).rejects.toThrow(
+      "no longer active",
+    );
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("rejects ready execution when authority closes after preparation", async () => {
+    const { attempt, admission } = await admittedAttempt("run-ready-revoked");
+    const { tool } = testTool();
+    const executePrepared = vi.fn(async () => ({ content: [], details: {} }));
+    const prepare = vi.fn<InternalToolExecutionPreparer>(async () => ({
+      kind: "ready",
+      args: {},
+      execute: executePrepared,
+      dispose() {},
+    }));
+    attachInternalToolExecutionPreparer(tool, prepare);
+    const { bound } = bindTool(attempt, tool);
+    const boundPreparer = getInternalToolExecutionPreparer(bound);
+    if (!boundPreparer) {
+      throw new Error("expected retained bound execution preparer");
+    }
+    const prepared = await boundPreparer({ toolCallId: "call-ready", args: {} });
+    expect(prepared.kind).toBe("ready");
+    admission.close();
+
+    if (prepared.kind !== "ready") {
+      throw new Error("expected ready execution preparation");
+    }
+    expect(() => prepared.execute()).toThrow("no longer active");
+    expect(executePrepared).not.toHaveBeenCalled();
   });
 });

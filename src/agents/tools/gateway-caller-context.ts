@@ -1,7 +1,7 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import type { AdmittedRunContext, OperationalRunInstanceRef } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
@@ -97,8 +97,7 @@ export async function withGatewayToolCallerIdentity<T>(
     inherited?.executionIdentityToken ?? identity.executionIdentityToken;
   const cronSelfManagementJobId =
     identity.cronSelfManagementJobId?.trim() ?? inherited?.cronSelfManagementJobId;
-  const cronToolsAllowCapture =
-    identity.cronToolsAllowCapture ?? inherited?.cronToolsAllowCapture;
+  const cronToolsAllowCapture = identity.cronToolsAllowCapture ?? inherited?.cronToolsAllowCapture;
   const cronCreatorAuthorityGrant =
     identity.cronCreatorAuthorityGrant ?? inherited?.cronCreatorAuthorityGrant;
   const turnSourceChannel = inherited?.turnSourceChannel ?? identity.turnSourceChannel?.trim();

@@ -114,7 +114,10 @@ function readPluginSdkEntrypointBudgetEnv(
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
-  core: 2,
+  // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
+  // compatibility barrels while external harnesses migrate to AgentHarnessV2.
+  core: 3,
+  "plugin-entry": 1,
   routing: 1,
   health: 0,
   // +1: shipped channel setup state-migration declaration during its migration window.

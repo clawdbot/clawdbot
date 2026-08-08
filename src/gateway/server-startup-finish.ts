@@ -319,15 +319,11 @@ export async function finishGatewayStartup(params: {
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntimeLocal;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntimeLocal.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntimeLocal.recovery;
-  const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
+  const clearFallbackContext: unknown = setFallbackGatewayContextResolver(
     () => gatewayRequestContext,
   );
   clearFallbackGatewayContextForServer.set(
-    typeof fallbackGatewayContextCleanup === "function"
-      ? () => {
-          fallbackGatewayContextCleanup();
-        }
-      : () => {},
+    typeof clearFallbackContext === "function" ? () => clearFallbackContext() : () => {},
   );
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",

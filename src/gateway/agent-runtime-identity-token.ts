@@ -473,8 +473,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
   }
 }
 
-/** Mint an opaque token that lets trusted local agent-tool clients identify their agent. */
-export async function mintAgentRuntimeIdentityToken(params: {
+export type AgentRuntimeIdentityTokenParams = {
   agentId: string;
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
@@ -490,7 +489,9 @@ export async function mintAgentRuntimeIdentityToken(params: {
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   workerTurnClaim?: WorkerSessionTurnClaim;
-}): Promise<string> {
+};
+
+function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTokenParams): string {
   const operationalInstanceId = normalizeOptionalString(params.operationalRunInstance.instanceId);
   const operationalRunId = normalizeOptionalString(params.operationalRunInstance.runId);
   if (!operationalInstanceId || !operationalRunId) {
@@ -550,7 +551,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
         expiresAtMs: Date.now() + CRON_SELF_MANAGEMENT_TOKEN_TTL_MS,
       }
     : undefined;
-  const payload = encodePayload({
+  return encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
@@ -579,6 +580,21 @@ export async function mintAgentRuntimeIdentityToken(params: {
       ? { executionIdentity: params.executionIdentityToken }
       : {}),
   });
+}
+
+/** Measure the exact ASCII token size without reading signing credentials or minting a bearer. */
+export function measureAgentRuntimeIdentityTokenBytes(
+  params: AgentRuntimeIdentityTokenParams,
+): number {
+  const payload = prepareAgentRuntimeIdentityTokenPayload(params);
+  return Buffer.byteLength(`${payload}.${signPayload("", payload)}`, "utf8");
+}
+
+/** Mint an opaque token that lets trusted local agent-tool clients identify their agent. */
+export async function mintAgentRuntimeIdentityToken(
+  params: AgentRuntimeIdentityTokenParams,
+): Promise<string> {
+  const payload = prepareAgentRuntimeIdentityTokenPayload(params);
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
 }

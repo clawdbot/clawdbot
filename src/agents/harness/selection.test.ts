@@ -5,10 +5,16 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
@@ -130,8 +136,24 @@ vi.mock("./context-engine-turn-attempt.js", () => ({
 }));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+let selectionAdmission: PreparedAgentRunAdmission;
+let selectionAdmittedRunContext: AdmittedRunContext;
 
-beforeEach(() => {
+beforeEach(async () => {
+  resetAgentRunRegistryForTest();
+  selectionAdmission = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId: "run-1",
+      agentId: "main",
+      ingress: { kind: "system", boundary: "harness-selection-test", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef("run-1"),
+  });
+  selectionAdmittedRunContext = await selectionAdmission.admit(
+    "plugin-harness",
+    "harness-selection-test",
+  );
   clearAgentHarnesses();
   compactAuthMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
@@ -173,6 +195,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  selectionAdmission.close();
+  resetAgentRunRegistryForTest();
   clearAgentHarnesses();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
@@ -192,7 +216,7 @@ afterEach(() => {
 
 function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
   return {
-    admittedRunContext: createTestAdmittedRunContext("run-1"),
+    admittedRunContext: selectionAdmittedRunContext,
     prompt: "hello",
     sessionId: "session-1",
     runId: "run-1",
