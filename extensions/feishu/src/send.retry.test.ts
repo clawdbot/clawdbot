@@ -373,6 +373,29 @@ describe("requestFeishuApi — retry on fulfilled rate-limit body (no throw)", (
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("retries when an idempotent send fulfills with code 230049", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 230049, msg: "message is being processed" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_processed" } });
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      retryTransient: true,
+    });
+    expect((result as { data: { message_id: string } }).data.message_id).toBe("om_processed");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry fulfilled code 230049 without transient retry opt-in", async () => {
+    const fulfilled = { code: 230049, msg: "message is being processed" };
+    const request = vi.fn().mockResolvedValue(fulfilled);
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe(fulfilled);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("exhausts retries when SDK keeps fulfilling 11232 and throws wrapped error", async () => {
     const request = vi.fn().mockResolvedValue({ code: 11232, msg: "rate limit" });
 

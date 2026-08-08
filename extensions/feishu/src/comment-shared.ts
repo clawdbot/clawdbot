@@ -147,6 +147,10 @@ function isFeishuSendTransientError(error: unknown, seen = new Set<unknown>()): 
   return isFeishuSendTransientError(error.cause, seen);
 }
 
+function isFeishuMessageInProgressResponse(value: unknown): boolean {
+  return isRecord(value) && value.code === FEISHU_MESSAGE_IN_PROGRESS_CODE;
+}
+
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
@@ -163,16 +167,16 @@ export async function requestFeishuApi<T>(
     return await retryAsync(
       async () => {
         const result = await request();
-        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-        // instead of throwing. Rethrow it in the AxiosError response shape so
-        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
-        // wraps it exactly like an SDK throw.
+        // Feishu SDK may fulfill with a retryable business-error body instead
+        // of throwing. Convert it to the same shape as a rejected SDK request.
         const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-        if (fulfilledRateLimit !== undefined) {
-          throw Object.assign(
-            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
-            { response: { status: 200, data: result } },
-          );
+        const fulfilledMessageInProgress =
+          options.retryTransient === true && isFeishuMessageInProgressResponse(result);
+        if (fulfilledRateLimit !== undefined || fulfilledMessageInProgress) {
+          const fulfilledCode = fulfilledRateLimit ?? FEISHU_MESSAGE_IN_PROGRESS_CODE;
+          throw Object.assign(new Error(`Request fulfilled with retryable code ${fulfilledCode}`), {
+            response: { status: 200, data: result },
+          });
         }
         return result;
       },
