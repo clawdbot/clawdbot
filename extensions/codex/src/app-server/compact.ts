@@ -442,23 +442,36 @@ async function compactCodexNativeThread(
   params: CompactEmbeddedAgentSessionParams,
   options: CodexAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
+  // Hoist binding resolution to verify thread liveness before deferring ownership.
+  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    config: params.config,
+  });
+  const initialBinding = await options.bindingStore.read(bindingIdentity);
+
   if (params.trigger !== "manual" && !options.allowNonManualNativeRequest) {
-    embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      trigger: params.trigger,
-    });
-    return codexNativeCompactionResult(params, {
-      compacted: false,
-      reason: "codex app-server owns automatic compaction",
-      details: {
-        backend: "codex-app-server",
-        skipped: true,
-        reason: "non_manual_trigger",
-        trigger: params.trigger ?? "unknown",
-      },
-    });
+    // Validate thread existence; if stale or missing, bypass deferral to trigger the recovery path.
+    if (initialBinding?.threadId) {
+      embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        trigger: params.trigger,
+      });
+      return codexNativeCompactionResult(params, {
+        compacted: false,
+        reason: "codex app-server owns automatic compaction",
+        details: {
+          backend: "codex-app-server",
+          skipped: true,
+          reason: "non_manual_trigger",
+          trigger: params.trigger ?? "unknown",
+        },
+      });
+    }
   }
+
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
@@ -468,19 +481,15 @@ async function compactCodexNativeThread(
   if (nativeExecutionBlock) {
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
   }
-  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    config: params.config,
-  });
-  const initialBinding = await options.bindingStore.read(bindingIdentity);
+
+  // Evaluate the hoisted binding; remove the secondary options.bindingStore.read() call from the original logic.
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
       recovery: "missing_thread_binding",
     });
   }
+
   let binding = initialBinding;
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
