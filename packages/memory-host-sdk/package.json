@@ -12,6 +12,8 @@
     "openclaw": "workspace:*"
   },
   "exports": {
+    "./authorization": "./src/host/authorization.ts",
+    "./authorization-conformance": "./src/host/authorization-conformance.ts",
     "./runtime-core": "./src/runtime-core.ts",
     "./runtime-files": "./src/runtime-files.ts",
     "./engine-foundation": "./src/engine-foundation.ts",

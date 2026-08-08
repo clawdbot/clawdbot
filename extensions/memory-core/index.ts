@@ -18,6 +18,7 @@ import type {
   PluginStateLeaseRunner,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
+import { MEMORY_CORE_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
@@ -246,6 +247,7 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    authorization: MEMORY_CORE_AUTHORIZATION_CAPABILITIES,
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
