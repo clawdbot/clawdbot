@@ -16,7 +16,13 @@ const tails = resolveGlobalMap<string, Promise<void>>(Symbol.for("openclaw.reply
 export function reserveReplyAdmissionTicket(
   sessionKeys: Iterable<string | undefined>,
 ): ReplyAdmissionTicket | undefined {
-  const keys = [...new Set([...sessionKeys].map(normalizeOptionalString).filter(Boolean))].sort();
+  const keys = [
+    ...new Set(
+      [...sessionKeys]
+        .map(normalizeOptionalString)
+        .filter((key): key is string => typeof key === "string"),
+    ),
+  ].sort();
   if (keys.length === 0) {
     return undefined;
   }

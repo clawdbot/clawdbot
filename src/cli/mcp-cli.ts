@@ -39,6 +39,7 @@ import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
+import { waitForMcpOAuthAuthorizationCode } from "./mcp-oauth-loopback.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -1348,12 +1349,21 @@ export function registerMcpCli(program: Command) {
           headers: withoutMcpAuthorizationHeader(resolved.headers),
           resourceUrl: resolved.url,
         }),
-        onAuthorizationUrl: (url) => {
-          defaultRuntime.log(`Open this URL to authorize "${name}":`);
-          defaultRuntime.log(url.toString());
-          defaultRuntime.log(
-            `After approval, run ${formatCliCommand(`openclaw mcp login ${name} --code <code>`)}.`,
+        onAuthorizationUrl: async (url) => {
+          const manualFallbackCommand = formatCliCommand(
+            `openclaw mcp login ${name} --code <code>`,
           );
+          return await waitForMcpOAuthAuthorizationCode({
+            authorizationUrl: url,
+            manualFallbackCommand,
+            onReady: () => {
+              defaultRuntime.log(`Open this URL to authorize "${name}":`);
+              defaultRuntime.log(url.toString());
+              defaultRuntime.log(
+                `If the browser redirect cannot reach this machine, stop this command and run ${manualFallbackCommand}.`,
+              );
+            },
+          });
         },
       });
       if (result === "authorized") {
