@@ -182,7 +182,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
-    gatewayUpdateCampaign.adopt();
+    const adoptedCampaignId = gatewayUpdateCampaign.adopt()
+      ? gatewayUpdateCampaign.getState()?.id
+      : undefined;
     const actor = resolveControlPlaneActor(client);
     const {
       sessionKey,
@@ -441,6 +443,17 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       };
+    }
+
+    // A failed RPC owns the adopted campaign until it explicitly releases it;
+    // only a started handoff may leave "applying" for the successor process.
+    if (
+      result.status !== "ok" &&
+      handoff?.status !== "started" &&
+      adoptedCampaignId !== undefined &&
+      gatewayUpdateCampaign.getState()?.id === adoptedCampaignId
+    ) {
+      gatewayUpdateCampaign.clear();
     }
 
     const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({

@@ -44,7 +44,7 @@ const getUpdateAvailableMock = vi.fn(
 const getUpdateScheduleMock = vi.fn<
   () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
 >(() => null);
-const adoptUpdateCampaignMock = vi.fn(() => true);
+const adoptUpdateCampaignMock = vi.fn(() => false);
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 type ManagedServiceUpdateHandoffResult = Awaited<
   ReturnType<
@@ -236,7 +236,8 @@ beforeEach(() => {
   getUpdateAvailableMock.mockReturnValue(null);
   getUpdateScheduleMock.mockReset();
   getUpdateScheduleMock.mockReturnValue(null);
-  adoptUpdateCampaignMock.mockClear();
+  adoptUpdateCampaignMock.mockReset();
+  adoptUpdateCampaignMock.mockReturnValue(false);
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",

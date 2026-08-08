@@ -17,7 +17,7 @@ type UpdateCampaignTarget = NonNullable<UpdateScheduleState["target"]>;
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
   inspect?: Partial<GatewayActiveWorkInspectors>;
-  apply: (context: { forced: boolean }) => Promise<void>;
+  apply: (context: { forced: boolean }) => Promise<"handoff" | "applied" | "failed">;
   onChange: (campaign: UpdateCampaignState | undefined) => void;
 };
 
@@ -224,7 +224,19 @@ export class UpdateCampaignController {
       updatedAtMs: now,
     });
     if (runApply) {
-      void announcement.apply({ forced }).catch(() => undefined);
+      // An apply can settle after clear/new announce; only its originating campaign may be cleared.
+      void announcement.apply({ forced }).then(
+        (outcome) => {
+          if (outcome === "failed" && this.campaign?.id === campaign.id) {
+            this.clear();
+          }
+        },
+        () => {
+          if (this.campaign?.id === campaign.id) {
+            this.clear();
+          }
+        },
+      );
     }
   }
 

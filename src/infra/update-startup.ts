@@ -624,7 +624,7 @@ async function runCampaignUpdate(params: {
   root?: string;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   runAuto: AutoUpdateRunner;
-}): Promise<void> {
+}): Promise<"handoff" | "applied" | "failed"> {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = await readState();
   attemptState.autoLastAttemptVersion = params.identity;
@@ -645,7 +645,7 @@ async function runCampaignUpdate(params: {
       ...(outcome.command ? { command: outcome.command } : {}),
       ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
     });
-    return;
+    return "handoff";
   }
   if (outcome.ok) {
     const successState = await readState();
@@ -657,7 +657,7 @@ async function runCampaignUpdate(params: {
       version: params.version,
       tag: params.tag,
     });
-    return;
+    return "applied";
   }
   params.log.info("auto-update attempt failed", {
     channel: params.channel,
@@ -665,6 +665,7 @@ async function runCampaignUpdate(params: {
     tag: params.tag,
     reason: outcome.reason ?? `exit:${outcome.code}`,
   });
+  return "failed";
 }
 
 export async function runGatewayUpdateCheck(params: {

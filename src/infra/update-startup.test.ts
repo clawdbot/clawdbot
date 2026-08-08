@@ -1399,6 +1399,7 @@ describe("update-startup", () => {
       command: "openclaw update --yes --channel beta --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
     });
+    expect(getUpdateSchedule()?.campaign?.state).toBe("applying");
   });
 
   it("does not restart after a managed auto-update handoff spawn failure", async () => {
@@ -1426,6 +1427,7 @@ describe("update-startup", () => {
       tag: "beta",
       reason: "Error: spawn ENOENT",
     });
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
   });
 
   it("does not schedule another restart when auto-update joins an active handoff", async () => {
