@@ -5,6 +5,7 @@ import { request, type IncomingMessage } from "node:http";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DEFAULT_INGRESS_ADOPTION_STALL_MS } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests as createChannelIngressQueue,
@@ -16,6 +17,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayLifecycle,
   type TelegramSpooledReplayDeferredParticipant,
   type TelegramSpooledReplaySettlementHold,
 } from "./bot-processing-outcome.js";
@@ -270,6 +272,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   clearTelegramRuntime();
   closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
@@ -1134,6 +1137,64 @@ describe("startTelegramWebhook", () => {
     }
   });
 
+  it.each([
+    {
+      label: "environment override",
+      envValue: "50",
+      timeoutMs: 50,
+    },
+    {
+      label: "canonical default",
+      envValue: undefined,
+      timeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
+    },
+  ])("uses the $label for webhook adoption stalls", async ({ envValue, timeoutMs }) => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS", envValue);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    let finishUpdate: (() => void) | undefined;
+    const active: {
+      dispatchStartedAt?: number;
+      lifecycle?: NonNullable<ReturnType<typeof getTelegramSpooledReplayLifecycle>>;
+    } = {};
+    await writeTelegramSpooledUpdate({
+      spoolDir: requireWebhookSpoolDir(),
+      update: { update_id: 39, message: { chat: { id: 123 }, text: "stalled" } },
+    });
+    handleUpdateSpy.mockImplementationOnce(async () => {
+      active.dispatchStartedAt = Date.now();
+      active.lifecycle = getTelegramSpooledReplayLifecycle();
+      await new Promise<void>((resolve) => {
+        finishUpdate = resolve;
+      });
+    });
+
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    try {
+      await waitForWebhookState(() => expect(active.lifecycle).toBeDefined());
+      const { dispatchStartedAt, lifecycle } = active;
+      if (!lifecycle || dispatchStartedAt === undefined) {
+        throw new Error("expected active webhook ingress lifecycle");
+      }
+      expect(lifecycle.abortSignal.aborted).toBe(false);
+      const remainingMs = timeoutMs - (Date.now() - dispatchStartedAt);
+      expect(remainingMs).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(remainingMs - 1);
+      expect(lifecycle.abortSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(lifecycle.abortSignal.aborted).toBe(true);
+    } finally {
+      finishUpdate?.();
+      await started.stop();
+    }
+  });
+
   it("keeps a timed-out webhook lane guarded until replay settles", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
@@ -1169,7 +1230,7 @@ describe("startTelegramWebhook", () => {
       });
       try {
         await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40]));
-        await vi.advanceTimersByTimeAsync(25 * 60_000 + 10_000);
+        await vi.advanceTimersByTimeAsync(DEFAULT_INGRESS_ADOPTION_STALL_MS + 10_000);
         await yieldWebhookTask();
         expect(seenUpdateIds).toEqual([40]);
 
@@ -1209,7 +1270,7 @@ describe("startTelegramWebhook", () => {
       });
       try {
         await waitForWebhookState(() => expect(participant).toBeDefined());
-        await vi.advanceTimersByTimeAsync(25 * 60_000 + 10_000);
+        await vi.advanceTimersByTimeAsync(DEFAULT_INGRESS_ADOPTION_STALL_MS + 10_000);
         await yieldWebhookTask();
 
         expect(participant?.abortSignal.aborted).toBe(false);

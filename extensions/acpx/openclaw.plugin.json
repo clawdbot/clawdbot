@@ -1,5 +1,8 @@
 {
   "id": "acpx",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },

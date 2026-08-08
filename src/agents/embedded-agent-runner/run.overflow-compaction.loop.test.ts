@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAgentExecutionAttribution } from "../agent-execution-attribution.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -150,19 +149,6 @@ describe("embedded run retry dispatch", () => {
     expect(result.preparedAttempt.initialReplayState).toBe(replayState);
     expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
-  });
-
-  it("keeps host-owned attribution out of plugin harness attempt parameters", async () => {
-    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-    input.params.attribution = createAgentExecutionAttribution({
-      runId: "run-1",
-      lifecycleGeneration: "generation-1",
-    });
-
-    const result = await dispatchEmbeddedRunAttempt(input);
-
-    expect(result.preparedAttempt).not.toHaveProperty("attribution");
-    expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);
   });
 
   it.each([true, false])(

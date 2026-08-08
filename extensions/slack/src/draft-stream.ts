@@ -117,9 +117,7 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
         threadTs,
         identity: params.identity,
-        ...(params.eventScope
-          ? { client: params.eventScope.client, enterpriseEventScope: params.eventScope }
-          : {}),
+        ...(params.eventScope ? { eventScope: params.eventScope } : {}),
         ...(params.metadata ? { metadata: params.metadata } : {}),
         ...(blocks ? { blocks } : {}),
       });

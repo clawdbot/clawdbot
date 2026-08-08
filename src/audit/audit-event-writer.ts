@@ -21,18 +21,12 @@ type AuditWriterMessage =
   | { type: "maintenance-error"; error: string }
   | { type: "stopped" };
 
-type AuditWriterWorkMessage =
-  | { type: "record-event"; input: AuditEventInput }
-  | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork };
-
-type AuditWriterCommand = AuditWriterWorkMessage | { type: "stop" };
-
 export type AuditEventWriter = {
   ready: Promise<void>;
   record: (input: AuditEventInput) => boolean;
   /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
-  stop: (finalInputs?: readonly AuditEventInput[]) => Promise<void>;
+  stop: () => Promise<void>;
 };
 
 function formatAuditWriterError(error: unknown): string {
@@ -113,13 +107,12 @@ export function createAuditEventWriter(
   const fail = (error: unknown) => {
     options.onError?.(formatAuditWriterError(error));
   };
-  const postToWorker = (message: AuditWriterCommand) => {
-    // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin
-    worker.postMessage(message);
-  };
 
-  const enqueue = (message: AuditWriterWorkMessage): boolean => {
+  const enqueue = (
+    message:
+      | { type: "record-event"; input: AuditEventInput }
+      | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork },
+  ): boolean => {
     if (stopped || unavailable || pending >= maxPending) {
       if (!stopped) {
         fail(
@@ -132,7 +125,9 @@ export function createAuditEventWriter(
     }
     pending += 1;
     try {
-      postToWorker(message);
+      // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin
+      worker.postMessage(message);
       return true;
     } catch (error) {
       pending -= 1;
@@ -145,9 +140,6 @@ export function createAuditEventWriter(
       }
       return false;
     }
-  };
-  const postFinalRecord = (input: AuditEventInput) => {
-    postToWorker({ type: "record-event", input });
   };
 
   worker.on("message", (message: AuditWriterMessage) => {
@@ -190,26 +182,13 @@ export function createAuditEventWriter(
     ready,
     record: (input) => enqueue({ type: "record-event", input }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
-    stop: async (finalInputs = []) => {
+    stop: async () => {
       if (stopped) {
         return;
       }
       stopped = true;
       if (unavailable) {
         return;
-      }
-      for (const input of finalInputs) {
-        pending += 1;
-        try {
-          // Shutdown records bypass the live queue cap but retain worker message
-          // ordering, so the following stop drains them before exit.
-          postFinalRecord(input);
-        } catch (error) {
-          pending -= 1;
-          unavailable = true;
-          fail(error);
-          return;
-        }
       }
       await new Promise<void>((resolve) => {
         resolveStop = resolve;
@@ -219,7 +198,9 @@ export function createAuditEventWriter(
           finishStop();
         }, AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS);
         try {
-          postToWorker({ type: "stop" });
+          // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin
+          worker.postMessage({ type: "stop" });
         } catch (error) {
           fail(error);
           finishStop();

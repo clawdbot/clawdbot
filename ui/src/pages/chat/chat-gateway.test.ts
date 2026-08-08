@@ -878,6 +878,39 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
   });
 
+  it("retires a reply steer chip after an exact-target terminal rejection", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "reply-steer-request",
+      chatQueue: [
+        {
+          id: "reply-steer-chip",
+          text: "Reply with deployment context",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "reply-steer-request",
+          sendRunId: "reply-steer-request",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "reply-steer-request",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "active run changed; review and retry",
+      }),
+    ).toBe("error");
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunError).toEqual({
+      summary: "Error: active run changed; review and retry",
+    });
+  });
+
   it("uses an already-persisted steer to recover the active stream boundary", () => {
     const state = createState({
       sessionKey: "main",

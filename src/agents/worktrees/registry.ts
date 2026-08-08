@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -119,6 +121,25 @@ export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRe
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
 }
 
+export function listRegistryWorktreesForMigration(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        if (!tableExists(db, "worktrees")) {
+          return [];
+        }
+        const query = kyselyFor(db)
+          .selectFrom("worktrees")
+          .selectAll()
+          .orderBy("created_at", "desc")
+          .orderBy("id", "asc");
+        return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
+      },
+      { env },
+    ) ?? []
+  );
+}
+
 export function getRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
@@ -165,6 +186,37 @@ export function discardLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): number {
           // The checkout and branch stay untouched; doctor never deletes their user data.
           kyselyFor(db).deleteFrom("worktrees").where("provisioned_paths_json", "is", null),
         ).numAffectedRows ?? 0n,
+      ),
+    { env },
+  );
+}
+
+export function rewriteRegistryWorktreePathsForMigration(
+  env: NodeJS.ProcessEnv,
+  rewrites: readonly { id: string; fromPath: string; toPath: string }[],
+): number {
+  if (rewrites.length === 0) {
+    return 0;
+  }
+  const db = dbFor(env);
+  // Only the state-migration owner may rewrite persisted worktree identity paths.
+  // Runtime updates deliberately keep `path` outside their patch surface.
+  return runOpenClawStateWriteTransaction(
+    () =>
+      rewrites.reduce(
+        (count, rewrite) =>
+          count +
+          Number(
+            executeSqliteQuerySync(
+              db,
+              kyselyFor(db)
+                .updateTable("worktrees")
+                .set({ path: rewrite.toPath })
+                .where("id", "=", rewrite.id)
+                .where("path", "=", rewrite.fromPath),
+            ).numAffectedRows ?? 0n,
+          ),
+        0,
       ),
     { env },
   );

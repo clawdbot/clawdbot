@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "vitest";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { getSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -6,6 +7,7 @@ import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetSystemEventsForTest();
 });
 
 function shellQuote(value: string): string {
@@ -21,6 +23,51 @@ function currentNodeEvalCommand(source: string): string {
 function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
+
+test.skipIf(process.platform === "win32")(
+  "consumes a real notify-on-exit event when process poll returns the terminal result",
+  async () => {
+    const scopeKey = "agent:main:process-notify-poll";
+    const execTool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: true,
+      backgroundMs: 0,
+      timeoutSec: 10,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: true,
+      sessionKey: scopeKey,
+      scopeKey,
+    });
+    const processTool = createProcessTool({ scopeKey });
+    const marker = "REAL_NOTIFY_ON_EXIT";
+    const started = await execTool.execute("process-notify-start", {
+      command: currentNodeEvalCommand(`process.stdout.write(${JSON.stringify(marker)});`),
+      background: true,
+    });
+    expect(started.details).toMatchObject({ status: "running" });
+    const sessionId = (started.details as { sessionId?: string }).sessionId;
+    expect(sessionId).toEqual(expect.any(String));
+    if (!sessionId) {
+      throw new Error("exec did not return a background session id");
+    }
+
+    await expect
+      .poll(() => peekSystemEventEntries(scopeKey).some((event) => event.text.includes(marker)), {
+        timeout: 5_000,
+        interval: 25,
+      })
+      .toBe(true);
+
+    const poll = await processTool.execute("process-notify-poll", {
+      action: "poll",
+      sessionId,
+    });
+    expect(poll.details).toMatchObject({ status: "completed", sessionId });
+    expect(peekSystemEventEntries(scopeKey)).toHaveLength(0);
+  },
+);
 
 test.skipIf(process.platform === "win32")(
   "controls one real interactive background child through exec and process tools",

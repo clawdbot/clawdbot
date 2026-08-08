@@ -16,20 +16,20 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [] });
   });
 
-  it("uses configless global metadata without a workspace-scoped current request", async () => {
+  it("allows configless runtime targets to reuse the lifecycle workspace", async () => {
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
 
     getSecretTargetRegistry();
 
     expect(metadataMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
+      allowWorkspaceScopedCurrent: true,
       env: process.env,
     });
     const calls = metadataMocks.resolvePluginMetadataSnapshot.mock.calls as unknown as Array<
       [{ allowWorkspaceScopedCurrent?: boolean }]
     >;
     for (const [call] of calls) {
-      expect(call.allowWorkspaceScopedCurrent).not.toBe(true);
+      expect(call.allowWorkspaceScopedCurrent).toBe(true);
     }
   });
   it("registers secret targets for installed-origin plugins (#104320)", async () => {

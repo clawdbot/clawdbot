@@ -179,6 +179,8 @@ describe("resolve-openclaw-package-candidate", () => {
       packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
       packageUrl: "",
+      pluginRegistryOutputDir: "",
+      requiredPluginPackagesJson: "[]",
       source: "npm",
       trustedSourceId: "",
       trustedSourcePolicy: ".github/package-trusted-sources.json",

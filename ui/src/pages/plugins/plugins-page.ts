@@ -1,6 +1,5 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -19,7 +18,6 @@ import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
 import {
   buildAddMcpServerPatch,
@@ -32,6 +30,7 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../../lib/config/mcp-servers.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
@@ -175,7 +174,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.replaceResult(result);
     },
     onError: (error) => {
-      this.error = formatErrorMessage(error, { redact: redactToolDetail });
+      this.error = formatUiError(error);
     },
   });
 
@@ -531,14 +530,14 @@ class PluginsPage extends OpenClawLightDomElement {
   private get searchError(): string | null {
     return this.searchTask.status === TaskStatus.ERROR &&
       this.debouncedSearchQuery === this.query.trim()
-      ? formatErrorMessage(this.searchTask.error, { redact: redactToolDetail })
+      ? formatUiError(this.searchTask.error)
       : null;
   }
 
   private get configRefreshError(): string | null {
     const failure =
       this.configTask.status === TaskStatus.ERROR
-        ? formatErrorMessage(this.configTask.error, { redact: redactToolDetail })
+        ? formatUiError(this.configTask.error)
         : this.configTask.status === TaskStatus.COMPLETE
           ? this.configTask.value
           : null;
@@ -734,7 +733,7 @@ class PluginsPage extends OpenClawLightDomElement {
     onError: (error: unknown) => void = (error) => {
       this.setMessage(rowKey, {
         kind: "error",
-        text: formatErrorMessage(error, { redact: redactToolDetail }),
+        text: formatUiError(error),
       });
     },
   ): Promise<void> {
@@ -798,7 +797,7 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         this.setMessage(rowKey, {
           kind: "error",
-          text: formatErrorMessage(error, { redact: redactToolDetail }),
+          text: formatUiError(error),
         });
       },
     );
@@ -893,7 +892,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.mcpMessage = { kind: "success", text: params.successText };
       return true;
     } catch (error) {
-      return fail(formatErrorMessage(error, { redact: redactToolDetail }));
+      return fail(formatUiError(error));
     } finally {
       this.mcpBusy = false;
       if (params.busyKey) {

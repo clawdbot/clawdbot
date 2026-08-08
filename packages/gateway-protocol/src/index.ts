@@ -29,6 +29,7 @@ export {
   SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionRunStatus,
   type SessionToolOverrides,
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";

@@ -42,6 +42,14 @@ import {
 } from "./placement-workspace-result.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
 
+const RETIRABLE_PLACEMENT_STATES = ["local", "reclaimed", "failed"] as const;
+
+export type WorkerSessionPlacementRetirement = {
+  sessionId: string;
+  expectedState: (typeof RETIRABLE_PLACEMENT_STATES)[number];
+  expectedGeneration: number;
+};
+
 function exactConflictPath(value: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error("Worker placement conflict path is required");
@@ -146,6 +154,32 @@ export function createWorkerSessionPlacementStore(
         }
       }
       return records;
+    },
+
+    retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
+      const sessionId = required(input.sessionId, "session id");
+      if (!(RETIRABLE_PLACEMENT_STATES as readonly string[]).includes(input.expectedState)) {
+        throw new Error(`Cannot retire worker session placement from ${input.expectedState}`);
+      }
+      write((db) => {
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom("worker_session_placements")
+            .where("session_id", "=", sessionId)
+            .where("state", "=", input.expectedState)
+            .where("transition_generation", "=", input.expectedGeneration)
+            .where("turn_claim_owner", "is", null)
+            .where("turn_claim_id", "is", null)
+            .where("turn_claim_run_id", "is", null)
+            .where("turn_claim_generation", "is", null)
+            .where("turn_claim_owner_epoch", "is", null),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Worker session placement ${sessionId} changed before retirement`);
+        }
+      });
+      workspaceResultConflicts.delete(sessionId);
     },
 
     recordWorkspaceResultConflict(
@@ -528,3 +562,7 @@ export function createWorkerSessionPlacementStore(
 }
 
 export type WorkerSessionPlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;
+export type WorkerSessionPlacementRetirementService = Pick<
+  WorkerSessionPlacementStore,
+  "retireSessionPlacement"
+>;

@@ -26,6 +26,16 @@ function createProcessSessionHarness(sessionId: string) {
   return { processTool, session };
 }
 
+function appendOversizedPendingOutput(session: ReturnType<typeof createProcessSessionFixture>) {
+  const earlierMarker = "[earlier-pending-output]";
+  const latestMarker = "[latest-pending-output]";
+  const pendingCap = session.pendingMaxOutputChars ?? 30_000;
+  const aggregated = `${earlierMarker}${"x".repeat(pendingCap)}${latestMarker}`;
+  session.maxOutputChars = aggregated.length;
+  appendOutput(session, "stdout", aggregated);
+  return { aggregated, earlierMarker, latestMarker };
+}
+
 async function pollSession(
   processTool: ReturnType<typeof createProcessTool>,
   callId: string,
@@ -220,6 +230,88 @@ test("process poll resets retryInMs when output appears and clears on completion
   const pollFinished = await pollSession(processTool, "toolcall-finished", sessionId);
   expect(pollStatus(pollFinished)).toBe("completed");
   expect(retryMs(pollFinished)).toBeUndefined();
+});
+
+test.each([
+  { name: "below the retained tail", outputLength: 1_999, expectsOmissionNote: false },
+  { name: "at the retained tail", outputLength: 2_000, expectsOmissionNote: false },
+  { name: "above the retained tail", outputLength: 2_001, expectsOmissionNote: true },
+])(
+  "process poll discloses omitted finished output $name",
+  async ({ outputLength, expectsOmissionNote }) => {
+    const sessionId = `sess-finished-tail-${outputLength}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const earlierMarker = "[earlier-output]";
+    const latestMarker = "[latest-output]";
+    const fillerLength = outputLength - earlierMarker.length - latestMarker.length;
+    const aggregated = `${earlierMarker}${"x".repeat(fillerLength)}${latestMarker}`;
+
+    appendOutput(session, "stdout", aggregated);
+    markExited(session, 0, null, "completed");
+
+    const poll = await pollSession(processTool, "toolcall-finished-tail", sessionId);
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    const details = poll.details as { aggregated?: string };
+
+    expect(aggregated).toHaveLength(outputLength);
+    expect(details.aggregated).toBe(aggregated);
+    expect(text).toContain(latestMarker);
+    if (expectsOmissionNote) {
+      expect(text).not.toContain(earlierMarker);
+      expect(text).toContain("earlier retained output is omitted");
+      expect(text).toContain("action=log with offset and limit");
+    } else {
+      expect(text).toContain(earlierMarker);
+      expect(text).not.toContain("earlier retained output is omitted");
+    }
+  },
+);
+
+test.each([
+  { name: "while running", exitsDuringPoll: false },
+  { name: "when the process exits during the poll", exitsDuringPoll: true },
+])("process poll discloses omitted pending output $name", async ({ exitsDuringPoll }) => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = `sess-pending-cap-${exitsDuringPoll ? "exit" : "running"}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    let expected: ReturnType<typeof appendOversizedPendingOutput> | undefined;
+    let pollPromise: ReturnType<typeof pollSession>;
+
+    if (exitsDuringPoll) {
+      setTimeout(() => {
+        expected = appendOversizedPendingOutput(session);
+        markExited(session, 0, null, "completed");
+      }, 10);
+      pollPromise = pollSession(processTool, "toolcall-pending-cap", sessionId, 1_000);
+      await vi.advanceTimersByTimeAsync(250);
+    } else {
+      expected = appendOversizedPendingOutput(session);
+      pollPromise = pollSession(processTool, "toolcall-pending-cap", sessionId);
+    }
+
+    const poll = await pollPromise;
+    if (!expected) {
+      throw new Error("expected pending output to be appended");
+    }
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    const details = poll.details as { aggregated?: string; status?: string };
+
+    expect(details.status).toBe(exitsDuringPoll ? "completed" : "running");
+    expect(details.aggregated).toBe(expected.aggregated);
+    expect(text).not.toContain(expected.earlierMarker);
+    expect(text).toContain(expected.latestMarker);
+    expect(text).toContain("earlier output is omitted from this poll");
+    expect(text).toContain("action=log with offset and limit");
+
+    if (!exitsDuringPoll) {
+      const nextPoll = await pollSession(processTool, "toolcall-after-pending-cap", sessionId);
+      const nextText = nextPoll.content[0]?.type === "text" ? nextPoll.content[0].text : "";
+      expect(nextText).not.toContain("earlier output is omitted from this poll");
+    }
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("process poll exposes finished-session termination metadata", async () => {

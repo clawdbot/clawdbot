@@ -404,6 +404,19 @@ describe("provider error utils", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
+  it("cancels binary response bodies rejected by content-type validation", async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      readProviderBinaryResponse(response, "Provider TTS failed", "audio"),
+    ).rejects.toThrow("Provider TTS failed: malformed audio response");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects stalled JSON response body after chunk idle timeout", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

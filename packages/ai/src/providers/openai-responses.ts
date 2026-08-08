@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type {
   CacheRetention,
   Context,
@@ -10,7 +11,6 @@ import type {
   OpenAIResponsesCompat,
   SimpleStreamOptions,
   StreamFunction,
-  StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
@@ -65,7 +65,7 @@ function formatOpenAIResponsesError(error: unknown): string {
 }
 
 // OpenAI Responses-specific options
-export interface OpenAIResponsesOptions extends StreamOptions {
+export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
@@ -73,6 +73,7 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 }
 
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
+  authProfileId?: string;
   replayResponsesItemIds?: boolean;
 };
 
@@ -121,12 +122,13 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
 
   return streamOpenAIResponses(model, context, {
     ...base,
+    authProfileId: replayOptions?.authProfileId,
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
-    replayResponsesItemIds: (options as OpenAIResponsesReplayOptions | undefined)
-      ?.replayResponsesItemIds,
+    replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };
 
@@ -190,6 +192,8 @@ function buildParams(
 ) {
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
   });
 
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);

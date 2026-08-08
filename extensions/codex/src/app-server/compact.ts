@@ -21,7 +21,11 @@ import {
 } from "./attempt-client-cleanup.js";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
-import { consumeCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  consumeCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+  type CodexAppServerLiveThreadOwnership,
+} from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import {
   readCodexNotificationThreadId,
@@ -546,6 +550,8 @@ async function compactCodexNativeThread(
           config: params.config,
         });
         let releaseThreadSubscription: (() => Promise<void>) | undefined;
+        let retainedThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
+        let compactionSucceeded = false;
         const releaseCompactionThread = async (threadId: string) => {
           if (
             await unsubscribeCodexThreadBestEffort(client, {
@@ -608,7 +614,11 @@ async function compactCodexNativeThread(
           if (!isIncognitoSessionKey(params.sessionKey)) {
             // Remove any idle ownership first: sibling cleanup must not evict
             // this subscription while compaction still awaits terminal events.
-            if (!(await consumeCodexAppServerLiveThread(client, binding.threadId))) {
+            retainedThreadOwnership = await consumeCodexAppServerLiveThread(
+              client,
+              binding.threadId,
+            );
+            if (!retainedThreadOwnership) {
               await resumeCodexAppServerThread({
                 client,
                 abandonClient: async () => closeCodexStartupClientBestEffort(client),
@@ -732,6 +742,7 @@ async function compactCodexNativeThread(
             sessionId: params.sessionId,
             threadId: binding.threadId,
           });
+          compactionSucceeded = true;
         } catch (error) {
           if (isCodexThreadNotFoundError(error)) {
             return failedCodexThreadBindingCompactionResult(params, {
@@ -754,7 +765,32 @@ async function compactCodexNativeThread(
         } finally {
           completionWatch.cancel();
           try {
-            await releaseThreadSubscription?.();
+            if (compactionSucceeded && retainedThreadOwnership) {
+              const ownership = retainedThreadOwnership;
+              const currentBinding = await options.bindingStore.read(bindingIdentity);
+              // Reset uses this same generation lease; without it compaction
+              // could return an obsolete subscription after its owner ended.
+              const retained =
+                currentBinding?.threadId === binding.threadId &&
+                (await options.bindingStore.withLease(bindingIdentity, async () => {
+                  const leasedBinding = await options.bindingStore.read(bindingIdentity);
+                  if (leasedBinding?.threadId !== binding.threadId) {
+                    return false;
+                  }
+                  return await retainCodexAppServerLiveThread(
+                    client,
+                    binding.threadId,
+                    ownership.release,
+                    ownership.configFingerprint,
+                    ownership.serviceTier,
+                  );
+                }));
+              if (!retained) {
+                await releaseThreadSubscription?.();
+              }
+            } else {
+              await releaseThreadSubscription?.();
+            }
           } finally {
             if (shouldReleaseDefaultLease) {
               releaseLeasedSharedCodexAppServerClient(client);

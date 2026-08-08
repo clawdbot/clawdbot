@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeLowercaseStringOrEmpty as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { normalizeAgentModelRefForConfig } from "../../../config/model-input.js";
@@ -12,10 +13,6 @@ import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 
 export function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(record, key) && record[key] !== undefined;
-}
-
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function preferredClaudeSeparator(provider: string | undefined): "." | "-" {

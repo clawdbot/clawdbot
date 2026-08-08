@@ -63,7 +63,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
   const agentsList: AgentsListResult = {
     defaultId: "main",
     mainKey: "main",
-    scope: "project",
+    scope: "per-sender",
     agents: [
       { id: "main", name: "Main" },
       { id: "research", identity: { name: "Research", avatar: "R" } },

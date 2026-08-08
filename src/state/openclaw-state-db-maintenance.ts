@@ -18,8 +18,25 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+/**
+ * Additive Claw provenance columns that only a writable open can ensure. A
+ * same-version database written before them stays readable so read-only
+ * planning surfaces are not refused before they can report anything.
+ */
+export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
+  "claw_installs.bootstrap_content_digest",
+  "claw_installs.bootstrap_source_path",
+  "claw_package_refs.extension_adapter_identity",
+  "claw_package_refs.extension_detected_format",
+  "claw_package_refs.extension_format",
+  "claw_package_refs.extension_id",
+  "claw_package_refs.extension_mapped_json",
+  "claw_package_refs.extension_unavailable_json",
+] as const;
+
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+  allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],

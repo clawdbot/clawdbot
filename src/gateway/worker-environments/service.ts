@@ -110,6 +110,7 @@ type WorkerEnvironmentServiceOptions = {
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
   bootstrapWorker: (params: {
+    operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
     resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
@@ -218,6 +219,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const tunnels = options.tunnelManager;
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
+  const providerOperations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
   const pendingCredentials = new Map<string, MintedWorkerCredential>();
   const observedAckCursors = new Map<string, WorkerTerminalTurnFence>();
@@ -351,20 +353,34 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const inState = (r: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
     states.includes(r.state);
-  const withLock = <T>(environmentId: string, task: () => Promise<T>) => {
-    const operation = operations.enqueue(environmentId, task);
+  const trackOperation = <T>(operation: Promise<T>) => {
     activeOperations.add(operation);
     const release = () => activeOperations.delete(operation);
     void operation.then(release, release);
     return operation;
   };
+  const withLock = <T>(environmentId: string, task: () => Promise<T>) =>
+    trackOperation(operations.enqueue(environmentId, task));
 
-  const callProvider = <T>(run: () => Promise<T>) =>
-    withTimeout(
-      Promise.resolve().then(run),
+  const callProvider = async <T>(environmentId: string, run: () => Promise<T>): Promise<T> => {
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const operation = trackOperation(
+      providerOperations.enqueue(environmentId, async () => {
+        signalStarted();
+        return await run();
+      }),
+    );
+    await started;
+    // Timeout completion must not release provider ownership or permit replay/destroy overlap.
+    return await withTimeout(
+      operation,
       options.providerCallTimeoutMs ?? 300_000,
       "Worker provider operation",
     );
+  };
 
   const callBootstrap = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     const controller = new AbortController();
@@ -401,7 +417,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!resolveSshIdentity) {
         throw new Error("Worker SSH identity resolution is unavailable");
       }
-      return await callProvider(() => resolveSshIdentity({ provider, leaseId, profile, keyRef }));
+      return await callProvider(record.environmentId, () =>
+        resolveSshIdentity({ provider, leaseId, profile, keyRef }),
+      );
     };
   };
 
@@ -518,7 +536,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await tunnels?.stop(record.environmentId);
     const destroying = move(draining, "destroying", { lastError: detail });
     try {
-      await callProvider(() => provider.destroy(lifecycleLease(record, leaseId)));
+      await callProvider(record.environmentId, () =>
+        provider.destroy(lifecycleLease(record, leaseId)),
+      );
     } catch (cleanupError) {
       // An indeterminate destroy must remain retryable; never hide a possibly-live paid lease
       // behind terminal failed state.
@@ -544,6 +564,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     try {
       receipt = await callBootstrap((signal) =>
         options.bootstrapWorker({
+          operationId: record.provisionOperationId,
           sshEndpoint: record.sshEndpoint,
           installation,
           resolveIdentity: identityResolverFor(record, provider, record.leaseId),
@@ -585,7 +606,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     try {
       const profile = requireWorkerProfile(record.profileSnapshot.settings);
       lease = requireWorkerLease(
-        await callProvider(() => provider.provision(profile, record.provisionOperationId)),
+        await callProvider(record.environmentId, () =>
+          provider.provision(profile, record.provisionOperationId),
+        ),
       );
     } catch (error) {
       if (
@@ -670,7 +693,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const owningProvider = provider ?? providerFor(r.providerId);
     const destroying = beginDestroy(draining);
     try {
-      await callProvider(() => owningProvider.destroy(lifecycleLease(r, leaseId)));
+      await callProvider(r.environmentId, () => owningProvider.destroy(lifecycleLease(r, leaseId)));
     } catch (error) {
       saveError(destroying, error);
       throw serviceError("provider_failure", "Worker provider operation failed");
@@ -753,7 +776,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       return;
     }
-    const status = await callProvider(() => provider.inspect(lifecycleLease(record, leaseId)))
+    const status = await callProvider(record.environmentId, () =>
+      provider.inspect(lifecycleLease(record, leaseId)),
+    )
       .then(inspectionStatus)
       .catch((error: unknown) => {
         saveError(record, error);

@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
@@ -292,11 +293,7 @@ function parseMatcherJson(text: string): unknown {
   if (start === -1 || end <= start) {
     return null;
   }
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
+  return safeParseJson(text.slice(start, end + 1)) ?? null;
 }
 
 function buildMatcherPrompt(groups: SetupAppCandidateGroup[]): string {

@@ -5,7 +5,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {

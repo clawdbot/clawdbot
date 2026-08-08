@@ -564,6 +564,73 @@ test("sessions.list exposes effective fast auto defaults from the selected model
   });
 });
 
+test.each([
+  {
+    label: "rosterless global default",
+    agents: {
+      defaults: {
+        fastModeDefault: true,
+        models: { "openai/gpt-5.5": { params: { fastMode: false } } },
+      },
+    },
+    expectedFastMode: undefined,
+    expectedEffectiveFastMode: true,
+    expectedSource: "agent",
+  },
+  {
+    label: "per-agent default",
+    agents: {
+      defaults: {
+        fastModeDefault: true,
+        models: { "openai/gpt-5.5": { params: { fastMode: true } } },
+      },
+      entries: { main: { fastModeDefault: false } },
+    },
+    expectedFastMode: undefined,
+    expectedEffectiveFastMode: false,
+    expectedSource: "agent",
+  },
+  {
+    label: "session override",
+    agents: {
+      defaults: {
+        fastModeDefault: false,
+        models: { "openai/gpt-5.5": { params: { fastMode: false } } },
+      },
+      entries: { main: { fastModeDefault: false } },
+    },
+    sessionFastMode: "auto" as const,
+    expectedFastMode: "auto",
+    expectedEffectiveFastMode: "auto",
+    expectedSource: "session",
+  },
+])("sessions.list projects $label fast-mode precedence", async (scenario) => {
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+    ...(scenario.sessionFastMode === undefined ? {} : { fastMode: scenario.sessionFastMode }),
+  });
+  const storePath = expectDefined(testState.sessionStorePath, "session store path");
+
+  const { respond } = await invokeSessionsList({
+    requestId: `req-sessions-list-fast-${scenario.label.replaceAll(" ", "-")}`,
+    context: {
+      getRuntimeConfig: () => ({
+        agents: scenario.agents,
+        session: { store: storePath },
+      }),
+    },
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    fastMode: scenario.expectedFastMode,
+    effectiveFastMode: scenario.expectedEffectiveFastMode,
+    effectiveFastModeSource: scenario.expectedSource,
+  });
+});
+
 test("sessions.list resolves effective fast metadata from the raw runtime provider", async () => {
   testState.agentConfig = {
     model: { primary: "openai-codex/gpt-5.5" },

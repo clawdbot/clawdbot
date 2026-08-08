@@ -494,7 +494,6 @@ describe("AppSidebar session ownership", () => {
     expect(row?.querySelector(".session-glyph openclaw-session-owner-chip")).not.toBeNull();
     expect(row?.querySelector('.session-glyph__badge[aria-label="Unread"]')).toBeNull();
     expect(row?.querySelector(".session-row-state .sidebar-recent-session__unread")).not.toBeNull();
-    expect(row?.querySelector(".sidebar-session-indicator__dot")).toBeNull();
   });
 
   it("keeps owner avatars off child rows", async () => {

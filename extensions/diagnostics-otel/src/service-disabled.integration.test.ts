@@ -19,6 +19,48 @@ const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
 const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
 const JAEGER_DEPRECATION_WARNING =
   'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.';
+const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
+const SPAN_ID = "00f067aa0ba902b7";
+const PROPAGATED_SPAN_CONTEXT = {
+  traceId: TRACE_ID,
+  spanId: SPAN_ID,
+  traceFlags: 1,
+  isRemote: true,
+} as const;
+const PROPAGATION_ROUNDTRIP_CASES = [
+  {
+    label: "W3C",
+    value: "tracecontext",
+    incoming: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
+    outgoing: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
+  },
+  {
+    label: "B3",
+    value: "b3",
+    incoming: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
+    outgoing: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
+  },
+  {
+    label: "B3MULTI",
+    value: "b3multi",
+    incoming: {
+      "x-b3-traceid": TRACE_ID,
+      "x-b3-spanid": SPAN_ID,
+      "x-b3-sampled": "1",
+    },
+    outgoing: {
+      "x-b3-traceid": TRACE_ID,
+      "x-b3-spanid": SPAN_ID,
+      "x-b3-sampled": "1",
+    },
+  },
+  {
+    label: "Jaeger",
+    value: "jaeger",
+    incoming: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:1` },
+    outgoing: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:01` },
+  },
+] as const;
 
 type OtelGlobalRegistrations = {
   context?: Parameters<typeof context.setGlobalContextManager>[0];
@@ -267,6 +309,36 @@ test.each([
       await service.stop?.(ctx);
     }
     expect(propagation.fields()).toEqual([]);
+  },
+);
+
+test.each(PROPAGATION_ROUNDTRIP_CASES)(
+  "retains and roundtrips $label propagation across async context",
+  async ({ value, incoming, outgoing: expectedOutgoing }) => {
+    process.env.OTEL_SDK_DISABLED = "true";
+    process.env.OTEL_PROPAGATORS = value;
+    const { service, ctx } = await startOtelService();
+
+    try {
+      const extracted = propagation.extract(ROOT_CONTEXT, incoming);
+      expect(trace.getSpanContext(extracted)).toEqual(PROPAGATED_SPAN_CONTEXT);
+
+      const outgoing: Record<string, string> = {};
+      await context.with(extracted, async () => {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(trace.getSpanContext(context.active())).toEqual(PROPAGATED_SPAN_CONTEXT);
+        propagation.inject(context.active(), outgoing);
+      });
+
+      expect(outgoing).toEqual(expectedOutgoing);
+      expect(trace.getSpanContext(propagation.extract(ROOT_CONTEXT, outgoing))).toEqual(
+        PROPAGATED_SPAN_CONTEXT,
+      );
+    } finally {
+      await service.stop?.(ctx);
+    }
   },
 );
 

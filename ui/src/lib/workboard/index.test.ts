@@ -110,7 +110,7 @@ function createStaleSessionCard(
       stale: {
         detectedAt: 1,
         lastSessionUpdatedAt,
-        reason: "Linked thread has not reported recent activity.",
+        reason: "Linked session has not reported recent activity.",
         ...overrides.metadata?.stale,
       },
     },
@@ -2906,7 +2906,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.create", {
       title: "Fix login",
       notes: [
-        `Thread: ${sampleSession.key}`,
+        `Session: ${sampleSession.key}`,
         "",
         "Recent user prompt: Please fix login",
         "",
@@ -3279,7 +3279,7 @@ describe("workboard controller", () => {
       "workboard.cards.create",
       expect.objectContaining({
         title: `${titlePrefix}...`,
-        notes: [`Thread: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
+        notes: [`Session: ${sampleSession.key}`, "", `Recent user prompt: ${textPrefix}...`].join(
           "\n",
         ),
       }),
@@ -5098,7 +5098,7 @@ describe("workboard controller", () => {
             stale: {
               detectedAt: 1,
               lastSessionUpdatedAt: staleUpdatedAt,
-              reason: "Linked thread has not reported recent activity.",
+              reason: "Linked session has not reported recent activity.",
             },
           },
         },
@@ -5115,7 +5115,7 @@ describe("workboard controller", () => {
           lifecycleStatusSourceUpdatedAt: staleUpdatedAt,
           stale: expect.objectContaining({
             lastSessionUpdatedAt: staleUpdatedAt,
-            reason: "Linked thread has not reported recent activity.",
+            reason: "Linked session has not reported recent activity.",
           }),
         },
       },

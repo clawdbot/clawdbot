@@ -2,6 +2,7 @@
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord as isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -24,15 +25,7 @@ import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
-import {
-  approveBootstrapDevicePairing,
-  ensureDeviceToken,
-  getPairedDevice,
-  requestDevicePairing,
-  verifyDeviceToken,
-} from "../infra/device-pairing.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
+import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -41,7 +34,15 @@ import {
   requestNodePairing,
   recordPairedNodeConnection,
   type RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
+import {
+  approveBootstrapDevicePairing,
+  ensureDeviceToken,
+  getPairedDevice,
+  requestDevicePairing,
+  verifyDeviceToken,
+} from "../infra/device-pairing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
@@ -172,10 +173,6 @@ function resolveWatchClientAddress(
     ...(clientIp ? { clientIp } : {}),
     rateLimitKey: clientIp ?? buildRateLimitIdentityKey("watch-client", "unknown"),
   };
-}
-
-function isStringRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {

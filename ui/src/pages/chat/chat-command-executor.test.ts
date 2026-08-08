@@ -85,11 +85,19 @@ function restrictedSnapshot(
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
+  const active = overrides?.status === "running" || overrides?.hasActiveRun === true;
   return {
     key,
     spawnedBy: overrides?.spawnedBy,
     kind: "direct",
     updatedAt: null,
+    ...(active
+      ? {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+        }
+      : {}),
     ...overrides,
   };
 }
@@ -1602,10 +1610,18 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.queueMode).toBe("steer");
   });
 
-  it("uses canonical active-run state when the session row only reports hasActiveRun", async () => {
+  it("uses a unique run id when a real session row omits active leaf context", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { hasActiveRun: true })] };
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: ["active-run"],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
       }
       if (method === "chat.send") {
         return { status: "started", runId: "run-active-flag", messageSeq: 2 };
@@ -1627,7 +1643,39 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       sessionKey: "agent:main:main",
       message: "continue with the smaller fix",
       deliver: false,
+      expectedRunId: "active-run",
     });
+    expect(chatSend.payload).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it.each([
+    ["zero", []],
+    ["multiple", ["run-a", "run-b"]],
+  ] as const)("refuses %s authoritative active run ids", async (_label, activeRunIds) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              hasActiveRun: true,
+              activeRunIds: [...activeRunIds],
+              activeLeafEntryId: undefined,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "continue safely",
+    );
+
+    expect(result.content).toBe(t("chat.commandResults.steer.noActiveRun"));
+    expectNoRequestCall(request, "chat.send");
   });
 
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {

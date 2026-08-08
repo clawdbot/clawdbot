@@ -244,9 +244,10 @@ export async function readConfigFileSnapshotInternal(
           configPath,
           raw,
           parsed: effectiveParsed,
-          validateBackup: async (backup) => {
-            recoveryCandidate = context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed);
-            return recoveryCandidate !== null;
+          prepareBackup: (backup) => {
+            const prepared = context.prepareRecoveryBackupCandidate(backup);
+            recoveryCandidate = prepared.ok ? (prepared.candidate.config ?? null) : null;
+            return prepared;
           },
           ...(allowSuspiciousRecovery
             ? {

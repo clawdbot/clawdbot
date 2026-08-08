@@ -2,8 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import { workerSshCommandOptions } from "./ssh.js";
+import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
   serializeWorkerWorkspaceManifest,
@@ -20,13 +19,12 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
-const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
-
 export async function recoverAcceptedWorkspacePublication(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   remoteWorkspaceDir: string;
 }) {
   const recovered = await params.runWorkspaceCommand({
+    transportRetry: "never",
     argv: [
       "node",
       "-e",
@@ -43,9 +41,7 @@ export async function recoverAcceptedWorkspacePublication(params: {
 
 function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
-  runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
-  ownerSignal: AbortSignal;
-  rsyncSsh: string;
+  runRsync: (argv: (rsyncSsh: string) => string[]) => Promise<SpawnResult>;
   scpTarget: string;
   localPath: string;
   remoteWorkspaceDir: string;
@@ -62,6 +58,7 @@ function createAcceptedWorkspacePublisher(params: {
       throw new Error("Accepted workspace manifest does not match its reference");
     }
     const published = await params.runWorkspaceCommand({
+      transportRetry: "idempotent",
       argv: [
         "node",
         "-e",
@@ -79,6 +76,7 @@ function createAcceptedWorkspacePublisher(params: {
 
     const verifyAcceptedWorkspace = async () => {
       const verified = await params.runWorkspaceCommand({
+        transportRetry: "idempotent",
         argv: [
           "node",
           "-e",
@@ -111,6 +109,7 @@ function createAcceptedWorkspacePublisher(params: {
     const transactionNonce = randomBytes(16).toString("hex");
     const transactionCommand = async (action: "apply" | "rollback" | "commit") =>
       await params.runWorkspaceCommand({
+        transportRetry: "never",
         argv: [
           "node",
           "-e",
@@ -123,6 +122,7 @@ function createAcceptedWorkspacePublisher(params: {
     let transactionBegun = false;
     try {
       const begun = await params.runWorkspaceCommand({
+        transportRetry: "never",
         argv: [
           "node",
           "-e",
@@ -158,25 +158,19 @@ function createAcceptedWorkspacePublisher(params: {
           const localSource = params.localPath.endsWith(path.sep)
             ? params.localPath
             : `${params.localPath}${path.sep}`;
-          const transferred = await params.runTask(
-            [
-              "rsync",
-              "--archive",
-              "--checksum",
-              "--no-recursive",
-              "--from0",
-              `--files-from=${transferListPath}`,
-              "-e",
-              params.rsyncSsh,
-              "--",
-              localSource,
-              `${params.scpTarget}:${remoteStagingRoot}/`,
-            ],
-            workerSshCommandOptions({
-              timeoutMs: WORKSPACE_TIMEOUT_MS,
-              signal: params.ownerSignal,
-            }),
-          );
+          const transferred = await params.runRsync((rsyncSsh) => [
+            "rsync",
+            "--archive",
+            "--checksum",
+            "--no-recursive",
+            "--from0",
+            `--files-from=${transferListPath}`,
+            "-e",
+            rsyncSsh,
+            "--",
+            localSource,
+            `${params.scpTarget}:${remoteStagingRoot}/`,
+          ]);
           if (!workerWorkspaceCommandSucceeded(transferred)) {
             throw workspaceSyncError(transferred);
           }

@@ -27,6 +27,7 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import {
   createSubagentRunManager,
@@ -474,6 +475,58 @@ export const registerSubagentRun: (params: RegisterSubagentRunParams) => void =
   subagentRunManager.registerSubagentRun;
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;
 export const settleFailedQueuedSubagentLaunch = subagentRunManager.settleFailedQueuedSubagentLaunch;
+
+/**
+ * Continues a `sessions_yield`-paused run under a new gateway runId.
+ *
+ * A follow-up dispatched to a paused child session is the same unit of work as
+ * the run that yielded, so it must adopt that row instead of minting a sibling.
+ * Registering a new row would move the requester to the child's own main session
+ * and strand the original requester's paused row as merely superseded: its
+ * announce stays gated on `pauseReason`, and its settle batch keeps deferring
+ * because the row still counts as an unsettled descendant. Returns false when no
+ * paused row owns the session, leaving ordinary registration to the caller.
+ */
+export function adoptPausedSubagentRunForFollowUp(params: {
+  childSessionKey: string;
+  runId: string;
+  task: string;
+}): boolean {
+  const childSessionKey = params.childSessionKey.trim();
+  const runId = params.runId.trim();
+  if (!childSessionKey || !runId) {
+    return false;
+  }
+  // Select the newest paused row rather than the newest row overall: a
+  // requester-bound follow-up stays a sibling at a higher generation, and
+  // matching on generation alone would let that sibling hide the paused owner
+  // and park its requester for good.
+  const paused = getLatestLiveSubagentRunByChildSessionKey(
+    childSessionKey,
+    (entry) => entry.pauseReason === "sessions_yield",
+  );
+  if (!paused) {
+    return false;
+  }
+  return subagentRunManager.replaceSubagentRunAfterSteer({
+    previousRunId: paused.runId,
+    nextRunId: runId,
+    expected: paused,
+    // A paused row is terminal by construction; adoption is exactly the case the
+    // ended-source gate exists to keep out of unrelated replacement callers.
+    allowEndedSource: true,
+    // The original requester is idle behind its own yield, so its wake credential
+    // is the only path back to it once this follow-up settles.
+    preserveRequesterSettleWake: true,
+    // Gateway admission has not started provider work yet. If this owner swap
+    // is not durable, reject the dispatch instead of registering a sibling or
+    // leaving a live successor that restart recovery cannot identify.
+    persistenceFailure: "throw",
+    // Persist the follow-up text so restart recovery cannot reissue the task that
+    // the child already yielded on.
+    task: params.task,
+  });
+}
 
 function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   clearScheduledResumeTimers();

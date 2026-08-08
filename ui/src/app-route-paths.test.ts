@@ -7,6 +7,7 @@ import {
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
+  pathForRoute,
   pathForPluginsHubTab,
   pathForWorkboardBoard,
   pluginsHubTabFromPath,
@@ -91,6 +92,11 @@ const DYNAMIC_STARTUP_CASES = [
 }[];
 
 describe("Dynamic route startup bridge", () => {
+  it("registers the Updates settings path", () => {
+    expect(pathForRoute("updates")).toBe("/settings/updates");
+    expect(routeIdFromPath("/settings/updates")).toBe("updates");
+  });
+
   it.each(DYNAMIC_STARTUP_CASES)(
     "loads the $label once while publishing its real location",
     async ({ routeId, location: initialLocation }) => {

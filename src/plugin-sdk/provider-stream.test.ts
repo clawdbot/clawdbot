@@ -52,6 +52,66 @@ function requirePayload(payload: Record<string, unknown> | undefined): Record<st
   return payload;
 }
 
+type OpenAIResponsesTestModel = {
+  api: "openai-responses" | "openai-chatgpt-responses";
+  provider: "openai";
+  baseUrl: string;
+  id: string;
+};
+
+const openAIResponsesServiceTierEndpoints = [
+  {
+    name: "public OpenAI Responses",
+    model: {
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      id: "gpt-5.6-luna",
+    },
+    fastParams: { fastMode: true },
+    payloadServiceTier: "default",
+    configuredServiceTier: "flex",
+  },
+  {
+    name: "ChatGPT Responses",
+    model: {
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      id: "gpt-5.6-sol",
+    },
+    fastParams: { fast_mode: true },
+    payloadServiceTier: "flex",
+    configuredServiceTier: "default",
+  },
+] as const;
+
+async function captureOpenAIResponsesFamilyPayload(params: {
+  model: OpenAIResponsesTestModel;
+  extraParams: Record<string, unknown>;
+  initialServiceTier?: string;
+}): Promise<Record<string, unknown>> {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    const payload: Record<string, unknown> = { model: model.id };
+    if (params.initialServiceTier !== undefined) {
+      payload.service_tier = params.initialServiceTier;
+    }
+    options?.onPayload?.(payload as never, model as never);
+    capturedPayload = payload;
+    return {} as never;
+  };
+  const wrapStreamFn = requireWrapStreamFn(
+    buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn,
+  );
+  const streamFn = requireStreamFn(
+    wrapStreamFn({ streamFn: baseStreamFn, extraParams: params.extraParams } as never),
+  );
+
+  await streamFn(params.model as never, {} as never, {});
+  return requirePayload(capturedPayload);
+}
+
 function expectDefaultThinkingBudget(payload: Record<string, unknown>) {
   const config = requireRecord(payload.config, "payload.config");
   const thinkingConfig = requireRecord(config.thinkingConfig, "payload.config.thinkingConfig");
@@ -195,6 +255,49 @@ describe("composeProviderStreamWrappers", () => {
 });
 
 describe("buildProviderStreamFamilyHooks", () => {
+  it.each(
+    openAIResponsesServiceTierEndpoints.flatMap(
+      ({ name, model, fastParams, payloadServiceTier, configuredServiceTier }) => [
+        {
+          name: `${name}: configured flex beats fast mode`,
+          model,
+          extraParams: { ...fastParams, serviceTier: "flex" },
+          initialServiceTier: undefined,
+          expectedServiceTier: "flex",
+        },
+        {
+          name: `${name}: configured default beats fast mode`,
+          model,
+          extraParams: { ...fastParams, service_tier: "default" },
+          initialServiceTier: undefined,
+          expectedServiceTier: "default",
+        },
+        {
+          name: `${name}: payload ${payloadServiceTier} beats configured ${configuredServiceTier} and fast mode`,
+          model,
+          extraParams: { ...fastParams, serviceTier: configuredServiceTier },
+          initialServiceTier: payloadServiceTier,
+          expectedServiceTier: payloadServiceTier,
+        },
+        {
+          name: `${name}: fast mode defaults to priority`,
+          model,
+          extraParams: fastParams,
+          initialServiceTier: undefined,
+          expectedServiceTier: "priority",
+        },
+      ],
+    ),
+  )("$name", async ({ model, extraParams, initialServiceTier, expectedServiceTier }) => {
+    const payload = await captureOpenAIResponsesFamilyPayload({
+      model,
+      extraParams,
+      initialServiceTier,
+    });
+
+    expect(payload.service_tier).toBe(expectedServiceTier);
+  });
+
   it("covers the stream family matrix", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;

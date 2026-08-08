@@ -159,6 +159,15 @@ export async function finalizeAcceptedContextEngineTurn(params: {
   lease: ContextEngineLogicalTurnLease;
   warn?: (message: string) => void;
 }): Promise<void> {
+  const declaresDurableAdvancement =
+    params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency ===
+    "atomic-idempotent-v1";
+  const implementsDurableAdvancement = typeof params.lease.engine.commitTurn === "function";
+  // Legacy leaves persistence to SessionManager and owns neither side of this contract.
+  // Partial durable declarations remain invariant failures in the guarded path below.
+  if (!declaresDurableAdvancement && !implementsDurableAdvancement) {
+    return;
+  }
   const warn = params.warn ?? console.warn;
   if (params.facts.promptError || params.facts.aborted || params.facts.yieldAborted) {
     discardContextEngineTurnAttemptIntent({ facts: params.facts, lease: params.lease, warn });
@@ -166,12 +175,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
   }
   try {
     assertAcceptedTranscriptTarget(params.facts);
-    if (
-      params.lease.degraded ||
-      params.lease.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-        "atomic-idempotent-v1" ||
-      typeof params.lease.engine.commitTurn !== "function"
-    ) {
+    if (params.lease.degraded || !declaresDurableAdvancement || !implementsDurableAdvancement) {
       throw new Error("accepted context engine does not support durable turn advancement");
     }
     const admission = params.facts.boundary.admission;

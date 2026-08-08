@@ -1,16 +1,5 @@
 import Foundation
 
-@_spi(AgentExecutionAttribution)
-public enum GatewayNodeInvokeSessionKeyEnvelope: Equatable, Sendable {
-    case legacy
-    case authoritative(String?)
-}
-
-@_spi(AgentExecutionAttribution)
-public enum GatewayNodeInvokeContext {
-    @TaskLocal public static var sessionKeyEnvelope: GatewayNodeInvokeSessionKeyEnvelope = .legacy
-}
-
 public struct BridgeInvokeRequest: Codable, Sendable {
     public let type: String
     public let id: String
