@@ -1,5 +1,6 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -363,6 +364,34 @@ describe("checkGatewayHealth", () => {
     const output = note.mock.calls.flat().join("\n");
     expect(output).not.toContain("gateway.remote.token");
     expect(output).not.toContain("devices rotate");
+  });
+
+  it("handles the real typed rate-limit error without forcing the credentials predicate", async () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      details: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+      },
+      retryable: true,
+      retryAfterMs: 60_000,
+    });
+    callGateway.mockRejectedValueOnce(error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(isGatewayCredentialsRequiredError).not.toHaveBeenCalled();
+    expect(probeGatewayStatus).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+    );
   });
 
   it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {

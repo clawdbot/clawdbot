@@ -515,6 +515,44 @@ describe("healthCommand", () => {
     { json: true, expectedLogs: 1 },
     { json: undefined, expectedLogs: 2 },
   ])(
+    "preserves a typed pre-hello authentication lockout through health output",
+    async ({ json, expectedLogs }) => {
+      const error = new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unauthorized: too many failed authentication attempts (retry later)",
+        details: {
+          code: "AUTH_RATE_LIMITED",
+          authReason: "rate_limited",
+          recommendedNextStep: "wait_then_retry",
+        },
+        retryable: true,
+        retryAfterMs: 60_000,
+      });
+      callGatewayMock.mockRejectedValueOnce(error);
+
+      await healthCommand({ json, timeoutMs: 5000, config: {} }, runtime as never);
+
+      expect(isGatewayCredentialsRequiredErrorMock).not.toHaveBeenCalled();
+      expect(probeGatewayStatusMock).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
+      if (json) {
+        expect(JSON.parse(requireFirstRuntimeLog())).toEqual(
+          buildRateLimitedHealthDiagnostic(error),
+        );
+      } else {
+        expect(runtime.log.mock.calls).toEqual([
+          [GATEWAY_HEALTH_REACHABLE_LINE],
+          [GATEWAY_HEALTH_RATE_LIMITED_MESSAGE],
+        ]);
+      }
+    },
+  );
+
+  it.each([
+    { json: true, expectedLogs: 1 },
+    { json: undefined, expectedLogs: 2 },
+  ])(
     "reports temporary authentication lockouts without credential-change guidance",
     async ({ json, expectedLogs }) => {
       callGatewayMock.mockRejectedValueOnce(new Error());

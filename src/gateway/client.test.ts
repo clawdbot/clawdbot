@@ -2076,6 +2076,51 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
+  it("reports AUTH_RATE_LIMITED before pausing reconnect on the following close", async () => {
+    const onConnectError = vi.fn();
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onConnectError,
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+      },
+      failureMessage: "unauthorized: too many failed authentication attempts (retry later)",
+    });
+
+    expect(onConnectError).toHaveBeenCalledOnce();
+    expect(onConnectError.mock.calls[0]?.[0]).toMatchObject({
+      name: "GatewayClientRequestError",
+      details: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+      },
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_RATE_LIMITED",
+    });
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("gateway connect failed: GatewayClientRequestError"),
+    );
+    expect(logErrorMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("gateway connect failed: GatewayClientRequestError"),
+    );
+  });
+
   it("keeps reconnect paused callback errors inside close dispatch", async () => {
     const onReconnectPaused = vi.fn(() => {
       throw new Error("paused callback failed");

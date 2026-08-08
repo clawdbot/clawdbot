@@ -28,6 +28,19 @@ export function gatewayProbeResultWasRateLimited(
   return gatewayProbeFailureKind(status) === "rate-limited";
 }
 
+/** Detects a structured or legacy rate-limit connect error before close projection. */
+export function gatewayConnectErrorWasRateLimited(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    classifyGatewayConnectFailure({
+      details: (error as Error & { details?: unknown }).details,
+      message: error.message,
+    }).kind === "rate-limited"
+  );
+}
+
 /**
  * Detects when a daemon probe reached the gateway even if read-scope auth failed.
  */
@@ -66,7 +79,15 @@ export function buildCredentialsRequiredHealthDiagnostic() {
 }
 
 /** Builds the health diagnostic emitted for a temporary Gateway authentication lockout. */
-export function buildRateLimitedHealthDiagnostic() {
+export function buildRateLimitedHealthDiagnostic(error?: unknown) {
+  const retryAfterCandidate =
+    error instanceof Error ? (error as Error & { retryAfterMs?: unknown }).retryAfterMs : undefined;
+  const retryAfterMs =
+    typeof retryAfterCandidate === "number" &&
+    Number.isSafeInteger(retryAfterCandidate) &&
+    retryAfterCandidate >= 0
+      ? retryAfterCandidate
+      : undefined;
   return {
     ok: false,
     error: {
@@ -74,6 +95,7 @@ export function buildRateLimitedHealthDiagnostic() {
       code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
       message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
       retryable: true,
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     },
     gateway: {
       reachable: true,

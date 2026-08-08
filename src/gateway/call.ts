@@ -12,6 +12,10 @@ import {
   type GatewayClientName,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/version.js";
@@ -940,6 +944,16 @@ function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
   );
 }
 
+function isAllowlistedGatewayConnectRequestError(err: Error): boolean {
+  if (err.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  return (
+    readConnectErrorDetailCode((err as Error & { details?: unknown }).details) ===
+    ConnectErrorDetailCodes.AUTH_RATE_LIMITED
+  );
+}
+
 async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[] | undefined;
@@ -1121,6 +1135,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         const shouldSurface =
           isGatewayConnectAssemblyError(err) ||
           isAgentRuntimeIdentityConnectError ||
+          isAllowlistedGatewayConnectRequestError(err) ||
           (surfaceGatewayClientRequestErrors && isGatewayClientRequestError);
         if (settled || !shouldSurface) {
           return;

@@ -38,6 +38,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
+  gatewayConnectErrorWasRateLimited,
   GATEWAY_HEALTH_REACHABLE_LINE,
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
@@ -74,8 +75,20 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
-  if (!isGatewayHealthAuthUnavailableError(params.error)) {
+  const directRateLimit = gatewayConnectErrorWasRateLimited(params.error);
+  if (!directRateLimit && !isGatewayHealthAuthUnavailableError(params.error)) {
     return false;
+  }
+  if (directRateLimit) {
+    const diagnostic = buildRateLimitedHealthDiagnostic(params.error);
+    if (params.json) {
+      writeRuntimeJson(params.runtime, diagnostic);
+    } else {
+      params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+      params.runtime.log(diagnostic.error.message);
+    }
+    params.runtime.exit(1);
+    return true;
   }
   const details = await buildGatewayProbeConnectionDetails({
     config: params.config,

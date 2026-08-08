@@ -26,6 +26,7 @@ import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+  gatewayConnectErrorWasRateLimited,
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
@@ -162,6 +163,10 @@ export async function checkGatewayHealth(params: {
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
+    if (gatewayConnectErrorWasRateLimited(err)) {
+      note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
+      return { healthOk: true, authenticated: false };
+    }
     if (isGatewayHealthAuthUnavailableError(err)) {
       const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
       const probe = await probeGatewayStatus({
