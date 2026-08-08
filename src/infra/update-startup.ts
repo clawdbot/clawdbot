@@ -91,6 +91,7 @@ type AutoUpdateRunner = (params: {
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
+  devTargetSha?: string;
 }) => Promise<AutoUpdateRunResult>;
 
 export type {
@@ -426,6 +427,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
+  devTargetSha?: string;
   supervisor: RespawnSupervisor;
 }): Promise<AutoUpdateRunResult> {
   const restartDelayMs = resolveManagedAutoUpdateRestartDelayMs(params.supervisor);
@@ -439,6 +441,14 @@ async function startManagedServiceAutoUpdateHandoff(params: {
       restartDelayMs,
       supervisor: params.supervisor,
       handoffId,
+      ...(params.devTargetSha
+        ? {
+            env: {
+              ...process.env,
+              OPENCLAW_UPDATE_DEV_TARGET_REF: params.devTargetSha,
+            },
+          }
+        : {}),
       meta: {
         handoffId,
         note: "background auto-update",
@@ -475,6 +485,7 @@ async function runAutoUpdateCommand(params: {
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
+  devTargetSha?: string;
 }): Promise<AutoUpdateRunResult> {
   if (isGatewayExternallySupervised()) {
     return {
@@ -492,6 +503,7 @@ async function runAutoUpdateCommand(params: {
       timeoutMs: params.timeoutMs,
       restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       root: params.root,
+      devTargetSha: params.devTargetSha,
       supervisor,
     });
   }
@@ -534,6 +546,9 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
+      ...(params.devTargetSha
+        ? { env: { OPENCLAW_UPDATE_DEV_TARGET_REF: params.devTargetSha } }
+        : {}),
     });
     return {
       ok: res.code === 0,
@@ -622,6 +637,7 @@ async function runCampaignUpdate(params: {
   version: string;
   tag: string;
   root?: string;
+  devTargetSha?: string;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   runAuto: AutoUpdateRunner;
 }): Promise<"handoff" | "applied" | "failed"> {
@@ -636,6 +652,7 @@ async function runCampaignUpdate(params: {
     timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
     restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
     ...(params.root ? { root: params.root } : {}),
+    ...(params.devTargetSha ? { devTargetSha: params.devTargetSha } : {}),
   });
   if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
     params.log.info("auto-update handoff started", {
@@ -682,6 +699,7 @@ export async function runGatewayUpdateCheck(params: {
     timeoutMs: number;
     restartDrainTimeoutMs: number | undefined;
     root?: string;
+    devTargetSha?: string;
   }) => Promise<AutoUpdateRunResult>;
 }): Promise<void> {
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
@@ -941,6 +959,7 @@ export async function runGatewayUpdateCheck(params: {
               version: upstreamSha,
               tag: "dev",
               root: root ?? status.root ?? undefined,
+              devTargetSha: target.upstreamSha,
               log: params.log,
               runAuto,
             }),

@@ -1069,6 +1069,54 @@ describe("update-startup", () => {
       timeoutMs: 45 * 60 * 1000,
       restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
+      devTargetSha: "upstream-sha",
+    });
+  });
+
+  it("pins direct dev campaign updates to the announced commit", async () => {
+    mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
+    const originalArgv = process.argv.slice();
+    process.argv = [process.execPath, "/opt/openclaw/dist/entry.js"];
+    try {
+      await runGatewayUpdateCheck({
+        cfg: { update: { channel: "dev", auto: { enabled: true } } },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+        activeWorkInspectors: idleActiveWorkInspectors(),
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    const updateCall = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.find(([argv]) => argv.includes("update"));
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      timeoutMs: 45 * 60 * 1000,
+      env: { OPENCLAW_UPDATE_DEV_TARGET_REF: "frozen-upstream-sha" },
+    });
+  });
+
+  it("pins managed dev campaign handoffs to the announced commit", async () => {
+    mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const [handoffParams] = startManagedServiceUpdateHandoffMock.mock.calls[0] ?? [];
+    expect(handoffParams?.env).toEqual({
+      ...process.env,
+      OPENCLAW_UPDATE_DEV_TARGET_REF: "frozen-upstream-sha",
     });
   });
 
