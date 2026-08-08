@@ -266,6 +266,7 @@ import {
   resetContinuationTracer,
   type DiagnosticEventPayload,
 } from "../api.js";
+import { resetContinuationTracerIfOwned } from "./continuation-tracer-ownership.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import {
   createExporterHealthEventEmitter,
@@ -7178,6 +7179,49 @@ describe("diagnostics-otel service", () => {
       expect(getContinuationTracer()).not.toBe(noopTracer);
       await service.stop?.(ctx);
       expect(getContinuationTracer()).toBe(noopTracer);
+    });
+
+    test("stale service cleanup does not reset a newer continuation tracer", async () => {
+      expect(getContinuationTracer()).toBe(noopTracer);
+      const firstService = createDiagnosticsOtelService();
+      const secondService = createDiagnosticsOtelService();
+      const firstContext = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+      const secondContext = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+      await firstService.start(firstContext);
+      const firstTracer = getContinuationTracer();
+      await secondService.start(secondContext);
+      const secondTracer = getContinuationTracer();
+
+      expect(firstTracer).not.toBe(noopTracer);
+      expect(secondTracer).not.toBe(noopTracer);
+      expect(secondTracer).not.toBe(firstTracer);
+
+      await firstService.stop?.(firstContext);
+      expect(getContinuationTracer()).toBe(secondTracer);
+
+      await secondService.stop?.(secondContext);
+      expect(getContinuationTracer()).toBe(noopTracer);
+    });
+
+    test("conditional reset preserves a newer continuation tracer owner", async () => {
+      const firstService = createDiagnosticsOtelService();
+      const secondService = createDiagnosticsOtelService();
+      const firstContext = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+      const secondContext = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+      await firstService.start(firstContext);
+      const firstTracer = getContinuationTracer();
+      await secondService.start(secondContext);
+      const secondTracer = getContinuationTracer();
+
+      expect(resetContinuationTracerIfOwned(firstTracer)).toBe(false);
+      expect(getContinuationTracer()).toBe(secondTracer);
+      expect(resetContinuationTracerIfOwned(secondTracer)).toBe(true);
+      expect(getContinuationTracer()).toBe(noopTracer);
+
+      await firstService.stop?.(firstContext);
+      await secondService.stop?.(secondContext);
     });
 
     test("parents continuation spans to registered trusted diagnostic spans", async () => {

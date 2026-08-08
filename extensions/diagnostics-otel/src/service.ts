@@ -14,13 +14,14 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
-  resetContinuationTracer,
   setContinuationTracer,
+  type Tracer,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type { DiagnosticTraceContext, OpenClawPluginService } from "../api.js";
 import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
+import { resetContinuationTracerIfOwned } from "./continuation-tracer-ownership.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
@@ -198,7 +199,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterOwnedSdkRuntime: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
-  let continuationTracerInstalled = false;
+  let installedContinuationTracer: Tracer | null = null;
   let retireExporterRoutes: ((preserveFailures?: boolean) => void) | null = null;
   let preserveExporterRoutesOnNextStop = false;
 
@@ -208,7 +209,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const currentLogProvider = logProvider;
     const currentTraceProvider = traceProvider;
     const currentMeterProvider = meterProvider;
-    const currentContinuationTracerInstalled = continuationTracerInstalled;
+    const currentContinuationTracer = installedContinuationTracer;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterOwnedSdkRuntime = unregisterOwnedSdkRuntime;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
@@ -219,7 +220,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     logProvider = null;
     traceProvider = null;
     meterProvider = null;
-    continuationTracerInstalled = false;
+    installedContinuationTracer = null;
     stopActiveTrustedSpans = null;
     unregisterOwnedSdkRuntime = null;
     unregisterUnhandledRejectionHandler = null;
@@ -239,7 +240,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       ...(await settle(currentStopActiveTrustedSpans)),
       ...(await settle(currentUnregisterOwnedSdkRuntime)),
       ...(await settle(
-        currentContinuationTracerInstalled ? () => resetContinuationTracer() : null,
+        currentContinuationTracer
+          ? () => {
+              resetContinuationTracerIfOwned(currentContinuationTracer);
+            }
+          : null,
       )),
     );
     const providerFailures = await settle(
@@ -610,13 +615,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       };
 
       if (tracesActive) {
-        setContinuationTracer(
-          createContinuationOtelTracerAdapter({
-            resolveSpanContext: diagnosticsTrace.resolveTrustedSpanContext,
-            resolveParentContext: diagnosticsTrace.resolveTrustedParentContext,
-          }),
-        );
-        continuationTracerInstalled = true;
+        const continuationTracer = createContinuationOtelTracerAdapter({
+          resolveSpanContext: diagnosticsTrace.resolveTrustedSpanContext,
+          resolveParentContext: diagnosticsTrace.resolveTrustedParentContext,
+        });
+        setContinuationTracer(continuationTracer);
+        installedContinuationTracer = continuationTracer;
       }
 
       unsubscribe = subscribe(
