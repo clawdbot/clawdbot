@@ -45,7 +45,7 @@ const RUNTIME_SIDECAR_BASELINE_PATH_RE =
 // must re-prove the src/plugins-owned declaration and closure-guard tests that the
 // extension lanes would otherwise never select.
 const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
-  /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.)[^\0]*\.(?:c|m)?[jt]s$)/u;
+  /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.).*\.(?:c|m)?[jt]s$)/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
 const PLUGIN_SDK_API_BASELINE_PATH_RE =

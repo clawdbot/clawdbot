@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
-import { summarizePluginDoctorContractModule } from "./doctor-contract-registry.js";
+import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import {
@@ -35,8 +35,8 @@ describe("bundled plugin doctor contract declarations", () => {
         cache: moduleLoaders,
         modulePath: artifactPath,
         importerUrl: import.meta.url,
-      })(artifactPath) as Parameters<typeof summarizePluginDoctorContractModule>[0];
-      const summary = summarizePluginDoctorContractModule(mod);
+      })(artifactPath) as Parameters<typeof coercePluginDoctorContractModule>[0];
+      const { summary } = coercePluginDoctorContractModule(mod);
       for (const surface of DOCTOR_CONTRACT_SURFACES) {
         const declared = declaration[surface] === true;
         if (declared !== summary[surface]) {

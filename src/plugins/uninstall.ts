@@ -24,7 +24,7 @@ import {
 } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 
-export { removePluginFromConfig, resolveUninstallChannelConfigKeys } from "./uninstall-config.js";
+export { resolveUninstallChannelConfigKeys } from "./uninstall-config.js";
 
 type UninstallActions = PluginConfigUninstallActions & {
   directory: boolean;
