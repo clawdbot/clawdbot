@@ -1,55 +1,9 @@
 /** Settles the provider stream and completes the post-turn lifecycle phase. */
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
+import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
-
-// Queued subscription handlers (block-reply delivery, tool events) are
-// fire-and-forget during the turn; the pending-events join below is the only
-// place the run waits for them. One hung handler (e.g. a stuck delivery
-// dispatch lane) must not dead-end the turn until the run budget — 48h by
-// default — so the join is bounded and settlement proceeds with a recorded
-// warning instead of producing no visible outcome at all.
-const PENDING_EVENT_JOIN_TIMEOUT_MS = 120_000;
-
-async function joinPendingEventsBounded(input: {
-  waitForPendingEvents: () => Promise<void>;
-  runAbortSignal: AbortSignal;
-  runId: string;
-}): Promise<void> {
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = (reason: "settled" | "timeout" | "abort") => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      input.runAbortSignal.removeEventListener("abort", onAbort);
-      if (reason === "timeout") {
-        log.warn(
-          `pending subscription events did not settle within ${PENDING_EVENT_JOIN_TIMEOUT_MS}ms; ` +
-            `proceeding to stream settlement: runId=${input.runId}`,
-        );
-      }
-      resolve();
-    };
-    const onAbort = () => finish("abort");
-    const timer = setTimeout(() => finish("timeout"), PENDING_EVENT_JOIN_TIMEOUT_MS);
-    timer.unref?.();
-    if (input.runAbortSignal.aborted) {
-      finish("abort");
-      return;
-    }
-    input.runAbortSignal.addEventListener("abort", onAbort, { once: true });
-    // Handler failures are already swallowed and logged by the event chain;
-    // treat rejection as settled so finalize never re-fails on join.
-    input.waitForPendingEvents().then(
-      () => finish("settled"),
-      () => finish("settled"),
-    );
-  });
-}
 
 type StreamSettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
 type StreamSettleResult = Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>;
@@ -64,6 +18,13 @@ type SharedPhaseInputKeys =
   | "sessionManager"
   | "sessionLockController"
   | "withOwnedSessionWriteLock";
+
+// Queued subscription handlers (block-reply delivery, tool events) are
+// fire-and-forget during the turn; the pending-events join below is the only
+// place the run waits for them. One hung handler (e.g. a stuck delivery
+// dispatch lane) must not dead-end the turn until the run budget — 48h by
+// default — so the join is bounded and settlement proceeds with a recorded
+// warning instead of producing no visible outcome at all.
 
 export async function finalizeEmbeddedAttemptStreamPhase(input: {
   attempt: StreamSettleInput["attempt"];
@@ -92,10 +53,15 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
 }): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
   const { activeSession, sessionManager, sessionLockController, withOwnedSessionWriteLock } = input;
 
-  await joinPendingEventsBounded({
-    waitForPendingEvents: input.waitForPendingEvents,
+  await joinWithRunLivenessDeadline({
+    joinWork: input.waitForPendingEvents,
     runAbortSignal: input.settle.runAbortSignal,
-    runId: input.attempt.runId,
+    onTimeout: () => {
+      log.warn(
+        `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+          `proceeding to stream settlement: runId=${input.attempt.runId}`,
+      );
+    },
   });
   const beforeAgentFinalizeRevisionReason = input.getBeforeAgentFinalizeRevisionReason();
   const beforeAgentFinalizeRevisionEntryId = input.getBeforeAgentFinalizeRevisionEntryId();
