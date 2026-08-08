@@ -1,9 +1,8 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import { buildMcpAppSandboxPath, resolveMcpAppSandboxPort } from "../agents/mcp-app-sandbox.js";
-import { DEFAULT_REQUEST_TIMEOUT_MS } from "../agents/mcp-transport-config.js";
 import { getMcpAppViewLease, type McpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -22,11 +21,6 @@ import {
 
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
 const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
-// Grace added to the browser-side operation fetch so the outer timer expires
-// only after the runtime MCP deadline has had time to complete and the Gateway
-// has had time to return its response. This avoids visible false failures for
-// valid near-deadline operations.
-const MCP_APP_STANDALONE_REQUEST_GRACE_MS = 5_000;
 const MCP_APP_STANDALONE_TICKET_TTL_MS = 2 * 60_000;
 const MCP_APP_STANDALONE_TICKET_MIN_REMAINING_MS = 15_000;
 const MCP_APP_STANDALONE_TICKET_MAX_ENTRIES = 256;
@@ -226,9 +220,6 @@ function runStandaloneMcpAppHost(config: {
   protocolVersion: string;
   viewPath: string;
   initialLoadTimeoutMs: number;
-  defaultRequestTimeoutMs: number;
-  requestTimeoutGraceMs: number;
-  timerSafeMax: number;
 }): void {
   type StandaloneElement = { className: string; textContent: string };
   type StandaloneFrame = StandaloneElement & {
@@ -272,7 +263,7 @@ function runStandaloneMcpAppHost(config: {
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
-    requestTimeoutMs?: number;
+    operationTimeoutMs?: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -289,6 +280,12 @@ function runStandaloneMcpAppHost(config: {
     value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined;
+  const errorMessage = (error: unknown, timeoutMessage: string) =>
+    asRecord(error)?.name === "TimeoutError"
+      ? timeoutMessage
+      : error instanceof Error
+        ? error.message
+        : String(error);
   const fail = (message: string) => {
     frame?.remove();
     frame = undefined;
@@ -347,13 +344,8 @@ function runStandaloneMcpAppHost(config: {
       cache: "no-store",
       credentials: "omit",
       signal:
-        payload?.requestTimeoutMs != null
-          ? AbortSignal.timeout(
-              Math.min(
-                payload.requestTimeoutMs + config.requestTimeoutGraceMs,
-                config.timerSafeMax,
-              ),
-            )
+        payload?.operationTimeoutMs != null
+          ? AbortSignal.timeout(payload.operationTimeoutMs)
           : undefined,
     });
     const body = (await response.json().catch(() => undefined)) as
@@ -500,7 +492,7 @@ function runStandaloneMcpAppHost(config: {
         reject(
           message.id as JsonRpcId,
           -32000,
-          error instanceof Error ? error.message : "MCP App operation failed",
+          errorMessage(error, "MCP App operation timed out; try again"),
         ),
       );
   });
@@ -534,18 +526,18 @@ function runStandaloneMcpAppHost(config: {
       frame.src = sandboxUrl.href;
       host?.replaceChildren(frame);
     })
-    .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+    .catch((error: unknown) =>
+      fail(errorMessage(error, "MCP App view timed out; reload to try again")),
+    );
 }
 
 function standaloneHostHtml(): { html: string; scriptHash: string } {
-  const clientSource = `(${runStandaloneMcpAppHost.toString()})(${JSON.stringify({
+  const serializedConfig = JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
     initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
-    defaultRequestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-    requestTimeoutGraceMs: MCP_APP_STANDALONE_REQUEST_GRACE_MS,
-    timerSafeMax: MAX_TIMER_TIMEOUT_MS,
-  })});`;
+  });
+  const clientSource = `;(() => { const __name = (target) => target; (${runStandaloneMcpAppHost.toString()})(${serializedConfig}); })();`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {
     html: `<!doctype html>
@@ -686,9 +678,6 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
-      // The timeout was snapshotted onto the view when it was created, so it
-      // survives later catalog invalidation (e.g. tools/list_changed) that can
-      // clear the runtime's cached catalog.
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -706,8 +695,12 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
-              ...(runtime.getServerRequestTimeoutMs !== undefined
-                ? { requestTimeoutMs: view.requestTimeoutMs }
+              ...(view.requestTimeoutMs !== undefined
+                ? {
+                    // Keep the browser's outer deadline behind the SDK request
+                    // so a valid near-deadline response can reach the App.
+                    operationTimeoutMs: addTimerTimeoutGraceMs(view.requestTimeoutMs),
+                  }
                 : {}),
             }),
       );

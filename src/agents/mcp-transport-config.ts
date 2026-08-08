@@ -54,7 +54,7 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
-export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
   if (!rawServer || typeof rawServer !== "object") {

@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -37,34 +37,19 @@ function issueTicket(params: Parameters<typeof createMcpAppStandaloneTicket>[0])
 const nowMs = 1_800_000_000_000;
 const secret = Buffer.alloc(32, 7);
 const releaseRuntimeLease = vi.fn();
-const defaultCatalog = {
-  version: 1,
-  generatedAt: Date.now(),
-  servers: {
-    demo: {
-      serverName: "demo",
-      launchSummary: "demo server",
-      toolCount: 3,
-      requestTimeoutMs: 60_000,
-    },
-  },
-  tools: [
-    { serverName: "demo", toolName: "shared" },
-    { serverName: "demo", toolName: "app-only", uiVisibility: ["app"] },
-    { serverName: "demo", toolName: "model-only", uiVisibility: ["model"] },
-    { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
-  ],
-};
 const runtime = {
   sessionId: "runtime-session",
   mcpAppsEnabled: true,
   markUsed: vi.fn(),
   acquireLease: vi.fn(() => releaseRuntimeLease),
-  getCatalog: vi.fn(async () => defaultCatalog),
-  peekCatalog: vi.fn(() => defaultCatalog),
-  getServerRequestTimeoutMs: vi.fn((serverName: string) =>
-    serverName === "demo" ? 60_000 : undefined,
-  ),
+  getCatalog: vi.fn(async () => ({
+    tools: [
+      { serverName: "demo", toolName: "shared" },
+      { serverName: "demo", toolName: "app-only", uiVisibility: ["app"] },
+      { serverName: "demo", toolName: "model-only", uiVisibility: ["model"] },
+      { serverName: "other", toolName: "cross-only", uiVisibility: ["app"] },
+    ],
+  })),
   callTool: vi.fn(async (serverName: string, toolName: string) => ({
     content: [{ type: "text", text: `${serverName}:${toolName}` }],
   })),
@@ -151,8 +136,6 @@ describe("MCP App standalone host", () => {
     });
     mocks.peekSessionMcpRuntime.mockReturnValue(runtime);
     mocks.getMcpAppViewLease.mockReturnValue(view);
-    runtime.getCatalog.mockReturnValue(Promise.resolve(defaultCatalog));
-    runtime.peekCatalog.mockReturnValue(defaultCatalog);
   });
 
   it("mints an opaque ticket bound to the session, runtime, view, and lease", () => {
@@ -223,12 +206,7 @@ describe("MCP App standalone host", () => {
     expect(body).toContain("location.hash");
     expect(body).toContain("event.origin");
     expect(body).toContain("if (!initializeAccepted)");
-    // Initial view load keeps a bounded timeout passed through serialized config;
-    // operation fetches honor the configured MCP request deadline plus a bounded
-    // gateway grace clamped to the timer-safe maximum.
-    expect(body).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
-    expect(body).toContain("Math.min(");
-    expect(body).toContain("config.timerSafeMax");
+    expect(body).not.toContain("MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS");
     expect(body).not.toContain('postMessage(message, "*")');
     expect(body).not.toContain(view.html);
     expect(body).not.toContain("agent:main:main");
@@ -236,6 +214,139 @@ describe("MCP App standalone host", () => {
     expect(result.setHeader).toHaveBeenCalledWith(
       "Content-Security-Policy",
       expect.stringMatching(/script-src 'sha256-[^']+';.*connect-src 'self'/u),
+    );
+  });
+
+  it("executes serialized fetch deadlines with visible outcomes", async () => {
+    const shell = await request({ url: "/__openclaw__/mcp-app" });
+    const html = String(shell.end.mock.calls[0]?.[0]);
+    const source = /<script>([\s\S]+)<\/script>/u.exec(html)?.[1];
+    expect(source).toBeDefined();
+
+    let renderedError = "";
+    const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    const initialSignal = AbortSignal.abort(timeoutError);
+    const initialTimeout = vi.fn(() => initialSignal);
+    const initialFetch = vi.fn(() => Promise.reject(timeoutError));
+
+    runInNewContext(source!, {
+      AbortSignal: { timeout: initialTimeout },
+      URL,
+      addEventListener: vi.fn(),
+      document: {
+        createElement: () => ({ className: "", textContent: "" }),
+        getElementById: () => ({
+          replaceChildren: (child: { textContent?: string }) => {
+            renderedError = child.textContent ?? "";
+          },
+        }),
+      },
+      fetch: initialFetch,
+      innerWidth: 800,
+      location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+      matchMedia: () => ({ matches: false }),
+      navigator: { language: "en" },
+      setTimeout,
+    });
+    await vi.waitFor(() =>
+      expect(renderedError).toBe("MCP App view timed out; reload to try again"),
+    );
+    expect(initialTimeout).toHaveBeenCalledWith(30_000);
+    expect(initialFetch).toHaveBeenCalledWith(
+      "/__openclaw__/mcp-app/view",
+      expect.objectContaining({ signal: initialSignal }),
+    );
+
+    const sandboxOrigin = "http://127.0.0.1:18790";
+    const postMessage = vi.fn();
+    const contentWindow = { postMessage };
+    const frame = {
+      setAttribute: vi.fn(),
+      contentWindow,
+    };
+    const replaceChildren = vi.fn();
+    let onMessage: ((event: unknown) => void) | undefined;
+    const operationController = new AbortController();
+    const timeout = vi.fn((delay: number) => {
+      if (delay === 65_000) {
+        queueMicrotask(() => operationController.abort(timeoutError));
+        return operationController.signal;
+      }
+      return new AbortController().signal;
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          sandboxUrl: "/mcp-app-sandbox",
+          sandboxPort: 18_790,
+          html: "<html>demo</html>",
+          toolInput: {},
+          toolResult: { content: [] },
+          serverTools: true,
+          operationTimeoutMs: 65_000,
+        }),
+      })
+      .mockImplementationOnce((_url: string, init: RequestInit) => {
+        const signal = init.signal as AbortSignal;
+        return new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(timeoutError), { once: true });
+        });
+      });
+
+    runInNewContext(source!, {
+      AbortSignal: { timeout },
+      URL,
+      addEventListener: (type: string, listener: (event: unknown) => void) => {
+        if (type === "message") {
+          onMessage = listener;
+        }
+      },
+      document: {
+        createElement: () => frame,
+        getElementById: () => ({ replaceChildren }),
+      },
+      fetch,
+      innerWidth: 800,
+      location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
+      matchMedia: () => ({ matches: false }),
+      navigator: { language: "en" },
+      setTimeout,
+    });
+    await vi.waitFor(() => expect(replaceChildren).toHaveBeenCalledWith(frame));
+
+    const emit = (data: unknown) =>
+      onMessage?.({ data, origin: sandboxOrigin, source: contentWindow });
+    emit({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "ui/initialize",
+      params: {
+        protocolVersion: "2026-01-26",
+        appInfo: { name: "demo", version: "1" },
+        appCapabilities: {},
+      },
+    });
+    emit({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+    emit({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "slow" } });
+
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          error: { code: -32000, message: "MCP App operation timed out; try again" },
+        },
+        sandboxOrigin,
+      ),
+    );
+    expect(timeout).toHaveBeenNthCalledWith(1, 30_000);
+    expect(timeout).toHaveBeenNthCalledWith(2, 65_000);
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/__openclaw__/mcp-app/view",
+      expect.objectContaining({ signal: operationController.signal }),
     );
   });
 
@@ -251,6 +362,7 @@ describe("MCP App standalone host", () => {
       sandboxPort: 18_790,
       serverTools: true,
       serverResources: true,
+      operationTimeoutMs: 65_000,
     });
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
@@ -259,78 +371,6 @@ describe("MCP App standalone host", () => {
     expect(
       (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
     ).toBe(401);
-  });
-
-  it("includes the configured MCP request timeout in the view payload", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
-    const accepted = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${issued.ticket}`,
-    });
-    expect(accepted.res.statusCode).toBe(200);
-    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
-      requestTimeoutMs: 60_000,
-    });
-  });
-
-  it("emits an operation fetch timeout that honors a non-default configured deadline plus gateway grace", async () => {
-    const customView = { ...view, requestTimeoutMs: 120_000 };
-    mocks.getMcpAppViewLease.mockReturnValue(customView);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view: customView, nowMs, secret });
-    const accepted = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${issued.ticket}`,
-    });
-    expect(accepted.res.statusCode).toBe(200);
-    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
-      requestTimeoutMs: 120_000,
-    });
-
-    const shell = await request({ url: "/__openclaw__/mcp-app" });
-    const body = String(shell.end.mock.calls[0]?.[0]);
-    // The operation fetch must use the configured deadline plus a bounded grace,
-    // not the hardcoded 30s cap.
-    expect(body).toContain("Math.min(");
-    expect(body).toContain("config.timerSafeMax");
-    expect(body).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
-  });
-
-  it("preserves the configured timeout in the view payload even when the cached catalog is invalidated", async () => {
-    const customView = { ...view, requestTimeoutMs: 120_000 };
-    mocks.getMcpAppViewLease.mockReturnValue(customView);
-    runtime.peekCatalog.mockReturnValue(null as never);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view: customView, nowMs, secret });
-    const accepted = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${issued.ticket}`,
-    });
-    expect(accepted.res.statusCode).toBe(200);
-    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
-      requestTimeoutMs: 120_000,
-    });
-  });
-
-  it("clamps the browser operation timeout at the timer-safe maximum even when the configured deadline plus grace would overflow", async () => {
-    // requestTimeoutMs at the timer-safe maximum + 5,000 ms grace would overflow
-    // AbortSignal.timeout; the clamp must keep the serialized timeout within range.
-    const maxView = { ...view, requestTimeoutMs: MAX_TIMER_TIMEOUT_MS };
-    mocks.getMcpAppViewLease.mockReturnValue(maxView);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view: maxView, nowMs, secret });
-    const accepted = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${issued.ticket}`,
-    });
-    expect(accepted.res.statusCode).toBe(200);
-    expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
-      requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-    });
-
-    const shell = await request({ url: "/__openclaw__/mcp-app" });
-    const body = String(shell.end.mock.calls[0]?.[0]);
-    // The clamp is applied in the serialized host so the operation timeout stays
-    // within the timer-safe range even at the maximum configured deadline.
-    expect(body).toContain("Math.min(");
-    expect(body).toContain("config.timerSafeMax");
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
@@ -466,32 +506,22 @@ describe("MCP App standalone host", () => {
     ).toBe(400);
   });
 
-  it("omits requestTimeoutMs from the view payload for native MCP App runtimes without a request-deadline contract", async () => {
-    const nativeRuntime = {
-      ...runtime,
-      getServerRequestTimeoutMs: undefined,
-    };
-    const nativeView = { ...view, runtime: nativeRuntime };
-    mocks.peekSessionMcpRuntime.mockReturnValue(nativeRuntime);
-    mocks.getMcpAppViewLease.mockReturnValue(nativeView);
+  it("omits the browser operation deadline when the view has no runtime deadline contract", async () => {
+    const noDeadlineView = { ...view, requestTimeoutMs: undefined };
+    mocks.getMcpAppViewLease.mockReturnValue(noDeadlineView);
 
-    const issued = issueTicket({ sessionKey: "agent:main:main", view: nativeView, nowMs, secret });
+    const issued = issueTicket({
+      sessionKey: "agent:main:main",
+      view: noDeadlineView,
+      nowMs,
+      secret,
+    });
     const accepted = await request({
       url: "/__openclaw__/mcp-app/view",
       authorization: `MCP-App ${issued.ticket}`,
     });
     expect(accepted.res.statusCode).toBe(200);
     const payload = JSON.parse(String(accepted.end.mock.calls[0]?.[0]));
-    expect(payload).not.toHaveProperty("requestTimeoutMs");
-
-    // The serialized browser host must keep the initial-load timeout but
-    // omit the operation AbortSignal for runtimes with no deadline contract.
-    const shell = await request({ url: "/__openclaw__/mcp-app" });
-    const html = String(shell.end.mock.calls[0]?.[0]);
-    expect(html).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
-    // The operation fetch uses a ternary that only adds AbortSignal when
-    // payload.requestTimeoutMs is set; for native runtimes the key is
-    // omitted, so the null check must be present.
-    expect(html).toContain("payload?.requestTimeoutMs != null");
+    expect(payload).not.toHaveProperty("operationTimeoutMs");
   });
 });

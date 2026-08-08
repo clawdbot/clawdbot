@@ -7,7 +7,6 @@ import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
-import { DEFAULT_REQUEST_TIMEOUT_MS } from "./mcp-transport-config.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
@@ -37,7 +36,7 @@ export type McpAppViewLease = {
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
-  requestTimeoutMs: number;
+  requestTimeoutMs?: number;
   expiresAtMs: number;
   requestWindowStartedAtMs: number;
   requestCount: number;
@@ -266,17 +265,9 @@ export async function fetchMcpAppView(params: {
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
-    // Snapshot the configured request timeout when the view is created. The
-    // cached catalog can be invalidated later (e.g. tools/list_changed), but the
-    // browser-side deadline must stay consistent with the runtime deadline that
-    // will be used for operations initiated from this view.
-    // Read from the runtime session first — its timeout survives catalog
-    // invalidation, so a tools/list_changed right before view creation does not
-    // substitute the 60-second default for a configured 120-second MCP operation.
-    const requestTimeoutMs =
-      params.runtime.getServerRequestTimeoutMs?.(params.serverName) ??
-      params.runtime.peekCatalog()?.servers[params.serverName]?.requestTimeoutMs ??
-      DEFAULT_REQUEST_TIMEOUT_MS;
+    // resources/read established the authoritative server session above. Carry
+    // its deadline into the view so catalog invalidation cannot change it later.
+    const requestTimeoutMs = params.runtime.getServerRequestTimeoutMs?.(params.serverName);
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
     pruneViewStore(byteSize, { reserveEntry: true });
@@ -300,7 +291,7 @@ export async function fetchMcpAppView(params: {
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
-      requestTimeoutMs,
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
       requestWindowStartedAtMs: Date.now(),
       requestCount: 0,
