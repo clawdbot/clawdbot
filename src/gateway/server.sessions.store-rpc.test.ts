@@ -127,7 +127,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(methods).toContain("sessions.preview");
   expect(methods).toContain("sessions.cleanup");
   expect(methods).toContain("sessions.patch");
-  expect(methods).toContain("sessions.archiveMany");
+  expect(methods).toContain("sessions.patchMany");
   expect(methods).toContain("sessions.reset");
   expect(methods).toContain("sessions.delete");
   expect(methods).toContain("sessions.compact");

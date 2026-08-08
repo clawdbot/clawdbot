@@ -27,6 +27,7 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import type { WorkerSessionPlacementRetirement } from "../worker-environments/placement-store.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
@@ -41,34 +42,64 @@ export class SessionWorkerPlacementMutationError extends Error {
   }
 }
 
-export function resolveSessionWorkerPlacementMutationError(params: {
+type SessionWorkerPlacementMutationGuard = {
+  error?: SessionWorkerPlacementMutationError;
+  retirement?: WorkerSessionPlacementRetirement;
+};
+
+export function resolveSessionWorkerPlacementMutationGuard(params: {
   action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
   context: GatewayRequestContext;
   key: string;
   sessionId: string | undefined;
-}): SessionWorkerPlacementMutationError | undefined {
+}): SessionWorkerPlacementMutationGuard {
   if (!params.sessionId) {
-    return undefined;
+    return {};
   }
   const placement = params.context.workerSessionPlacementService
     ?.getMany([params.sessionId])
     .get(params.sessionId);
-  // Failed placement normally keeps destructive mutation fenced. Missing worker identity or an
-  // authoritative destroyed environment proves cleanup cannot orphan a live worker.
+  const environment = placement?.environmentId
+    ? params.context.workerEnvironmentService?.get(placement.environmentId)
+    : undefined;
+  // finishProvenDestroy clears leaseId only after provider teardown succeeds. Failed environments
+  // that retain a lease stay fenced because their teardown is pending or indeterminate.
   const failedPlacementCanDelete =
     params.action === "delete" &&
     placement?.state === "failed" &&
     (placement.environmentId === null ||
-      params.context.workerEnvironmentService?.get(placement.environmentId)?.state === "destroyed");
-  if (
+      environment?.state === "destroyed" ||
+      (environment?.state === "failed" && environment.leaseId === null));
+  const placementCanMutate =
     !placement ||
     placement.state === "local" ||
     (params.action === "delete" && placement.state === "reclaimed") ||
-    failedPlacementCanDelete
-  ) {
-    return undefined;
+    failedPlacementCanDelete;
+  if (!placementCanMutate) {
+    return {
+      error: new SessionWorkerPlacementMutationError(placement.state, params.action, params.key),
+    };
   }
-  return new SessionWorkerPlacementMutationError(placement.state, params.action, params.key);
+  if (
+    params.action === "delete" &&
+    placement &&
+    (placement.state === "local" || placement.state === "reclaimed" || placement.state === "failed")
+  ) {
+    return {
+      retirement: {
+        sessionId: placement.sessionId,
+        expectedState: placement.state,
+        expectedGeneration: placement.generation,
+      },
+    };
+  }
+  return {};
+}
+
+export function resolveSessionWorkerPlacementMutationError(
+  params: Parameters<typeof resolveSessionWorkerPlacementMutationGuard>[0],
+): SessionWorkerPlacementMutationError | undefined {
+  return resolveSessionWorkerPlacementMutationGuard(params).error;
 }
 
 export function respondSessionWorkerPlacementMutationError(

@@ -1193,7 +1193,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         });
       },
     });
-    action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    action.element.classList.add("chat-confirm-wrap", "chat-rewind-wrap");
     menu.append(action.element);
     focusCandidates.push(action.button);
   }

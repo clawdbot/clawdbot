@@ -183,32 +183,54 @@ describe("worker live events", () => {
     expect(JSON.stringify(rows)).not.toContain(credential);
   });
 
-  it("records aborted cloud-worker terminals as interrupted", async () => {
-    const credential = ["lifecycle", "credential", "value"].join("-");
+  const lifecycleCredential = ["lifecycle", "credential", "value"].join("-");
+  it.each([
+    [
+      "length completions",
+      lifecycle({ phase: "end", startedAt: 100, endedAt: 200, stopReason: "length" }),
+      "length",
+      "success",
+    ],
+    [
+      "provider errors",
+      lifecycle({
+        phase: "error",
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "error",
+        error: `provider failed after Bearer ${lifecycleCredential}`,
+        fallbackExhaustedFailure: true,
+      }),
+      "error",
+      "error",
+    ],
+    [
+      "aborted completions",
+      lifecycle({
+        phase: "end",
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "aborted",
+        aborted: true,
+      }),
+      "aborted",
+      "interrupted",
+    ],
+  ])("persists stop reasons for %s", async (_name, terminal, stopReason, status) => {
     ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    ack(
-      live(
-        2,
-        lifecycle({
-          phase: "error",
-          startedAt: 100,
-          endedAt: 200,
-          aborted: true,
-          error: `cancelled after Bearer ${credential}`,
-        }),
-      ),
-    );
+    ack(live(2, terminal));
+    await Promise.resolve();
 
     const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
       agentId: "main",
       sessionId: SID,
       storePath: store,
     });
-    expect(rows.at(-1)?.event).toMatchObject({
-      type: "session.ended",
-      data: { status: "interrupted" },
-    });
-    expect(JSON.stringify(rows)).not.toContain(credential);
+    expect(rows.slice(-2).map((row) => row.event)).toMatchObject([
+      { type: "model.completed", data: { stopReason } },
+      { type: "session.ended", data: { status, stopReason } },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain(lifecycleCredential);
   });
 
   it("maps and sanitizes kinds", () => {

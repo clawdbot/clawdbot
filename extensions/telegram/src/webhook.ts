@@ -406,8 +406,6 @@ export async function startTelegramWebhook(opts: {
       botInfo,
       cfg: opts.config ?? {},
       accountId: opts.accountId ?? "default",
-      // Pre-migration product default: 25m claim→adoption stall for webhook.
-      adoptionStallTimeoutMs: 25 * 60_000,
       pollIntervalMs: TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS,
       abortSignal: webhookAbortSignal,
       onLog: (message) => log(`webhook ${message}`),

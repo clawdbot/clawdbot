@@ -16,7 +16,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
-  archiveSessionRows,
+  patchSessionRows,
   refreshSessionsAfterBatch,
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
@@ -109,32 +109,25 @@ export async function patchSessions(
   if (rows.length === 0) {
     return "completed";
   }
-  let result: SidebarSessionMutationResult = "completed";
-  // Sequential like deleteMany: parallel patches would race the shared
-  // session-state publishes inside the capability.
-  for (const row of rows) {
-    const rowResult = await patchSession(host, row, patch, scope, { deferListRefresh: true });
-    if (rowResult === "stale") {
-      return "stale";
-    }
-    if (rowResult === "failed") {
-      result = "failed";
-    }
+  const successful = await patchSessionRows(host, rows, patch, scope, {
+    fallback: () => patchSessionRowsSerial(host, rows, patch, scope),
+  });
+  if (!successful) {
+    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
   }
-  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
-  return refreshed === "completed" ? result : refreshed;
+  return successful.length === rows.length ? "completed" : "failed";
 }
 
-async function archiveSessionRowsSerial(
+async function patchSessionRowsSerial(
   host: SessionOrganizerControllerHost,
   rows: readonly SidebarRecentSession[],
-  archived: boolean,
+  patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
   options: { deferListRefresh?: boolean } = {},
 ): Promise<SidebarRecentSession[] | null> {
   const completed: SidebarRecentSession[] = [];
   for (const row of rows) {
-    const result = await patchSession(host, row, { archived }, scope, { deferListRefresh: true });
+    const result = await patchSession(host, row, patch, scope, { deferListRefresh: true });
     if (result === "stale") {
       return null;
     }
@@ -177,8 +170,8 @@ async function archiveSessionsWithUndo(
   if (rows.length === 0) {
     return;
   }
-  const archivedRows = await archiveSessionRows(host, rows, true, scope, {
-    fallback: () => archiveSessionRowsSerial(host, rows, true, scope),
+  const archivedRows = await patchSessionRows(host, rows, { archived: true }, scope, {
+    fallback: () => patchSessionRowsSerial(host, rows, { archived: true }, scope),
   });
   if (!archivedRows || archivedRows.length === 0) {
     return;
@@ -200,21 +193,37 @@ async function restoreArchivedSessions(
   scope: SidebarSessionMutationScope,
 ) {
   const rows = archived.map((entry) => entry.session);
-  const restored = await archiveSessionRows(host, rows, false, scope, {
-    deferListRefresh: true,
-    fallback: () => archiveSessionRowsSerial(host, rows, false, scope, { deferListRefresh: true }),
-  });
+  const singleRowUndo = rows.length === 1;
+  const restored = singleRowUndo
+    ? await patchSessionRowsSerial(host, rows, { archived: false }, scope, {
+        deferListRefresh: true,
+      })
+    : await patchSessionRows(host, rows, { archived: false }, scope, {
+        deferListRefresh: true,
+        fallback: () =>
+          patchSessionRowsSerial(host, rows, { archived: false }, scope, {
+            deferListRefresh: true,
+          }),
+      });
   if (!restored) {
     return;
   }
-  for (const { session, pinned } of archived) {
-    if (!pinned || !restored.includes(session)) {
-      continue;
-    }
-    const result = await patchSession(host, session, { pinned: true }, scope, {
-      deferListRefresh: true,
-    });
-    if (result === "stale") {
+  const repinRows = archived.flatMap(({ session, pinned }) =>
+    pinned && restored.includes(session) ? [session] : [],
+  );
+  if (repinRows.length > 0) {
+    const repinned = singleRowUndo
+      ? await patchSessionRowsSerial(host, repinRows, { pinned: true }, scope, {
+          deferListRefresh: true,
+        })
+      : await patchSessionRows(host, repinRows, { pinned: true }, scope, {
+          deferListRefresh: true,
+          fallback: () =>
+            patchSessionRowsSerial(host, repinRows, { pinned: true }, scope, {
+              deferListRefresh: true,
+            }),
+        });
+    if (!repinned && !host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
   }
@@ -313,8 +322,8 @@ export async function runBatchSessionAction(
       break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
-        await archiveSessionRows(host, rows, false, scope, {
-          fallback: () => archiveSessionRowsSerial(host, rows, false, scope),
+        await patchSessionRows(host, rows, { archived: false }, scope, {
+          fallback: () => patchSessionRowsSerial(host, rows, { archived: false }, scope),
         });
       } else {
         await archiveSessionsWithUndo(
@@ -382,7 +391,9 @@ export async function createSessionGroup(
   if ((await rememberSessionGroup(host, name, scope)) !== "completed") {
     return;
   }
-  if (sessions.length > 0) {
+  if (sessions.length === 1) {
+    await patchSession(host, sessions[0]!, { category: name }, scope);
+  } else if (sessions.length > 1) {
     await patchSessions(host, sessions, { category: name }, scope);
   } else if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
     // Header-created groups start empty; re-render so the section shows up.

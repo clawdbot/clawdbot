@@ -1883,6 +1883,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
 
+-- Provider-advertised fallback ports preserve stable retry order separately
+-- from the downgrade-sensitive canonical worker environment row.
+CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
+  environment_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
+  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
+  PRIMARY KEY (environment_id, position),
+  UNIQUE (environment_id, port),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+) STRICT;
+
 -- Session placement lives in the shared state database so local admission,
 -- worker admission, and environment attachment use one durable authority.
 CREATE TABLE IF NOT EXISTS worker_session_placements (

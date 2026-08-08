@@ -97,6 +97,37 @@ describe("OpenClawSchema cloudWorkers config", () => {
     });
   });
 
+  it("defaults a minimal Crabbox profile to bundle installation", () => {
+    expect(
+      parseCloudWorkers({
+        profiles: {
+          aws: {
+            provider: "crabbox",
+            settings: {
+              provider: "aws",
+              class: "standard",
+              ttl: "8h",
+              idleTimeout: "45m",
+            },
+          },
+        },
+      }),
+    ).toStrictEqual({
+      profiles: {
+        aws: {
+          provider: "crabbox",
+          install: "bundle",
+          settings: {
+            provider: "aws",
+            class: "standard",
+            ttl: "8h",
+            idleTimeout: "45m",
+          },
+        },
+      },
+    });
+  });
+
   it("accepts npm as an explicit install method", () => {
     expect(
       parseCloudWorkers({

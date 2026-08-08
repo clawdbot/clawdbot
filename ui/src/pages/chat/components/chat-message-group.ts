@@ -485,7 +485,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                     ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
                     : nothing}
                   ${opts.onRewind
-                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
                     : nothing}
                 </div>
               `

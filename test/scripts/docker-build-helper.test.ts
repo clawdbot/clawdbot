@@ -2308,12 +2308,32 @@ docker_e2e_docker_run_cmd run demo
     expect(
       publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
-    expect(runner.indexOf("\nconfigure_clawhub_fixture\n")).toBeLessThan(
+    const runnerClawHubIndex = runner.indexOf("\nconfigure_clawhub_fixture\n");
+    const runnerPrepareIndex = runner.indexOf(
+      'prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"',
+    );
+    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
+    expect(runnerClawHubIndex).toBeGreaterThan(-1);
+    expect(runnerClawHubIndex).toBeLessThan(runnerPrepareIndex);
+    expect(runnerPrepareIndex).toBeLessThan(runnerPluginRegistryIndex);
+    expect(runnerPluginRegistryIndex).toBeLessThan(
       runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
     );
-    expect(
-      publishedRunner.indexOf("phase configure-clawhub-fixture configure_clawhub_fixture"),
-    ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    const publishedClawHubIndex = publishedRunner.indexOf(
+      "phase configure-clawhub-fixture configure_clawhub_fixture",
+    );
+    const publishedPrepareIndex = publishedRunner.indexOf(
+      "phase prepare-update-restart-probe prepare_update_restart_probe",
+    );
+    const publishedPluginRegistryIndex = publishedRunner.indexOf(
+      "phase configure-plugin-registry configure_plugin_registry",
+    );
+    expect(publishedClawHubIndex).toBeGreaterThan(-1);
+    expect(publishedClawHubIndex).toBeLessThan(publishedPrepareIndex);
+    expect(publishedPrepareIndex).toBeLessThan(publishedPluginRegistryIndex);
+    expect(publishedPluginRegistryIndex).toBeLessThan(
+      publishedRunner.indexOf("phase update-candidate update_candidate"),
+    );
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
       publishedRunner.indexOf("phase assert-prepublish-requests node"),
     );
@@ -2855,6 +2875,57 @@ fi
         supervisor.kill("SIGTERM");
         expect(await waitForProcessExit(supervisor)).toBe(0);
         expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
+      } finally {
+        if (supervisor.exitCode === null && supervisor.signalCode === null) {
+          supervisor.kill("SIGTERM");
+          await waitForProcessExit(supervisor).catch(() => undefined);
+        }
+      }
+    }
+  });
+
+  it("preserves the ClawHub fixture URL across a supervised gateway restart", async () => {
+    const workDir = tempDirs.make("openclaw-update-restart-clawhub-env-");
+    const gatewayPath = join(workDir, "gateway.mjs");
+    writeFileSync(
+      gatewayPath,
+      `import fs from "node:fs";
+fs.appendFileSync(process.env.URLS_FILE, process.env.OPENCLAW_CLAWHUB_URL + "\\n");
+const starts = fs.readFileSync(process.env.URLS_FILE, "utf8").trim().split("\\n").length;
+process.exit(starts === 1 ? 1 : 78);
+`,
+    );
+    const scripts = [
+      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+    ];
+
+    for (const [index, script] of scripts.entries()) {
+      const supervisorPath = join(workDir, `clawhub-env-supervisor-${index}.mjs`);
+      const urlsPath = join(workDir, `clawhub-env-urls-${index}`);
+      const logPath = join(workDir, `clawhub-env-daemon-${index}.log`);
+      const source = extractUpgradeSurvivorSupervisor(script).replace(
+        "const restartDelayMs = 5_000;",
+        "const restartDelayMs = 5;",
+      );
+      writeFileSync(supervisorPath, source);
+
+      const supervisor = spawn(process.execPath, [supervisorPath], {
+        env: {
+          ...process.env,
+          OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:43123",
+          OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
+          URLS_FILE: urlsPath,
+        },
+        stdio: "ignore",
+      });
+      try {
+        expect(await waitForProcessExit(supervisor)).toBe(0);
+        expect(readFileSync(urlsPath, "utf8").trim().split("\n")).toEqual([
+          "http://127.0.0.1:43123",
+          "http://127.0.0.1:43123",
+        ]);
       } finally {
         if (supervisor.exitCode === null && supervisor.signalCode === null) {
           supervisor.kill("SIGTERM");

@@ -1177,7 +1177,7 @@ async function writeSystemdUnit({
     // File does not exist yet — nothing to back up.
   }
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({ env, description });
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
   const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
     readStateDirDotEnvFromStateDir(stateDir);

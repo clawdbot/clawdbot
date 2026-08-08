@@ -1504,6 +1504,17 @@ describe("worker environment service", () => {
       { leaseId: "lease-invalid", ssh: { ...SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },
       "SSH key must be a canonical SecretRef",
     ],
+    [
+      "excessive SSH fallback ports",
+      {
+        leaseId: "lease-invalid",
+        ssh: {
+          ...SSH_ENDPOINT,
+          fallbackPorts: Array.from({ length: 11 }, (_, index) => 2300 + index),
+        },
+      },
+      "SSH fallback ports cannot exceed 10",
+    ],
   ])("keeps %s from a provider retryable", async (_name, result, error) => {
     const workerService = createService(createProvider({ provision: async () => result as never }));
 
@@ -1873,6 +1884,7 @@ describe("worker environment service", () => {
     });
     expect(prepareInstallation).toHaveBeenCalledWith("npm");
     expect(bootstrapWorker).toHaveBeenCalledWith({
+      operationId: result.provisionOperationId,
       sshEndpoint: SSH_ENDPOINT,
       installation: NPM_ARTIFACT,
       resolveIdentity: expect.any(Function),
