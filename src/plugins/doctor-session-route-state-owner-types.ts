@@ -10,9 +10,7 @@ export type DoctorSessionRouteStateOwner = {
   authProfilePrefixes?: readonly string[];
 };
 
-export function isDoctorSessionRouteStateOwner(
-  value: unknown,
-): value is DoctorSessionRouteStateOwner {
+function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
   if (!value || typeof value !== "object") {
     return false;
   }

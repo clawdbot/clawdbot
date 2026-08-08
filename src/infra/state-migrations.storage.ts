@@ -25,7 +25,6 @@ import {
 } from "./state-migrations.task-sidecar-rows.js";
 
 export { normalizeLegacySqliteInteger };
-export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 
 export type LegacyPluginStateSidecarRow = {
   plugin_id: string;
