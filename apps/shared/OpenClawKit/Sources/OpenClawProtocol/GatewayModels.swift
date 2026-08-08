@@ -2147,6 +2147,7 @@ public struct ConversationSendResult: Codable, Sendable {
     public let conversationref: String
     public let channel: String
     public let messageid: String?
+    public let messageidsource: AnyCodable?
     public let queueid: String?
 
     public init(
@@ -2154,12 +2155,14 @@ public struct ConversationSendResult: Codable, Sendable {
         conversationref: String,
         channel: String,
         messageid: String? = nil,
+        messageidsource: AnyCodable? = nil,
         queueid: String? = nil)
     {
         self.status = status
         self.conversationref = conversationref
         self.channel = channel
         self.messageid = messageid
+        self.messageidsource = messageidsource
         self.queueid = queueid
     }
 
@@ -2168,6 +2171,7 @@ public struct ConversationSendResult: Codable, Sendable {
         case conversationref = "conversationRef"
         case channel
         case messageid = "messageId"
+        case messageidsource = "messageIdSource"
         case queueid = "queueId"
     }
 }
