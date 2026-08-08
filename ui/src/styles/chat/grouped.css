@@ -746,7 +746,8 @@ img.chat-avatar.chat-avatar--logo {
   outline-offset: 2px;
 }
 
-.chat-bubble:hover {
+/* Tool rows own their hover treatment; an accent border reads as an error. */
+.chat-bubble:not(:where(.chat-bubble--tool-shell)):hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
