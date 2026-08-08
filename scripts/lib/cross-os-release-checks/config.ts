@@ -501,6 +501,10 @@ export function parseCrossOsSuiteFilter(rawFilter: string) {
   };
 }
 
+export function shouldRunGatewayNodeCompat(rawFilter: string) {
+  return parseCrossOsSuiteFilter(rawFilter).matchesGatewayNodeCompat;
+}
+
 function normalizeCrossOsSuiteFilterToken(token: string) {
   return token
     .trim()

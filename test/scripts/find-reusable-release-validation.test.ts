@@ -90,6 +90,7 @@ interface NormalizedEvidence {
   current: ParentTuple;
   directRoot: boolean;
   evidenceReuse: Record<string, unknown> | null;
+  gatewayNodeCompatibility: Record<string, unknown> | null;
   manifest: Record<string, unknown>;
   releaseProfile: string;
   repository: string;
@@ -195,7 +196,70 @@ function getSharedRepo(): { clone: string; priorSha: string } {
   return sharedRepo;
 }
 
+function gatewayNodeCompatibility(targetSha: string, workflowSha: string) {
+  const baselineVersion = "2026.5.7";
+  const candidateVersion = "2026.7.1";
+  const rows = [
+    ["baseline-gateway-baseline-node", "passed"],
+    ["baseline-gateway-candidate-node", "passed"],
+    ["baseline-gateway-disjoint-node", "protocol-mismatch"],
+    ["candidate-gateway-baseline-node", "passed"],
+    ["candidate-gateway-candidate-node", "passed"],
+    ["candidate-gateway-disjoint-node", "protocol-mismatch"],
+  ] as const;
+  return {
+    architecture: "x64",
+    artifact: {
+      digest: `sha256:${"d".repeat(64)}`,
+      id: 7001,
+      name: "openclaw-gateway-node-linux-compat-x64-203-1",
+      producerJob: "cross_os_release_checks / Gateway/node packaged compatibility / Linux / x64",
+      repository: REPOSITORY,
+      runAttempt: 1,
+      runId: "203",
+      sizeBytes: 48_000,
+      workflowPath: ".github/workflows/openclaw-release-checks.yml",
+      workflowSha,
+    },
+    baselineVersion,
+    files: rows.map(([direction, outcome], index) => {
+      const candidateGateway = direction.startsWith("candidate-");
+      const candidateNode = !direction.includes("-baseline-node");
+      const mismatch = outcome === "protocol-mismatch";
+      const gatewayProtocolVersion = candidateGateway ? 4 : 3;
+      return {
+        caseId: `linux-x64-${direction}`,
+        direction,
+        gatewayAcceptedNodeMin: 3,
+        gatewayProtocolVersion,
+        gatewayVersion: candidateGateway ? candidateVersion : baselineVersion,
+        helloProtocol: mismatch ? null : gatewayProtocolVersion,
+        nodeVersion: candidateNode ? candidateVersion : baselineVersion,
+        outcome,
+        path: `linux-x64-${direction}.json`,
+        protocolClientAdvertisedMax: mismatch ? 2 : candidateNode ? 4 : 3,
+        protocolClientAdvertisedMin: mismatch ? 1 : 3,
+        sha256: (index + 1).toString(16).repeat(64),
+        sizeBytes: 4096 + index,
+      };
+    }),
+    platform: "linux",
+    producer: {
+      job: "gateway_node_linux_compat",
+      repository: REPOSITORY,
+      runAttempt: 1,
+      runId: "203",
+      workflowPath: ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      workflowSha,
+    },
+    schema: "openclaw.gateway-node-compat-release-evidence/v1",
+    targetSha,
+  };
+}
+
 function normalizedEvidence(options: {
+  compatibilityComplete?: boolean;
+  manifestVersion?: 2 | 3;
   producerSha?: string;
   releaseProfile?: string;
   runId?: string;
@@ -212,14 +276,19 @@ function normalizedEvidence(options: {
   const workflowRef = options.workflowRef ?? "main";
   const workflowFullRef = `refs/heads/${workflowRef}`;
   const shaPinned = workflowRef.startsWith("release-ci/");
+  const manifestVersion = options.manifestVersion ?? (shaPinned ? 3 : 2);
   const validationInputs =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
   const npmTelegramRequired =
     validationInputs !== null &&
     (validationInputs.npmTelegramPackageSpec.length > 0 ||
       validationInputs.releasePackageSpec.length > 0);
+  const compatibility =
+    options.compatibilityComplete === false
+      ? null
+      : gatewayNodeCompatibility(options.targetSha, producerSha);
   const manifest = {
-    version: shaPinned ? 3 : 2,
+    version: manifestVersion,
     workflowName: "Full Release Validation",
     workflowRef,
     workflowSha: producerSha,
@@ -234,6 +303,7 @@ function normalizedEvidence(options: {
     runReleaseSoak: String(soak),
     validationInputs,
     controls: {
+      ...(compatibility ? { gatewayNodeCompatibility: "required" } : {}),
       performanceBlocking: true,
       performanceReportPublication: "artifact-only",
       stableSoakRequired: releaseProfile === "stable" || releaseProfile === "full",
@@ -249,6 +319,7 @@ function normalizedEvidence(options: {
         runId: "204",
       },
     },
+    ...(compatibility ? { gatewayNodeCompatibility: compatibility } : {}),
   };
   const root: ParentTuple = {
     artifact: {
@@ -260,7 +331,7 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: shaPinned ? 3 : 2,
+    manifestVersion,
     runAttempt: 2,
     runId,
     status: "completed",
@@ -271,9 +342,12 @@ function normalizedEvidence(options: {
     workflowPath: ".github/workflows/full-release-validation.yml",
     workflowQualifiedPath: `.github/workflows/full-release-validation.yml@${workflowFullRef}`,
     workflowRef,
-    workflowRefProof: shaPinned
-      ? "manifest-v3-sha-pinned-main-ancestry"
-      : "legacy-v2-main-ancestry",
+    workflowRefProof:
+      manifestVersion === 2
+        ? "legacy-v2-main-ancestry"
+        : shaPinned
+          ? "manifest-v3-sha-pinned-main-ancestry"
+          : "manifest-v3-branch",
     workflowRefType: "branch",
     workflowRunPath: shaPinned
       ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
@@ -347,11 +421,13 @@ function normalizedEvidence(options: {
       root: "success",
     },
     controls: {
+      ...(compatibility ? { gatewayNodeCompatibility: "required" } : {}),
       performanceReportPublication: "artifact-only",
     },
     current: structuredClone(root),
     directRoot: true,
     evidenceReuse: null,
+    gatewayNodeCompatibility: compatibility,
     manifest,
     releaseProfile,
     repository: REPOSITORY,
@@ -574,6 +650,46 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it("keeps historical v3 evidence readable but only reuses compatibility-complete roots", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const historical = normalizedEvidence({
+      compatibilityComplete: false,
+      manifestVersion: 3,
+      runId: "222",
+      targetSha: priorSha,
+    });
+    expect(historical.valid).toBe(true);
+    expect(historical.manifest).not.toHaveProperty("gatewayNodeCompatibility");
+
+    const historicalFixtures = setUpFixtures([
+      { record: historical, runId: historical.root.runId },
+    ]);
+    const historicalResult = runResolver({
+      ...historicalFixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+    });
+    expect(historicalResult.status).toBe(0);
+    expect(parseOutput(historicalResult.stdout)).toMatchObject({ reuse: "false" });
+
+    const complete = normalizedEvidence({
+      manifestVersion: 3,
+      runId: "111",
+      targetSha: priorSha,
+    });
+    const completeFixtures = setUpFixtures([{ record: complete, runId: complete.root.runId }]);
+    const completeResult = runResolver({
+      ...completeFixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+    });
+    expect(completeResult.status).toBe(0);
+    expect(parseOutput(completeResult.stdout)).toMatchObject({
       evidence_run_id: "111",
       reuse: "true",
     });

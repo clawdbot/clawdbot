@@ -7,6 +7,17 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  GATEWAY_NODE_COMPAT_BASELINE_NPM_INTEGRITY,
+  GATEWAY_NODE_COMPAT_BASELINE_SHA256,
+  GATEWAY_NODE_COMPAT_BASELINE_SOURCE_SHA,
+  GATEWAY_NODE_COMPAT_BASELINE_TAG,
+  GATEWAY_NODE_COMPAT_BASELINE_VERSION,
+  GATEWAY_NODE_COMPAT_EVIDENCE_WORKFLOW,
+  GATEWAY_NODE_COMPAT_PRODUCER_JOB,
+  GATEWAY_NODE_COMPAT_RELEASE_CHECKS_WORKFLOW,
+  GATEWAY_NODE_COMPAT_RELEASE_SCHEMA,
+} from "../../scripts/gateway-node-compat-release-evidence.mjs";
+import {
   artifactDownloadArgs,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
@@ -180,26 +191,31 @@ function artifactDigest(bytes: Buffer): string {
 
 function rawManifest({
   evidenceReuse,
+  gatewayNodeCompatibility,
   rerunGroup = "all",
   runId = "29090000000",
   targetSha = "a".repeat(40),
   version = 2,
   workflowFullRef,
+  workflowRef = "main",
   workflowRefType,
   workflowSha,
 }: {
   evidenceReuse?: unknown;
+  gatewayNodeCompatibility?: unknown;
   rerunGroup?: string;
   runId?: string;
   targetSha?: string;
   version?: 2 | 3;
   workflowFullRef?: string;
+  workflowRef?: string;
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
 }): {
   childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
   controls: Record<string, unknown>;
   evidenceReuse?: unknown;
+  gatewayNodeCompatibility?: unknown;
   releaseProfile: string;
   rerunGroup: string;
   runAttempt: string;
@@ -229,6 +245,7 @@ function rawManifest({
       stableSoakRequired: false,
     },
     evidenceReuse,
+    ...(gatewayNodeCompatibility ? { gatewayNodeCompatibility } : {}),
     releaseProfile: "beta",
     rerunGroup,
     runAttempt: "2",
@@ -251,14 +268,88 @@ function rawManifest({
     },
     version,
     workflowName: "Full Release Validation",
-    workflowRef: "main",
+    workflowRef,
     ...(workflowSha ? { workflowSha } : {}),
     ...(version === 3
       ? {
-          workflowFullRef: workflowFullRef ?? "refs/heads/main",
+          workflowFullRef: workflowFullRef ?? `refs/heads/${workflowRef}`,
           workflowRefType: workflowRefType ?? "branch",
         }
       : {}),
+  };
+}
+
+function gatewayNodeCompatibilityFixture({
+  runId = "404",
+  targetSha = "a".repeat(40),
+  workflowSha = "b".repeat(40),
+}: {
+  runId?: string;
+  targetSha?: string;
+  workflowSha?: string;
+} = {}) {
+  const rows = [
+    ["baseline-gateway-baseline-node", "passed"],
+    ["baseline-gateway-candidate-node", "passed"],
+    ["baseline-gateway-disjoint-node", "protocol-mismatch"],
+    ["candidate-gateway-baseline-node", "passed"],
+    ["candidate-gateway-candidate-node", "passed"],
+    ["candidate-gateway-disjoint-node", "protocol-mismatch"],
+  ] as const;
+  return {
+    architecture: "x64",
+    artifact: {
+      digest: `sha256:${"d".repeat(64)}`,
+      id: 7001,
+      name: `openclaw-gateway-node-linux-compat-x64-${runId}-1`,
+      producerJob: GATEWAY_NODE_COMPAT_PRODUCER_JOB,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runId,
+      sizeBytes: 48000,
+      workflowPath: GATEWAY_NODE_COMPAT_RELEASE_CHECKS_WORKFLOW,
+      workflowSha,
+    },
+    baseline: {
+      npmIntegrity: GATEWAY_NODE_COMPAT_BASELINE_NPM_INTEGRITY,
+      sha256: GATEWAY_NODE_COMPAT_BASELINE_SHA256,
+      sourceSha: GATEWAY_NODE_COMPAT_BASELINE_SOURCE_SHA,
+      tag: GATEWAY_NODE_COMPAT_BASELINE_TAG,
+      version: GATEWAY_NODE_COMPAT_BASELINE_VERSION,
+    },
+    baselineVersion: GATEWAY_NODE_COMPAT_BASELINE_VERSION,
+    files: rows.map(([direction, outcome], index) => {
+      const candidateGateway = direction.startsWith("candidate-");
+      const candidateNode = !direction.includes("-baseline-node");
+      const mismatch = outcome === "protocol-mismatch";
+      const gatewayProtocolVersion = candidateGateway ? 4 : 3;
+      return {
+        caseId: `linux-x64-${direction}`,
+        direction,
+        gatewayAcceptedNodeMin: 3,
+        gatewayProtocolVersion,
+        gatewayVersion: candidateGateway ? "2026.8.6" : GATEWAY_NODE_COMPAT_BASELINE_VERSION,
+        helloProtocol: mismatch ? null : gatewayProtocolVersion,
+        nodeVersion: candidateNode ? "2026.8.6" : GATEWAY_NODE_COMPAT_BASELINE_VERSION,
+        outcome,
+        path: `linux-x64-${direction}.json`,
+        protocolClientAdvertisedMax: mismatch ? 2 : candidateNode ? 4 : 3,
+        protocolClientAdvertisedMin: mismatch ? 1 : 3,
+        sha256: (index + 1).toString(16).repeat(64),
+        sizeBytes: 4096 + index,
+      };
+    }),
+    platform: "linux",
+    producer: {
+      job: "gateway_node_linux_compat",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runId,
+      workflowPath: GATEWAY_NODE_COMPAT_EVIDENCE_WORKFLOW,
+      workflowSha,
+    },
+    schema: GATEWAY_NODE_COMPAT_RELEASE_SCHEMA,
+    targetSha,
   };
 }
 
@@ -744,6 +835,7 @@ describe("release CI summary child correlation", () => {
     expect(evidence).toMatchObject({
       directRoot: true,
       evidenceReuse: null,
+      releaseEvidencePublication: null,
       releaseProfile: "full",
       repository: "openclaw/openclaw",
       rerunGroup: "package",
@@ -838,6 +930,41 @@ describe("release CI summary child correlation", () => {
       workflowRefProof: "manifest-v3-branch",
       workflowRefType: "branch",
       workflowRunPath: ".github/workflows/full-release-validation.yml",
+    });
+  });
+
+  it("normalizes compact Gateway/node compatibility evidence without embedding row JSON", () => {
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowSha: "a".repeat(40),
+    });
+    fixture.manifest.gatewayNodeCompatibility = gatewayNodeCompatibilityFixture({
+      runId: String(fixture.childRun.id),
+      targetSha: fixture.targetSha,
+      workflowSha: fixture.workflowSha,
+    });
+
+    const evidence = validateReleaseRunEvidence(
+      {
+        repository: "openclaw/openclaw",
+        runId: fixture.runId,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
+      },
+      fixture.client,
+    );
+
+    expect(evidence.gatewayNodeCompatibility).toEqual(fixture.manifest.gatewayNodeCompatibility);
+    expect(evidence.gatewayNodeCompatibility).not.toHaveProperty("rows");
+    expect(evidence.gatewayNodeCompatibility?.files).toHaveLength(6);
+    expect(evidence.gatewayNodeCompatibility?.files[4]).toMatchObject({
+      caseId: "linux-x64-candidate-gateway-candidate-node",
+      gatewayProtocolVersion: 4,
+      gatewayVersion: "2026.8.6",
+      helloProtocol: 4,
+      nodeVersion: "2026.8.6",
+      protocolClientAdvertisedMax: 4,
+      protocolClientAdvertisedMin: 3,
     });
   });
 
@@ -1374,6 +1501,42 @@ describe("release CI summary child correlation", () => {
     ).toThrow("release validation manifest workflow SHA mismatch");
   });
 
+  it("validates optional release evidence publication intent", () => {
+    const workflowSha = "b".repeat(40);
+    const raw = rawManifest({ version: 3, workflowSha });
+    Object.assign(raw, {
+      releaseEvidencePublication: {
+        packageSpec: "openclaw@2026.8.7",
+        releaseRef: "v2026.8.7",
+        requested: true,
+      },
+    });
+    expect(
+      validateParentManifest(raw, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }).releaseEvidencePublication,
+    ).toEqual({
+      packageSpec: "openclaw@2026.8.7",
+      releaseRef: "v2026.8.7",
+      requested: true,
+    });
+
+    (raw as Record<string, unknown>).releaseEvidencePublication = {
+      packageSpec: " openclaw@2026.8.7",
+      releaseRef: "v2026.8.7",
+      requested: true,
+    };
+    expect(() =>
+      validateParentManifest(raw, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("release evidence publication is invalid");
+  });
+
   it("requires v3 manifests to record artifact-only performance publication", () => {
     const workflowSha = "b".repeat(40);
     const missing = rawManifest({ version: 3, workflowSha });
@@ -1399,6 +1562,158 @@ describe("release CI summary child correlation", () => {
         workflowSha,
       }),
     ).toThrow("release validation manifest performance report publication mode is invalid");
+  });
+
+  it("requires and validates Gateway/node compatibility evidence for selected release lanes", () => {
+    const workflowSha = "b".repeat(40);
+    const compatibility = gatewayNodeCompatibilityFixture({ workflowSha });
+    const raw = rawManifest({
+      gatewayNodeCompatibility: compatibility,
+      version: 3,
+      workflowSha,
+    });
+    raw.controls.gatewayNodeCompatibility = "required";
+    const manifest = validateParentManifest(raw, {
+      runAttempt: 2,
+      runId: "29090000000",
+      workflowSha,
+    });
+
+    expect(manifest.gatewayNodeCompatibility).toEqual(compatibility);
+
+    const missing = rawManifest({ version: 3, workflowSha });
+    missing.controls.gatewayNodeCompatibility = "required";
+    expect(() =>
+      validateParentManifest(missing, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("requires Gateway/node compatibility evidence");
+  });
+
+  it("keeps historical v3 manifests readable and accepts missing Tideclaw advisory evidence", () => {
+    const workflowSha = "b".repeat(40);
+    expect(
+      validateParentManifest(rawManifest({ version: 3, workflowSha }), {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }).gatewayNodeCompatibility,
+    ).toBeUndefined();
+
+    const advisory = rawManifest({
+      version: 3,
+      workflowFullRef: "refs/heads/tideclaw/alpha/2026-08-06-1200Z",
+      workflowRef: "tideclaw/alpha/2026-08-06-1200Z",
+      workflowSha,
+    });
+    advisory.controls.gatewayNodeCompatibility = "advisory";
+    expect(
+      validateParentManifest(advisory, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }).gatewayNodeCompatibility,
+    ).toBeUndefined();
+
+    const compatibility = gatewayNodeCompatibilityFixture({ workflowSha });
+    advisory.gatewayNodeCompatibility = compatibility;
+    expect(
+      validateParentManifest(advisory, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }).gatewayNodeCompatibility,
+    ).toEqual(compatibility);
+    compatibility.targetSha = "c".repeat(40);
+    expect(() =>
+      validateParentManifest(advisory, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("target SHA mismatch");
+  });
+
+  it("requires not-selected manifests to omit Gateway/node compatibility evidence", () => {
+    const workflowSha = "b".repeat(40);
+    const manifest = rawManifest({ rerunGroup: "package", version: 3, workflowSha });
+    manifest.controls.gatewayNodeCompatibility = "not-selected";
+    expect(
+      validateParentManifest(manifest, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }).gatewayNodeCompatibility,
+    ).toBeUndefined();
+
+    manifest.gatewayNodeCompatibility = gatewayNodeCompatibilityFixture({ workflowSha });
+    expect(() =>
+      validateParentManifest(manifest, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("includes unselected Gateway/node compatibility evidence");
+  });
+
+  it("uses the canonical cross-OS filter to select Gateway/node compatibility evidence", () => {
+    const workflowSha = "b".repeat(40);
+    for (const crossOsSuiteFilter of ["", "gateway-node-compat"]) {
+      const compatibility = gatewayNodeCompatibilityFixture({ workflowSha });
+      const manifest = rawManifest({
+        gatewayNodeCompatibility: compatibility,
+        rerunGroup: "cross-os",
+        version: 3,
+        workflowSha,
+      });
+      manifest.validationInputs.crossOsSuiteFilter = crossOsSuiteFilter;
+      manifest.controls.gatewayNodeCompatibility = "required";
+      expect(
+        validateParentManifest(manifest, {
+          runAttempt: 2,
+          runId: "29090000000",
+          workflowSha,
+        }).gatewayNodeCompatibility,
+      ).toEqual(compatibility);
+    }
+
+    const windowsOnly = rawManifest({
+      rerunGroup: "cross-os",
+      version: 3,
+      workflowSha,
+    });
+    windowsOnly.validationInputs.crossOsSuiteFilter = "windows/packaged-upgrade";
+    windowsOnly.controls.gatewayNodeCompatibility = "not-selected";
+    expect(
+      validateParentManifest(windowsOnly, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }).gatewayNodeCompatibility,
+    ).toBeUndefined();
+  });
+
+  it("binds Gateway/node compatibility evidence to the release-check child run", () => {
+    const workflowSha = "b".repeat(40);
+    const compatibility = gatewayNodeCompatibilityFixture({
+      runId: "999",
+      workflowSha,
+    });
+    const manifest = rawManifest({
+      gatewayNodeCompatibility: compatibility,
+      version: 3,
+      workflowSha,
+    });
+    manifest.controls.gatewayNodeCompatibility = "required";
+    expect(() =>
+      validateParentManifest(manifest, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha,
+      }),
+    ).toThrow("release-check run ID mismatch");
   });
 
   it("requires a successful artifact-only performance guard for the current attempt", () => {
@@ -1497,25 +1812,118 @@ describe("release CI summary child correlation", () => {
     expect(current.targetSha).toBe(root.targetSha);
   });
 
-  it("accepts a verified changelog-only release delta", () => {
-    const root = validateParentManifest(rawManifest({}), {
+  it("binds inherited compatibility evidence to the root across a newer wrapper SHA", () => {
+    const rootWorkflowSha = "b".repeat(40);
+    const currentWorkflowSha = "c".repeat(40);
+    const compatibility = gatewayNodeCompatibilityFixture({ workflowSha: rootWorkflowSha });
+    const rootValue = rawManifest({
+      gatewayNodeCompatibility: compatibility,
+      version: 3,
+      workflowSha: rootWorkflowSha,
+    });
+    rootValue.controls.gatewayNodeCompatibility = "required";
+    const root = validateParentManifest(rootValue, {
       runAttempt: 2,
       runId: "29090000000",
+      workflowSha: rootWorkflowSha,
     });
-    const changedPaths = validateParentManifest(
-      rawManifest({
-        evidenceReuse: {
-          changedPaths: ["CHANGELOG.md"],
-          evidenceSha: root.targetSha,
-          policy: "changelog-only-release-v1",
-          runId: root.runId,
-          selectedRunId: root.runId,
-        },
-        runId: "29090000001",
-        targetSha: "b".repeat(40),
-      }),
-      { runAttempt: 2, runId: "29090000001" },
+
+    const currentValue = rawManifest({
+      evidenceReuse: {
+        changedPaths: [],
+        evidenceSha: root.targetSha,
+        policy: "exact-target-full-validation-v1",
+        runId: root.runId,
+        selectedRunId: root.runId,
+      },
+      gatewayNodeCompatibility: structuredClone(compatibility),
+      runId: "29090000001",
+      targetSha: root.targetSha,
+      version: 3,
+      workflowSha: currentWorkflowSha,
+    });
+    currentValue.controls.gatewayNodeCompatibility = "required";
+    const current = validateParentManifest(currentValue, {
+      runAttempt: 2,
+      runId: "29090000001",
+      workflowSha: currentWorkflowSha,
+    });
+
+    expect(validateEvidenceReuseChain(current, root, root)).toBe(root.targetSha);
+    expect(current.workflowSha).toBe(currentWorkflowSha);
+    expect(current.gatewayNodeCompatibility).toEqual(root.gatewayNodeCompatibility);
+
+    const alteredValue = structuredClone(currentValue);
+    const alteredCompatibility = alteredValue.gatewayNodeCompatibility as ReturnType<
+      typeof gatewayNodeCompatibilityFixture
+    >;
+    expectDefined(
+      alteredCompatibility.files[0],
+      "first altered Gateway/node compatibility row",
+    ).sha256 = "f".repeat(64);
+    const altered = validateParentManifest(alteredValue, {
+      runAttempt: 2,
+      runId: "29090000001",
+      workflowSha: currentWorkflowSha,
+    });
+    expect(() => validateEvidenceReuseChain(altered, root, root)).toThrow(
+      "evidence reuse current manifest policy differs from the chain root",
     );
+
+    const invalidRootValue = structuredClone(rootValue);
+    const invalidRootCompatibility = invalidRootValue.gatewayNodeCompatibility as ReturnType<
+      typeof gatewayNodeCompatibilityFixture
+    >;
+    invalidRootCompatibility.artifact.workflowSha = currentWorkflowSha;
+    invalidRootCompatibility.producer.workflowSha = currentWorkflowSha;
+    expect(() =>
+      validateParentManifest(invalidRootValue, {
+        runAttempt: 2,
+        runId: "29090000000",
+        workflowSha: rootWorkflowSha,
+      }),
+    ).toThrow("Gateway/node compatibility workflow SHA mismatch");
+  });
+
+  it("accepts a verified changelog-only release delta", () => {
+    const rootWorkflowSha = "b".repeat(40);
+    const currentWorkflowSha = "c".repeat(40);
+    const currentTargetSha = "d".repeat(40);
+    const compatibility = gatewayNodeCompatibilityFixture({
+      workflowSha: rootWorkflowSha,
+    });
+    const rootValue = rawManifest({
+      gatewayNodeCompatibility: compatibility,
+      version: 3,
+      workflowSha: rootWorkflowSha,
+    });
+    rootValue.controls.gatewayNodeCompatibility = "required";
+    const root = validateParentManifest(rootValue, {
+      runAttempt: 2,
+      runId: "29090000000",
+      workflowSha: rootWorkflowSha,
+    });
+
+    const changedPathsValue = rawManifest({
+      evidenceReuse: {
+        changedPaths: ["CHANGELOG.md"],
+        evidenceSha: root.targetSha,
+        policy: "changelog-only-release-v1",
+        runId: root.runId,
+        selectedRunId: root.runId,
+      },
+      gatewayNodeCompatibility: structuredClone(compatibility),
+      runId: "29090000001",
+      targetSha: currentTargetSha,
+      version: 3,
+      workflowSha: currentWorkflowSha,
+    });
+    changedPathsValue.controls.gatewayNodeCompatibility = "required";
+    const changedPaths = validateParentManifest(changedPathsValue, {
+      runAttempt: 2,
+      runId: "29090000001",
+      workflowSha: currentWorkflowSha,
+    });
     expect(
       validateEvidenceReuseChain(changedPaths, root, root, (base: string, head: string) => ({
         files: [{ filename: "CHANGELOG.md", status: "modified" }],
@@ -1523,6 +1931,30 @@ describe("release CI summary child correlation", () => {
         status: head === changedPaths.targetSha ? "ahead" : "diverged",
       })),
     ).toBe(root.targetSha);
+    expect(changedPaths.targetSha).toBe(currentTargetSha);
+    expect(changedPaths.workflowSha).toBe(currentWorkflowSha);
+    expect(changedPaths.gatewayNodeCompatibility).toEqual(root.gatewayNodeCompatibility);
+
+    const alteredValue = structuredClone(changedPathsValue);
+    const alteredCompatibility = alteredValue.gatewayNodeCompatibility as ReturnType<
+      typeof gatewayNodeCompatibilityFixture
+    >;
+    expectDefined(
+      alteredCompatibility.files[0],
+      "first altered Gateway/node compatibility row",
+    ).sha256 = "f".repeat(64);
+    const altered = validateParentManifest(alteredValue, {
+      runAttempt: 2,
+      runId: "29090000001",
+      workflowSha: currentWorkflowSha,
+    });
+    expect(() =>
+      validateEvidenceReuseChain(altered, root, root, (base: string, head: string) => ({
+        files: [{ filename: "CHANGELOG.md", status: "modified" }],
+        merge_base_commit: { sha: base },
+        status: head === altered.targetSha ? "ahead" : "diverged",
+      })),
+    ).toThrow("evidence reuse current manifest policy differs from the chain root");
   });
 
   it("rejects unverified changed paths and cross-SHA exact-target reuse", () => {

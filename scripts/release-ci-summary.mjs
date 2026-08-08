@@ -10,6 +10,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  renderGatewayNodeCompatSummary,
+  validateGatewayNodeCompatManifestEvidence,
+} from "./gateway-node-compat-release-evidence.mjs";
+import { shouldRunGatewayNodeCompat } from "./lib/cross-os-release-checks/config.ts";
 import { plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
@@ -27,6 +32,8 @@ const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
 // the workflow budget.
 const GH_COMMAND_TIMEOUT_MS = 60_000;
 const SUCCESSFUL_PARENT_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
+const GATEWAY_NODE_COMPAT_SELECTED_RERUN_GROUPS = new Set(["all", "cross-os", "release-checks"]);
+const GATEWAY_NODE_COMPAT_MODES = new Set(["advisory", "not-selected", "required"]);
 
 const CHILD_DISPATCHES = [
   {
@@ -369,6 +376,7 @@ function manifestEvidenceIdentity(manifest) {
   return canonicalJson({
     childRunIds: manifest.childRunIds,
     controls: manifest.controls,
+    gatewayNodeCompatibility: manifest.gatewayNodeCompatibility,
     releaseProfile: manifest.releaseProfile,
     rerunGroup: manifest.rerunGroup,
     runReleaseSoak: manifest.runReleaseSoak,
@@ -440,6 +448,78 @@ export function validateParentManifest(value, expected) {
           value.validationInputs,
           "release validation manifest validation inputs",
         );
+  const crossOsSuiteFilter = validationInputs?.crossOsSuiteFilter;
+  if (crossOsSuiteFilter !== undefined && typeof crossOsSuiteFilter !== "string") {
+    throw new Error("release validation manifest cross-OS suite filter is invalid");
+  }
+  const gatewayNodeCompatibilityMode = controls.gatewayNodeCompatibility;
+  if (
+    gatewayNodeCompatibilityMode !== undefined &&
+    !GATEWAY_NODE_COMPAT_MODES.has(gatewayNodeCompatibilityMode)
+  ) {
+    throw new Error("release validation manifest Gateway/node compatibility control is invalid");
+  }
+  const gatewayNodeCompatibilitySelected =
+    GATEWAY_NODE_COMPAT_SELECTED_RERUN_GROUPS.has(rerunGroup) &&
+    shouldRunGatewayNodeCompat(crossOsSuiteFilter ?? "");
+  const expectedGatewayNodeCompatibilityMode = !gatewayNodeCompatibilitySelected
+    ? "not-selected"
+    : workflowFullRef?.startsWith("refs/heads/tideclaw/alpha/")
+      ? "advisory"
+      : "required";
+  if (
+    gatewayNodeCompatibilityMode !== undefined &&
+    gatewayNodeCompatibilityMode !== expectedGatewayNodeCompatibilityMode
+  ) {
+    throw new Error(
+      "release validation manifest Gateway/node compatibility control is inconsistent",
+    );
+  }
+  const gatewayNodeCompatibility =
+    value.gatewayNodeCompatibility === undefined
+      ? undefined
+      : validateGatewayNodeCompatManifestEvidence(value.gatewayNodeCompatibility);
+  if (gatewayNodeCompatibility?.targetSha !== undefined && value.evidenceReuse === undefined) {
+    if (gatewayNodeCompatibility.targetSha !== targetSha) {
+      throw new Error("release validation manifest Gateway/node compatibility target SHA mismatch");
+    }
+    if (gatewayNodeCompatibility.artifact.workflowSha !== workflowSha) {
+      throw new Error(
+        "release validation manifest Gateway/node compatibility workflow SHA mismatch",
+      );
+    }
+  }
+  if (gatewayNodeCompatibilityMode === "required" && !gatewayNodeCompatibility) {
+    throw new Error("release validation manifest requires Gateway/node compatibility evidence");
+  }
+  if (gatewayNodeCompatibilityMode === "not-selected" && gatewayNodeCompatibility) {
+    throw new Error(
+      "release validation manifest includes unselected Gateway/node compatibility evidence",
+    );
+  }
+  let releaseEvidencePublication;
+  if (value.releaseEvidencePublication !== undefined) {
+    const publication = normalizeJsonObject(
+      value.releaseEvidencePublication,
+      "release validation manifest release evidence publication",
+    );
+    const keys = Object.keys(publication).toSorted();
+    if (
+      JSON.stringify(keys) !== JSON.stringify(["packageSpec", "releaseRef", "requested"]) ||
+      typeof publication.requested !== "boolean" ||
+      typeof publication.releaseRef !== "string" ||
+      typeof publication.packageSpec !== "string" ||
+      publication.releaseRef.trim() !== publication.releaseRef ||
+      publication.packageSpec.trim() !== publication.packageSpec
+    ) {
+      throw new Error("release validation manifest release evidence publication is invalid");
+    }
+    releaseEvidencePublication = {
+      packageSpec: publication.packageSpec,
+      releaseRef: publication.releaseRef,
+      requested: publication.requested,
+    };
+  }
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -457,6 +537,14 @@ export function validateParentManifest(value, expected) {
     ),
     releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
   };
+  if (
+    gatewayNodeCompatibility &&
+    gatewayNodeCompatibility.artifact.runId !== childRunIds.releaseChecks
+  ) {
+    throw new Error(
+      "release validation manifest Gateway/node compatibility release-check run ID mismatch",
+    );
+  }
   let evidenceReuse;
   if (value.evidenceReuse !== undefined) {
     const reuse = normalizeJsonObject(
@@ -490,7 +578,9 @@ export function validateParentManifest(value, expected) {
     childRunIds,
     controls,
     evidenceReuse,
+    gatewayNodeCompatibility,
     releaseProfile,
+    releaseEvidencePublication,
     rerunGroup,
     runAttempt: Number(value.runAttempt),
     runId: String(value.runId),
@@ -1420,7 +1510,9 @@ export function validateReleaseRunEvidence(
           selectedRunId: reuse.selectedRunId,
         }
       : null,
+    gatewayNodeCompatibility: rootEvidence.manifest.gatewayNodeCompatibility ?? null,
     manifest: rootEvidence.manifestJson,
+    releaseEvidencePublication: currentEvidence.manifest.releaseEvidencePublication ?? null,
     releaseProfile: rootEvidence.manifest.releaseProfile,
     repository: normalizedRepository,
     rerunGroup: rootEvidence.manifest.rerunGroup,
@@ -1767,6 +1859,9 @@ async function main() {
       sourceManifest.rerunGroup,
       sourceManifest.validationInputs,
     );
+    if (sourceManifest.gatewayNodeCompatibility) {
+      console.log(renderGatewayNodeCompatSummary(sourceManifest.gatewayNodeCompatibility));
+    }
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,

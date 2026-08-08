@@ -404,7 +404,7 @@ jobs:
   prepare_release_candidate:
     name: Prepare shared release candidate
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && contains(fromJSON('["all","plugin-prerelease","release-checks","cross-os","live-e2e","package"]'), inputs.rerun_group) }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && contains(fromJSON('["all","plugin-prerelease","release-checks","cross-os","live-e2e","package"]'), inputs.rerun_group) }}
     permissions:
       actions: read
       contents: read
@@ -875,7 +875,7 @@ jobs:
               if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
                 args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
               fi
-              if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
+              if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
                 args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
               fi
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks"
@@ -967,10 +967,34 @@ jobs:
     # so it does not cancel healthy release checks before their final verifier.
     timeout-minutes: 240
     outputs:
+      candidate_package_sha256: ${{ steps.release_package_candidate.outputs.sha256 || needs.prepare_release_candidate.outputs.package_sha256 }}
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
       conclusion: ${{ steps.dispatch.outputs.conclusion }}
     steps:
+      - name: Checkout trusted package resolver
+        if: ${{ inputs.release_package_spec != '' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Resolve release package candidate
+        id: release_package_candidate
+        if: ${{ inputs.release_package_spec != '' }}
+        env:
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+        run: |
+          set -euo pipefail
+          node workflow/scripts/resolve-openclaw-package-candidate.mjs \
+            --source npm \
+            --package-spec "$RELEASE_PACKAGE_SPEC" \
+            --output-dir "${RUNNER_TEMP}/full-release-package-candidate" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Dispatch and monitor release checks
         id: dispatch
         env:
@@ -990,7 +1014,7 @@ jobs:
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
-          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          RELEASE_PACKAGE_SPEC: ${{ steps.release_package_candidate.outputs.package_version && format('openclaw@{0}', steps.release_package_candidate.outputs.package_version) || inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
@@ -1061,7 +1085,7 @@ jobs:
       ]
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Verify child workflow results
         env:
@@ -1491,90 +1515,68 @@ jobs:
 
           exit "$failed"
 
-      - name: Request release evidence update
-        if: ${{ inputs.dispatch_release_evidence }}
+      - name: Checkout Gateway/node compatibility selector and collector
+        if: ${{ success() && needs.evidence_reuse.outputs.reuse != 'true' && needs.release_checks.outputs.run_id != '' && contains(fromJSON('["all","release-checks","cross-os"]'), inputs.rerun_group) }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Select Gateway/node compatibility mode
+        id: gateway_node_compat_selection
+        if: ${{ success() && needs.evidence_reuse.outputs.reuse != 'true' && needs.release_checks.outputs.run_id != '' && contains(fromJSON('["all","release-checks","cross-os"]'), inputs.rerun_group) }}
         env:
-          RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
-          TARGET_REF: ${{ inputs.ref }}
-          PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
-          GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
-          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
-          EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
-          EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
-          EVIDENCE_POLICY: ${{ needs.evidence_reuse.outputs.evidence_policy }}
+          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && "$EVIDENCE_REUSE" != "true" ]]; then
-            echo "Release checks were skipped by rerun group; skipping automatic release evidence update."
-            exit 0
-          fi
-          notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions."
-          if [[ "$EVIDENCE_REUSE" == "true" && -n "${EVIDENCE_ROOT_RUN_ID// }" ]]; then
-            notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE}, which reused green product evidence from chain-root run ${EVIDENCE_ROOT_RUN_ID} under policy ${EVIDENCE_POLICY}."
-          fi
-          if [[ -z "${RELEASES_DISPATCH_TOKEN// }" ]]; then
-            echo "OPENCLAW_RELEASES_DISPATCH_TOKEN is not configured; skipping automatic release evidence update."
-            exit 0
-          fi
-
-          evidence_package_spec="$PACKAGE_SPEC"
-          if [[ -z "${evidence_package_spec// }" ]]; then
-            tag_ref="${TARGET_REF#refs/tags/}"
-            if [[ "$tag_ref" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?)$ ]]; then
-              evidence_package_spec="openclaw@${BASH_REMATCH[1]}"
-            fi
-          fi
-
-          release_id="${TARGET_REF#refs/tags/}"
-          release_id="${release_id#v}"
-          if [[ "$evidence_package_spec" =~ ^openclaw@(.+)$ ]]; then
-            release_id="${BASH_REMATCH[1]}"
-          fi
-          release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
-          if [[ -z "$release_id" ]]; then
-            echo "::warning::Could not derive release evidence id from target ref '${TARGET_REF}'; skipping automatic release evidence update."
-            exit 0
-          fi
-
-          payload="$(
-            jq -cn \
-              --arg full_validation_run_id "$GITHUB_RUN_ID_VALUE" \
-              --arg release_id "$release_id" \
-              --arg release_ref "$TARGET_REF" \
-              --arg package_spec "$evidence_package_spec" \
-              --arg notes "$notes" \
-              '{
-                event_type: "openclaw_full_release_validation_completed",
-                client_payload: {
-                  full_validation_run_id: $full_validation_run_id,
-                  release_id: $release_id,
-                  release_ref: $release_ref,
-                  package_spec: $package_spec,
-                  notes: $notes
-                }
-              }'
+          selected="$(
+            node --experimental-strip-types workflow/scripts/openclaw-cross-os-release-checks.ts \
+              --resolve-gateway-node-compat-selection true \
+              --suite-filter "$CROSS_OS_SUITE_FILTER"
           )"
+          case "$selected" in
+            true)
+              if [[ "$WORKFLOW_FULL_REF" == refs/heads/tideclaw/alpha/* ]]; then
+                mode="advisory"
+              else
+                mode="required"
+              fi
+              ;;
+            false)
+              mode="not-selected"
+              ;;
+            *)
+              echo "Unexpected Gateway/node compatibility selection: $selected" >&2
+              exit 1
+              ;;
+          esac
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
-          if ! curl --fail-with-body \
-            --connect-timeout 10 \
-            --max-time 30 \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${RELEASES_DISPATCH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/openclaw/releases/dispatches \
-            -d "$payload"; then
-            echo "::warning::Automatic release evidence dispatch failed; child workflow validation remains authoritative."
-            {
-              echo "### Release evidence dispatch failed"
-              echo
-              echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases\`:"
-              echo
-              echo "\`\`\`bash"
-              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
-              echo "\`\`\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: Collect Gateway/node compatibility evidence
+        if: ${{ success() && steps.gateway_node_compat_selection.outputs.selected == 'true' }}
+        env:
+          CANDIDATE_PACKAGE_SHA256: ${{ needs.release_checks.outputs.candidate_package_sha256 }}
+          GATEWAY_NODE_COMPAT_MODE: ${{ steps.gateway_node_compat_selection.outputs.mode }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/full-release-validation"
+          node workflow/scripts/gateway-node-compat-release-evidence.mjs collect \
+            --candidate-package-sha256 "${CANDIDATE_PACKAGE_SHA256}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-id "${RELEASE_CHECKS_RUN_ID}" \
+            --workflow-sha "${GITHUB_SHA}" \
+            --target-sha "${TARGET_SHA}" \
+            --mode "${GATEWAY_NODE_COMPAT_MODE}" \
+            --retry-deadline-ms "900000" \
+            --output "${RUNNER_TEMP}/full-release-validation/gateway-node-compatibility.json"
 
       - name: Write release validation manifest
         if: ${{ success() }}
@@ -1609,10 +1611,28 @@ jobs:
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          DISPATCH_RELEASE_EVIDENCE: ${{ inputs.dispatch_release_evidence }}
+          EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
+          FALLBACK_EVIDENCE_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          GATEWAY_NODE_COMPAT_MODE: ${{ steps.gateway_node_compat_selection.outputs.mode || 'not-selected' }}
+          GATEWAY_NODE_COMPAT_PATH: ${{ runner.temp }}/full-release-validation/gateway-node-compatibility.json
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
           mkdir -p "$manifest_dir"
+          if [[ ! -f "$GATEWAY_NODE_COMPAT_PATH" ]]; then
+            printf 'null\n' > "$GATEWAY_NODE_COMPAT_PATH"
+          fi
+          release_evidence_package_spec="$EVIDENCE_PACKAGE_SPEC"
+          if [[ -z "${release_evidence_package_spec// }" ]]; then
+            release_evidence_package_spec="$FALLBACK_EVIDENCE_PACKAGE_SPEC"
+          fi
+          if [[ -z "${release_evidence_package_spec// }" ]]; then
+            tag_ref="${TARGET_REF#refs/tags/}"
+            if [[ "$tag_ref" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?)$ ]]; then
+              release_evidence_package_spec="openclaw@${BASH_REMATCH[1]}"
+            fi
+          fi
           if [[ "$EVIDENCE_REUSE" == "true" ]]; then
             # Inherit the evidence manifest (profile, soak, child runs) so future
             # reuse lookups and evidence consumers keep resolving the chain root.
@@ -1629,6 +1649,8 @@ jobs:
               --arg evidenceRootRunId "$EVIDENCE_ROOT_RUN_ID" \
               --arg evidenceSha "$EVIDENCE_SHA" \
               --arg evidencePolicy "$EVIDENCE_POLICY" \
+              --arg dispatchReleaseEvidence "$DISPATCH_RELEASE_EVIDENCE" \
+              --arg releaseEvidencePackageSpec "$release_evidence_package_spec" \
               --argjson evidenceChangedPaths "$EVIDENCE_CHANGED_PATHS" \
               '. + {
                 version: 3,
@@ -1646,6 +1668,11 @@ jobs:
                   selectedRunId: $evidenceRunId,
                   evidenceSha: $evidenceSha,
                   changedPaths: $evidenceChangedPaths
+                },
+                releaseEvidencePublication: {
+                  requested: ($dispatchReleaseEvidence == "true"),
+                  releaseRef: $targetRef,
+                  packageSpec: $releaseEvidencePackageSpec
                 },
                 controls: ((.controls // {}) + {
                   performanceReportPublication: "artifact-only"
@@ -1684,6 +1711,10 @@ jobs:
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --arg dispatchReleaseEvidence "$DISPATCH_RELEASE_EVIDENCE" \
+            --arg releaseEvidencePackageSpec "$release_evidence_package_spec" \
+            --arg gatewayNodeCompatibilityMode "$GATEWAY_NODE_COMPAT_MODE" \
+            --slurpfile gatewayNodeCompatibility "$GATEWAY_NODE_COMPAT_PATH" \
             '{
               version: 3,
               workflowName: $workflowName,
@@ -1712,10 +1743,16 @@ jobs:
                 npmTelegramScenario: $npmTelegramScenario,
                 allowUnreleasedChangelog: $allowUnreleasedChangelog
               },
+              releaseEvidencePublication: {
+                requested: ($dispatchReleaseEvidence == "true"),
+                releaseRef: $targetRef,
+                packageSpec: $releaseEvidencePackageSpec
+              },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
                 performanceBlocking: ($releaseProfile != "beta"),
-                performanceReportPublication: "artifact-only"
+                performanceReportPublication: "artifact-only",
+                gatewayNodeCompatibility: $gatewayNodeCompatibilityMode
               },
               childRuns: {
                 normalCi: $normalCiRunId,
@@ -1728,14 +1765,18 @@ jobs:
                   blocking: ($releaseProfile != "beta")
                 }
               }
-            }' > "${manifest_dir}/full-release-validation-manifest.json"
+            }
+            | if $gatewayNodeCompatibility[0] == null
+              then .
+              else . + {gatewayNodeCompatibility: $gatewayNodeCompatibility[0]}
+              end' > "${manifest_dir}/full-release-validation-manifest.json"
 
       - name: Upload release validation manifest
         if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/full-release-validation
+          path: ${{ runner.temp }}/full-release-validation/full-release-validation-manifest.json
           if-no-files-found: error
 
       - name: Upload legacy release validation manifest alias
@@ -1743,6 +1784,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-validation-${{ github.run_id }}
-          path: ${{ runner.temp }}/full-release-validation
+          path: ${{ runner.temp }}/full-release-validation/full-release-validation-manifest.json
           if-no-files-found: error
           overwrite: true

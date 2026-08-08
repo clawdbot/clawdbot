@@ -135,6 +135,11 @@ function assertWorkflowPath(value) {
   return workflowPath;
 }
 
+function canonicalWorkflowPath(value) {
+  // REST may qualify the path with @ref; repository, branch, and SHA remain bound below.
+  return assertWorkflowPath(assertTrimmedString(value, "workflow path").split("@", 1)[0]);
+}
+
 function assertRepository(value) {
   const repository = assertTrimmedString(value, "GitHub repository");
   if (!REPOSITORY_RE.test(repository)) {
@@ -667,7 +672,11 @@ function requireExpectedBinding(params) {
     "workflow head branch",
   );
   const runStatePolicy = assertTrimmedString(expected.runStatePolicy, "workflow run-state policy");
-  if (runStatePolicy !== "completed-success" && runStatePolicy !== "same-run-producer-success") {
+  if (
+    runStatePolicy !== "completed-producer-success" &&
+    runStatePolicy !== "completed-success" &&
+    runStatePolicy !== "same-run-producer-success"
+  ) {
     throw new Error(`Unsupported workflow run-state policy: ${runStatePolicy}`);
   }
   const consumerRunAttempt =
@@ -675,9 +684,16 @@ function requireExpectedBinding(params) {
       ? assertPositiveInteger(expected.consumerRunAttempt, "consumer workflow run attempt")
       : undefined;
   const producerJobName =
-    runStatePolicy === "same-run-producer-success"
+    expected.producerJobName !== undefined
       ? assertTrimmedString(expected.producerJobName, "producer job name")
       : undefined;
+  if (
+    (runStatePolicy === "completed-producer-success" ||
+      runStatePolicy === "same-run-producer-success") &&
+    producerJobName === undefined
+  ) {
+    throw new Error(`Producer job name is required for ${runStatePolicy}.`);
+  }
   if (consumerRunAttempt !== undefined && runAttempt > consumerRunAttempt) {
     throw new Error("Producer workflow run attempt must not be newer than the consumer attempt.");
   }
@@ -726,7 +742,7 @@ export function validateActionsArtifactBinding(params) {
     run.head_sha !== expected.workflowSha ||
     run.head_branch !== expected.workflowHeadBranch ||
     run.event !== expected.workflowEvent ||
-    run.path !== expected.workflowPath ||
+    canonicalWorkflowPath(run.path) !== expected.workflowPath ||
     run.repository?.full_name !== expected.repository ||
     run.head_repository?.full_name !== expected.repository
   ) {
@@ -735,6 +751,14 @@ export function validateActionsArtifactBinding(params) {
   if (expected.runStatePolicy === "completed-success") {
     if (run.status !== "completed" || run.conclusion !== "success") {
       throw new Error("Actions workflow run does not match the immutable publication tuple.");
+    }
+  } else if (expected.runStatePolicy === "completed-producer-success") {
+    if (
+      run.status !== "completed" ||
+      typeof run.conclusion !== "string" ||
+      run.conclusion.length === 0
+    ) {
+      throw new Error("Producer workflow attempt must be completed.");
     }
   } else if (expected.runAttempt === expected.consumerRunAttempt) {
     // Environment protection reports the active workflow as waiting until the
@@ -754,7 +778,7 @@ export function validateActionsArtifactBinding(params) {
 
 export function validateActionsArtifactProducerJob(params) {
   const expected = requireExpectedBinding(params);
-  if (expected.runStatePolicy !== "same-run-producer-success") {
+  if (expected.producerJobName === undefined) {
     return expected;
   }
   const response = params.workflowJobs;
@@ -890,6 +914,55 @@ async function fetchBoundedJson(url, request, params) {
   return value;
 }
 
+async function fetchWorkflowJobs(apiRoot, expected, request, retry) {
+  const jobs = [];
+  const jobIds = new Set();
+  let totalCount;
+  for (let page = 1; page <= 10; page += 1) {
+    const pageSuffix = page === 1 ? "" : `&page=${page}`;
+    const response = await runBoundedRetry(
+      `GitHub Actions producer jobs page ${page}`,
+      () =>
+        fetchBoundedJson(
+          `${apiRoot}/actions/runs/${expected.runId}/attempts/${expected.runAttempt}/jobs?per_page=100${pageSuffix}`,
+          request,
+          {
+            label: `GitHub Actions producer jobs page ${page}`,
+            maxBytes: DEFAULT_MAX_JSON_BYTES,
+          },
+        ),
+      retry,
+    );
+    if (
+      !Number.isSafeInteger(response.total_count) ||
+      response.total_count < 0 ||
+      !Array.isArray(response.jobs)
+    ) {
+      throw new Error("Actions workflow jobs inventory is incomplete.");
+    }
+    if (totalCount === undefined) {
+      totalCount = response.total_count;
+    } else if (response.total_count !== totalCount) {
+      throw new Error("Actions workflow jobs inventory changed during pagination.");
+    }
+    for (const job of response.jobs) {
+      if (!Number.isSafeInteger(job?.id) || jobIds.has(job.id)) {
+        throw new Error("Actions workflow jobs inventory contains duplicate or invalid job IDs.");
+      }
+      jobIds.add(job.id);
+      jobs.push(job);
+    }
+    if (response.jobs.length < 100) {
+      break;
+    }
+  }
+  const workflowJobs = { jobs, total_count: totalCount ?? 0 };
+  if (workflowJobs.jobs.length !== workflowJobs.total_count) {
+    throw new Error("Actions workflow jobs inventory is incomplete.");
+  }
+  return workflowJobs;
+}
+
 export async function downloadActionsArtifactArchive(params) {
   const expected = requireExpectedBinding(params);
   const token = assertTrimmedString(params.token, "GitHub token");
@@ -947,20 +1020,8 @@ export async function downloadActionsArtifactArchive(params) {
   );
   validateActionsArtifactBinding({ artifactMetadata, expected, workflowRun });
   let workflowJobs;
-  if (expected.runStatePolicy === "same-run-producer-success") {
-    workflowJobs = await runBoundedRetry(
-      "GitHub Actions producer jobs",
-      () =>
-        fetchBoundedJson(
-          `${apiRoot}/actions/runs/${expected.runId}/attempts/${expected.runAttempt}/jobs?per_page=100`,
-          request,
-          {
-            label: "GitHub Actions producer jobs",
-            maxBytes: DEFAULT_MAX_JSON_BYTES,
-          },
-        ),
-      retry,
-    );
+  if (expected.producerJobName !== undefined) {
+    workflowJobs = await fetchWorkflowJobs(apiRoot, expected, request, retry);
     validateActionsArtifactProducerJob({ expected, workflowJobs });
   }
 

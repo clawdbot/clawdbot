@@ -89,6 +89,16 @@ export function validateParentManifest(
         selectedRunId: string;
       }
     | undefined;
+  gatewayNodeCompatibility:
+    | import("./gateway-node-compat-release-evidence.mjs").GatewayNodeCompatManifestEvidence
+    | undefined;
+  releaseEvidencePublication:
+    | {
+        packageSpec: string;
+        releaseRef: string;
+        requested: boolean;
+      }
+    | undefined;
   releaseProfile: string;
   rerunGroup: string;
   runAttempt: number;
@@ -207,7 +217,15 @@ export type ReleaseRunEvidence = {
   children: Array<Record<string, unknown>>;
   directRoot: boolean;
   evidenceReuse: Record<string, unknown> | null;
+  gatewayNodeCompatibility:
+    | import("./gateway-node-compat-release-evidence.mjs").GatewayNodeCompatManifestEvidence
+    | null;
   producerOnTrustedMainLineage: boolean;
+  releaseEvidencePublication: {
+    packageSpec: string;
+    releaseRef: string;
+    requested: boolean;
+  } | null;
   releaseProfile: string;
   repository: string;
   rerunGroup: string;

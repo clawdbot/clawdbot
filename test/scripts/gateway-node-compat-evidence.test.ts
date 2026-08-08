@@ -1438,7 +1438,7 @@ describe("gateway node compatibility evidence", () => {
     const declaration = readFileSync("scripts/gateway-node-compat-evidence.d.mts", "utf8");
     const declaredValueExports = Array.from(
       declaration.matchAll(/export (?:declare )?(?:const|function) ([A-Za-z0-9_]+)/gu),
-      (match) => match[1],
+      (match) => match[1] ?? "",
     ).toSorted(compareStrings);
 
     expect(Object.keys(evidenceModule).toSorted(compareStrings)).toEqual(declaredValueExports);

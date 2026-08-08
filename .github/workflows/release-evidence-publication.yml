@@ -1,0 +1,140 @@
+name: Release Evidence Publication
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] trusted post-completion release publisher; the job verifies repository, workflow, exact run tuple, main lineage, manifest intent, and all child evidence before using the dispatch token
+    workflows:
+      - Full Release Validation
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-evidence-publication-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  publish:
+    name: Publish validated release evidence
+    if: >
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.repository.full_name == 'openclaw/openclaw' &&
+      github.event.workflow_run.name == 'Full Release Validation' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted publication verifier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify exact completed release evidence
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/release-evidence.json"
+          node scripts/release-ci-summary.mjs \
+            --validate-run "$PARENT_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --trusted-workflow-ref main \
+            --json > "$evidence"
+          node scripts/release-evidence-publication.mjs prepare \
+            --event "$GITHUB_EVENT_PATH" \
+            --evidence "$evidence" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Dispatch release evidence publication
+        if: steps.publication.outputs.should_dispatch == 'true'
+        env:
+          FULL_VALIDATION_RUN_ID: ${{ steps.publication.outputs.full_validation_run_id }}
+          HEAD_SHA: ${{ steps.publication.outputs.head_sha }}
+          NOTES: ${{ steps.publication.outputs.notes }}
+          PACKAGE_SPEC: ${{ steps.publication.outputs.package_spec }}
+          PUBLICATION_KEY: ${{ steps.publication.outputs.publication_key }}
+          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
+          RELEASE_REF: ${{ steps.publication.outputs.release_ref }}
+          RUN_ATTEMPT: ${{ steps.publication.outputs.run_attempt }}
+          UPDATED_AT: ${{ steps.publication.outputs.updated_at }}
+          RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${RELEASES_DISPATCH_TOKEN// }" ]] || {
+            echo "OPENCLAW_RELEASES_DISPATCH_TOKEN is required for requested release evidence publication." >&2
+            exit 1
+          }
+          payload="$(
+            jq -cn \
+              --arg full_validation_run_id "$FULL_VALIDATION_RUN_ID" \
+              --arg full_validation_run_attempt "$RUN_ATTEMPT" \
+              --arg full_validation_head_sha "$HEAD_SHA" \
+              --arg full_validation_updated_at "$UPDATED_AT" \
+              --arg release_id "$RELEASE_ID" \
+              --arg release_ref "$RELEASE_REF" \
+              --arg package_spec "$PACKAGE_SPEC" \
+              --arg notes "$NOTES" \
+              --arg publication_key "$PUBLICATION_KEY" \
+              '{
+                event_type: "openclaw_full_release_validation_completed",
+                client_payload: {
+                  full_validation_run_id: $full_validation_run_id,
+                  full_validation_run_attempt: $full_validation_run_attempt,
+                  full_validation_head_sha: $full_validation_head_sha,
+                  full_validation_updated_at: $full_validation_updated_at,
+                  release_id: $release_id,
+                  release_ref: $release_ref,
+                  package_spec: $package_spec,
+                  notes: $notes,
+                  publication_key: $publication_key
+                }
+              }'
+          )"
+          curl --fail-with-body \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${RELEASES_DISPATCH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/openclaw/releases/dispatches \
+            -d "$payload"
+
+      - name: Confirm durable release evidence publication
+        if: steps.publication.outputs.should_dispatch == 'true'
+        env:
+          FULL_VALIDATION_RUN_ID: ${{ steps.publication.outputs.full_validation_run_id }}
+          HEAD_SHA: ${{ steps.publication.outputs.head_sha }}
+          PACKAGE_SPEC: ${{ steps.publication.outputs.package_spec }}
+          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
+          RELEASE_REF: ${{ steps.publication.outputs.release_ref }}
+          RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
+          RUN_ATTEMPT: ${{ steps.publication.outputs.run_attempt }}
+          UPDATED_AT: ${{ steps.publication.outputs.updated_at }}
+        run: |
+          node scripts/release-evidence-publication.mjs confirm \
+            --run-id "$FULL_VALIDATION_RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --head-sha "$HEAD_SHA" \
+            --updated-at "$UPDATED_AT" \
+            --release-id "$RELEASE_ID" \
+            --release-ref "$RELEASE_REF" \
+            --package-spec "$PACKAGE_SPEC"

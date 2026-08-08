@@ -211,6 +211,10 @@ for ((index = 0; index < run_count; index += 1)); do
       and .evidenceReuse == null
       and .rerunGroup == "all"
       and .controls.performanceReportPublication == "artifact-only"
+      and .controls.gatewayNodeCompatibility == "required"
+      and (.gatewayNodeCompatibility | type == "object")
+      and .gatewayNodeCompatibility.schema == "openclaw.gateway-node-compat-release-evidence/v1"
+      and (.gatewayNodeCompatibility.files | type == "array" and length == 6)
       and .conclusions.current == "success"
       and .conclusions.root == "success"
       and .conclusions.allRequiredSucceeded == true

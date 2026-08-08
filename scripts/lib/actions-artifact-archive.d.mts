@@ -16,7 +16,7 @@ export type ArtifactBinding = {
   artifactName: string;
   artifactSizeBytes: number;
   repository: string;
-  runStatePolicy: "completed-success" | "same-run-producer-success";
+  runStatePolicy: "completed-producer-success" | "completed-success" | "same-run-producer-success";
   runAttempt: number;
   runId: number;
   workflowEvent: string;
