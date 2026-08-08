@@ -285,7 +285,6 @@ function composerControlsHtml() {
           <details class="chat-controls__inline-select chat-controls__model-picker">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
             <span class="chat-controls__inline-select-label">GPT-5.6</span>
-            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__model-menu">
             <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
@@ -299,7 +298,6 @@ function composerControlsHtml() {
           <details class="chat-controls__inline-select chat-controls__effort-picker">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">High</span>
-            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
             <div class="chat-controls__reasoning-panel">Effort</div>
