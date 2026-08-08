@@ -33,6 +33,7 @@ export function createTelegramMessageSessionRuntime({
     resolvedThreadId?: number;
     botHasTopicsEnabled?: boolean;
     senderId?: string | number;
+    businessConnectionId?: string | null;
     runtimeCfg: OpenClawConfig;
   }) => {
     const resolvedThreadId =
@@ -57,6 +58,7 @@ export function createTelegramMessageSessionRuntime({
       replyThreadId: topicThreadId,
       senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
+      businessConnectionId: params.businessConnectionId,
     });
     const baseSessionKey = resolveTelegramConversationBaseSessionKey({
       cfg: params.runtimeCfg,
@@ -64,6 +66,7 @@ export function createTelegramMessageSessionRuntime({
       chatId: params.chatId,
       isGroup: params.isGroup,
       senderId: params.senderId,
+      businessConnectionId: params.businessConnectionId,
     });
     const threadKeys =
       shouldUseTelegramDmThreadSession({

@@ -1,7 +1,8 @@
 // Telegram message-like update registration and cache/dispatch ordering.
 import type { Message } from "grammy/types";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
 import type { TelegramHandlerInboundRuntime } from "./bot-handlers.inbound.runtime.js";
@@ -19,11 +20,16 @@ import {
 } from "./bot/helpers.js";
 import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import {
+  recordBusinessChatMessage,
+  resolveBusinessConnection,
+  upsertBusinessConnection,
+} from "./business-connection-store.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type TelegramMessageHandlerParams = Pick<
   RegisterTelegramHandlerParams,
-  "bot" | "shouldSkipUpdate"
+  "accountId" | "bot" | "shouldSkipUpdate"
 > & {
   opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
   runtime: Pick<RegisterTelegramHandlerParams["runtime"], "error">;
@@ -45,7 +51,7 @@ type TelegramMessageHandlerRuntime = Pick<
 };
 
 export function registerTelegramMessageHandlers(
-  { bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
+  { accountId, bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
   messageRuntime: TelegramMessageHandlerRuntime,
   authorizationRuntime: Pick<TelegramHandlerAuthorizationRuntime, "authorizeInboundMessage">,
   inboundRuntime: Pick<TelegramHandlerInboundRuntime, "processInboundMessage">,
@@ -85,6 +91,8 @@ export function registerTelegramMessageHandlers(
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
+    /** Set for Telegram Business messages; keeps the session isolated from a plain DM with the same sender. */
+    businessConnectionId?: string;
   };
 
   const normalizeChannelPostMessage = (post: Message): Message => {
@@ -192,6 +200,7 @@ export function registerTelegramMessageHandlers(
         resolvedThreadId,
         botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
         senderId: event.senderId,
+        businessConnectionId: event.businessConnectionId,
         runtimeCfg: gate.context.cfg,
       });
       const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
@@ -312,6 +321,104 @@ export function registerTelegramMessageHandlers(
       requireConfiguredGroup: false,
       botUserId: resolveBotUserId(ctx),
     });
+  });
+
+  // Telegram Business Connect ("secretary mode"): the bot is linked to a
+  // personal/business account and sees that account's private-chat traffic.
+  // business_message mirrors BOTH directions of the linked chat — messages
+  // from the other party AND messages the connection owner sends manually
+  // from their own Telegram client — so the owner's own echoed messages must
+  // be filtered out before they ever reach handleInboundMessageLike, or the
+  // agent would generate a reply to the owner's own outgoing text.
+  bot.on("business_message", async (ctx) => {
+    const msg = ctx.businessMessage;
+    const businessConnectionId = msg?.business_connection_id;
+    if (!msg || !businessConnectionId) {
+      return;
+    }
+    const connection = await resolveBusinessConnection({
+      businessConnectionId,
+      fetchConnection: () => bot.api.getBusinessConnection(businessConnectionId),
+    });
+    // Fail closed: an unresolved connection means we cannot tell whether this
+    // is the owner's own echo or verify it is still active, and a disabled
+    // connection must never reach the agent — Telegram can still deliver a
+    // straggling business_message after business_connection reports
+    // is_enabled=false. Either way, do not record or dispatch.
+    if (!connection) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "telegram",
+        reason: "business connection could not be resolved (hydration failed)",
+        target: businessConnectionId,
+      });
+      return;
+    }
+    if (!connection.isEnabled) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "telegram",
+        reason: "business connection is disabled",
+        target: businessConnectionId,
+      });
+      return;
+    }
+    if (msg.from?.id != null && connection.userId === msg.from.id) {
+      return;
+    }
+    const isForum = await resolveTelegramForumFlag({
+      chatId: msg.chat.id,
+      chatType: msg.chat.type,
+      isGroup: false,
+      isForum: msg.chat.is_forum,
+      isTopicMessage: msg.is_topic_message,
+      getChat,
+    });
+    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    await recordBusinessChatMessage({
+      accountId,
+      chatId: normalizedMsg.chat.id,
+      businessConnectionId,
+      messageId: normalizedMsg.message_id,
+    });
+    await handleInboundMessageLike({
+      ctxForDedupe: ctx,
+      ctx: buildSyntheticContext(ctx, normalizedMsg),
+      botUserId: resolveBotUserId(ctx),
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
+      isGroup: false,
+      isForum,
+      messageThreadId: normalizedMsg.message_thread_id,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
+      senderUsername: normalizedMsg.from?.username ?? "",
+      businessConnectionId,
+      requireConfiguredGroup: false,
+      sendOversizeWarning: true,
+      oversizeLogMessage: "media exceeds size limit",
+      errorMessage: "business_message handler failed",
+    });
+  });
+
+  bot.on("edited_business_message", async (ctx) => {
+    const msg = ctx.editedBusinessMessage;
+    if (!msg) {
+      return;
+    }
+    await recordEditedMessageForReplyChain({
+      ctxForDedupe: ctx,
+      msg,
+      requireConfiguredGroup: false,
+      botUserId: resolveBotUserId(ctx),
+    });
+  });
+
+  bot.on("business_connection", async (ctx) => {
+    const connection = ctx.businessConnection;
+    if (!connection) {
+      return;
+    }
+    await upsertBusinessConnection(connection);
   });
 
   // Handle channel posts — enables bot-to-bot communication via Telegram channels.

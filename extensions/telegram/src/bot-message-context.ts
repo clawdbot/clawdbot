@@ -245,6 +245,7 @@ export const buildTelegramMessageContext = async ({
     replyThreadId,
     senderId,
     topicAgentId: topicConfig?.agentId,
+    businessConnectionId: msg.business_connection_id,
   });
   const { bindingMode } = conversationRoute;
   let { route } = conversationRoute;
@@ -327,7 +328,7 @@ export const buildTelegramMessageContext = async ({
         sendChatActionHandler.sendChatAction(
           chatId,
           "typing",
-          buildTypingThreadParams(replyThreadId),
+          buildTypingThreadParams(replyThreadId, msg.business_connection_id),
         ),
     });
   };
@@ -340,7 +341,7 @@ export const buildTelegramMessageContext = async ({
           sendChatActionHandler.sendChatAction(
             chatId,
             "record_voice",
-            buildTypingThreadParams(replyThreadId),
+            buildTypingThreadParams(replyThreadId, msg.business_connection_id),
           ),
       });
     } catch (err) {
@@ -399,6 +400,7 @@ export const buildTelegramMessageContext = async ({
     chatId,
     isGroup,
     senderId,
+    businessConnectionId: msg.business_connection_id,
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,

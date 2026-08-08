@@ -7,6 +7,7 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import * as businessSpies from "./bot.create-telegram-bot.business-spies.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
@@ -462,6 +463,7 @@ const telegramBotRuntimeForTest = {
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
       getFile: grammySpies.getFileSpy,
+      ...businessSpies.businessApi,
       raw: {
         sendRichMessage: async (params: RichMessageParams) =>
           grammySpies.sendMessageSpy(

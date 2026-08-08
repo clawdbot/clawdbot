@@ -236,6 +236,10 @@ export function createTelegramDraftStream(params: {
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
   replyToMode?: ReplyToMode;
+  /** Set for Telegram Business messages; threaded into every send/edit so the
+   * streamed draft is attributed to the connected business account instead
+   * of silently falling back to the bot identity. */
+  businessConnectionId?: string;
   richMessages?: boolean;
   throttleMs?: number;
   /**
@@ -270,16 +274,20 @@ export function createTelegramDraftStream(params: {
     params.linkPreview === false ? ({ link_preview_options: { is_disabled: true } } as const) : {};
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
+  const businessConnectionParams = params.businessConnectionId
+    ? { business_connection_id: params.businessConnectionId }
+    : {};
   const initialSendMessageParams =
     replyToMessageId != null
       ? {
           ...threadParams,
+          ...businessConnectionParams,
           reply_parameters: {
             message_id: replyToMessageId,
             allow_sending_without_reply: true,
           },
         }
-      : (threadParams ?? {});
+      : { ...(threadParams ?? {}), ...businessConnectionParams };
   const consumesReplyTarget =
     replyToMessageId != null &&
     params.replyToMode !== undefined &&
@@ -293,7 +301,7 @@ export function createTelegramDraftStream(params: {
       return initialSendMessageParams;
     }
     if (replyTargetState.kind !== "available") {
-      return threadParams ?? {};
+      return { ...(threadParams ?? {}), ...businessConnectionParams };
     }
     replyTargetState = { kind: "pending", generation: sendGeneration };
     return initialSendMessageParams;
@@ -329,14 +337,14 @@ export function createTelegramDraftStream(params: {
   // ephemeral preview to delete, NOT a durable content chunk to retain — that
   // distinguishes a reposition from forceNewMessage's continuation-chunk race.
   const repositionedSendGenerations = new Set<number>();
-  // Keep the call arity unchanged when no preview options apply: an explicit
+  // Keep the call arity unchanged when no extra options apply: an explicit
   // trailing `undefined` is a different call than omitting the argument.
-  const editMessageTextWithPreview = async (
+  const editMessageTextWithExtras = async (
     messageId: number,
     text: string,
     other?: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>,
   ) => {
-    const merged = other ? { ...other, ...linkPreviewParams } : linkPreviewParams;
+    const merged = { ...other, ...linkPreviewParams, ...businessConnectionParams };
     return Object.keys(merged).length > 0
       ? await params.api.editMessageText(chatId, messageId, text, merged)
       : await params.api.editMessageText(chatId, messageId, text);
@@ -464,6 +472,7 @@ export function createTelegramDraftStream(params: {
             chat_id: chatId,
             message_id: targetMessageId,
             rich_message: page.richMessage,
+            ...businessConnectionParams,
           });
         } catch (err) {
           const fallbackPlan = buildTelegramPlainFallbackPlan({
@@ -475,23 +484,23 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await editMessageTextWithPreview(targetMessageId, fallbackPlan.plainText);
+          await editMessageTextWithExtras(targetMessageId, fallbackPlan.plainText);
           acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
         }
       } else if (page.sourceTextMode === "html") {
         try {
-          await editMessageTextWithPreview(targetMessageId, page.sourceText, {
+          await editMessageTextWithExtras(targetMessageId, page.sourceText, {
             parse_mode: "HTML" as const,
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await editMessageTextWithPreview(targetMessageId, page.text);
+          await editMessageTextWithExtras(targetMessageId, page.text);
           acceptedSnapshot = fallbackSnapshot(page.text);
         }
       } else {
-        await editMessageTextWithPreview(targetMessageId, page.sourceText);
+        await editMessageTextWithExtras(targetMessageId, page.sourceText);
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;

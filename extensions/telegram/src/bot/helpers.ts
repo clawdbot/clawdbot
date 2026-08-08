@@ -482,12 +482,20 @@ export function buildTelegramInboundOriginTarget(
 /**
  * Build thread params for typing indicators (sendChatAction).
  * Empirically, General topic (id=1) needs message_thread_id for typing to appear.
+ *
+ * Business-connected chats reject sendChatAction with PEER_ID_INVALID unless
+ * business_connection_id is threaded through alongside chat_id — mirrors the
+ * businessConnectionId handling in send-message.ts's sendReplyMessage.
  */
-export function buildTypingThreadParams(messageThreadId?: number) {
-  if (messageThreadId == null) {
-    return undefined;
+export function buildTypingThreadParams(messageThreadId?: number, businessConnectionId?: string) {
+  const params: { message_thread_id?: number; business_connection_id?: string } = {};
+  if (messageThreadId != null) {
+    params.message_thread_id = Math.trunc(messageThreadId);
   }
-  return { message_thread_id: Math.trunc(messageThreadId) };
+  if (businessConnectionId) {
+    params.business_connection_id = businessConnectionId;
+  }
+  return Object.keys(params).length > 0 ? params : undefined;
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
@@ -506,17 +514,27 @@ export function buildTelegramGroupPeerId(chatId: number | string, messageThreadI
  * In some Telegram DM deliveries (for example certain business/chat bridge flows),
  * `chat.id` can differ from the actual sender user id. Prefer sender id when present
  * so per-peer DM scopes isolate users correctly.
+ *
+ * When `businessConnectionId` is set (Telegram Business Connect messages), the
+ * peer id is namespaced under that connection regardless of the configured
+ * dmScope. A customer's business-chat session must never collide with a plain
+ * DM session for the same numeric sender id — the two are different
+ * conversations even though `buildAgentPeerSessionKey`'s "direct" branch is
+ * reused unchanged for both.
  */
 export function resolveTelegramDirectPeerId(params: {
   chatId: number | string;
   senderId?: number | string | null;
+  businessConnectionId?: string | null;
 }) {
   const senderId =
     params.senderId != null ? (normalizeOptionalString(String(params.senderId)) ?? "") : "";
-  if (senderId) {
-    return senderId;
+  const basePeerId = senderId || String(params.chatId);
+  const businessConnectionId = normalizeOptionalString(params.businessConnectionId ?? undefined);
+  if (businessConnectionId) {
+    return `business:${businessConnectionId}:${basePeerId}`;
   }
-  return String(params.chatId);
+  return basePeerId;
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {

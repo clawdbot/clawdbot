@@ -325,6 +325,7 @@ export const dispatchTelegramMessage = async ({
     accountId: dispatchContext.route.accountId,
     allowProviderPreview,
     bot,
+    businessConnectionId: dispatchContext.msg.business_connection_id,
     cfg,
     chatId: dispatchContext.chatId,
     draftReplyToMessageId: quote.draftReplyToMessageId,

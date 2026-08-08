@@ -1106,6 +1106,7 @@ export const registerTelegramNativeCommands = ({
       replyThreadId: threadSpec.id,
       senderId,
       topicAgentId,
+      businessConnectionId: msg.business_connection_id,
     });
     const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
     if (bindingMode.kind === "configured") {

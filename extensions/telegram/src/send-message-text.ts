@@ -140,6 +140,7 @@ export function createTelegramTextSender(config: {
     const plainParams: TelegramSendMessageParams = {
       ...baseParams,
       ...(opts.silent === true ? { disable_notification: true } : {}),
+      ...(opts.businessConnectionId ? { business_connection_id: opts.businessConnectionId } : {}),
     };
     const requestSendMessage = (
       label: string,
@@ -597,6 +598,9 @@ export function createTelegramTextSender(config: {
                     rich_message: chunk.richMessage,
                     ...effectiveParams,
                     ...(opts.silent === true ? { disable_notification: true } : {}),
+                    ...(opts.businessConnectionId
+                      ? { business_connection_id: opts.businessConnectionId }
+                      : {}),
                   }),
                 retryLabel,
               ),
