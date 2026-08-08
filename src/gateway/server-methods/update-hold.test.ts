@@ -11,7 +11,7 @@ const validateUpdateHoldResultMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("../../infra/update-campaign.js", () => ({
   gatewayUpdateCampaign: {
-    adopt: () => true,
+    adopt: () => undefined,
     hold: holdUpdateCampaignMock,
   },
 }));
