@@ -1835,6 +1835,7 @@ const openaiChatToolsE2e = "test/e2e/qa-lab/runtime/openai-compatible-chat-tools
 const npmPostpublish = "test/openclaw-npm-postpublish-verify.test.ts";
 const crossOsReleaseChecks = "openclaw-cross-os-release-checks";
 const runNode = "src/infra/run-node.test.ts";
+const changedWindowsScope = "src/scripts/ci-changed-scope.windows.test.ts";
 const pluginSdkEntryOwners = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
@@ -2092,7 +2093,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS = [
   [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mjs$/u, ["test-projects"]],
-  [/^scripts\/ci-changed-scope\.mjs$/u, [changedScope, "control-ui-i18n"]],
+  [/^scripts\/ci-changed-scope\.mjs$/u, [changedScope, changedWindowsScope, "control-ui-i18n"]],
   [/^scripts\/check-changed\.mjs$/u, ["changed-lanes"]],
   [
     new RegExp(

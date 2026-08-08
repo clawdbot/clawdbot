@@ -1304,7 +1304,11 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
     expectChangedTargets(
       ["scripts/ci-changed-scope.mjs"],
-      ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+      [
+        "src/scripts/ci-changed-scope.test.ts",
+        "src/scripts/ci-changed-scope.windows.test.ts",
+        "test/scripts/control-ui-i18n.test.ts",
+      ],
     );
 
     expectChangedTargets(

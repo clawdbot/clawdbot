@@ -1,9 +1,31 @@
 // Windows CI scope tests cover paths with platform-specific runtime contracts.
 import { describe, expect, it } from "vitest";
 
-const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
+const { detectChangedScope, detectNodeFastScope } =
+  await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes Knip cleanup owners to Windows", () => {
+    for (const ownerPath of [
+      "scripts/check-deadcode-unused-files.mjs",
+      "scripts/deadcode-knip-runner.mjs",
+      "test/scripts/check-deadcode-unused-files.test.ts",
+    ]) {
+      expect(detectChangedScope([ownerPath]), ownerPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("keeps Windows routing coverage in fast CI", () => {
+    expect(detectNodeFastScope(["src/scripts/ci-changed-scope.windows.test.ts"])).toEqual({
+      runFastOnly: true,
+      runPluginContracts: false,
+      runCiRouting: true,
+    });
+  });
+
   it("routes SQLite transcript archive changes to Windows", () => {
     for (const archivePath of [
       "src/config/sessions/session-accessor.sqlite-archive.ts",
