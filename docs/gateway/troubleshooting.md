@@ -393,6 +393,55 @@ Related:
 - [Remote access](/gateway/remote)
 - [Trusted proxy auth](/gateway/trusted-proxy-auth)
 
+## Remote client cannot connect
+
+Use when a client on another machine gets connection errors, timeouts, or connects and then immediately closes, while local use works. Verified on 2026.7.1-2.
+
+One command sorts every case. From the machine that cannot connect:
+
+```bash
+curl -sS -m 5 http://<gateway-host>:18789/
+```
+
+- HTML comes back: the network path is fine. Skip to [curl works, the client still fails](#curl-works-the-client-still-fails). Any GET serves the control UI, so this proves reachability only, never auth.
+- `connection refused`: nothing is listening at that host:port.
+- Hangs then times out: path or firewall, see [timeout, not refused](#timeout-not-refused).
+
+### Connection refused
+
+On the gateway host, check what is actually listening: `ss -tlnp | grep 18789`.
+
+1. Nothing listening: start the gateway in the foreground and read its error.
+   - `Missing config. Run 'openclaw setup' or set gateway.mode=local (or pass --allow-unconfigured)`: do exactly that.
+   - `Refusing to bind gateway to lan without auth.`: non-loopback binds require auth, with no exceptions (explicit `--auth none` is also refused). Set `OPENCLAW_GATEWAY_TOKEN` or pass `--token`/`--password`, then retry.
+   - `Port 18789 is already in use.`: a previous gateway still holds the port. `openclaw gateway --force` kills it and takes over (it logs `force: killed pid <N> on port <P>`).
+2. Listening on `127.0.0.1:18789`: loopback is unreachable from other machines by design. Keep loopback and use the SSH tunnel from [remote access](/gateway/remote), or bind wider with auth (`--bind lan`).
+3. Listening on an unexpected port: effective port precedence is `--port` flag, then `OPENCLAW_GATEWAY_PORT`, then `gateway.port`, then 18789. The classic miss is the env var set in your shell but not in the service environment that actually runs the gateway.
+4. Docker:
+   - Gateway in a container: the port must be published (`-p 18789:18789`). In-container bind defaults to `auto` (0.0.0.0), but unpublished ports reach nobody.
+   - Client in a container reaching a host gateway: `localhost` is the container. Use `host.docker.internal` (macOS/Windows) or host networking (Linux).
+   - Container to container: use the service name on a shared network, never `localhost`.
+   - If Tailscale serve/funnel is active, bind is forced back to loopback, which silently defeats a published-port setup. Pick one mechanism.
+
+### Timeout, not refused
+
+The gateway is fine; the path is not. On the same LAN, check the host firewall on the gateway machine. Across the internet, use a sanctioned path from the next section: plaintext `ws://` to remote hosts is refused client-side anyway.
+
+### curl works, the client still fails
+
+Work down in order; each failure names itself.
+
+1. `SECURITY ERROR: Cannot connect to "<host>" over plaintext ws://`: the client refuses remote plaintext WebSocket by design so credentials cannot ride unencrypted. Options, in order of sanity:
+   - Keep the gateway on loopback and tunnel, then connect to localhost (plaintext to 127.0.0.1 is allowed): `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host`
+   - [Tailscale serve](/gateway/tailscale) (TLS handled for you)
+   - Reverse proxy with TLS, connect via `wss://`
+   - Trusted private LAN only: `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`
+2. `unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)`: the error names its own fix. Check both ends; SSH tunnels do not bypass auth.
+3. `pairing required: device is not approved yet` (close code 1008): token auth is only half; new devices also need approval. On the gateway host run `openclaw devices list`, find the request id, then `openclaw devices approve <requestId>` and reconnect. See [pairing](/gateway/pairing).
+4. Diagnostic trap: `openclaw gateway status` prints local service and config summaries first even when probing a remote `--url`, and the CLI keeps working from config when the gateway is down. A calm-looking CLI is not proof of a reachable gateway. Trust `openclaw gateway probe` and `openclaw gateway health --url <url> --token <token>`.
+
+`404 Not Found` on `/v1/...` does not mean unreachable: the HTTP APIs are plugin-gated and off by default. The control UI answering proves the gateway is there.
+
 ## Gateway service not running
 
 Use when the service is installed but the process does not stay up.
