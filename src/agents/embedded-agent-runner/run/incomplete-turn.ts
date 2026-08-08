@@ -278,11 +278,18 @@ export function resolveIncompleteTurnPayloadText(params: {
   // Timeout phase and interruption precedence belong to the canonical attempt terminal.
   // Only its tool-execution timeout may become an incomplete-turn payload here.
   //
-  // This returns before the general suppression guard below, so it cannot inherit
-  // that guard's external-abort silence and has to reject externally owned
-  // interruptions itself. A `timeout` terminal carries `source: "external"` when an
-  // operator cancellation raced the timeout, so the two states genuinely co-occur;
-  // without this check that cancellation would be reported as an exhausted time budget.
+  // This returns before the general suppression guards below, so it cannot inherit
+  // their silence and has to re-state each owner it would otherwise bypass.
+  //
+  // External abort: a `timeout` terminal carries `source: "external"` when an operator
+  // cancellation raced the timeout, so the two states genuinely co-occur; without this
+  // check that cancellation would be reported as an exhausted time budget.
+  //
+  // Explicit silent reply: `hasOnlySilentAssistantReply` owns the `NO_REPLY` token as
+  // deliberate silence, including post-tool turns, and `hasTimeoutTerminalOutput` never
+  // inspects assistant text. An empty payload alongside that token is a state the file
+  // already treats as reachable (see the silent-reply branch below), so without this
+  // check a turn that deliberately declined to answer would emit an unsolicited notice.
   if (
     terminal.timedOut &&
     terminal.timedOutDuringToolExecution &&
@@ -290,6 +297,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     !(params.aborted && params.externalAbort) &&
     params.payloadCount === 0 &&
     params.allowEmptyAssistantReplyAsSilent !== true &&
+    !hasOnlySilentAssistantReply(params.attempt.assistantTexts) &&
     !hasTimeoutTerminalOutput
   ) {
     return terminal.idleTimedOut ? TURN_IDLE_TIMEOUT_NOTICE : TURN_BUDGET_TIMEOUT_NOTICE;

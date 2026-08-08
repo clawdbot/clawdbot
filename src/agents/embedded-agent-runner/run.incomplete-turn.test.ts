@@ -5051,5 +5051,32 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
     expect(result.payloads?.[0]?.text).not.toBe(TURN_BUDGET_TIMEOUT_NOTICE);
   });
+
+  it("stays silent when an explicit NO_REPLY turn also times out during tool execution", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        timedOut: true,
+        timedOutDuringToolExecution: true,
+        lastToolError: { toolName: "exec", error: "command aborted", meta: "sleep 30" },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-explicit-silence",
+      config: { messages: { suppressToolErrors: true } } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    // The assistant deliberately declined to answer, so the established silent-reply
+    // owner wins over the timeout notice rather than being bypassed by it.
+    expect(result.payloads?.some((p) => p.text === TURN_BUDGET_TIMEOUT_NOTICE)).toBeFalsy();
+    expect(result.payloads?.some((p) => p.text === TURN_IDLE_TIMEOUT_NOTICE)).toBeFalsy();
+    expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
