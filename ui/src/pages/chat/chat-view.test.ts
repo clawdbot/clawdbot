@@ -2149,9 +2149,7 @@ describe("chat transcript rendering cache", () => {
       onOpenWorkspaceFile,
     };
 
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      { kind: "stream-run", key: "stream-run:media", parts: [streamPart] },
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([streamPart]);
     renderChatView({ ...mediaProps, canAbort: true });
 
     expect(vi.mocked(chatMessage.renderStreamGroup).mock.calls.at(-1)?.[1]).toMatchObject(expected);
