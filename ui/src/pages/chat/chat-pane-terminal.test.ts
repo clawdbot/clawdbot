@@ -28,7 +28,7 @@ describe("chat pane terminal action", () => {
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(state),
-          createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+          createBackgroundTasksProps(state),
           session,
           false,
           undefined,
