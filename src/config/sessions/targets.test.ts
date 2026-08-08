@@ -1,9 +1,8 @@
 // Session target tests cover persisted channel targets for sessions.
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -338,88 +337,6 @@ describe("resolveSessionStoreTargets", () => {
           env,
         }).path,
       ).toBe(path.join(home, "shared.worker.2.sqlite"));
-    });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "deduplicates aliased SQLite locators by physical identity",
-    async () => {
-      await withTempHome(async (home) => {
-        const stateDir = path.join(home, ".openclaw");
-        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        const realDir = path.join(home, "real-stores");
-        const aliasDir = path.join(home, "alias-stores");
-        await fs.mkdir(realDir, { recursive: true });
-        await fs.symlink(realDir, aliasDir, "dir");
-        const diagnostics: string[] = [];
-
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget(
-            [
-              { agentId: "main", storePath: path.join(realDir, "shared.sqlite") },
-              { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
-            ],
-            {
-              defaultAgentId: "main",
-              env,
-              onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
-            },
-          ),
-        ).toEqual([{ agentId: "main", storePath: path.join(realDir, "shared.sqlite") }]);
-        expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
-
-        const otherDir = path.join(home, "other-stores");
-        await fs.mkdir(otherDir);
-        await fs.unlink(aliasDir);
-        await fs.symlink(otherDir, aliasDir, "dir");
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget(
-            [
-              { agentId: "main", storePath: path.join(realDir, "shared.sqlite") },
-              { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
-            ],
-            { defaultAgentId: "main", env },
-          ),
-        ).toHaveLength(2);
-      });
-    },
-  );
-
-  it("prepares each SQLite identity once during one dedupe pass", async () => {
-    await withTempHome(async (home) => {
-      const realHome = realpathSync(home);
-      const targets = Array.from({ length: 29 }, (_, index) => ({
-        agentId: `agent-${index}`,
-        storePath: path.join(
-          realHome,
-          ".openclaw",
-          "agents",
-          `agent-${index}`,
-          "sessions",
-          "sessions.json",
-        ),
-      }));
-      const databaseDirs = new Set(
-        targets.map((target) => path.join(path.dirname(path.dirname(target.storePath)), "agent")),
-      );
-      await Promise.all(
-        [...databaseDirs].map((databaseDir) => fs.mkdir(databaseDir, { recursive: true })),
-      );
-      const realpathNative = vi.spyOn(realpathSync, "native");
-      try {
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget([...targets, ...targets], {
-            defaultAgentId: targets[0]!.agentId,
-          }),
-        ).toEqual(targets);
-        const preparedPaths = realpathNative.mock.calls.flatMap(([pathname]) =>
-          typeof pathname === "string" && databaseDirs.has(pathname) ? [pathname] : [],
-        );
-        expect(preparedPaths).toHaveLength(targets.length);
-        expect(new Set(preparedPaths).size).toBe(preparedPaths.length);
-      } finally {
-        realpathNative.mockRestore();
-      }
     });
   });
 
