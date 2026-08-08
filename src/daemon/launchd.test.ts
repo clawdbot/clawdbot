@@ -1683,8 +1683,7 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
     const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
-    const wrapperPath =
-      "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
     state.bootstrapError = "Operation not permitted";
     state.bootstrapTransient = true;
 
@@ -1706,10 +1705,9 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
     const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
-    const wrapperPath =
-      "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
     const previousEnv = "export OPENCLAW_GATEWAY_PORT='18789'\n";
-    const previousWrapper = "#!/bin/sh\n. \"$1\"\nshift\nexec \"$@\"\n";
+    const previousWrapper = '#!/bin/sh\n. "$1"\nshift\nexec "$@"\n';
     const previous = createTestLaunchAgentPlist({
       label: "ai.openclaw.gateway",
       programArguments: [
