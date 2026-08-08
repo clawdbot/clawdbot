@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -44,7 +46,14 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  admitFollowupRunLifecycle,
+  enqueueFollowupRun,
+  parkSteerCandidate,
+  resolveFollowupAbortSignal,
+  scheduleFollowupDrain,
+} from "./queue.js";
+import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
@@ -56,7 +65,7 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { readChannelSourceTurnId } from "./source-turn-id.js";
+import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
   params: RunReplyAgentParams,
@@ -69,6 +78,7 @@ export async function runReplyAgent(
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState = "empty",
     isActive,
     isRunActive,
     opts,
@@ -95,6 +105,7 @@ export async function runReplyAgent(
   } = params;
   // One lifecycle for all adoption sites in this run.
   const turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+  const releaseAdmissionTicket = () => opts?.[REPLY_ADMISSION_TICKET]?.release();
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
@@ -173,6 +184,7 @@ export async function runReplyAgent(
         }
       }
     }
+    releaseAdmissionTicket();
     typing.cleanup();
     return undefined;
   }
@@ -209,83 +221,6 @@ export async function runReplyAgent(
     }
   };
 
-  let shouldQueueAfterSteerRejection = false;
-  if (effectiveShouldSteer && isActive && opts?.messageInjectionAttempted !== true) {
-    // Steer against the operation that owns THIS session's run slot. A native
-    // command continuation whose slot adoption was skipped (#104844) still
-    // carries a source-keyed reservation; steering by its stale sessionId
-    // would miss the live target run.
-    const registeredReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
-    const activeReplyOperation =
-      providedReplyOperation?.key === sessionKey
-        ? providedReplyOperation
-        : (registeredReplyOperation ?? providedReplyOperation);
-    const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
-    const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      steerSessionId,
-      followupRun.prompt,
-      {
-        steeringMode: "all",
-        isInboundUserMessage: true,
-        ...(followupRun.images?.length ? { images: followupRun.images } : {}),
-        ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
-        ...(followupRun.media?.length ? { media: followupRun.media } : {}),
-        ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
-        ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
-        ...(followupRun.run.sourceReplyDeliveryMode
-          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
-          : {}),
-        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
-        ...(followupRun.userTurnTranscriptRecorder
-          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
-          : {}),
-      },
-    );
-    if (steerOutcome.queued) {
-      const adoptionDisposition = await finalizeAcceptedSteer({
-        activeReplyOperation,
-        abortKey: sessionKey ?? queueKey,
-        cleanupTyping: () => typing.cleanup(),
-        errorMessage: steerOutcome.errorMessage,
-        onAdopted: turnAdoptionLifecycle ? () => turnAdoptionLifecycle.onAdopted() : undefined,
-        replyOperationRunState,
-        steerSessionId,
-        transcriptCommit: steerOutcome.transcriptCommit,
-      });
-      if (adoptionDisposition === "stop") {
-        return undefined;
-      }
-      if (followupRun.currentInboundAudio === true) {
-        activeReplyOperation?.markAcceptedSteeredInboundAudio();
-      }
-      if (activeReplyOperation) {
-        // Steering joins the existing task; its dispatch-local controller is
-        // disposable, while the task-owned controller must keep its lifetime.
-        await refreshReplyOperationTyping(activeReplyOperation, {
-          startIfIdle: typingSignals.shouldStartImmediately,
-        });
-      }
-      await touchActiveSessionEntry();
-      typing.cleanup();
-      return undefined;
-    }
-    // A vanished/non-streaming owner can fall through; every rejection from a
-    // still-owning runtime must retain this exact turn as a follow-up.
-    shouldQueueAfterSteerRejection = !["no_active_run", "not_streaming", "stale_run"].includes(
-      steerOutcome.reason,
-    );
-    const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
-    logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
-  }
-
-  const activeRunQueueAction = resolveActiveRunQueueAction({
-    isActive,
-    isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup || shouldQueueAfterSteerRejection,
-    queueMode: activeRunQueueMode,
-    resetTriggered: effectiveResetTriggered,
-  });
-
   const queuedRunFollowupTurn = createFollowupRunner({
     opts,
     typing,
@@ -298,10 +233,172 @@ export async function runReplyAgent(
     agentCfgContextTokens,
     toolProgressDetail,
   });
+
+  if (effectiveShouldSteer && isActive && opts?.messageInjectionAttempted !== true) {
+    // Steer against the operation that owns THIS session's run slot. A native
+    // command continuation whose slot adoption was skipped (#104844) still
+    // carries a source-keyed reservation; steering by its stale sessionId
+    // would miss the live target run.
+    const registeredReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
+    const activeReplyOperation =
+      providedReplyOperation?.key === sessionKey
+        ? providedReplyOperation
+        : (registeredReplyOperation ?? providedReplyOperation);
+    const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
+    replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
+    const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, queuedRunFollowupTurn);
+    if (!parked) {
+      releaseAdmissionTicket();
+      typing.cleanup();
+      return undefined;
+    }
+    const scheduleParkedFallback = () => {
+      const owner = replyRunRegistry.get(queueKey);
+      if (owner) {
+        scheduleFollowupDrainAfterReplyOperationClear({
+          operation: owner,
+          queueKey,
+          runFollowup: queuedRunFollowupTurn,
+        });
+      } else {
+        scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
+      }
+    };
+    scheduleParkedFallback();
+    releaseAdmissionTicket();
+    try {
+      const admission = await parked.admit();
+      if (admission === "cancelled") {
+        parked.consume();
+        typing.cleanup();
+        return undefined;
+      }
+      if (admission === "fallback") {
+        parked.fallback();
+        if (replyOperationRunState) {
+          replyOperationRunState.admission = { status: "accepted", mode: "followup" };
+        }
+        await touchActiveSessionEntry();
+        typing.cleanup();
+        return undefined;
+      }
+      // Channel dispatch normally stamps the route-scoped source id. Internal
+      // callers can derive the same per-message identity from the prepared turn.
+      const steerRunId = expectDefined(
+        restartRecoverySourceTurnId ??
+          buildChannelSourceTurnId({
+            provider:
+              followupRun.originatingChannel ??
+              followupRun.run.messageProvider ??
+              sessionCtx.Provider,
+            accountId:
+              followupRun.originatingAccountId ??
+              followupRun.run.agentAccountId ??
+              sessionCtx.AccountId,
+            conversationId:
+              followupRun.originatingTo ??
+              followupRun.originatingChatId ??
+              sessionKey ??
+              followupRun.run.sessionKey,
+            messageId: followupRun.messageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+          }) ??
+          normalizeOptionalString(opts?.runId),
+        "steered turn id",
+      );
+      const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+        steerSessionId,
+        followupRun.prompt,
+        {
+          steeringMode: "all",
+          isInboundUserMessage: true,
+          ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+          ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
+          ...(followupRun.media?.length ? { media: followupRun.media } : {}),
+          waitForTranscriptCommit: true,
+          queueIdentity: steerRunId,
+          abortSignal: resolveFollowupAbortSignal(followupRun),
+          onQueueAccepted: parked.accepted,
+          ...(resolvedQueue.debounceMs !== undefined
+            ? { debounceMs: resolvedQueue.debounceMs }
+            : {}),
+          ...(followupRun.run.sourceReplyDeliveryMode
+            ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
+            : {}),
+          taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+          ...(followupRun.userTurnTranscriptRecorder
+            ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+            : {}),
+        },
+      );
+      if (!steerOutcome.queued) {
+        parked.fallback();
+        if (replyOperationRunState) {
+          replyOperationRunState.admission = { status: "accepted", mode: "followup" };
+        }
+        const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
+        logVerbose(
+          `queue: active session ${steerSessionId} rejected steering injection: ${summary}`,
+        );
+        await touchActiveSessionEntry();
+        typing.cleanup();
+        return undefined;
+      }
+      const adoptionDisposition = await finalizeAcceptedSteer({
+        activeReplyOperation,
+        abortKey: sessionKey ?? queueKey,
+        cleanupTyping: () => typing.cleanup(),
+        errorMessage: steerOutcome.errorMessage,
+        onAdopted: () => admitFollowupRunLifecycle(followupRun),
+        replyOperationRunState,
+        steerSessionId,
+        transcriptCommit: steerOutcome.transcriptCommit,
+      });
+      parked.consume();
+      if (adoptionDisposition === "stop") {
+        return undefined;
+      }
+      if (followupRun.currentInboundAudio === true) {
+        activeReplyOperation?.markAcceptedSteeredInboundAudio();
+      }
+      if (activeReplyOperation) {
+        await refreshReplyOperationTyping(activeReplyOperation, {
+          startIfIdle: typingSignals.shouldStartImmediately,
+        });
+      }
+      await touchActiveSessionEntry();
+      typing.cleanup();
+      return undefined;
+    } catch (error) {
+      if (resolveFollowupAbortSignal(followupRun)?.aborted) {
+        parked.consume();
+      } else {
+        parked.fallback();
+      }
+      throw error;
+    } finally {
+      if (followupRun.steerPending) {
+        if (resolveFollowupAbortSignal(followupRun)?.aborted) {
+          parked.consume();
+        } else {
+          parked.fallback();
+        }
+      }
+    }
+  }
+
+  const activeRunQueueAction = resolveActiveRunQueueAction({
+    queueAdmissionState,
+    isActive,
+    isHeartbeat,
+    shouldFollowup: effectiveShouldFollowup,
+    queueMode: activeRunQueueMode,
+    resetTriggered: effectiveResetTriggered,
+  });
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
     }
+    releaseAdmissionTicket();
     typing.cleanup();
     return undefined;
   }
@@ -317,6 +414,7 @@ export async function runReplyAgent(
       false,
     );
     if (!enqueued) {
+      releaseAdmissionTicket();
       typing.cleanup();
       return undefined;
     }
@@ -335,6 +433,7 @@ export async function runReplyAgent(
     } else {
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
+    releaseAdmissionTicket();
     const queuedBehindActiveRun = isRunActive?.() === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
@@ -426,6 +525,7 @@ export async function runReplyAgent(
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "owned" };
     }
+    releaseAdmissionTicket();
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
@@ -447,6 +547,7 @@ export async function runReplyAgent(
           : { status: "skipped", reason: admission.reason };
     }
     if (admission.status === "skipped") {
+      releaseAdmissionTicket();
       typing.cleanup();
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
         return undefined;
@@ -456,6 +557,7 @@ export async function runReplyAgent(
       });
     }
     replyOperation = admission.operation;
+    releaseAdmissionTicket();
     const previousRunSessionId = followupRun.run.sessionId;
     followupRun.run.sessionId = replyOperation.sessionId;
     if (replyOperation.sessionId !== previousRunSessionId) {

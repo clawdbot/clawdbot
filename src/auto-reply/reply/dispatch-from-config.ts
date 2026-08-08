@@ -1,4 +1,5 @@
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
@@ -15,6 +16,7 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
@@ -23,14 +25,26 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  const ticket = reserveReplyAdmissionTicket([
+    normalizeOptionalString(params.ctx.SessionKey),
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey),
+  ]);
+  const ticketedParams = ticket
+    ? {
+        ...params,
+        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
+      }
+    : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   try {
-    const result = await dispatchReplyFromConfigInner(params, messageAuditTerminal);
+    const result = await dispatchReplyFromConfigInner(ticketedParams, messageAuditTerminal);
     messageAuditTerminal?.finishSuccess(result);
     return result;
   } catch (error) {
     messageAuditTerminal?.finishError();
     throw error;
+  } finally {
+    ticket?.release();
   }
 }
 

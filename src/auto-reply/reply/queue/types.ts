@@ -53,6 +53,7 @@ type QueueInsertPosition = "tail" | "front";
 
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
+  steerCandidate?: boolean;
 };
 
 export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
@@ -97,6 +98,14 @@ export type FollowupRun = {
   summaryLine?: string;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
+  /** The current-turn hook already ran before this steer became a fallback. */
+  /** Pending same-turn acceptance while this item remains parked in FIFO order. */
+  steerPending?: {
+    predecessor: Promise<boolean>;
+    settle: (accepted: boolean) => void;
+  };
+  /** Preserves this candidate's position ahead of overflow summaries. */
+  steerAnchor?: true;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
@@ -229,7 +238,7 @@ const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecy
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
 
-type FollowupLifecycleRun = Pick<FollowupRun, "turnAdoptionLifecycle">;
+type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -281,6 +290,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 }
 
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+  run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
 
   const finish = () => {
