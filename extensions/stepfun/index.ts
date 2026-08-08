@@ -151,6 +151,9 @@ function createStepFunApiKeyMethod(params: {
     profileIds: resolveProfileIds(params.region),
     allowProfile: false,
     defaultModel: params.defaultModel,
+    // Repeat non-interactive onboarding must not clobber a user-pinned primary;
+    // only seed the default model into a config that has no primary yet.
+    preserveExistingPrimary: true,
     expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
     applyConfig: params.applyConfig,
     wizard: {
