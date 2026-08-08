@@ -366,6 +366,90 @@ describe("bot-native-command-menu", () => {
     expect((localizedPayload[0] as { description: string }).description).toHaveLength(256);
   });
 
+  it("prioritizes configured, canonical, then alias commands under localization-only pressure", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const localizedDescription = "한".repeat(250);
+    const canonical = Array.from({ length: 22 }, (_, index) => ({
+      command: `canonical_${index}`,
+      description: `Canonical ${index}`,
+      descriptionLocalizations: { ko: localizedDescription },
+    }));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      commandsToRegister: [
+        {
+          command: "early_alias",
+          description: "Alias",
+          descriptionLocalizations: { ko: localizedDescription },
+          isAlias: true,
+        },
+        ...canonical,
+        {
+          command: "configured",
+          description: "Configured",
+          descriptionLocalizations: { ko: localizedDescription },
+          isConfigured: true,
+        },
+      ],
+      accountId: `test-localized-pressure-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    const localizedNames = setMyCommandsPayload(setMyCommands, 2).map(
+      (command) => (command as { command: string }).command,
+    );
+    expect(localizedNames).toEqual([
+      "configured",
+      ...canonical.map(({ command }) => command),
+      "early_alias",
+    ]);
+    expect(setMyCommandsPayload(setMyCommands, 3)).toEqual(setMyCommandsPayload(setMyCommands, 2));
+  });
+
+  it("preserves ordinary localized order when localization creates no pressure", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const commands = [
+      {
+        command: "early_alias",
+        description: "Alias",
+        descriptionLocalizations: { ko: "별칭" },
+        isAlias: true,
+      },
+      {
+        command: "canonical",
+        description: "Canonical",
+        descriptionLocalizations: { ko: "표준" },
+      },
+      {
+        command: "configured",
+        description: "Configured",
+        descriptionLocalizations: { ko: "설정" },
+        isConfigured: true,
+      },
+    ];
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      commandsToRegister: commands,
+      accountId: `test-localized-no-pressure-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
+      { command: "early_alias", description: "별칭" },
+      { command: "canonical", description: "표준" },
+      { command: "configured", description: "설정" },
+    ]);
+    expect(setMyCommandsPayload(setMyCommands, 3)).toEqual(setMyCommandsPayload(setMyCommands, 2));
+  });
+
   it("resyncs when command order changes (#32017)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);

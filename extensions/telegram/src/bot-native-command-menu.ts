@@ -439,10 +439,9 @@ function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
     }));
     return {
       languageCode,
-      commands: fitTelegramCommandsWithinTextBudget(
-        localizedCommands,
-        TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET,
-      ).commands,
+      commands: buildCappedTelegramMenuCommands({
+        allCommands: localizedCommands,
+      }).commandsToRegister,
     };
   });
   return {
