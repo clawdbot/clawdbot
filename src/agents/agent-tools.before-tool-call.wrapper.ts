@@ -442,6 +442,18 @@ export function wrapToolWithBeforeToolCallHook(
           adjustedParams: outcome.params,
           finalizerMode: "wrapped",
         });
+        // Hooks can repair or rewrite arguments; only the final execution
+        // shape is safe to validate, after vetoes but before side effects.
+        await validateToolExecutionParams(toolCallId, executeParams);
+        await reconcileLoopCallExecutionParams({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: executeParams,
+          toolCallId,
+        });
+        // Validation and loop reconciliation can yield after the first abort check.
+        // Keep one-shot voice grants and execution behind the final cancellation fence.
+        signal?.throwIfAborted();
         // A voice grant binds the post-finalizer execution shape. Consuming it
         // earlier would let later alias or tool-owned rewrites escape the grant.
         const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
@@ -456,15 +468,6 @@ export function wrapToolWithBeforeToolCallHook(
             toolParams: executeParams,
           });
         }
-        // Hooks can repair or rewrite arguments; only the final execution
-        // shape is safe to validate, after vetoes but before side effects.
-        await validateToolExecutionParams(toolCallId, executeParams);
-        await reconcileLoopCallExecutionParams({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: executeParams,
-          toolCallId,
-        });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);

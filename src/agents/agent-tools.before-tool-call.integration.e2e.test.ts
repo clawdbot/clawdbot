@@ -50,6 +50,7 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
+import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
@@ -1715,6 +1716,85 @@ describe("before_tool_call adapter and client tool integration", () => {
       );
     },
   );
+
+  it("preserves one-shot voice approval when an asynchronous validator ignores cancellation", async () => {
+    const runId = "run-voice-validation-cancellation";
+    const toolCallId = "call-voice-validation-cancellation";
+    const approvedParams = { action: "send", to: "target-a", message: "approved body" };
+    installVoiceRunBinding(runId);
+    approveVoiceToolParams(runId, approvedParams);
+
+    let releaseValidation: () => void = () => {};
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    let markValidationStarted: () => void = () => {};
+    const validationStarted = new Promise<void>((resolve) => {
+      markValidationStarted = resolve;
+    });
+    const validator = vi.fn(async (params: unknown) => {
+      expect(params).toEqual(approvedParams);
+      markValidationStarted();
+      await validationGate;
+    });
+
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const hookContext = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+    const sourceTool = asAgentTool({ name: "message", execute });
+    const wrappedTool = wrapToolWithBeforeToolCallHook(sourceTool, hookContext);
+    const definition = expectDefined(
+      toToolDefinitions([wrappedTool], hookContext)[0],
+      "voice validation cancellation tool definition",
+    );
+    const controller = new AbortController();
+    const abortReason = new Error("run cancelled during tool argument validation");
+    const execution = runWithToolExecutionValidation(toolCallId, validator, () =>
+      definition.execute(
+        toolCallId,
+        approvedParams,
+        controller.signal,
+        undefined,
+        {} as ExtensionContext,
+      ),
+    );
+
+    await validationStarted;
+    controller.abort(abortReason);
+    releaseValidation();
+
+    const failure = await execution.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(abortReason.message);
+    expect((failure as Error).cause).toBe(abortReason);
+    expect(execute).not.toHaveBeenCalled();
+    expect(consumeAdjustedParamsForToolCall(toolCallId, runId)).toBeUndefined();
+
+    const retry = await definition.execute(
+      "call-voice-validation-retry",
+      approvedParams,
+      undefined,
+      undefined,
+      {} as ExtensionContext,
+    );
+    expect(retry.details).toEqual({ ok: true });
+    expect(execute).toHaveBeenCalledOnce();
+
+    const exhausted = await definition.execute(
+      "call-voice-validation-exhausted",
+      approvedParams,
+      undefined,
+      undefined,
+      {} as ExtensionContext,
+    );
+    expect(exhausted.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "client-voice-confirmation",
+    });
+    expect(execute).toHaveBeenCalledOnce();
+  });
 
   it.each(["wrapped", "adapter"] as const)(
     "blocks approved voice params rewritten to another action through the %s path",
