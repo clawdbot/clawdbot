@@ -843,7 +843,7 @@ describe("codex command", () => {
             excludeTurns: true,
           });
           await options?.onResponse?.(resumed, harness.client);
-          return resumed;
+          return response;
         },
       );
 

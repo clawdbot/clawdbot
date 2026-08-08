@@ -7,6 +7,7 @@ import {
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -174,6 +175,21 @@ async function readTestConversationBinding(sessionFile: string) {
 }
 
 function boundConversationClaim(sessionFile: string, sessionKey?: string) {
+  const pluginBinding: PluginConversationBinding = {
+    bindingId: "binding-1",
+    pluginId: "codex",
+    pluginRoot: tempDir,
+    channel: "telegram",
+    accountId: "default",
+    conversationId: "5185575566",
+    boundAt: Date.now(),
+    data: {
+      kind: "codex-app-server-session" as const,
+      version: 1 as const,
+      sessionFile,
+      workspaceDir: tempDir,
+    },
+  };
   return {
     event: {
       content: "continue",
@@ -186,21 +202,7 @@ function boundConversationClaim(sessionFile: string, sessionKey?: string) {
     ctx: {
       channelId: "telegram",
       ...(sessionKey ? { sessionKey } : {}),
-      pluginBinding: {
-        bindingId: "binding-1",
-        pluginId: "codex",
-        pluginRoot: tempDir,
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "5185575566",
-        boundAt: Date.now(),
-        data: {
-          kind: "codex-app-server-session" as const,
-          version: 1 as const,
-          sessionFile,
-          workspaceDir: tempDir,
-        },
-      },
+      pluginBinding,
     },
   };
 }
