@@ -2391,6 +2391,23 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("acknowledges successful native Ollama responses", async () => {
+    const onResponse = vi.fn();
+
+    await expectSuccessfulOllamaRequest(
+      { baseUrl: "http://ollama-host:11434", options: { onResponse } },
+      () => {
+        expect(onResponse).toHaveBeenCalledWith(
+          {
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+          },
+          expect.objectContaining({ provider: "custom-ollama" }),
+        );
+      },
+    );
+  });
+
   it("awaits asynchronous payload mutations before dispatching native Ollama requests", async () => {
     await withSuccessfulOllamaFetch(async (fetchMock) => {
       let releasePayload: (() => void) | undefined;

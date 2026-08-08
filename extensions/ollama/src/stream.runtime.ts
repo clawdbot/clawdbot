@@ -1030,6 +1030,10 @@ function createRawOllamaStreamFn(
           if (!response.body) {
             throw new Error("Ollama API returned empty response body");
           }
+          await options?.onResponse?.(
+            { status: response.status, headers: Object.fromEntries(response.headers.entries()) },
+            model,
+          );
 
           const reader = response.body.getReader();
           let accumulatedRawContent = "";

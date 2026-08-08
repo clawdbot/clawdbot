@@ -136,6 +136,7 @@ function buildMantleAnthropicBaseOptions(
     cacheRetention: options?.cacheRetention,
     sessionId: options?.sessionId,
     onPayload: options?.onPayload,
+    onResponse: options?.onResponse,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
   };
