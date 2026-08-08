@@ -32,9 +32,11 @@ describe("AppSidebar session section visibility", () => {
     expect(list?.querySelector(".sidebar-recent-session--draft")?.textContent?.trim()).toBe(
       "New thread",
     );
-    expect(
-      list?.querySelector(".sidebar-recent-session--draft .sidebar-session-indicator"),
-    ).toBeNull();
+    const draftLead = list?.querySelector(
+      ".sidebar-recent-session--draft .sidebar-session-indicator",
+    );
+    expect(draftLead).not.toBeNull();
+    expect(draftLead?.childElementCount).toBe(0);
     expect(
       list?.querySelectorAll(".sidebar-recent-session:not(.sidebar-recent-session--draft)"),
     ).toHaveLength(0);
