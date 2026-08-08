@@ -128,11 +128,16 @@ export function resolveRunWorkspaceDir(params: {
   // A rosterless config (e.g. `agent exec --isolated`/`--auth-env-only`, which
   // discard the roster by design) has no entry to validate against, but it
   // still resolves the implicit legacy agent the same way listAgentIds and
-  // resolveDefaultAgentId already do for that identical input. An explicitly
-  // named owner -- via `agentId` or an agent-prefixed session key -- has no
-  // roster to check it against, so that case keeps refusing to invent one.
+  // resolveDefaultAgentId already do for that identical input. That implicit
+  // agent id is fixed and known even without a roster, so a caller that
+  // resolved it themselves and passed it through explicitly (e.g. `agent
+  // exec` pinning its session key to `resolveDefaultAgentId`) is admitted the
+  // same as an unspecified agentId would be -- the two produce an identical
+  // workspace either way. Only a caller naming a *different* owner -- via
+  // `agentId` or an agent-prefixed session key -- has no roster to check it
+  // against, so that case keeps refusing to invent one.
   if (!hasAgentRosterProperty(config)) {
-    if (agentIdSource !== "default") {
+    if (agentIdSource !== "default" && agentId !== resolveDefaultAgentId(config)) {
       throw new RunWorkspaceRosterRequiredError();
     }
   } else if (!resolveAgentConfig(config, agentId)) {
