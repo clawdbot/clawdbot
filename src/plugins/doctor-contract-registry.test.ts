@@ -298,21 +298,30 @@ describe("doctor-contract-registry module loader", () => {
     });
   });
 
-  it("loads session route-state owners from doctor contract modules", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      "module.exports = { sessionRouteStateOwners: [{ id: 'demo', label: 'Demo', providerIds: ['demo'], runtimeIds: ['demo-cli'], cliSessionKeys: ['demo-cli'], authProfilePrefixes: ['demo:'] }] };\n",
-      "utf-8",
-    );
+  it("loads session route-state owners from manifest records without loading modules", () => {
     mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      plugins: [
+        {
+          id: "test-plugin",
+          rootDir: "/plugins/test-plugin",
+          sessionRouteStateOwners: [
+            {
+              id: "demo",
+              label: "Demo",
+              providerIds: ["demo"],
+              runtimeIds: ["demo-cli"],
+              cliSessionKeys: ["demo-cli"],
+              authProfilePrefixes: ["demo:"],
+            },
+          ],
+        },
+      ],
       diagnostics: [],
     });
 
     expect(
       listPluginDoctorSessionRouteStateOwners({
-        workspaceDir: pluginRoot,
+        workspaceDir: "/workspace",
         env: {},
       }),
     ).toEqual([
@@ -325,6 +334,7 @@ describe("doctor-contract-registry module loader", () => {
         authProfilePrefixes: ["demo:"],
       },
     ]);
+    expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
   it("loads config-derived session-store agent IDs from doctor contract modules", () => {
@@ -351,23 +361,54 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["cards", "voice"]);
   });
 
-  it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {
-    const anthropicRoot = makeTempDir();
-    const googleRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(anthropicRoot, "doctor-contract-api.cjs"),
-      "module.exports = { sessionRouteStateOwners: [{ id: 'anthropic', label: 'Anthropic', providerIds: ['anthropic', 'claude-cli'], runtimeIds: ['claude-cli'], cliSessionKeys: ['claude-cli'], authProfilePrefixes: ['anthropic:', 'claude-cli:'] }] };\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(googleRoot, "doctor-contract-api.cjs"),
-      "module.exports = { sessionRouteStateOwners: [{ id: 'google', label: 'Google', providerIds: ['google', 'google-antigravity', 'google-gemini-cli', 'google-vertex'], runtimeIds: ['google-gemini-cli'], cliSessionKeys: ['google-gemini-cli', 'gemini-cli'], authProfilePrefixes: ['google:', 'google-antigravity:', 'google-gemini-cli:', 'google-vertex:', 'gemini-cli:'] }] };\n",
-      "utf-8",
-    );
+  it("deduplicates manifest owners by first id and sorts them by id", () => {
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
-        { id: "anthropic", rootDir: anthropicRoot },
-        { id: "google", rootDir: googleRoot },
+        {
+          id: "google",
+          rootDir: "/plugins/google",
+          channels: [],
+          providers: ["google"],
+          sessionRouteStateOwners: [
+            {
+              id: "google",
+              label: "Google",
+              providerIds: ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
+              runtimeIds: ["google-gemini-cli"],
+              cliSessionKeys: ["google-gemini-cli", "gemini-cli"],
+              authProfilePrefixes: [
+                "google:",
+                "google-antigravity:",
+                "google-gemini-cli:",
+                "google-vertex:",
+                "gemini-cli:",
+              ],
+            },
+          ],
+        },
+        {
+          id: "anthropic",
+          rootDir: "/plugins/anthropic",
+          channels: [],
+          providers: ["anthropic"],
+          sessionRouteStateOwners: [
+            {
+              id: "anthropic",
+              label: "Anthropic",
+              providerIds: ["anthropic", "claude-cli"],
+              runtimeIds: ["claude-cli"],
+              cliSessionKeys: ["claude-cli"],
+              authProfilePrefixes: ["anthropic:", "claude-cli:"],
+            },
+          ],
+        },
+        {
+          id: "google-shadow",
+          rootDir: "/plugins/google-shadow",
+          channels: [],
+          providers: ["google-shadow"],
+          sessionRouteStateOwners: [{ id: "google", label: "Ignored duplicate" }],
+        },
       ],
       diagnostics: [],
     });
@@ -376,7 +417,7 @@ describe("doctor-contract-registry module loader", () => {
       listPluginDoctorSessionRouteStateOwners({
         workspaceDir: "/workspace",
         env: {},
-        pluginIds: ["anthropic", "google"],
+        pluginIds: ["anthropic", "google", "google-shadow"],
       }),
     ).toEqual([
       {
@@ -402,6 +443,7 @@ describe("doctor-contract-registry module loader", () => {
         ],
       },
     ]);
+    expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
   it("passes active config to manifest registry discovery", () => {
