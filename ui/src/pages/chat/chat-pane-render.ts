@@ -581,7 +581,6 @@ export class ChatPane extends ChatPaneHeader {
             },
             activeTabId: board.activeTabId,
             dock: board.dock,
-            reopenDock: board.reopenDock,
             dockSize: this.boardChatDockSize,
             chat,
             divider: this.renderBoardDivider("bottom"),
@@ -601,7 +600,6 @@ export class ChatPane extends ChatPaneHeader {
             } satisfies BoardViewCallbacks,
             widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
             workboardCardChip,
-            onDockChange: (dock) => this.handleBoardDockChange(dock),
           })
         : chat;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
