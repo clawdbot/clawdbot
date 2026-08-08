@@ -77,7 +77,7 @@ function getSteeringAtCheckpoint(
   if (!callback) {
     return [];
   }
-  return getInternalSyncSteeringGetter(callback)?.() ?? callback();
+  return getInternalSyncSteeringGetter(callback)?.() ?? callback.call(config);
 }
 
 function appendTextDeltaToAssistantMessage(

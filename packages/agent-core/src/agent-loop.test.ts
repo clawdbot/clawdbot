@@ -1244,6 +1244,30 @@ describe("agentLoop tool termination", () => {
     expect(publicGetter).not.toHaveBeenCalled();
   });
 
+  it("preserves the config receiver for public steering callbacks", async () => {
+    const steer = { role: "user" as const, content: "method steer", timestamp: 2 };
+    const requestMessages: Message[][] = [];
+    const methodConfig = {
+      ...config,
+      queuedSteering: [steer] as AgentMessage[],
+      async getSteeringMessages() {
+        return this.queuedSteering.splice(0, 1);
+      },
+    } satisfies AgentLoopConfig & { queuedSteering: AgentMessage[] };
+
+    await runAgentLoop(
+      [{ role: "user", content: "start", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      methodConfig,
+      () => {},
+      undefined,
+      createTurnSequenceStream([[{ type: "text", text: "done" }]], requestMessages),
+    );
+
+    expect(requestMessages[0]?.at(-1)).toBe(steer);
+    expect(methodConfig.queuedSteering).toEqual([]);
+  });
+
   it("suppresses a tool when steering arrives during private execution preflight", async () => {
     const preflightStarted = createDeferred();
     const releasePreflight = createDeferred();
