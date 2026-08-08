@@ -1,5 +1,5 @@
 /** Tests node-host runner command parsing, timeout, and plugin dispatch behavior. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
 import type { configureNodeHost } from "./config.js";
@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
   capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
   capturedGatewayClients: [] as Array<{
-    request: ReturnType<typeof vi.fn>;
+    request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
     stop: ReturnType<typeof vi.fn>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
@@ -69,26 +69,22 @@ vi.mock("../gateway/client-start-readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mocks.startGatewayClientWhenEventLoopReady,
 }));
 
-vi.mock("../gateway/client.js", () => ({
-  GatewayClientRequestError: class MockGatewayClientRequestError extends Error {
-    readonly gatewayCode: string;
-
-    constructor(params: { code: string; message: string }) {
-      super(params.message);
-      this.gatewayCode = params.code;
-    }
-  },
-  GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
-    const client = {
-      request: vi.fn(async () => ({})),
-      stop: vi.fn(),
-      updateNodeManifest: vi.fn(),
-    };
-    mocks.capturedGatewayClientOptions.push(opts);
-    mocks.capturedGatewayClients.push(client);
-    return client;
-  },
-}));
+vi.mock("../gateway/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/client.js")>();
+  return {
+    ...actual,
+    GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
+      const client = {
+        request: vi.fn(async () => ({})),
+        stop: vi.fn(),
+        updateNodeManifest: vi.fn(),
+      };
+      mocks.capturedGatewayClientOptions.push(opts);
+      mocks.capturedGatewayClients.push(client);
+      return client;
+    },
+  };
+});
 
 vi.mock("../gateway/credentials-secret-inputs.js", () => ({
   resolveGatewayCredentialsWithSecretInputs: mocks.resolveGatewayCredentialsWithSecretInputs,
@@ -668,7 +664,7 @@ describe("runNodeHost", () => {
 
   it.each([
     { protocol: 4, message: "unauthorized role: node", label: "exact v4 authorization" },
-    { protocol: 3, message: "unauthorized role: node ", label: "near-match v3 authorization" },
+    { protocol: 3, message: "unauthorized role: node.", label: "near-match v3 authorization" },
   ])("fails closed without flooding on $label failures", async ({ protocol, message }) => {
     await withReadyNodeHost(async ({ client, options }) => {
       client.request.mockImplementation(async (method: string) => {
@@ -747,6 +743,53 @@ describe("runNodeHost", () => {
         expect(client.request).toHaveBeenCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, {
           tools: [],
         });
+      });
+    });
+  });
+
+  it("retires queued publications when a manifest change reconnects the gateway", async () => {
+    let resolveFirstPluginPublication: (() => void) | undefined;
+    await withReadyNodeHost(async ({ client, options }) => {
+      client.request.mockImplementation((method: string) => {
+        if (method === NODE_PLUGIN_TOOLS_UPDATE_METHOD && !resolveFirstPluginPublication) {
+          return new Promise((resolve) => {
+            resolveFirstPluginPublication = () => resolve({});
+          });
+        }
+        return Promise.resolve({});
+      });
+      options?.onHelloOk?.({
+        protocol: 3,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() => expect(resolveFirstPluginPublication).toBeDefined());
+
+      mocks.nodePluginTools = [];
+      mocks.nodeHostCaps = ["canvas"];
+      mocks.availabilityChanged?.();
+      await vi.waitFor(() => expect(client.updateNodeManifest).toHaveBeenCalled());
+      resolveFirstPluginPublication?.();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(
+        client.request.mock.calls.filter(([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD),
+      ).toHaveLength(1);
+
+      options?.onHelloOk?.({
+        protocol: 3,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await vi.waitFor(() => {
+        expect(
+          client.request.mock.calls.filter(
+            ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+          ),
+        ).toHaveLength(2);
+      });
+      expect(client.request).toHaveBeenLastCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, {
+        tools: [],
       });
     });
   });

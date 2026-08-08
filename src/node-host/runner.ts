@@ -110,7 +110,6 @@ function handleNodeHostReconnectPaused(
 }
 
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
-const NODE_PROTOCOL_FEATURES_UPDATE_METHOD = "node.protocolFeatures.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
 
 function isExactUnknownMethodError(error: unknown, method: string): boolean {
@@ -422,6 +421,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       publishInventory();
     },
     onManifestChanged: (manifest) => {
+      // Manifest changes force a reconnect. Retire the current publication queue
+      // now so it cannot drain against the closing connection.
+      gatewayConnectionGeneration += 1;
       gatewayHelloReceived = false;
       connectedGatewayProtocol = 0;
       optionalPublicationStates.clear();
