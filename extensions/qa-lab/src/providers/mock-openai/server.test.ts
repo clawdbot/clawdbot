@@ -18,6 +18,8 @@ const QA_REASONING_ONLY_RECOVERY_PROMPT =
   "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK.";
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT =
   "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK.";
+const QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT =
+  "Mixed reasoning blank fallback QA check: recover through the alternate model.";
 const QA_THINKING_VISIBILITY_OFF_PROMPT =
   "QA thinking visibility check off: answer exactly THINKING-OFF-OK.";
 const QA_THINKING_VISIBILITY_MAX_PROMPT =
@@ -7918,6 +7920,23 @@ Update and merge these partial structured summaries.`,
     expect(String(requireRecord(requestLog[2], "debug request 2").allInputText)).toContain(
       QA_REASONING_ONLY_RETRY_INSTRUCTION,
     );
+  });
+
+  it("scripts mixed reasoning-plus-blank primary output and a visible fallback", async () => {
+    const server = await startMockServer();
+
+    const primary = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "mock-empty-primary",
+      input: [makeUserInput(QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT)],
+    });
+    expect(outputItems(primary).map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(outputText(primary, 1)).toBe(" ");
+
+    const fallback = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "mock-visible-fallback",
+      input: [makeUserInput(QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT)],
+    });
+    expect(outputText(fallback)).toBe("MODEL-FALLBACK-VISIBLE-OK");
   });
 
   it("scripts the GPT-5.6 Luna thinking visibility switch prompts", async () => {

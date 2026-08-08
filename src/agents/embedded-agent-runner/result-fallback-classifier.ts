@@ -80,17 +80,36 @@ export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult)
   );
 }
 
+function hasDeliverableAssistantPayload(result: {
+  payloads?: unknown;
+  meta?: { finalAssistantVisibleText?: unknown };
+}): boolean {
+  const finalVisibleText = result.meta?.finalAssistantVisibleText;
+  const payloads = Array.isArray(result.payloads)
+    ? result.payloads.filter((payload) => {
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          return true;
+        }
+        const record = payload as { isCommentary?: unknown; visible?: unknown };
+        return record.isCommentary !== true && record.visible !== false;
+      })
+    : [];
+  return (
+    (typeof finalVisibleText === "string" &&
+      finalVisibleText.trim().length > 0 &&
+      !isSilentReplyPayloadText(finalVisibleText)) ||
+    hasVisibleAgentPayload(
+      { payloads },
+      { includeErrorPayloads: false, includeReasoningPayloads: false },
+    )
+  );
+}
+
 function hasNonTextVisiblePayloadContent(
   payload: NonNullable<EmbeddedAgentRunResult["payloads"]>[number],
 ): boolean {
-  const { text: _text, ...payloadWithoutText } = payload;
-  return hasVisibleAgentPayload(
-    { payloads: [payloadWithoutText] },
-    {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    },
-  );
+  const { isError: _isError, text: _text, ...payloadWithoutText } = payload;
+  return hasDeliverableAssistantPayload({ payloads: [payloadWithoutText] });
 }
 
 function classifyGenericExternalRunFailurePayload(params: {
@@ -215,19 +234,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (genericExternalFailureClassification) {
     return genericExternalFailureClassification;
   }
-  if (
-    typeof params.result.meta.finalAssistantVisibleText === "string" &&
-    params.result.meta.finalAssistantVisibleText.trim().length > 0 &&
-    !isSilentReplyPayloadText(params.result.meta.finalAssistantVisibleText)
-  ) {
-    return null;
-  }
-  if (
-    hasVisibleAgentPayload(params.result, {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    })
-  ) {
+  if (hasDeliverableAssistantPayload(params.result)) {
     return null;
   }
   if (fallbackSafeIncompleteTurn) {
@@ -269,45 +276,33 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
 
-  // Empty completions and reasoning-only output are fallback candidates for
-  // every model: counting them as success silently drops the turn on visible
-  // channels (the user sees nothing). Deliberate silent replies remain
-  // successful terminal work.
-  if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
+  // Once the shared visibility owner finds no deliverable assistant payload,
+  // empty and reasoning-only output must advance fallback for every model.
+  if (hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
-  if (payloads.length === 0) {
-    return {
-      message: `${params.provider}/${params.model} ended without a visible assistant reply`,
-      reason: "format",
-      code: "empty_result",
-    };
+  if (errorText.trim()) {
+    return null;
   }
-  if (payloads.every((payload) => payload.isReasoning === true)) {
+  if (
+    payloads.some((payload) => payload.isError === true && hasNonTextVisiblePayloadContent(payload))
+  ) {
+    return null;
+  }
+  const assistantPayloads = payloads.filter((payload) => payload.isError !== true);
+  if (
+    assistantPayloads.length > 0 &&
+    assistantPayloads.every((payload) => payload.isReasoning === true)
+  ) {
     return {
       message: `${params.provider}/${params.model} ended with reasoning only`,
       reason: "format",
       code: "reasoning_only_result",
     };
   }
-  // A completion that returns only empty/whitespace text payloads is the same
-  // silent drop as no payloads at all. Reasoning payloads are invisible to the
-  // shared visibility test, so their text must not make a mixed
-  // reasoning-plus-blank completion look like a visible reply.
-  const nonReasoningPayloads = payloads.filter((payload) => payload.isReasoning !== true);
-  if (
-    nonReasoningPayloads.every(
-      (payload) =>
-        !hasNonTextVisiblePayloadContent(payload) &&
-        !(typeof payload?.text === "string" && payload.text.trim().length > 0),
-    )
-  ) {
-    return {
-      message: `${params.provider}/${params.model} ended without a visible assistant reply`,
-      reason: "format",
-      code: "empty_result",
-    };
-  }
-
-  return null;
+  return {
+    message: `${params.provider}/${params.model} ended without a visible assistant reply`,
+    reason: "format",
+    code: "empty_result",
+  };
 }

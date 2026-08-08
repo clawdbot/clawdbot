@@ -437,128 +437,83 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("classifies empty non-GPT completions as fallback-worthy (#120132)", () => {
-    // A tail model that survives the API call but returns an empty completion
-    // must not count as candidate_succeeded: that silently drops the turn on
-    // visible channels.
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "zai",
-      model: "glm-5.2",
-      result: {
-        payloads: [],
-        meta: {
-          durationMs: 42,
-          finalAssistantRawText: "",
-          finalAssistantVisibleText: "",
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "zai/glm-5.2 ended without a visible assistant reply",
-      reason: "format",
+  it.each([
+    {
+      name: "empty",
+      payloads: [],
       code: "empty_result",
-    });
-  });
-
-  it("classifies whitespace-only non-GPT completions as fallback-worthy (#120132)", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "zai",
-      model: "glm-5.2",
-      result: {
-        payloads: [{ text: "   " }],
-        meta: {
-          durationMs: 42,
-          finalAssistantRawText: "   ",
-          finalAssistantVisibleText: "   ",
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "zai/glm-5.2 ended without a visible assistant reply",
-      reason: "format",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "whitespace-only",
+      payloads: [{ text: "   " }],
       code: "empty_result",
-    });
-  });
-
-  it("classifies reasoning-only non-GPT completions as fallback-worthy (#120132)", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "zai",
-      model: "glm-5.2",
-      result: {
-        payloads: [{ isReasoning: true, text: "thinking about the answer" }],
-        meta: {
-          durationMs: 42,
-          finalAssistantRawText: "",
-          finalAssistantVisibleText: "",
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "zai/glm-5.2 ended with reasoning only",
-      reason: "format",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "reasoning-only",
+      payloads: [{ isReasoning: true, text: "thinking about the answer" }],
       code: "reasoning_only_result",
-    });
-  });
-
-  it("classifies mixed reasoning-plus-blank completions as fallback-worthy (#120148)", () => {
-    // A result such as [{ isReasoning: true, text: "thinking" }, { text: " " }]
-    // carries no user-visible reply: reasoning text is invisible to the shared
-    // visibility test, and the remaining payload is blank. Counting the
-    // reasoning text as visible would silently end the turn on visible
-    // channels.
+      suffix: "with reasoning only",
+    },
+    {
+      name: "mixed reasoning-plus-blank",
+      payloads: [{ isReasoning: true, text: "thinking about the answer" }, { text: "   " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "commentary-only",
+      payloads: [{ isCommentary: true, text: "progress only" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "explicitly hidden",
+      payloads: [{ visible: false, text: "internal" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "blank error",
+      payloads: [{ isError: true, text: " " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+  ])("classifies $name non-GPT completions as fallback-worthy", ({ payloads, code, suffix }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "zai",
       model: "glm-5.2",
       result: {
-        payloads: [{ isReasoning: true, text: "thinking about the answer" }, { text: "   " }],
-        meta: {
-          durationMs: 42,
-          finalAssistantRawText: "   ",
-          finalAssistantVisibleText: "   ",
-        },
+        payloads,
+        meta: { durationMs: 42 },
       },
     });
 
     expect(result).toEqual({
-      message: "zai/glm-5.2 ended without a visible assistant reply",
+      message: `zai/glm-5.2 ended ${suffix}`,
       reason: "format",
-      code: "empty_result",
+      code,
     });
   });
 
-  it("keeps mixed reasoning-plus-visible completions successful (#120148)", () => {
-    // The reasoning payload is invisible, but a sibling payload with visible
-    // text is a real reply, so the run must not be fallback-eligible.
+  it.each([
+    {
+      name: "mixed reasoning-plus-visible text",
+      payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
+    },
+    { name: "media-only", payloads: [{ mediaUrl: "https://example.test/result.png" }] },
+    {
+      name: "rich error",
+      payloads: [{ isError: true, mediaUrl: "https://example.test/error.png" }],
+    },
+  ])("keeps $name completions successful", ({ payloads }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "zai",
       model: "glm-5.2",
       result: {
-        payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
-        meta: {
-          durationMs: 42,
-          finalAssistantRawText: "Here is the answer",
-          finalAssistantVisibleText: "Here is the answer",
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("keeps deliberate silent replies successful for non-GPT models (#120132)", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "zai",
-      model: "glm-5.2",
-      result: {
-        payloads: [],
-        meta: {
-          durationMs: 42,
-          finalAssistantRawText: "NO_REPLY",
-          finalAssistantVisibleText: "NO_REPLY",
-        },
+        payloads,
+        meta: { durationMs: 42 },
       },
     });
 
