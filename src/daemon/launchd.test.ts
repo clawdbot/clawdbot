@@ -11,7 +11,7 @@ import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
 } from "./launchd-plist.js";
 import {
-  installLaunchAgent,
+  installLaunchAgent as installLaunchAgentImpl,
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
@@ -52,6 +52,7 @@ const state = vi.hoisted(() => ({
   bootoutCode: 1,
   serviceLoaded: true,
   serviceRunning: true,
+  serviceStates: new Map<string, "running" | "stopped" | "not-loaded">(),
   stopLeavesRunning: false,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
@@ -136,6 +137,23 @@ function createDefaultLaunchdEnv(): Record<string, string | undefined> {
     HOME: "/Users/test",
     OPENCLAW_PROFILE: "default",
   };
+}
+
+async function installLaunchAgent(
+  args: Parameters<typeof installLaunchAgentImpl>[0],
+): ReturnType<typeof installLaunchAgentImpl> {
+  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+  const serviceTarget = `${domain}/ai.openclaw.gateway`;
+  if (
+    !state.files.has(resolveLaunchAgentPlistPath(args.env)) &&
+    !state.serviceStates.has(serviceTarget)
+  ) {
+    // Most install cases model a genuinely fresh definition. Cached jobs with
+    // no plist must opt in explicitly because they have no rollback artifact.
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+  }
+  return await installLaunchAgentImpl(args);
 }
 
 function createTestLaunchAgentPlist(params: {
@@ -327,6 +345,16 @@ function executeLaunchctlMock(file: string, args: string[]) {
     if (state.printError && state.printFailuresRemaining > 0) {
       state.printFailuresRemaining -= 1;
       return { stdout: "", stderr: state.printError, code: state.printCode };
+    }
+    const serviceState = state.serviceStates.get(call[1] ?? "");
+    if (serviceState === "not-loaded") {
+      return { stdout: "", stderr: "Could not find service", code: 113 };
+    }
+    if (serviceState === "stopped") {
+      return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+    }
+    if (serviceState === "running") {
+      return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
     }
     if (!state.serviceLoaded) {
       return { stdout: "", stderr: "Could not find service", code: 113 };
@@ -579,6 +607,7 @@ beforeEach(() => {
   state.fileModes.clear();
   state.fileWrites.length = 0;
   state.cleanupProtectedPids.length = 0;
+  state.serviceStates.clear();
   launchdConstantsState.legacyGatewayLabels.length = 0;
   launchctlSpawnSync.mockReset();
   launchctlSpawnSync.mockImplementation((file: string, args: string[]) => {
@@ -1570,6 +1599,8 @@ describe("launchd install", () => {
     });
     launchdConstantsState.legacyGatewayLabels.push(legacyLabel);
     state.files.set(legacyPlistPath, previousLegacy);
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    state.serviceStates.set(`${domain}/${legacyLabel}`, "running");
     state.bootstrapError = "Operation not permitted";
     state.bootstrapTransient = true;
 
@@ -1586,6 +1617,7 @@ describe("launchd install", () => {
     expect(state.serviceLoaded).toBe(true);
     expect(state.serviceRunning).toBe(true);
     expect(launchctlCommandNames()).toEqual([
+      "print",
       "print",
       "bootout",
       "unload",
@@ -1645,6 +1677,25 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).toEqual(["print"]);
   });
 
+  it("aborts before mutation when launchd has the only copy of the prior definition", async () => {
+    const env = createDefaultLaunchdEnv();
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    state.serviceStates.set(`${domain}/ai.openclaw.gateway`, "running");
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow("is loaded but its plist is missing");
+
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(true);
+    expect(state.fileWrites).toEqual([]);
+    expect(launchctlCommandNames()).toEqual(["print"]);
+  });
+
   it("keeps a previously unloaded LaunchAgent unloaded after failed reinstall", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
@@ -1684,6 +1735,8 @@ describe("launchd install", () => {
     const plistPath = resolveLaunchAgentPlistPath(env);
     const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
     const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
     state.bootstrapError = "Operation not permitted";
     state.bootstrapTransient = true;
 
@@ -1724,6 +1777,8 @@ describe("launchd install", () => {
     state.files.set(wrapperPath, previousWrapper);
     state.fileModes.set(envFilePath, 0o600);
     state.fileModes.set(wrapperPath, 0o700);
+    state.serviceLoaded = true;
+    state.serviceRunning = true;
     state.bootstrapError = "Operation not permitted";
     state.bootstrapTransient = true;
 
@@ -1770,7 +1825,7 @@ describe("launchd install", () => {
     await expect(stageLaunchAgent(args)).rejects.toThrow("system ownership blocked: loaded");
 
     expect(state.fileWrites).toEqual([]);
-    expect(state.launchctlCalls).toEqual([]);
+    expect(launchctlCommandNames()).toEqual(["print"]);
   });
 
   it("rolls back a post-publication ownership race before activation", async () => {
@@ -1790,7 +1845,7 @@ describe("launchd install", () => {
 
     expect(launchdSystemState.assertNoSystemLaunchDaemonOwnership).toHaveBeenCalledTimes(3);
     expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
-    expect(state.launchctlCalls).toEqual([]);
+    expect(launchctlCommandNames()).toEqual(["print"]);
   });
 
   it("restores the previous plist when staged publication loses ownership", async () => {

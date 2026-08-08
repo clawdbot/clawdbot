@@ -1390,16 +1390,21 @@ async function snapshotLaunchAgentLoadedState(
   plistContents: Buffer | null,
   serviceTarget: string,
 ): Promise<boolean> {
-  if (plistContents === null) {
-    return false;
-  }
   const probe = await probeLaunchAgentState(serviceTarget);
   if (probe.state === "unknown") {
     throw new Error(
       `launchctl print could not determine whether ${serviceTarget} is loaded: ${probe.detail ?? "unknown error"}`,
     );
   }
-  return probe.state !== "not-loaded";
+  const loaded = probe.state !== "not-loaded";
+  if (loaded && plistContents === null) {
+    // launchd can retain a definition after its plist is deleted. Booting that
+    // job out would destroy the only copy, so no exact rollback is possible.
+    throw new Error(
+      `LaunchAgent ${serviceTarget} is loaded but its plist is missing; refusing an install that cannot restore the current definition if activation fails.`,
+    );
+  }
+  return loaded;
 }
 
 async function restoreLaunchAgentOwnedFile(params: {
