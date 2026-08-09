@@ -2183,7 +2183,7 @@ export const registerTelegramNativeCommands = ({
       from: callbackQuery.from,
       text: commandText,
     };
-    const clearButtons = (await handleLoginCallback(botUser, message, rawText)) === true;
+    const clearButtons = await handleLoginCallback(botUser, message, rawText);
     return { handled: true, clearButtons };
   };
 };
