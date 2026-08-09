@@ -31,10 +31,41 @@ function dispatchWaiters(state: CronServiceState): void {
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
-      return;
+      break;
     }
     waiter(acquireCronRunSlot(state));
   }
+  if (admission.active < maxConcurrentRuns && admission.waiters.length === 0) {
+    const listener = admission.capacityListener;
+    admission.capacityListener = null;
+    if (listener) {
+      queueMicrotask(listener);
+    }
+  }
+}
+
+/**
+ * Acquire only the slots currently available to scheduled work. Unlike the
+ * waiter-based path used by direct runs, this never retains a timer batch while
+ * the pool is saturated.
+ */
+export function tryAcquireCronRunSlots(
+  state: CronServiceState,
+  requested: number,
+): Array<() => void> {
+  if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
+    return [];
+  }
+  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+  return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
+}
+
+/** Keep the first wake-up until capacity release consumes or cancellation clears it. */
+export function setCronRunCapacityListener(state: CronServiceState, listener: () => void): void {
+  if (state.runAdmission.capacityListener) {
+    return;
+  }
+  state.runAdmission.capacityListener = listener;
 }
 
 async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
@@ -52,6 +83,7 @@ async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => 
 
 /** Wake queued work on stop so each caller can release its durable reservation. */
 export function cancelCronRunAdmissionWaiters(state: CronServiceState): void {
+  state.runAdmission.capacityListener = null;
   const waiters = state.runAdmission.waiters.splice(0);
   for (const waiter of waiters) {
     waiter(null);
