@@ -112,6 +112,12 @@ describe("discoverAuthStorage", () => {
       openai: "oauth",
       openrouter: "api_key",
     });
+    expect(
+      resolveUsableAgentCredentialModes({
+        bearer: { type: "token", token: "runtime-token", expires: Date.now() + 60_000 },
+        expired: { type: "token", token: "expired-token", expires: Date.now() - 1 },
+      }),
+    ).toEqual({ bearer: "token" });
   });
 
   it("drops runtime auth profiles with out-of-range expiry values", () => {

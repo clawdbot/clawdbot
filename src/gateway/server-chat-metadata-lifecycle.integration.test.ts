@@ -113,7 +113,10 @@ async function expectAvailable(
       catalogProjector: projector,
     }),
   ]);
-  const metadataModel = metadata.models?.find(
+  const metadataModels = metadata.models as
+    | Array<{ id?: string; provider?: string; available?: boolean }>
+    | undefined;
+  const metadataModel = metadataModels?.find(
     (candidate) => candidate.id === "gpt-5.4" && candidate.provider === "openai",
   );
   const listedModel = modelsList.models.find(
