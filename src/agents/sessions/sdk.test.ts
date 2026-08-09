@@ -434,18 +434,8 @@ describe("AgentSession queued user turns", () => {
       target: createTestUserTurnTranscriptTarget(),
     });
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
-    const onQueueAccepted = vi.fn();
 
-    await session.steer(
-      "runtime group prompt",
-      undefined,
-      recorder,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      onQueueAccepted,
-    );
+    await session.steer("runtime group prompt", undefined, recorder);
 
     const runtimeMessage = steer.mock.calls[0]?.[0];
     expect(runtimeMessage).toMatchObject({
@@ -463,10 +453,6 @@ describe("AgentSession queued user turns", () => {
       },
       recorder,
     });
-    expect(onQueueAccepted).toHaveBeenCalledWith(true);
-    expect(steer.mock.invocationCallOrder[0]!).toBeLessThan(
-      onQueueAccepted.mock.invocationCallOrder[0]!,
-    );
   });
 
   it("carries prompt facts non-enumerably on the exact steered message", async () => {

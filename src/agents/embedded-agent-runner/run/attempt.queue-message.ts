@@ -35,7 +35,6 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
     canInject?: () => boolean,
-    onQueueAccepted?: (accepted: boolean) => void,
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
@@ -59,9 +58,8 @@ function steerActiveSession(
   imageOrder?: PromptImageOrderEntry[],
   queueIdentity?: string,
   canInject?: () => boolean,
-  onQueueAccepted?: (accepted: boolean) => void,
 ): Promise<void> {
-  if (media?.length || queueIdentity || canInject || onQueueAccepted) {
+  if (canInject) {
     return activeSession.steer(
       text,
       images,
@@ -70,7 +68,16 @@ function steerActiveSession(
       imageOrder,
       queueIdentity,
       canInject,
-      onQueueAccepted,
+    );
+  }
+  if (media?.length || queueIdentity) {
+    return activeSession.steer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      queueIdentity,
     );
   }
   return userTurnTranscriptRecorder
@@ -339,7 +346,6 @@ async function steerAndWaitForTranscriptCommit(
       imageOrder,
       queueIdentity,
       () => acceptanceOpen && (canInject?.() ?? true),
-      reportAcceptance,
     );
     void steer.then(
       () => {
@@ -401,14 +407,6 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   if (options?.waitForTranscriptCommit !== true) {
-    let acceptanceReported = false;
-    const reportAcceptance = (accepted: boolean) => {
-      if (acceptanceReported) {
-        return;
-      }
-      acceptanceReported = true;
-      options?.onQueueAccepted?.(accepted);
-    };
     try {
       await steerActiveSession(
         activeSession,
@@ -419,11 +417,10 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         options?.imageOrder,
         options?.queueIdentity,
         canInject,
-        reportAcceptance,
       );
-      reportAcceptance(true);
+      options?.onQueueAccepted?.(true);
     } catch (error) {
-      reportAcceptance(false);
+      options?.onQueueAccepted?.(false);
       throw error;
     }
     return;

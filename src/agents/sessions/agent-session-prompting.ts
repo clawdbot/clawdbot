@@ -339,7 +339,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
     canInject?: () => boolean,
-    onQueueAccepted?: (accepted: boolean) => void,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -365,7 +364,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       media,
       imageOrder,
       queueIdentity,
-      onQueueAccepted,
     );
   }
 
@@ -402,7 +400,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
-    onQueueAccepted?: (accepted: boolean) => void,
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
@@ -416,7 +413,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
         : promptMessage,
     );
-    onQueueAccepted?.(true);
   }
 
   /**
