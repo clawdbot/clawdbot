@@ -7,7 +7,7 @@ import {
   listBuiltPluginControlPlaneModules,
   probeBuiltPluginControlPlaneModules,
   verifyBuiltPluginControlPlaneModules,
-} from "../../scripts/check-built-plugin-control-plane-modules.mjs";
+} from "../../scripts/check-built-plugin-control-plane-modules.mts";
 
 const roots: string[] = [];
 

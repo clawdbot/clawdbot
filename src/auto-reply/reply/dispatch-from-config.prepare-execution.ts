@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isFastModeAutoProgressPayload,
   resolveSendableOutboundReplyParts,
@@ -15,6 +14,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
+import { hasAskUserPayload, hasExecApprovalPayload } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import {
@@ -126,16 +126,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (shouldSendToolSummaries()) {
       return payload;
     }
-    const execApproval =
-      payload.channelData &&
-      typeof payload.channelData === "object" &&
-      !Array.isArray(payload.channelData)
-        ? payload.channelData.execApproval
-        : undefined;
-    if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
+    if (hasExecApprovalPayload(payload)) {
       return payload;
     }
-    if (state.hasAskUserPayload(payload)) {
+    if (hasAskUserPayload(payload)) {
       return payload;
     }
     if (isFastModeAutoProgressPayload(payload)) {
@@ -197,25 +191,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
   const allowSuppressedSourceProgressCallbacks =
     params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
-  const isChannelOwnedToolResultProgressPayload = (payload: ReplyPayload) => {
-    const text = normalizeOptionalString(payload.text);
-    return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
-  };
-  const shouldForwardToolResultProgressCallback = (
-    payload: ReplyPayload,
-    isFastModeAutoProgress: boolean,
-  ) => {
-    if (isFastModeAutoProgress) {
-      return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
-    }
-    if (
-      allowSuppressedSourceProgressCallbacks &&
-      isChannelOwnedToolResultProgressPayload(payload)
-    ) {
-      return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
-    }
-    return shouldSendToolSummaries() && shouldForwardProgressCallback();
-  };
   const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     requiresToolSummaryVisibility?: boolean;
@@ -433,7 +408,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,
     onPatchSummaryFromReplyOptions,
-    shouldForwardToolResultProgressCallback,
     waitForPendingDirectBlockReplyDelivery,
     shouldForwardProgressCallback,
     preserveProgressCallbackStartOrder,

@@ -621,10 +621,13 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(2);
     expect(peakActivePlans).toBe(1);
     expect(
-      mocks.buildPreparedModelCatalogSnapshot.mock.calls.map(
-        (call) =>
-          (call[0] as { authCredentials: { custom: { key: string } } }).authCredentials.custom.key,
-      ),
+      mocks.buildPreparedModelCatalogSnapshot.mock.calls.map((call) => {
+        const credential = call[0].authCredentials.custom;
+        if (credential?.type !== "api_key") {
+          throw new Error("expected prepared custom API key");
+        }
+        return credential.key;
+      }),
     ).toEqual(["test-key:/tmp/configured-agent-a", "test-key:/tmp/configured-agent-b"]);
   });
 

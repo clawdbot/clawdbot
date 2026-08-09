@@ -1,31 +1,23 @@
 // Qa Lab tests cover the SQLite-backed auth store plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirHarness } from "../../temp-dir.test-helper.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./auth-store.js";
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-auth-store-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirHarness();
 
 describe("QA auth profile store", () => {
   afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await tempDirs.cleanup();
   });
 
   it("writes new auth profiles to SQLite without creating legacy JSON", async () => {
-    const agentDir = await createTempDir();
+    const agentDir = await tempDirs.makeTempDir("openclaw-qa-auth-store-");
 
     await writeQaAuthProfiles({
       agentDir,
@@ -47,7 +39,7 @@ describe("QA auth profile store", () => {
   });
 
   it("refuses to bypass a pending legacy auth source", async () => {
-    const agentDir = await createTempDir();
+    const agentDir = await tempDirs.makeTempDir("openclaw-qa-auth-store-");
     const authPath = path.join(agentDir, "auth-profiles.json");
     await fs.writeFile(authPath, "{not-json", "utf8");
 
@@ -67,7 +59,7 @@ describe("QA auth profile store", () => {
   });
 
   it("merges canonical API-key, token, and OAuth profile shapes", async () => {
-    const agentDir = await createTempDir();
+    const agentDir = await tempDirs.makeTempDir("openclaw-qa-auth-store-");
     await writeQaAuthProfiles({
       agentDir,
       profiles: {
@@ -111,7 +103,7 @@ describe("QA auth profile store", () => {
   });
 
   it("can replace an existing profile set for deterministic fixture seeding", async () => {
-    const agentDir = await createTempDir();
+    const agentDir = await tempDirs.makeTempDir("openclaw-qa-auth-store-");
     saveAuthProfileStore(
       {
         version: 1,

@@ -1,6 +1,7 @@
 // Codex tests cover run attempt plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
@@ -2249,6 +2250,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createRunParams();
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = [];
     params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
@@ -2302,6 +2304,62 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
+  });
+
+  it("replaces the native surface with an exact conversation-policy-filtered catalog", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools(options).filter((tool) =>
+        ["read", "write", "edit", "apply_patch", "exec", "process"].includes(tool.name),
+      ),
+    );
+    const params = createRunParams();
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.conversationToolPolicy = {
+      deny: ["exec", "process", "write", "edit"],
+    };
+    params.pluginHarnessToolPolicyRestricted = true;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as
+      | {
+          dynamicTools?: CodexDynamicToolSpec[];
+          environments?: unknown[];
+          config?: Record<string, unknown>;
+        }
+      | undefined;
+    const dynamicToolNames = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).map(
+      (tool) => tool.name,
+    );
+
+    expect(startParams?.environments).toEqual([]);
+    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read"]);
+    expect(startParams?.config).toMatchObject({
+      "features.hooks": false,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
+    });
+    expect(harness.requests.map((request) => request.method)).toContain("mcpServerStatus/list");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {

@@ -8,6 +8,7 @@ import {
   createSessionProjection,
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -54,16 +55,6 @@ async function flushAsyncSelect() {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-}
-
-function createDeferred<T>() {
-  let resolve: (value: T) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function expectSendChatFields(

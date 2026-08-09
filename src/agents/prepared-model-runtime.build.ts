@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import pLimit from "p-limit";
 import { withTimeout } from "../node-host/with-timeout.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   PreparedModelRuntimePublicationSupersededError,
@@ -183,6 +184,7 @@ function createSnapshot(
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
+    authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: pluginMetadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     ...(pluginRegistry ? { pluginRegistry } : {}),

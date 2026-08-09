@@ -22,11 +22,11 @@ import {
   resolveBuildAllSteps,
   restoreBuildAllStepCacheOutputs,
   writeBuildAllStepCacheStamp,
-} from "../../scripts/build-all.mjs";
+} from "../../scripts/build-all.mts";
 import {
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
-} from "../../scripts/lib/plugin-sdk-entries.mjs";
+} from "../../scripts/lib/plugin-sdk-entries.mts";
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -267,7 +267,7 @@ describe("resolveBuildAllStep", () => {
 
     expect(result).toEqual({
       command: "/custom/node",
-      args: ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
+      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
       options: {
         stdio: "inherit",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
@@ -305,24 +305,32 @@ describe("resolveBuildAllSteps", () => {
 
   it("prints CLI help without starting build steps", () => {
     for (const args of [["--help"], ["cliStartup", "--help"]]) {
-      const result = spawnSync(process.execPath, ["scripts/build-all.mjs", ...args], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/build-all.mts", ...args],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("Usage: node scripts/build-all.mjs [profile]");
+      expect(result.stdout).toContain("Usage: node --import tsx scripts/build-all.mts [profile]");
       expect(result.stdout).toContain("cliStartup");
       expect(result.stdout).not.toContain("[build-all]");
     }
   });
 
   it("rejects unknown CLI args without starting build steps", () => {
-    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup", "--bogus"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/build-all.mts", "cliStartup", "--bogus"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
@@ -359,7 +367,13 @@ describe("resolveBuildAllSteps", () => {
     const packages = getBuildAllStep("tsdown-packages");
     const unified = getBuildAllStep("tsdown-unified");
 
-    expect(ai.args).toEqual(["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"]);
+    expect(ai.args).toEqual([
+      "--import",
+      "tsx",
+      "scripts/tsdown-build.mts",
+      "--config",
+      "tsdown.ai.config.ts",
+    ]);
     expect(packages.args).toEqual(
       expect.arrayContaining(["--config", "tsdown.config.ts", "--filter", "openclaw-packages"]),
     );

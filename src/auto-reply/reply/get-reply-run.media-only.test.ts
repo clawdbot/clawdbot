@@ -2136,6 +2136,43 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
+  it("rebinds a provisional pre-dispatch operation to a discovered existing session", async () => {
+    const operation = createReplyOperation({
+      sessionId: "provisional-session",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": {
+        sessionId: "existing-session",
+        sessionFile: "/tmp/existing-session.jsonl",
+        updatedAt: 1,
+      },
+    };
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            sessionEntry: undefined,
+            sessionId: undefined,
+            sessionStore,
+            storePath: "/tmp/sessions.json",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(operation.sessionId).toBe("existing-session");
+      expect(call.replyOperation).toBe(operation);
+      expect(call.followupRun.run.sessionId).toBe("existing-session");
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");

@@ -618,6 +618,16 @@ async function trySendAttachmentForTarget(params: {
       "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
     );
   }
+  // Service-qualified handles are not existing chat GUIDs. Let imsg's canonical
+  // send RPC resolve them; explicit bridge and native voice retain bridge semantics.
+  if (
+    params.target.kind === "handle" &&
+    !params.audioAsVoice &&
+    params.sendTransport !== "bridge" &&
+    (params.service === "sms" || params.service === "imessage")
+  ) {
+    return null;
+  }
   if (params.remoteHost && params.sendTransport === "applescript") {
     return null;
   }

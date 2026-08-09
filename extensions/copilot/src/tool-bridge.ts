@@ -27,6 +27,9 @@ import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
+type CreateOpenClawCodingToolsForBridge = (
+  options?: OpenClawCodingToolsOptions,
+) => ReturnType<CreateOpenClawCodingTools> | Promise<ReturnType<CreateOpenClawCodingTools>>;
 type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
@@ -133,7 +136,7 @@ interface CopilotToolBridgeInput {
    */
   onYieldDetected?: (message?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
-  createOpenClawCodingTools?: (opts: unknown) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
+  createOpenClawCodingTools?: CreateOpenClawCodingToolsForBridge;
   beforeExecute?: (ctx: {
     toolName: string;
     toolCallId: string;
@@ -372,6 +375,7 @@ function buildOpenClawCodingToolsOptions(
       jobId: a.jobId,
       memoryFlushWritePath: a.memoryFlushWritePath,
       toolsAllow: a.toolsAllow,
+      conversationToolPolicy: a.conversationToolPolicy,
     }),
     exec: {
       ...a.execOverrides,

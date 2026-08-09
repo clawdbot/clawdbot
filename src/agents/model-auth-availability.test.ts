@@ -4,6 +4,8 @@ import type {
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
 } from "../plugin-sdk/provider-model-types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
@@ -55,6 +57,7 @@ function evaluate(params: {
   resolution?: ProviderModelRouteResolution | null;
   store?: AuthProfileStore;
   syntheticAuthProviderRefs?: readonly string[];
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 }) {
   return createModelAuthAvailabilityResolver({
     cfg: (params.cfg ?? {}) as OpenClawConfig,
@@ -62,6 +65,7 @@ function evaluate(params: {
     env: params.env ?? {},
     routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
   }).evaluateModelAuth("openai", params.ref);
 }
 
@@ -100,6 +104,57 @@ describe("createModelAuthAvailabilityResolver", () => {
       selectedRoute,
     });
   });
+
+  it("canonicalizes prepared runtime auth through provider aliases", () => {
+    const metadataSnapshot = {
+      index: {
+        plugins: [
+          {
+            pluginId: "external-cloud",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "external-cloud",
+          origin: "global",
+          providerAuthAliases: { "cloud-alias": "external-cloud" },
+        },
+      ],
+    } as unknown as PluginMetadataSnapshot;
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      preparedRuntimeAuthModes: { "external-cloud": "api_key" },
+    });
+
+    expect(resolver.evaluateModelAuth("cloud-alias")).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      routeResolution: null,
+      selectedAuthMode: "api_key",
+    });
+  });
+
+  it.each([
+    { mode: "api_key" as const, selectedRoute: platformRoute },
+    { mode: "oauth" as const, selectedRoute: subscriptionRoute },
+  ])(
+    "uses prepared runtime $mode auth when the profile snapshot is empty",
+    ({ mode, selectedRoute }) => {
+      expect(evaluate({ preparedRuntimeAuthModes: { openai: mode } })).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+        selectedAuthMode: mode,
+        selectedRoute,
+      });
+    },
+  );
 
   it("keeps a selected profile with missing credential material unavailable", () => {
     expect(

@@ -148,6 +148,8 @@ export {
   SessionsCatalogContinueResultSchema,
   SessionsCatalogArchiveParamsSchema,
   SessionsCatalogArchiveResultSchema,
+  SessionsCatalogStartTerminalParamsSchema,
+  SessionsCatalogStartTerminalResultSchema,
   SessionsSearchHitSchema,
   SessionsSearchParamsSchema,
   SessionsSearchResultSchema,

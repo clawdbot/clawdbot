@@ -2,6 +2,7 @@
 import { EventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
@@ -1023,14 +1024,6 @@ describe("agentLoop tool termination", () => {
       count: 20,
       reason: `CRITICAL: ${toolCall.name} is looping`,
     };
-  }
-
-  function createDeferred() {
-    let resolve!: () => void;
-    const promise = new Promise<void>((done) => {
-      resolve = done;
-    });
-    return { promise, resolve };
   }
 
   function createTurnSequenceStream(

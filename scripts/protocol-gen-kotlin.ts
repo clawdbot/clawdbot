@@ -8,7 +8,7 @@ import {
   PROTOCOL_VERSION,
 } from "../packages/gateway-protocol/src/version.js";
 import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-descriptors.js";
-import { extractGatewayEventNames } from "./check-protocol-event-coverage.mjs";
+import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
 
 type JsonSchema = {
   type?: string | string[];

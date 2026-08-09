@@ -1097,7 +1097,10 @@ describe("runAgentHarnessAttempt", () => {
 
     const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
-    expect(classifyCall?.[1]).toStrictEqual(params);
+    expect(classifyCall?.[1]).toStrictEqual({
+      ...params,
+      pluginHarnessToolPolicyRestricted: false,
+    });
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });
@@ -1108,6 +1111,7 @@ describe("runAgentHarnessAttempt", () => {
       {
         id: "codex",
         label: "Codex",
+        conversationToolPolicySupport: "exact",
         supports: (ctx) =>
           ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
         runAttempt,
@@ -1131,12 +1135,140 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
   });
 
+  it("passes partial conversation policy to harnesses that enforce it exactly", async () => {
+    const received: Array<{
+      conversationToolPolicy: EmbeddedRunAttemptParams["conversationToolPolicy"];
+      pluginHarnessToolPolicyRestricted: boolean | undefined;
+      toolsAllow: string[] | undefined;
+    }> = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push({
+        conversationToolPolicy: attempt.conversationToolPolicy,
+        pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted,
+        toolsAllow: attempt.toolsAllow,
+      });
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        conversationToolPolicySupport: "exact",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    for (const toolsAllow of [undefined, ["Read", "Bash"]]) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        conversationToolPolicy: { deny: ["exec"] },
+        toolsAllow,
+      });
+    }
+
+    expect(received).toEqual([
+      {
+        conversationToolPolicy: { deny: ["exec"] },
+        pluginHarnessToolPolicyRestricted: true,
+        toolsAllow: undefined,
+      },
+      {
+        conversationToolPolicy: { deny: ["exec"] },
+        pluginHarnessToolPolicyRestricted: true,
+        toolsAllow: ["Read", "Bash"],
+      },
+    ]);
+  });
+
+  it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
+    const received: boolean[] = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push(attempt.pluginHarnessToolPolicyRestricted === true);
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        conversationToolPolicySupport: "exact",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    const cases: Array<{
+      config?: OpenClawConfig;
+      conversationToolPolicy?: EmbeddedRunAttemptParams["conversationToolPolicy"];
+      agentId?: string;
+      sessionKey?: string;
+    }> = [
+      {},
+      { config: { tools: { profile: "coding" } } as OpenClawConfig },
+      { conversationToolPolicy: {} },
+      { conversationToolPolicy: { allow: ["*"] } },
+      { conversationToolPolicy: { deny: ["exec"] } },
+      { config: { tools: { deny: ["exec"] } } as OpenClawConfig },
+      {
+        config: {
+          agents: { list: [{ id: "worker", tools: { deny: ["exec"] } }] },
+        } as OpenClawConfig,
+        agentId: "worker",
+        sessionKey: "agent:worker:session-1",
+      },
+      {
+        config: { tools: { deny: ["exec"] } } as OpenClawConfig,
+        conversationToolPolicy: {},
+      },
+    ];
+
+    for (const testCase of cases) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(testCase.config),
+        conversationToolPolicy: testCase.conversationToolPolicy,
+        agentId: testCase.agentId,
+        sessionKey: testCase.sessionKey,
+      });
+    }
+
+    expect(received).toEqual([false, false, false, false, true, true, true, true]);
+  });
+
+  it("rejects restrictive policy before an unsupported plugin harness runs", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("other"));
+    registerAgentHarness(
+      {
+        id: "other",
+        label: "Other runtime",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "other" },
+    );
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        conversationToolPolicy: { deny: ["exec"] },
+      }),
+    ).rejects.toThrow(
+      "Other runtime cannot enforce this conversation's tool policy. Use the embedded runtime",
+    );
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
   it("adds chat policy wording for plugin harness group deny-all", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
     registerAgentHarness(
       {
         id: "codex",
         label: "Codex",
+        conversationToolPolicySupport: "exact",
         supports: (ctx) =>
           ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
         runAttempt,

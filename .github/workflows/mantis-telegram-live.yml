@@ -508,7 +508,7 @@ jobs:
           fi
           echo "telegram_exit=${telegram_exit}" >> "$GITHUB_OUTPUT"
 
-          node "${GITHUB_WORKSPACE}/scripts/mantis/build-telegram-evidence.mjs" \
+          node --import tsx "${GITHUB_WORKSPACE}/scripts/mantis/build-telegram-evidence.mts" \
             --output-dir "$root" \
             --candidate-ref "$CANDIDATE_SHA" \
             --candidate-sha "$CANDIDATE_SHA" \

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -11,6 +10,11 @@ import type {
   PluginDoctorStateMigrationContext,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "../doctor-contract-api.js";
 import { buildQQBotStateKey } from "./engine/utils/state-keys.js";
@@ -26,13 +30,7 @@ type CredentialBackup = {
   savedAt: string;
 };
 
-const createdDirs: string[] = [];
-
-async function createTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  createdDirs.push(dir);
-  return dir;
-}
+const tempWorkspaces: TempWorkspace[] = [];
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -101,15 +99,18 @@ describe("qqbot doctor state migration", () => {
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
-    stateDir = await createTempDir("qqbot-state-");
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-state-",
+    });
+    tempWorkspaces.push(workspace);
+    stateDir = workspace.dir;
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
 
   afterEach(async () => {
     resetPluginStateStoreForTests();
-    for (const dir of createdDirs.splice(0)) {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
   });
 
   function migrationParams() {
@@ -203,7 +204,12 @@ describe("qqbot doctor state migration", () => {
   });
 
   it("does not scan credential backups outside the active state directory", async () => {
-    const homeDir = await createTempDir("qqbot-home-");
+    const homeWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "qqbot-home-",
+    });
+    tempWorkspaces.push(homeWorkspace);
+    const homeDir = homeWorkspace.dir;
     env.HOME = homeDir;
     await writeJson(
       path.join(homeDir, ".openclaw", "qqbot", "data", "credential-backup-default.json"),

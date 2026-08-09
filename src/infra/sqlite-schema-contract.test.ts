@@ -30,6 +30,9 @@ const CANONICAL_SCHEMA = `
     parent_id TEXT,
     FOREIGN KEY (parent_id) REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED
   );
+  CREATE TABLE compatible_columns (
+    value TEXT
+  ) STRICT;
   CREATE INDEX idx_children_parent ON children(parent_id, id);
   CREATE TRIGGER children_value_after_update
   AFTER UPDATE OF value ON children
@@ -138,6 +141,69 @@ describe("assertSqliteSchemaContains", () => {
           allowedColumnDefinitions: {
             "parents.value": ["value TEXT NOT NULL DEFAULT 'legacy' CHECK (length(value) > 0)"],
           },
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"])(
+    "accepts a compatible future additive %s column only when enabled",
+    (type) => {
+      const database = createDatabase(CANONICAL_SCHEMA);
+      try {
+        database.exec(`ALTER TABLE compatible_columns ADD COLUMN future_note ${type};`);
+
+        expect(() =>
+          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
+        ).toThrow("column definitions differ for compatible_columns");
+        expect(() =>
+          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+            allowCompatibleAdditiveColumns: true,
+          }),
+        ).not.toThrow();
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it.each([
+    "TEXT DEFAULT NULL",
+    "TEXT NOT NULL DEFAULT ''",
+    "TEXT PRIMARY KEY",
+    "TEXT UNIQUE",
+    "TEXT CHECK (length(future_note) > 0)",
+    "TEXT REFERENCES parents(id)",
+    "TEXT COLLATE NOCASE",
+    "TEXT GENERATED ALWAYS AS (value) VIRTUAL",
+  ])("rejects a future additive column declared as %s", (declaration) => {
+    const database = createDatabase(schemaWithFutureColumn(declaration));
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).toThrow("column definitions differ for compatible_columns");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps allowlisted missing additive columns compatible in the upgrade direction", () => {
+    const futureSchema = CANONICAL_SCHEMA.replace(
+      "    value TEXT\n  ) STRICT;",
+      "    value TEXT,\n    future_note TEXT\n  ) STRICT;",
+    );
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      expect(() => assertSqliteSchemaContains(database, "test database", futureSchema)).toThrow(
+        "column definitions differ for compatible_columns",
+      );
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", futureSchema, {
+          allowedMissingColumns: ["compatible_columns.future_note"],
         }),
       ).not.toThrow();
     } finally {
@@ -271,4 +337,11 @@ function createDatabase(schema: string): DatabaseSync {
   const database = new DatabaseSync(":memory:");
   database.exec(schema);
   return database;
+}
+
+function schemaWithFutureColumn(declaration: string): string {
+  return CANONICAL_SCHEMA.replace(
+    "    value TEXT\n  ) STRICT;",
+    `    value TEXT,\n    future_note ${declaration}\n  ) STRICT;`,
+  );
 }

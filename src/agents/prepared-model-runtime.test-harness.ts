@@ -1,15 +1,20 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
+type BuildPreparedModelCatalogSnapshot =
+  typeof import("./model-catalog.js").buildPreparedModelCatalogSnapshot;
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   authStorage: {
-    getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })),
+    getAll: vi.fn<() => AuthStorageData>(() => ({
+      custom: { type: "api_key", key: "test-key" },
+    })),
     getOAuthProviders: vi.fn(() => []),
   },
   modelRegistry: {
@@ -17,7 +22,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     getAll: vi.fn(() => []),
     find: vi.fn(() => null),
   },
-  buildPreparedModelCatalogSnapshot: vi.fn(async (..._args: unknown[]) => ({
+  buildPreparedModelCatalogSnapshot: vi.fn<BuildPreparedModelCatalogSnapshot>(async () => ({
     entries: [],
     routeVariants: [],
   })),
@@ -49,7 +54,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./model-catalog.js", () => ({
-  buildPreparedModelCatalogSnapshot: (...args: unknown[]) =>
+  buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));
 
@@ -91,7 +96,10 @@ vi.mock("./agent-scope.js", () => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
+    config.agents?.list?.find((entry) => entry.id === agentId),
   resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",
@@ -100,6 +108,8 @@ vi.mock("./agent-scope.js", () => ({
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
+  getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
+  getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {

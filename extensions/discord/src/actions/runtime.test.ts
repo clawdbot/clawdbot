@@ -2893,11 +2893,40 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(createChannelDiscord).toHaveBeenCalled();
   });
 
-  it("uses thread permissions for Discord sender thread edits", async () => {
+  it.each<{
+    name: string;
+    params: { archived?: boolean; locked?: boolean };
+    previouslyLocked?: boolean;
+    permissions: bigint[];
+  }>([
+    {
+      name: "uses thread permissions for Discord sender thread edits",
+      params: { archived: true },
+      permissions: [PermissionFlagsBits.ManageThreads],
+    },
+    {
+      name: "requires ManageThreads for Discord sender thread unlocks",
+      params: { locked: false },
+      permissions: [PermissionFlagsBits.ManageThreads],
+    },
+    {
+      name: "requires ManageThreads to reopen locked Discord sender threads",
+      params: { archived: false },
+      previouslyLocked: true,
+      permissions: [PermissionFlagsBits.ManageThreads],
+    },
+    {
+      name: "allows SendMessagesInThreads for unlocked Discord sender thread reopens",
+      params: { archived: false },
+      previouslyLocked: false,
+      permissions: [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
+    },
+  ])("$name", async ({ params, previouslyLocked, permissions }) => {
     const threadChannel = {
       id: "T1",
       type: ChannelType.GuildPublicThread,
       guild_id: "G1",
+      ...(previouslyLocked === undefined ? {} : { thread_metadata: { locked: previouslyLocked } }),
     };
     fetchChannelInfoDiscord
       .mockResolvedValueOnce(threadChannel)
@@ -2905,7 +2934,7 @@ describe("handleDiscordGuildAction - channel management", () => {
 
     await handleGuildAction(
       "channelEdit",
-      { channelId: "T1", archived: true, senderUserId: "sender-1" },
+      { channelId: "T1", senderUserId: "sender-1", ...params },
       channelsEnabled,
     );
 
@@ -2913,87 +2942,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       "G1",
       "T1",
       "sender-1",
-      [PermissionFlagsBits.ManageThreads],
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(editChannelDiscord).toHaveBeenCalled();
-  });
-
-  it("requires ManageThreads for Discord sender thread unlocks", async () => {
-    const threadChannel = {
-      id: "T1",
-      type: ChannelType.GuildPublicThread,
-      guild_id: "G1",
-    };
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce(threadChannel)
-      .mockResolvedValueOnce(threadChannel);
-
-    await handleGuildAction(
-      "channelEdit",
-      { channelId: "T1", locked: false, senderUserId: "sender-1" },
-      channelsEnabled,
-    );
-
-    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
-      "G1",
-      "T1",
-      "sender-1",
-      [PermissionFlagsBits.ManageThreads],
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(editChannelDiscord).toHaveBeenCalled();
-  });
-
-  it("requires ManageThreads to reopen locked Discord sender threads", async () => {
-    const threadChannel = {
-      id: "T1",
-      type: ChannelType.GuildPublicThread,
-      guild_id: "G1",
-      thread_metadata: { locked: true },
-    };
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce(threadChannel)
-      .mockResolvedValueOnce(threadChannel);
-
-    await handleGuildAction(
-      "channelEdit",
-      { channelId: "T1", archived: false, senderUserId: "sender-1" },
-      channelsEnabled,
-    );
-
-    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
-      "G1",
-      "T1",
-      "sender-1",
-      [PermissionFlagsBits.ManageThreads],
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(editChannelDiscord).toHaveBeenCalled();
-  });
-
-  it("allows SendMessagesInThreads for unlocked Discord sender thread reopens", async () => {
-    const threadChannel = {
-      id: "T1",
-      type: ChannelType.GuildPublicThread,
-      guild_id: "G1",
-      thread_metadata: { locked: false },
-    };
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce(threadChannel)
-      .mockResolvedValueOnce(threadChannel);
-
-    await handleGuildAction(
-      "channelEdit",
-      { channelId: "T1", archived: false, senderUserId: "sender-1" },
-      channelsEnabled,
-    );
-
-    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
-      "G1",
-      "T1",
-      "sender-1",
-      [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
+      permissions,
       { cfg: DISCORD_TEST_CFG },
     );
     expect(editChannelDiscord).toHaveBeenCalled();

@@ -8,12 +8,12 @@ import { describe, expect, it } from "vitest";
 import {
   BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES,
   buildDeprecatedPluginSdkModuleSpecifiers,
-} from "../../scripts/lib/deprecated-plugin-sdk-usage.mjs";
+} from "../../scripts/lib/deprecated-plugin-sdk-usage.mts";
 import deprecatedPublicPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-deprecated-public-subpaths.json" with { type: "json" };
 
 const GUARD_SCRIPT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../scripts/check-deprecated-api-usage.mjs",
+  "../../scripts/check-deprecated-api-usage.mts",
 );
 
 function runFacadeImportRule(sourceByRepoPath: Record<string, string>) {

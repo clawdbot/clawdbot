@@ -14,6 +14,14 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
+/** Trim caller-supplied Gateway credentials without consulting config or environment. */
+export function resolveExplicitGatewayAuth(auth?: ExplicitGatewayAuth): ExplicitGatewayAuth {
+  return {
+    token: trimToUndefined(auth?.token),
+    password: trimToUndefined(auth?.password),
+  };
+}
+
 type ResolvedGatewayCredentials = {
   token?: string;
   password?: string;

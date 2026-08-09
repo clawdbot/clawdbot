@@ -72,6 +72,7 @@ export function createCodexAppServerAgentHarness(options: {
     autoSelection: { providerIds: [...providerIds] },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
+    conversationToolPolicySupport: "exact",
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },

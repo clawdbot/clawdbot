@@ -11,17 +11,17 @@ import {
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
-} from "./scripts/lib/plugin-sdk-entries.mjs";
+} from "./scripts/lib/plugin-sdk-entries.mts";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
-} from "./scripts/lib/state-schema-inline-plugin.mjs";
+} from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-} from "./scripts/lib/tsdown-config-groups.mjs";
-import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
+} from "./scripts/lib/tsdown-config-groups.mts";
+import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (

@@ -13,6 +13,12 @@ import {
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
+const HIDDEN_REASONING_BLOCKS = [
+  ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
+  ["reasoning", { type: "reasoning", text: "Checking the heartbeat." }],
+  ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
+] as const;
+
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
     expect(
@@ -93,17 +99,17 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(true);
   });
 
-  it.each([
-    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
-    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
-  ])("matches acknowledgements with hidden %s blocks", (_label, thinkingBlock) => {
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
-      }),
-    ).toBe(true);
-  });
+  it.each(HIDDEN_REASONING_BLOCKS)(
+    "matches acknowledgements with hidden %s blocks",
+    (_label, reasoningBlock) => {
+      expect(
+        isHeartbeatOkResponse({
+          role: "assistant",
+          content: [reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }],
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("preserves meaningful or non-text responses", () => {
     expect(
@@ -170,24 +176,24 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
-  it.each([
-    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
-    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
-  ])("removes no-op heartbeat pairs with hidden %s blocks", (_label, thinkingBlock) => {
-    const nextUserMessage = { role: "user", content: "What time is it?" };
-    const messages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
-      {
-        role: "assistant",
-        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
-      },
-      nextUserMessage,
-    ];
+  it.each(HIDDEN_REASONING_BLOCKS)(
+    "removes no-op heartbeat pairs with hidden %s blocks",
+    (_label, reasoningBlock) => {
+      const nextUserMessage = { role: "user", content: "What time is it?" };
+      const messages = [
+        { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+        {
+          role: "assistant",
+          content: [reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }],
+        },
+        nextUserMessage,
+      ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      nextUserMessage,
-    ]);
-  });
+      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+        nextUserMessage,
+      ]);
+    },
+  );
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
     for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {

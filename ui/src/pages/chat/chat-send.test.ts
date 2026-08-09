@@ -4,6 +4,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
@@ -288,19 +289,6 @@ function idleChatHistory(sessionKey = "agent:main") {
     messages: [],
     sessionInfo: row(sessionKey, { hasActiveRun: false, status: "done" }),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 const neverSettlesPromise: Promise<never> = Promise.race([]);
@@ -1621,7 +1609,7 @@ describe("handleSendChat", () => {
   });
 
   it("keeps a resolved model reconciliation inside the canonical settings queue", async () => {
-    const reconcile = createDeferred<void>();
+    const reconcile = createDeferred();
     let patchCount = 0;
     const host = makeChatHost({
       requestHandlers: {

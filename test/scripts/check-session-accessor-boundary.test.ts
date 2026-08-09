@@ -23,7 +23,7 @@ import {
   migratedSessionAccessorWriteFiles,
   migratedTranscriptWriterFiles,
   readOnlyGatewaySessionAccessorFiles,
-} from "../../scripts/check-session-accessor-boundary.mjs";
+} from "../../scripts/check-session-accessor-boundary.mts";
 
 describe("session accessor boundary guard", () => {
   it("keeps Gateway read paths on non-materializing accessors", () => {

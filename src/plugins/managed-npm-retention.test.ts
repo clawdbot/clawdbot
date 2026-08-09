@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePluginNpmGenerationProjectDir } from "./install-paths.js";
+import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
+
+const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
@@ -72,4 +76,35 @@ describe("managed npm retention", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it.each(["project", "legacy"] as const)(
+    "preserves %s packages retained by an explicit keep-files uninstall",
+    async (layout) => {
+      const stateDir = retentionTempDirs.make("openclaw-retention-");
+      const npmDir = path.join(stateDir, "npm");
+      const projectRoot =
+        layout === "legacy"
+          ? npmDir
+          : resolvePluginNpmGenerationProjectDir({
+              npmDir,
+              packageName: "@openclaw/kept-plugin",
+              generationKey: "kept-plugin-v1",
+            });
+      const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "kept-plugin");
+      fs.mkdirSync(packageDir, { recursive: true });
+      await markRetainedManagedNpmInstall({
+        packageDir,
+        pluginId: "kept-plugin",
+        reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+      });
+
+      try {
+        await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
+        expect(fs.existsSync(packageDir)).toBe(true);
+        expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
+      } finally {
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

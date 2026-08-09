@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -19,7 +20,6 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
@@ -48,7 +48,7 @@ function enqueueTestRun(
 
 function createDrainRecorder(expectedCalls = 1) {
   const calls: FollowupRun[] = [];
-  const done = createDeferred<void>();
+  const done = createDeferred();
   const runFollowup = async (run: FollowupRun) => {
     calls.push(run);
     if (calls.length >= expectedCalls) {
@@ -162,8 +162,8 @@ describe("followup queue collect routing", () => {
   });
 
   it("serializes completion behind rejected admission and blocks later admission", async () => {
-    const admissionStarted = createDeferred<void>();
-    const releaseAdmission = createDeferred<void>();
+    const admissionStarted = createDeferred();
+    const releaseAdmission = createDeferred();
     const admissionError = new Error("admission failed");
     const events: string[] = [];
     const onAdmitted = vi.fn(async () => {
@@ -1362,9 +1362,9 @@ describe("followup queue collect routing", () => {
   it("removes a delivered split summary by source identity after concurrent enqueue", async () => {
     const key = `test-collect-overflow-concurrent-source-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
-    const done = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const done = createDeferred();
     const settings = createQueueSettings({ cap: 1 });
 
     enqueueTestRun(
@@ -1428,8 +1428,8 @@ describe("followup queue collect routing", () => {
   it("does not deliver a context group again after concurrent overflow summarizes it", async () => {
     const key = `test-collect-overflow-stale-context-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstStarted = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
     const settings = createQueueSettings({ cap: 2 });
     const createContextRun = (prompt: string, chatType: "direct" | "channel") =>
       createRun({
@@ -1465,7 +1465,7 @@ describe("followup queue collect routing", () => {
   it("retries split overflow summaries after transient failure", async () => {
     const key = `test-collect-overflow-split-retry-${Date.now()}`;
     const prompts: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const onComplete = vi.fn();
     let attempt = 0;
     const settings = createQueueSettings({ cap: 1 });
@@ -2585,7 +2585,7 @@ describe("followup queue collect routing", () => {
     const key = `test-collect-partial-retry-${Date.now()}`;
     const attempts: FollowupRun[] = [];
     const successfulCalls: FollowupRun[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
       attempt += 1;
@@ -3140,7 +3140,7 @@ describe("followup queue collect routing", () => {
   it("admits one lifecycle-owned overflow source before delivery", async () => {
     const key = `test-overflow-summary-single-admission-${Date.now()}`;
     const events: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const sourceComplete = vi.fn(() => {
       events.push("source-complete");
     });
@@ -3190,9 +3190,9 @@ describe("followup queue collect routing", () => {
   it("keeps one onComplete-only overflow source retryable after delivery fails", async () => {
     const key = `test-overflow-summary-lifecycle-failure-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstAttempt = createDeferred<void>();
-    const releaseRetry = createDeferred<void>();
-    const done = createDeferred<void>();
+    const firstAttempt = createDeferred();
+    const releaseRetry = createDeferred();
+    const done = createDeferred();
     const onComplete = vi.fn();
     let attempts = 0;
     const runFollowup = async (run: FollowupRun) => {
@@ -3290,7 +3290,7 @@ describe("followup queue collect routing", () => {
   it("runs distinct collected admission lifecycles independently when one retries", async () => {
     const key = `test-collect-admission-isolation-${Date.now()}`;
     const events: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const secondAdmissionError = new Error("second admission failed");
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
@@ -3515,7 +3515,7 @@ describe("followup queue collect routing", () => {
 
   it("keeps queue cancellation connected after collect admission", async () => {
     const key = `test-collect-queue-cancel-${Date.now()}`;
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
@@ -3713,7 +3713,7 @@ describe("followup queue collect routing", () => {
   it("runs distinct overflow admission lifecycles independently when one retries", async () => {
     const key = `test-overflow-admission-isolation-${Date.now()}`;
     const events: string[] = [];
-    const done = createDeferred<void>();
+    const done = createDeferred();
     const secondAdmissionError = new Error("second overflow admission failed");
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
