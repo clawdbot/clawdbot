@@ -13,7 +13,7 @@ import {
 } from "./endpoint-probe.ts";
 
 export type PairingWizardAccess = "full" | "limited";
-type PairingWizardRoute = "current" | "lan" | "public";
+type PairingWizardRoute = "current" | "lan" | "public" | "tailscale";
 
 type BlockedPlan = Extract<DevicePairConnectivityPlanResult, { status: "blocked" }>;
 type ConfirmedPlan = Extract<DevicePairConnectivityPlanResult, { status: "confirmation-required" }>;
@@ -159,7 +159,8 @@ export function createPairingWizard(deps: PairingWizardDeps) {
     return isCurrent(owned) ? result : null;
   };
 
-  const planRoute = async (owned: number, mode: "lan" | "public") => {
+  // `current` needs no plan: inspection already resolved the route it names.
+  const planRoute = async (owned: number, mode: Exclude<PairingWizardRoute, "current">) => {
     const result = await request<DevicePairConnectivityPlanResult>(
       "device.pair.connectivity.plan",
       { mode, ...(mode === "public" ? { publicUrl } : {}) },
@@ -184,9 +185,10 @@ export function createPairingWizard(deps: PairingWizardDeps) {
     setStep({ kind: "issuing" });
     const setup = await request<DevicePairSetupCodeResult>("device.pair.setupCode", {
       ...(snapshot.access === "limited" ? { bootstrapProfile: "limited" as const } : {}),
-      // Pin the planned route so a persisted public URL cannot replace it.
-      ...(route === "public" ? { mode: "public" as const, publicUrl } : {}),
-      ...(route === "lan" ? { mode: "lan" as const } : {}),
+      // Pin the planned route so no configured public, remote, or Tailscale
+      // address can outrank the one this browser just proved.
+      ...(route === "current" ? {} : { mode: route }),
+      ...(route === "public" ? { publicUrl } : {}),
     });
     if (!isCurrent(owned) || !setup) {
       return;
@@ -345,12 +347,18 @@ export function createPairingWizard(deps: PairingWizardDeps) {
     }
     setStep({ kind: "inspecting" });
     try {
-      const planned = await planRoute(owned, "lan");
+      const planned = await planRoute(owned, next);
       if (!planned) {
         return;
       }
       if (planned.status === "blocked") {
         setStep({ kind: "blocked", plan: planned });
+        return;
+      }
+      if (next === "tailscale") {
+        // The Serve route is the operator's, not OpenClaw's: nothing is written
+        // and nothing can be undone, so proof is all that stands before issuance.
+        await proveThenIssue(owned, planned.urls);
         return;
       }
       if (!planned.urls.every((url) => canProve(url))) {

@@ -54,6 +54,43 @@ const appliedLanPlan = {
   configWrite: undefined,
 };
 
+const TAILNET_URL = "wss://gateway.tail1a2b.ts.net";
+
+const tailscalePlan = {
+  status: "confirmation-required",
+  mode: "tailscale",
+  configHash: CONFIG_HASH,
+  configState: "applied",
+  urls: [TAILNET_URL],
+  exposure: "tailnet",
+  auth: "token",
+  access: "full",
+  accessDowngraded: false,
+  changes: [],
+  restartRequired: false,
+  preservesCurrentRoute: true,
+};
+
+const blockedTailscalePlan = {
+  status: "blocked",
+  mode: "tailscale",
+  configHash: CONFIG_HASH,
+  configState: "applied",
+  auth: "token",
+  blocker: "tailscale-serve-required",
+  changes: [],
+  action: { kind: "retry", target: "gateway-host", execution: "manual", resumable: true },
+};
+
+const tailnetSetupCode = {
+  setupCode: "SETUP-CODE",
+  gatewayUrl: TAILNET_URL,
+  auth: "token",
+  urlSource: "gateway.tailscale.mode=serve",
+  access: "full",
+  accessDowngraded: false,
+};
+
 function setupCodeFor(gatewayUrl: string) {
   return {
     setupCode: "SETUP-CODE",
@@ -560,5 +597,78 @@ describe("pairing wizard", () => {
 
     expect(harness.wizard.snapshot.open).toBe(false);
     expect(stepKind(harness.wizard.snapshot.step)).toBe("inspecting");
+  });
+
+  it("proves the tailnet route before minting and pins issuance to it", async () => {
+    const harness = createHarness({
+      responses: {
+        "device.pair.connectivity.plan": tailscalePlan,
+        "device.pair.setupCode": tailnetSetupCode,
+      },
+    });
+    await harness.wizard.open({ canAdmin: true });
+    await harness.wizard.chooseRoute("tailscale");
+
+    expect(harness.wizard.snapshot.step).toEqual({ kind: "code", setup: tailnetSetupCode });
+    expect(harness.methods()).toEqual([
+      "device.pair.connectivity.inspect",
+      "device.pair.connectivity.plan",
+      "device.pair.setupCode",
+    ]);
+    expect(harness.paramsOf("device.pair.connectivity.plan")).toEqual([{ mode: "tailscale" }]);
+    expect(harness.paramsOf("device.pair.setupCode")).toEqual([{ mode: "tailscale" }]);
+    // An externally owned route is read, never written or restarted.
+    expect(harness.config.patch).not.toHaveBeenCalled();
+  });
+
+  it("withholds a setup code when the tailnet route does not answer", async () => {
+    const harness = createHarness({
+      responses: { "device.pair.connectivity.plan": tailscalePlan },
+      probe: async () => ({ status: "unreachable" }),
+    });
+    await harness.wizard.open({ canAdmin: true });
+    await harness.wizard.chooseRoute("tailscale");
+
+    expect(harness.wizard.snapshot.step).toEqual({ kind: "recovery", reason: "endpoint-unproven" });
+    expect(harness.methods()).not.toContain("device.pair.setupCode");
+    expect(harness.config.patch).not.toHaveBeenCalled();
+  });
+
+  it("re-plans from authoritative state once the host step is finished", async () => {
+    const harness = createHarness({
+      responses: { "device.pair.connectivity.plan": blockedTailscalePlan },
+    });
+    await harness.wizard.open({ canAdmin: true });
+    await harness.wizard.chooseRoute("tailscale");
+
+    expect(harness.wizard.snapshot.step).toEqual({ kind: "blocked", plan: blockedTailscalePlan });
+    expect(harness.methods()).not.toContain("device.pair.setupCode");
+
+    harness.setResponse("device.pair.connectivity.plan", tailscalePlan);
+    harness.setResponse("device.pair.setupCode", tailnetSetupCode);
+    await harness.wizard.chooseRoute("tailscale");
+
+    expect(harness.wizard.snapshot.step).toEqual({ kind: "code", setup: tailnetSetupCode });
+    expect(harness.paramsOf("device.pair.connectivity.plan")).toEqual([
+      { mode: "tailscale" },
+      { mode: "tailscale" },
+    ]);
+  });
+
+  it("keeps the other routes usable while Tailscale is blocked", async () => {
+    const harness = createHarness({
+      responses: { "device.pair.connectivity.plan": blockedTailscalePlan },
+    });
+    await harness.wizard.open({ canAdmin: true });
+    await harness.wizard.chooseRoute("tailscale");
+    expect(stepKind(harness.wizard.snapshot.step)).toBe("blocked");
+
+    await harness.wizard.back();
+    expect(stepKind(harness.wizard.snapshot.step)).toBe("chooser");
+
+    harness.setResponse("device.pair.connectivity.plan", lanPlan);
+    await harness.wizard.chooseRoute("lan");
+
+    expect(harness.wizard.snapshot.step).toEqual({ kind: "lan-review", plan: lanPlan });
   });
 });

@@ -151,6 +151,13 @@ Use an already connected Control UI session with `operator.admin` access:
      address issues Limited access, and this is not exposure to the public
      internet. Confirming applies the Gateway's own configuration change, so the
      Gateway restarts and this page reconnects on its own.
+   - **Tailscale** — optional, for phones signed in to the same tailnet. It uses
+     an existing Tailscale Serve route that already reaches this Gateway.
+     OpenClaw never creates, changes, or removes Tailscale routes, so when
+     Tailscale is absent, signed out, still starting, missing a Serve route, or
+     waiting on Service approval, the wizard names that one step, leaves the
+     other options untouched, and offers **Retry** once you have finished it on
+     the Gateway host.
    - **Public address** — advanced. Enter a `wss://` address that already routes
      to this Gateway. It is used once for this pairing and never stored, and
      OpenClaw does not create a tunnel for you.

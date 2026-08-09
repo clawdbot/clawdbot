@@ -56,6 +56,36 @@ const appliedLanPlan = {
   configWrite: undefined,
 };
 
+const TAILNET_URL = "wss://gateway.tail1a2b.ts.net";
+const TAILSCALE_UNAVAILABLE_COPY = "To use Tailscale, install it on the Gateway host.";
+
+/** Every unhealthy Tailscale state is a manual, resumable Gateway-host step. */
+const blockedTailscalePlan = {
+  status: "blocked",
+  mode: "tailscale",
+  configHash: BASE_CONFIG_HASH,
+  configState: "applied",
+  auth: "token",
+  blocker: "tailscale-unavailable",
+  changes: [],
+  action: { kind: "retry", target: "gateway-host", execution: "manual", resumable: true },
+};
+
+const tailscalePlan = {
+  status: "confirmation-required",
+  mode: "tailscale",
+  configHash: BASE_CONFIG_HASH,
+  configState: "applied",
+  urls: [TAILNET_URL],
+  exposure: "tailnet",
+  auth: "token",
+  access: "full",
+  accessDowngraded: false,
+  changes: [],
+  restartRequired: false,
+  preservesCurrentRoute: true,
+};
+
 /**
  * Restarts the application connection the way a `gateway.*` change does, and
  * proves the app socket really dropped and was replaced. Counting sockets for
@@ -300,6 +330,93 @@ suite.define(() => {
     );
   });
 
+  it("keeps an unavailable Tailscale option local, recoverable, and link-free", async () => {
+    const setupCode = Buffer.from(
+      JSON.stringify({ url: TAILNET_URL, bootstrapToken: "e2e-bootstrap-token" }),
+      "utf8",
+    ).toString("base64url");
+    const qrDataUrl = await qrcode.toDataURL(setupCode, { margin: 2, width: 360 });
+    mkdirSync(artifactDir, { recursive: true });
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(String(error)));
+        const gateway = await installMockGateway(page, {
+          presenceUsers: [{ self: true, id: "operator", name: "Operator" }],
+          methodResponses: {
+            "device.pair.list": { paired: [], pending: [] },
+            "device.pair.connectivity.inspect": loopbackInspection,
+            "device.pair.connectivity.plan": blockedTailscalePlan,
+            "device.pair.setupCode": {
+              access: "full",
+              auth: "token",
+              gatewayUrl: TAILNET_URL,
+              qrDataUrl,
+              setupCode,
+              urlSource: "gateway.tailscale.mode=serve",
+            },
+            "node.list": { nodes: [] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/security`);
+        await page
+          .locator(".security-page")
+          .getByRole("button", { name: "Pair mobile device" })
+          .click();
+        await page.getByRole("dialog", { name: "OpenClaw mobile" }).waitFor();
+        await page.getByText("How should this phone reach the Gateway?").waitFor();
+
+        await page.getByRole("button", { name: /^Tailscale/ }).click();
+        await page.getByText(TAILSCALE_UNAVAILABLE_COPY).waitFor();
+        expect((await gateway.getRequests("device.pair.connectivity.plan")).at(-1)?.params).toEqual(
+          {
+            mode: "tailscale",
+          },
+        );
+        // The unavailable branch states the requirement and offers recovery and
+        // nothing else: no link, download, or install action of any kind.
+        const branch = page.locator(".device-pair-setup__body");
+        expect(await branch.locator("a").count()).toBe(0);
+        expect(await branch.locator("button").allInnerTexts()).toEqual(["Retry", "Back"]);
+        expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+        expect(await gateway.getRequests("config.patch")).toEqual([]);
+        await settleDialog(page);
+        await page.screenshot({ path: path.join(artifactDir, "07-tailscale-unavailable.png") });
+
+        // Back leaves the sibling routes exactly as they were.
+        await page.getByRole("button", { name: "Back", exact: true }).click();
+        await page.getByText("How should this phone reach the Gateway?").waitFor();
+        expect(await page.getByRole("button", { name: /^Local network/ }).isEnabled()).toBe(true);
+        expect(await page.getByRole("button", { name: /^Public address/ }).isEnabled()).toBe(true);
+
+        // Retry re-plans from authoritative Gateway state after the host step.
+        await page.getByRole("button", { name: /^Tailscale/ }).click();
+        await page.getByText(TAILSCALE_UNAVAILABLE_COPY).waitFor();
+        await gateway.setMethodResponse("device.pair.connectivity.plan", tailscalePlan);
+        await page.getByRole("button", { name: "Retry" }).click();
+
+        const qr = page.getByAltText("OpenClaw mobile pairing QR code");
+        await qr.waitFor();
+        // The tailnet candidate answered the challenge in this browser first.
+        expect(await gateway.getSocketUrls()).toContain(TAILNET_URL);
+        expect((await gateway.getRequests("device.pair.setupCode")).map((r) => r.params)).toEqual([
+          { mode: "tailscale" },
+        ]);
+        expect(await page.getByText(TAILNET_URL, { exact: true }).isVisible()).toBe(true);
+        expect(await gateway.getRequests("config.patch")).toEqual([]);
+        await settleDialog(page);
+        await page.screenshot({ path: path.join(artifactDir, "08-tailscale-code.png") });
+        expect(pageErrors).toEqual([]);
+      },
+    );
+  });
+
   it.each(PAIRING_VIEWPORTS)(
     "renders the chooser and LAN review at $name width in both themes",
     async (viewport) => {
@@ -315,7 +432,7 @@ suite.define(() => {
             viewport: { height: viewport.height, width: viewport.width },
           },
           async ({ page }) => {
-            await installMockGateway(page, {
+            const gateway = await installMockGateway(page, {
               presenceUsers: [{ self: true, id: "operator", name: "Operator" }],
               methodResponses: {
                 "device.pair.list": { paired: [], pending: [] },
@@ -344,6 +461,19 @@ suite.define(() => {
             await settleDialog(page);
             await page.screenshot({
               path: path.join(artifactDir, `lan-review-${viewport.name}-${colorScheme}.png`),
+            });
+
+            await page.getByRole("button", { name: "Back", exact: true }).click();
+            await page.getByText("How should this phone reach the Gateway?").waitFor();
+            await gateway.setMethodResponse("device.pair.connectivity.plan", blockedTailscalePlan);
+            await page.getByRole("button", { name: /^Tailscale/ }).click();
+            await page.getByText(TAILSCALE_UNAVAILABLE_COPY).waitFor();
+            await settleDialog(page);
+            await page.screenshot({
+              path: path.join(
+                artifactDir,
+                `tailscale-unavailable-${viewport.name}-${colorScheme}.png`,
+              ),
             });
           },
         );

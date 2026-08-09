@@ -56,8 +56,9 @@ creation has a token or password auth path.
    **Pair mobile device** on the **Devices** page. Full access is recommended
    and selected by default; choose Limited access only when you want to omit
    administrative Gateway controls. Then pick how the phone should reach the
-   Gateway — the current address, the local network, or a public `wss://`
-   address you already route here. The setup code appears once your browser has
+   Gateway — the current address, the local network, an existing Tailscale Serve
+   route, or a public `wss://` address you already route here. The setup code
+   appears once your browser has
    confirmed that address answers. See
    [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for what
    the local-network option changes.

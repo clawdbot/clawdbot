@@ -499,6 +499,8 @@ export const en: TranslationMap = {
       routeLanHint: "Phones on the same network as this computer.",
       routeLanInsecurePage:
         "Unavailable from this secure page: the browser cannot check a plaintext local address.",
+      routeTailscale: "Tailscale",
+      routeTailscaleHint: "Phones signed in to the same tailnet as this Gateway.",
       routePublic: "Public address",
       routePublicHint: "You already route a secure wss:// address to this Gateway.",
       noticeReverted: "The previous network setting was restored.",
@@ -553,7 +555,20 @@ export const en: TranslationMap = {
       blockedPublicRequired: "Enter the address that reaches this Gateway.",
       blockedPublicInvalid: "Enter a plain wss:// host, with no path, query, or credentials.",
       blockedPublicInsecure: "Public pairing requires a secure wss:// address.",
-      blockedGatewayHost: "Finish this step on the Gateway host, then try again.",
+      blockedTailscaleUnavailable: "To use Tailscale, install it on the Gateway host.",
+      blockedTailscaleLoginRequired:
+        "Sign in to Tailscale on the Gateway host. A new machine may also need approval in your tailnet.",
+      blockedTailscaleNotRunning: "Tailscale is installed on the Gateway host but not running.",
+      blockedTailscaleStarting: "Tailscale is still starting on the Gateway host.",
+      blockedTailscaleStatusError: "Tailscale status could not be read on the Gateway host.",
+      blockedTailscaleServeRequired:
+        "No Tailscale Serve route reaches this Gateway. Set one up on the Gateway host.",
+      blockedTailscaleServeConflict:
+        "Another Tailscale Serve route already uses this address. OpenClaw leaves existing routes as they are.",
+      blockedTailscaleApprovalRequired:
+        "This Tailscale service is waiting for approval in your tailnet.",
+      blockedTailscaleApprovalUnknown:
+        "The approval state of this Tailscale service could not be read.",
       generateCode: "Create setup code",
       transportLimitedTitle: "Limited for network safety",
       transportLimitedHint:

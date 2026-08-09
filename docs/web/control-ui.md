@@ -108,7 +108,7 @@ An already paired administrator can create the iOS/Android connection QR without
   </Step>
 </Steps>
 
-Pairing requires `operator.admin`; a pairing-only session opens the dialog on its review path instead. The dialog first inspects how a phone can reach the Gateway and offers the current address, the local network, or an operator-supplied public `wss://` address; it issues a setup code only after your browser confirms the chosen address answers the Gateway challenge. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
+Pairing requires `operator.admin`; a pairing-only session opens the dialog on its review path instead. The dialog first inspects how a phone can reach the Gateway and offers the current address, the local network, an existing Tailscale Serve route, or an operator-supplied public `wss://` address; it issues a setup code only after your browser confirms the chosen address answers the Gateway challenge. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
 
 ## Personal identity (browser-local)
 

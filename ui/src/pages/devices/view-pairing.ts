@@ -22,8 +22,6 @@ const PAIRING_DOCS_URL =
 
 type PairingBlocker = Extract<DevicePairConnectivityPlanResult, { status: "blocked" }>["blocker"];
 
-// Tailscale routes are not offered here; their blockers can only arrive as an
-// already-configured current route, so they share the Gateway-host message.
 const BLOCKER_COPY: Record<PairingBlocker, string> = {
   "gateway-auth-required": "devices.pairing.blockedAuthRequired",
   "gateway-auth-unavailable": "devices.pairing.blockedAuthUnavailable",
@@ -35,15 +33,15 @@ const BLOCKER_COPY: Record<PairingBlocker, string> = {
   "public-url-required": "devices.pairing.blockedPublicRequired",
   "public-url-invalid": "devices.pairing.blockedPublicInvalid",
   "public-url-insecure": "devices.pairing.blockedPublicInsecure",
-  "tailscale-unavailable": "devices.pairing.blockedGatewayHost",
-  "tailscale-login-required": "devices.pairing.blockedGatewayHost",
-  "tailscale-not-running": "devices.pairing.blockedGatewayHost",
-  "tailscale-starting": "devices.pairing.blockedGatewayHost",
-  "tailscale-status-error": "devices.pairing.blockedGatewayHost",
-  "tailscale-serve-required": "devices.pairing.blockedGatewayHost",
-  "tailscale-serve-conflict": "devices.pairing.blockedGatewayHost",
-  "tailscale-service-approval-required": "devices.pairing.blockedGatewayHost",
-  "tailscale-service-approval-unknown": "devices.pairing.blockedGatewayHost",
+  "tailscale-unavailable": "devices.pairing.blockedTailscaleUnavailable",
+  "tailscale-login-required": "devices.pairing.blockedTailscaleLoginRequired",
+  "tailscale-not-running": "devices.pairing.blockedTailscaleNotRunning",
+  "tailscale-starting": "devices.pairing.blockedTailscaleStarting",
+  "tailscale-status-error": "devices.pairing.blockedTailscaleStatusError",
+  "tailscale-serve-required": "devices.pairing.blockedTailscaleServeRequired",
+  "tailscale-serve-conflict": "devices.pairing.blockedTailscaleServeConflict",
+  "tailscale-service-approval-required": "devices.pairing.blockedTailscaleApprovalRequired",
+  "tailscale-service-approval-unknown": "devices.pairing.blockedTailscaleApprovalUnknown",
 };
 
 const RECOVERY_COPY: Record<PairingWizardRecovery, string> = {
@@ -163,6 +161,9 @@ function renderChooser(
   // A secure page cannot open the plaintext LAN candidate, so it cannot verify it.
   const lanProvable =
     inspection.lan.status === "available" && canProvePairingEndpoint(inspection.lan.url);
+  // Tailscale ignores `inspection.tailscale` and stays selectable: every unhealthy
+  // state is a Gateway-host step the operator can finish and retry, so only the
+  // branch it leads to says what is missing.
   return html`
     ${renderAccess(props, false)}
     ${props.wizard.notice === "route-reverted"
@@ -193,6 +194,11 @@ function renderChooser(
         ...(inspection.lan.status === "available" ? { detail: inspection.lan.url } : {}),
         disabled: inspection.lan.status !== "available" || !lanProvable,
         onSelect: () => void props.actions.chooseRoute("lan"),
+      })}
+      ${renderRoute({
+        label: t("devices.pairing.routeTailscale"),
+        hint: t("devices.pairing.routeTailscaleHint"),
+        onSelect: () => void props.actions.chooseRoute("tailscale"),
       })}
       ${renderRoute({
         label: t("devices.pairing.routePublic"),
@@ -270,13 +276,23 @@ function renderLanReview(
   `;
 }
 
-function renderMessage(props: DevicePairSetupProps, params: { title?: string; body: string }) {
+function renderMessage(
+  props: DevicePairSetupProps,
+  params: { title?: string; body: string; onRetry?: () => void },
+) {
   return html`
     <div class="callout warn device-pair-setup__error" role="alert">
       ${params.title ? html`<strong>${params.title}</strong>` : nothing}
       <span>${params.body}</span>
     </div>
-    <div class="device-pair-setup__actions">${renderBack(props.actions)}</div>
+    <div class="device-pair-setup__actions">
+      ${params.onRetry
+        ? html`<button class="btn primary" type="button" @click=${params.onRetry}>
+            ${icons.refresh} ${t("common.retry")}
+          </button>`
+        : nothing}
+      ${renderBack(props.actions)}
+    </div>
   `;
 }
 
@@ -388,7 +404,15 @@ function renderStep(props: DevicePairSetupProps): TemplateResult {
     case "lan-review":
       return renderLanReview(props, step);
     case "blocked":
-      return renderMessage(props, { body: t(BLOCKER_COPY[step.plan.blocker]) });
+      return renderMessage(props, {
+        body: t(BLOCKER_COPY[step.plan.blocker]),
+        // Retry re-plans from authoritative Gateway state. It is offered only
+        // when the plan itself declares a resumable manual step, so the UI never
+        // invents recovery the connectivity owner did not report.
+        ...(step.plan.action
+          ? { onRetry: () => void props.actions.chooseRoute(step.plan.mode) }
+          : {}),
+      });
     case "applying":
       return renderStatus(t("devices.pairing.applying"));
     case "awaiting-restart":
