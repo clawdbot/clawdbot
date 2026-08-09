@@ -4617,7 +4617,7 @@ describe("subagent registry seam flow", () => {
     });
     const oldRun = findRequesterRun("run-released-successor-old");
     expect(oldRun?.killReconciliation?.supersededAt).toBe(Date.now());
-    mod.releaseSubagentRun("run-released-successor-new");
+    await mod.releaseSubagentRun("run-released-successor-new");
 
     await mod.testing.sweepOnceForTests();
 
@@ -4658,7 +4658,12 @@ describe("subagent registry seam flow", () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-old-tombstone-attachments-"),
     );
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      "00000000-0000-4000-8000-000000000001",
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
     const oldTranscriptTarget = {
@@ -4843,7 +4848,7 @@ describe("subagent registry seam flow", () => {
       childSessionKey,
       task: "new timing owner",
     });
-    mod.releaseSubagentRun("run-released-timing-new");
+    await mod.releaseSubagentRun("run-released-timing-new");
     releaseTimingWrite?.();
     await timingWriteFinished;
 
@@ -5675,11 +5680,10 @@ describe("subagent registry seam flow", () => {
     }) as never);
 
     mod.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    expect(findRequesterRun("run-resume-delete")).toBeUndefined();
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(findRequesterRun("run-resume-delete")).toBeUndefined();
+    });
   });
 
   it("retries and settles keep-mode completions regardless of prior attempt count", async () => {
@@ -5718,13 +5722,13 @@ describe("subagent registry seam flow", () => {
     }) as never);
 
     mod.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(findRequesterRun("run-resume-keep")?.cleanupCompletedAt).toBeTypeOf("number");
+    });
 
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     const run = findRequesterRun("run-resume-keep");
     expect(run?.delivery?.status).toBe("delivered");
-    expect(run?.cleanupCompletedAt).toBeTypeOf("number");
     expect(run?.completion?.resultText).toBe("child completed successfully");
   });
 
@@ -6081,7 +6085,12 @@ describe("subagent registry seam flow", () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-kill-attachments-"),
     );
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      "00000000-0000-4000-8000-000000000002",
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
 
@@ -6318,7 +6327,12 @@ describe("subagent registry seam flow", () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-release-attachments-"),
     );
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      "00000000-0000-4000-8000-000000000003",
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
 
@@ -6340,7 +6354,7 @@ describe("subagent registry seam flow", () => {
       cleanupHandled: false,
     });
 
-    mod.releaseSubagentRun("run-release-delete");
+    await mod.releaseSubagentRun("run-release-delete");
 
     await waitForFast(async () => {
       await expectPathMissing(attachmentsDir);
@@ -6352,6 +6366,27 @@ describe("subagent registry seam flow", () => {
         workspaceDir: undefined,
       });
     });
+  });
+
+  it("retains the registry cleanup owner when released attachment removal fails", async () => {
+    mod.addSubagentRunForTests({
+      runId: "run-release-cleanup-failed",
+      childSessionKey: "agent:main:subagent:release-cleanup-failed",
+      task: "retain failed cleanup owner",
+      cleanup: "delete",
+      attachmentsDir: "/tmp/openclaw-release-cleanup-failed/child",
+      attachmentsRootDir: "/tmp/openclaw-release-cleanup-failed",
+      attachmentsSandboxSessionKey: "agent:main:release-cleanup-failed",
+      createdAt: 1,
+      cleanupHandled: false,
+    });
+    mocks.persistSubagentRunsToDiskOrThrow.mockClear();
+
+    await mod.releaseSubagentRun("run-release-cleanup-failed");
+
+    expect(findRequesterRun("run-release-cleanup-failed")).toBeDefined();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).not.toHaveBeenCalled();
+    expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
   });
 
   it("loads context-engine runtime before released end hooks", async () => {
@@ -6385,7 +6420,7 @@ describe("subagent registry seam flow", () => {
       cleanupHandled: false,
     });
 
-    mod.releaseSubagentRun("run-release-context-engine");
+    await mod.releaseSubagentRun("run-release-context-engine");
 
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({

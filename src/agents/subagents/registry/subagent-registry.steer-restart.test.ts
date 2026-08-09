@@ -624,7 +624,7 @@ describe("subagent registry steer restarts", () => {
     expect(run.generation).toBe(2);
   });
 
-  it("advances the generation from a fallback outside the live registry", () => {
+  it("advances the generation from a fallback outside the live registry", async () => {
     registerRun({
       runId: "run-fallback-generation-old",
       childSessionKey: "agent:main:subagent:fallback-generation",
@@ -636,7 +636,7 @@ describe("subagent registry steer restarts", () => {
       throw new Error("expected fallback run");
     }
     fallback.generation = 2;
-    mod.releaseSubagentRun(fallback.runId);
+    await mod.releaseSubagentRun(fallback.runId);
 
     const run = expectDefined(
       replaceRunAfterSteer({

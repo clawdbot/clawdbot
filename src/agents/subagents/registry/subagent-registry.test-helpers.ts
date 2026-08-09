@@ -41,7 +41,7 @@ type RegistryTestApi = {
     endedAt?: number;
     suppressSessionEffects?: boolean;
   }): Promise<number>;
-  releaseSubagentRun(runId: string): void;
+  releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
   testing: {
     failQueuedSubagentRun(runId: string, error: string): boolean;
@@ -92,8 +92,8 @@ export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
   getRegistryTestApi().addSubagentRunForTests(entry as SubagentRunRecord);
 }
 
-export function releaseSubagentRun(runId: string) {
-  getRegistryTestApi().releaseSubagentRun(runId);
+export async function releaseSubagentRun(runId: string) {
+  await getRegistryTestApi().releaseSubagentRun(runId);
 }
 
 export async function finalizeInterruptedSubagentRun(params: {

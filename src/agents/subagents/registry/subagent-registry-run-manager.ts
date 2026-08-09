@@ -1538,9 +1538,22 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const releaseSubagentRun = (runId: string) => {
+  const releaseSubagentRun = async (runId: string) => {
     const entry = params.runs.get(runId);
     if (!entry) {
+      return;
+    }
+    if (
+      shouldDeleteAttachments(entry) &&
+      entry.attachmentsDir &&
+      entry.attachmentsRootDir &&
+      !(await safeRemoveAttachmentsDir(entry))
+    ) {
+      return;
+    }
+    // Attachment cleanup can yield. Keep a replacement row with the same id
+    // authoritative instead of retiring it with stale release work.
+    if (params.runs.get(runId) !== entry) {
       return;
     }
     params.runs.delete(runId);
@@ -1551,9 +1564,6 @@ export function createSubagentRunManager(params: {
       throw error;
     }
     params.clearPendingLifecycleError(runId);
-    if (shouldDeleteAttachments(entry)) {
-      void safeRemoveAttachmentsDir(entry);
-    }
     const releasedSessionStillUnowned = () =>
       !Array.from(params.getRunsForChildSession(entry.childSessionKey)).some(
         (candidate) => candidate !== entry,
