@@ -59,11 +59,18 @@ vi.mock("@opentelemetry/api", () => {
     SpanStatusCode,
     trace: {
       getTracer: vi.fn(() => recordingTracer),
+      getSpanContext: vi.fn(() => undefined),
       setSpanContext: vi.fn((_ctx: unknown, sc: unknown) => ({
         __tag: "parentCtx",
         sc,
       })),
     },
+    // The adapter validates any span context it falls back to; the mock must
+    // export it or every fallback silently reads as invalid.
+    isSpanContextValid: vi.fn(
+      (sc: { traceId?: string; spanId?: string } | undefined) =>
+        Boolean(sc?.traceId) && Boolean(sc?.spanId),
+    ),
     context: {
       active: vi.fn(() => ({ __tag: "rootCtx" })),
     },
@@ -114,12 +121,14 @@ describe("continuation-tracer adapter :: tracer acquisition", () => {
 
   it("uses an owned tracer provider instead of the global provider", () => {
     const injectedTracer = trace.getTracer("test.injected");
+    // oxlint-disable-next-line typescript/unbound-method -- mock-fn ref for jest-style assertion; vi.fn does not access `this`
     vi.mocked(trace.getTracer).mockClear();
     const getTracer = vi.fn(() => injectedTracer);
 
     createContinuationOtelTracerAdapter({ tracerProvider: { getTracer } });
 
     expect(getTracer).toHaveBeenCalledWith(CONTINUATION_OTEL_TRACER_NAME);
+    // oxlint-disable-next-line typescript/unbound-method -- mock-fn ref for jest-style assertion; vi.fn does not access `this`
     expect(trace.getTracer).not.toHaveBeenCalled();
   });
 });

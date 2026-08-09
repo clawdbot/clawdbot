@@ -19,6 +19,7 @@
 
 import {
   context as otelContextApi,
+  isSpanContextValid,
   trace,
   SpanStatusCode,
   TraceFlags,
@@ -154,8 +155,20 @@ export function createContinuationOtelTracerAdapter(
     trace.getTracer(CONTINUATION_OTEL_TRACER_NAME);
   return {
     formatTraceparent(traceContext: DiagnosticTraceContext): string | undefined {
-      const spanContext = adapterOptions.resolveSpanContext?.(traceContext);
-      if (!spanContext) {
+      // Continuation hops serialize this traceparent onto durable records
+      // (`SystemEvent.traceparent`, queued delivery metadata) and rebuild the
+      // parent from it on re-entry, so returning nothing permanently orphans
+      // the far side of a `continue_delegate`/`continue_work` boundary.
+      //
+      // The trusted-span registry is a process-local accelerator: it is keyed
+      // by OpenClaw's diagnostic trace id, is capacity-evicted, and cannot
+      // survive a restart or a second process. Prefer its exact mapping when
+      // present, then fall back to the SDK's live active span, which is the
+      // authoritative "where we came from" for a real exported span.
+      const spanContext =
+        adapterOptions.resolveSpanContext?.(traceContext) ??
+        trace.getSpanContext(otelContextApi.active());
+      if (!spanContext || !isSpanContextValid(spanContext)) {
         return undefined;
       }
       return `00-${spanContext.traceId}-${spanContext.spanId}-${otelTraceFlagsToDiagnostic(
