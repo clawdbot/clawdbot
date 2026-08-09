@@ -20,7 +20,7 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -79,12 +79,11 @@ export type PendingIMessageApprovalReactionPollTarget = {
   expiresAtMs: number;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
   () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
 );
 const pendingReactionPollTargets = new Map<string, PendingIMessageApprovalReactionPollTarget>();
-
-const loadApprovalResolver = resolverRuntimeLoader;
 
 function prunePendingReactionPollTargets(nowMs = Date.now()): void {
   for (const [key, target] of pendingReactionPollTargets.entries()) {
@@ -687,7 +686,7 @@ export async function handleIMessageApprovalReaction(params: {
     return { handled: true, stopPolling: false };
   }
 
-  const { resolveApprovalOverGateway } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
@@ -763,5 +762,5 @@ export async function maybeResolveIMessageApprovalReaction(params: {
 export function clearIMessageApprovalReactionTargetsForTest(): void {
   imessageApprovalReactionTargets.clearForTest();
   pendingReactionPollTargets.clear();
-  resolverRuntimeLoader.clear();
+  loadResolveApprovalOverGateway.clear();
 }

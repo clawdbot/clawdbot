@@ -38,25 +38,21 @@ import { recordOutboundMessageForPromptContext } from "./outbound-message-contex
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
-type ResolveTelegramApproval = (params: {
+type ResolveTelegramApprovalParams = {
   cfg: OpenClawConfig;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
   decision: ExecApprovalReplyDecision;
   channel: "telegram";
   senderId?: string | null;
   gatewayUrl?: string;
-}) => Promise<ApprovalResolveResult>;
+} & (
+  | { approvalKind: "exec" | "plugin"; resolveMethod?: never }
+  | { approvalKind?: never; resolveMethod: "exec" | "plugin" }
+);
 
-type ResolveTelegramLegacyApproval = (params: {
-  cfg: OpenClawConfig;
-  approvalId: string;
-  decision: ExecApprovalReplyDecision;
-  channel: "telegram";
-  senderId?: string | null;
-  gatewayUrl?: string;
-  resolveMethod: "exec" | "plugin";
-}) => Promise<void>;
+type ResolveTelegramApproval = (
+  params: ResolveTelegramApprovalParams,
+) => Promise<ApprovalResolveResult | void>;
 
 export type TelegramBotDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -80,7 +76,6 @@ export type TelegramBotDeps = {
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
   resolveApproval?: ResolveTelegramApproval;
-  resolveLegacyApproval?: ResolveTelegramLegacyApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
@@ -152,10 +147,7 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
     return wasSentByBot;
   },
   get resolveApproval() {
-    return resolveApprovalOverGateway;
-  },
-  get resolveLegacyApproval() {
-    return resolveApprovalOverGateway;
+    return resolveApprovalOverGateway as ResolveTelegramApproval;
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;

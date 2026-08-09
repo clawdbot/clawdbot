@@ -10,7 +10,7 @@ import {
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
@@ -53,8 +53,9 @@ type IMessageApprovalPollTarget = {
 
 type IMessageApprovalPollTombstone = { approvalId: string };
 
-const loadApprovalResolver = createLazyRuntimeModule(
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
   () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
 );
 
 const reportPersistentError = createPluginStateErrorReporter(
@@ -534,7 +535,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     return true;
   }
 
-  const { resolveApprovalOverGateway } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
     const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
@@ -583,7 +584,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
 function clearIMessageApprovalPollTargetsForTest(): void {
   pollTargets.clearForTest();
   pollTombstones.clearForTest();
-  loadApprovalResolver.clear();
+  loadResolveApprovalOverGateway.clear();
 }
 
 export const iMessageApprovalPollTargets = {
