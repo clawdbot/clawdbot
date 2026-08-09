@@ -957,6 +957,14 @@ export async function executeCronRun(params: {
   if (!runResult) {
     throw new Error("cron isolated run returned no result");
   }
+
+  runResult.meta = runResult.meta ?? {};
+  runResult.meta.agentMeta = runResult.meta.agentMeta ?? {};
+  runResult.meta.agentMeta.sessionId =
+    runResult.meta.agentMeta.sessionId ?? params.cronSession.sessionEntry.sessionId;
+  runResult.meta.agentMeta.sessionFile =
+    runResult.meta.agentMeta.sessionFile ?? params.cronSession.sessionEntry.sessionFile;
+
   return {
     runResult,
     fallbackProvider,
