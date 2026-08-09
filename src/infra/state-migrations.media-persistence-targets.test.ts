@@ -91,6 +91,30 @@ describe("media persistence migration targets", () => {
     ]);
   });
 
+  it("prefers a renamed configured owner over the default-layout directory name", () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-renamed-owner-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = path.join(stateDir, "agents", "oldname", "agent", "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ agentId: "renamed", env, path: databasePath });
+    unregisterOpenClawAgentDatabase({ agentId: "renamed", env, path: databasePath });
+
+    const result = migrateLegacyMediaPersistence({
+      configuredAgentDatabaseTargets: [{ agentId: "renamed", path: databasePath }],
+      env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId: "renamed", path: databasePath })]);
+  });
+
   it("preserves filesystem traversal for registered paths containing dot-dot segments", () => {
     const stateDir = fs.realpathSync.native(
       makeTempDir(tempDirs, "media-persistence-symlink-path-"),

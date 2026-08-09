@@ -57,13 +57,15 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
       `Failed enumerating registered agent databases for media migration: ${String(error)}`,
     );
   }
+  // Explicit config owns identity; disk layout is a fallback heuristic, and
+  // registry rows are last because copied or renamed state can leave them stale.
   const candidates: CandidateTarget[] = [
-    ...listDefaultAgentDatabaseTargets(params.env, params.warnings),
     ...params.configuredAgentDatabaseTargets.map((target) => ({
       agentId: target.agentId,
       path: target.path,
       source: "configured" as const,
     })),
+    ...listDefaultAgentDatabaseTargets(params.env, params.warnings),
     ...registered.map((entry) => ({
       agentId: entry.agentId,
       path: entry.path,
@@ -83,6 +85,7 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
   }
   const configuredPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const targets: AgentDatabaseMediaMigrationTarget[] = [];
+  const seenRealPaths = new Set<string>();
   for (const candidate of candidates) {
     // Preserve the original locator: lexical normalization of `link/../file`
     // can select a different file than filesystem symlink traversal does.
@@ -172,6 +175,11 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
       );
       continue;
     }
+    if (seenRealPaths.has(realPath)) {
+      continue;
+    }
+    // Claim identity only after every persistence, boundary, and file gate passed.
+    seenRealPaths.add(realPath);
     targets.push({ ...candidate, path: pathname, realPath });
   }
   return targets;
