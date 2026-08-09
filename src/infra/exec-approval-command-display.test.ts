@@ -115,6 +115,16 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("https://api.example.com");
   });
 
+  it("preserves a same-key programmatic env lookup when a separate secret triggers bypass", () => {
+    const lookup = "OPENAI_API_KEY=process.env.OPENAI_API_KEY";
+    const cmd = `${lookup} echo sk-abc123\u200B456789012345678`;
+    const result = sanitizeExecApprovalDisplayText(cmd);
+
+    expect(result).toContain(lookup);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+  });
+
   it("masks newly added vendor token prefixes through the default redaction path", () => {
     const token = "glpat-abcdefghijklmnopqrstuv";
     const result = sanitizeExecApprovalDisplayText(`deploy --with ${token}`);

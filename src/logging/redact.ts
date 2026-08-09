@@ -632,6 +632,20 @@ function isEmptyShellParameterExpansionTail(token: string): boolean {
   return /^[-=?+]\}$/.test(token);
 }
 
+function shouldPreserveShellReferencePatternMatch(
+  match: string,
+  token: string,
+  pattern: RegExp,
+  context?: { input?: string; offset?: number },
+): boolean {
+  return (
+    shellReferencePreservingPatterns.has(pattern) &&
+    (shouldPreserveShellReferenceMatch(match, token) ||
+      shouldPreserveProgrammaticEnvLookupMatch(match, context?.input, context?.offset) ||
+      isEmptyShellParameterExpansionTail(token))
+  );
+}
+
 function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean {
   return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
 }
@@ -729,22 +743,16 @@ function redactMatch(
   if (splitSecretValueForMask(formAwareValue.secret).maskable === "***") {
     return match;
   }
-  const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
   // Preserve shell variable references (e.g. `MY_TOKEN=$MY_TOKEN`) for assignment patterns
   // registered as shell-reference-preserving, so non-secret expansions that merely echo the
   // assignment key are not masked.
-  if (
-    isShellReferencePattern &&
-    (shouldPreserveShellReferenceMatch(match, token) ||
-      shouldPreserveProgrammaticEnvLookupMatch(match, context?.input, context?.offset) ||
-      isEmptyShellParameterExpansionTail(token))
-  ) {
+  if (shouldPreserveShellReferencePatternMatch(match, token, pattern, context)) {
     return match;
   }
   // Assignment values can legitimately include trailing shell/structural characters
   // (e.g. `${VAR:-default}`); mask the captured token whole so those characters count toward the
   // retained hint instead of being exposed by delimiter-aware masking.
-  const masked = isShellReferencePattern
+  const masked = shellReferencePreservingPatterns.has(pattern)
     ? maskToken(token)
     : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`;
   if (token === match) {
@@ -832,6 +840,14 @@ function markPatternMatchRedaction(
     fullMatch,
     match.slice(1).map((value) => (typeof value === "string" ? value : "")),
   );
+  if (
+    shouldPreserveShellReferencePatternMatch(fullMatch, selected.value, pattern, {
+      input,
+      offset: match.index,
+    })
+  ) {
+    return;
+  }
   const tokenStart =
     selected.value === fullMatch
       ? 0
