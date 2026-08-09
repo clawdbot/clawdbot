@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "./regexp.mjs";
 
 const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*)?$/u;
@@ -7,38 +6,7 @@ const STABLE_PACKAGE_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>[1-9]\d*))?$/u;
 const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
-type ReleaseAsset = { name: string; digest?: string | null };
-type StableRelease = {
-  assets?: Array<ReleaseAsset | null | undefined>;
-  isDraft?: boolean;
-  isPrerelease?: boolean;
-  tagName?: string;
-};
-type VersionJson = { version?: unknown } | null | undefined;
-type StableMainCloseoutParams = {
-  [key: string]: unknown;
-  allowStaleRollbackDrill?: boolean;
-  fullReleaseValidationRunAttempt?: string;
-  mainAppcast: string;
-  mainChangelog: string;
-  mainPackageJson: VersionJson;
-  nowMs: number;
-  release?: StableRelease | null;
-  requireCompletePlatformAssets?: boolean;
-  rollbackDrillDate?: string;
-  rollbackDrillId?: string;
-  tag: string;
-  tagChangelog: string;
-  tagPackageJson: VersionJson;
-  windowsNodeInstallerDigests?: string | Record<string, string> | null;
-  windowsNodeReleaseRunId?: string;
-};
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
-}
-
-function parseStableReleaseTagDetails(tag: string) {
+function parseStableReleaseTagDetails(tag) {
   const match = STABLE_RELEASE_TAG_RE.exec(tag);
   if (!match?.groups?.version) {
     throw new Error(`expected a stable release tag, got ${tag}`);
@@ -49,34 +17,34 @@ function parseStableReleaseTagDetails(tag: string) {
   };
 }
 
-function sha256(value: string) {
+function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function parseStableReleaseTag(tag: string): string {
+export function parseStableReleaseTag(tag) {
   return parseStableReleaseTagDetails(tag).baseVersion;
 }
 
-function parseStablePackageVersion(version: string): [number, number, number, number] | null {
+function parseStablePackageVersion(version) {
   const match = STABLE_PACKAGE_VERSION_RE.exec(version);
   if (!match?.groups) {
     return null;
   }
   return [
-    Number.parseInt(match.groups.year ?? "", 10),
-    Number.parseInt(match.groups.month ?? "", 10),
-    Number.parseInt(match.groups.patch ?? "", 10),
+    Number.parseInt(match.groups.year, 10),
+    Number.parseInt(match.groups.month, 10),
+    Number.parseInt(match.groups.patch, 10),
     Number.parseInt(match.groups.correction ?? "0", 10),
   ];
 }
 
-function isStableMainVersionAtLeast(mainVersion: string, shippedVersion: string) {
+function isStableMainVersionAtLeast(mainVersion, shippedVersion) {
   const main = parseStablePackageVersion(mainVersion);
   const shipped = parseStablePackageVersion(shippedVersion);
   if (!main || !shipped) {
     return false;
   }
-  for (const index of [0, 1, 2, 3] as const) {
+  for (let index = 0; index < main.length; index += 1) {
     if (main[index] !== shipped[index]) {
       return main[index] > shipped[index];
     }
@@ -84,7 +52,7 @@ function isStableMainVersionAtLeast(mainVersion: string, shippedVersion: string)
   return true;
 }
 
-export function extractStableChangelogSection(changelog: string, version: string): string | null {
+export function extractStableChangelogSection(changelog, version) {
   const heading = new RegExp(`^## ${escapeRegExp(version)}\\n`, "mu").exec(changelog);
   if (!heading || heading.index === undefined) {
     return null;
@@ -97,7 +65,7 @@ export function extractStableChangelogSection(changelog: string, version: string
   ).trimEnd();
 }
 
-function readVersion(packageJson: VersionJson, label: string, errors: string[]) {
+function readVersion(packageJson, label, errors) {
   const value = packageJson?.version;
   if (typeof value !== "string" || value.length === 0) {
     errors.push(`${label} package.json is missing a version.`);
@@ -106,13 +74,13 @@ function readVersion(packageJson: VersionJson, label: string, errors: string[]) 
   return value;
 }
 
-function readReleaseAssets(release: StableRelease | null | undefined): ReleaseAsset[] {
+function readReleaseAssets(release) {
   return Array.isArray(release?.assets)
-    ? release.assets.filter((asset): asset is ReleaseAsset => typeof asset?.name === "string")
+    ? release.assets.filter((asset) => asset && typeof asset.name === "string")
     : [];
 }
 
-function isCloseoutEvidenceAsset(assetName: string, tag: string) {
+function isCloseoutEvidenceAsset(assetName, tag) {
   const releaseVersion = tag.slice(1);
   return (
     assetName === `openclaw-${releaseVersion}-stable-main-closeout.json` ||
@@ -120,7 +88,7 @@ function isCloseoutEvidenceAsset(assetName: string, tag: string) {
   );
 }
 
-function parseRollbackDrillDate(value: unknown) {
+function parseRollbackDrillDate(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
     return null;
   }
@@ -131,7 +99,7 @@ function parseRollbackDrillDate(value: unknown) {
     : null;
 }
 
-function verifyRollbackDrill(params: StableMainCloseoutParams, errors: string[]) {
+function verifyRollbackDrill(params, errors) {
   if (!params.rollbackDrillId?.trim()) {
     errors.push("rollback drill id is required.");
   }
@@ -152,9 +120,9 @@ function verifyRollbackDrill(params: StableMainCloseoutParams, errors: string[])
   }
 }
 
-export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
+export function verifyStableMainCloseout(params) {
   const { baseVersion, tagVersion } = parseStableReleaseTagDetails(params.tag);
-  const errors: string[] = [];
+  const errors = [];
   const mainVersion = readVersion(params.mainPackageJson, "main", errors);
   const tagPackageVersion = readVersion(params.tagPackageJson, "release tag", errors);
   const fallbackCorrection = tagVersion !== baseVersion && tagPackageVersion === baseVersion;
@@ -194,7 +162,7 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
 
   if (params.release?.tagName !== params.tag) {
     errors.push(
-      `GitHub release tag is ${params.release?.tagName ?? "<missing>"}, expected ${params.tag}.`,
+      `GitHub release tag is ${String(params.release?.tagName ?? "<missing>")}, expected ${params.tag}.`,
     );
   }
   if (params.release?.isDraft === true) {
@@ -209,14 +177,10 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
     `OpenClaw-${macAssetVersion}.zip`,
     `OpenClaw-${macAssetVersion}.dmg`,
     `OpenClaw-${macAssetVersion}.dSYM.zip`,
-  ] as const;
+  ];
   const releaseAssets = readReleaseAssets(params.release);
   const assetNames = new Set(releaseAssets.map((asset) => asset.name));
-  let releasePublishRecovery: {
-    completePlatformAssetsRequired: true;
-    windowsNodeReleaseRunId: string;
-    windowsNodeInstallerDigests: Record<string, string>;
-  } | null = null;
+  let releasePublishRecovery = null;
   const missingMacAssets = expectedMacAssets.filter((asset) => !assetNames.has(asset));
   if (missingMacAssets.length > 0) {
     errors.push(
@@ -247,10 +211,11 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
       },
     ];
     for (const family of requiredPlatformFamilies) {
+      const compareNames = (left, right) => left.localeCompare(right);
       const actual = [...assetNames]
         .filter((name) => name.startsWith(family.prefix))
-        .toSorted((left, right) => left.localeCompare(right));
-      const expected = family.expected.toSorted((left, right) => left.localeCompare(right));
+        .toSorted(compareNames);
+      const expected = family.expected.toSorted(compareNames);
       if (JSON.stringify(actual) !== JSON.stringify(expected)) {
         errors.push(
           `GitHub release ${params.tag} ${family.label} asset names do not match the recovery contract: expected ${family.expected.join(", ")}; got ${actual.join(", ") || "<none>"}.`,
@@ -271,30 +236,27 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
       "OpenClawCompanion-Setup-arm64.exe",
       "OpenClawCompanion-Setup-x64.exe",
     ];
-    const configuredWindowsDigests = params.windowsNodeInstallerDigests;
-    let trustedWindowsDigests = isStringRecord(configuredWindowsDigests)
-      ? configuredWindowsDigests
-      : null;
-    if (typeof configuredWindowsDigests === "string") {
+    let trustedWindowsDigests = params.windowsNodeInstallerDigests;
+    if (typeof trustedWindowsDigests === "string") {
       try {
-        const parsed: unknown = JSON.parse(configuredWindowsDigests);
-        trustedWindowsDigests = isStringRecord(parsed) ? parsed : null;
+        trustedWindowsDigests = JSON.parse(trustedWindowsDigests);
       } catch {
         trustedWindowsDigests = null;
       }
     }
-    const trustedDigestRecord = trustedWindowsDigests;
-    const trustedDigestNames = trustedDigestRecord
-      ? Object.keys(trustedDigestRecord).toSorted((left, right) => left.localeCompare(right))
-      : [];
+    const trustedDigestNames =
+      trustedWindowsDigests &&
+      typeof trustedWindowsDigests === "object" &&
+      !Array.isArray(trustedWindowsDigests)
+        ? Object.keys(trustedWindowsDigests).toSorted((left, right) => left.localeCompare(right))
+        : [];
     const expectedDigestNames = windowsInstallerNames.toSorted((left, right) =>
       left.localeCompare(right),
     );
     const trustedDigestContractValid =
-      trustedDigestRecord !== null &&
       JSON.stringify(trustedDigestNames) === JSON.stringify(expectedDigestNames) &&
       windowsInstallerNames.every((name) =>
-        /^sha256:[0-9a-f]{64}$/u.test(trustedDigestRecord[name] ?? ""),
+        /^sha256:[0-9a-f]{64}$/u.test(trustedWindowsDigests?.[name] ?? ""),
       );
     if (!trustedDigestContractValid) {
       errors.push(
@@ -303,7 +265,7 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
     } else {
       const mismatchedWindowsAssets = windowsInstallerNames.filter((name) => {
         const asset = releaseAssets.find((candidate) => candidate.name === name);
-        return asset?.digest !== trustedDigestRecord[name];
+        return asset?.digest !== trustedWindowsDigests[name];
       });
       if (mismatchedWindowsAssets.length > 0) {
         errors.push(
@@ -311,16 +273,15 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
         );
       }
     }
-    const windowsNodeReleaseRunId = params.windowsNodeReleaseRunId ?? "";
-    if (!/^[1-9]\d*$/u.test(windowsNodeReleaseRunId)) {
+    if (!/^[1-9]\d*$/u.test(params.windowsNodeReleaseRunId ?? "")) {
       errors.push("failed-publish recovery is missing a trusted Windows Node Release run id.");
     }
-    if (trustedDigestContractValid && /^[1-9]\d*$/u.test(windowsNodeReleaseRunId)) {
+    if (trustedDigestContractValid && /^[1-9]\d*$/u.test(params.windowsNodeReleaseRunId ?? "")) {
       releasePublishRecovery = {
         completePlatformAssetsRequired: true,
-        windowsNodeReleaseRunId,
+        windowsNodeReleaseRunId: params.windowsNodeReleaseRunId,
         windowsNodeInstallerDigests: Object.fromEntries(
-          windowsInstallerNames.map((name) => [name, trustedDigestRecord[name] ?? ""]),
+          windowsInstallerNames.map((name) => [name, trustedWindowsDigests[name]]),
         ),
       };
     }
@@ -328,7 +289,7 @@ export function verifyStableMainCloseout(params: StableMainCloseoutParams) {
 
   verifyRollbackDrill(params, errors);
 
-  if (errors.length > 0 || mainChangelog === null) {
+  if (errors.length > 0) {
     return { errors, manifest: null };
   }
 

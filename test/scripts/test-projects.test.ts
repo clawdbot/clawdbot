@@ -1949,7 +1949,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
       ],
       "scripts/lib/test-group-report.mts": ["test/scripts/test-group-report.test.ts"],
-      "scripts/lib/stable-release-closeout.mts": ["test/stable-release-closeout.test.ts"],
+      "scripts/lib/stable-release-closeout.mjs": ["test/stable-release-closeout.test.ts"],
       "scripts/lib/extension-source-classifier.mts": [
         "test/scripts/extension-source-classifier.test.ts",
         "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
