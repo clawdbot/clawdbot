@@ -6,6 +6,7 @@ import {
   EMPTY_LEGACY_SESSION_SURFACES,
   type PreparedLegacySessionSurfaces,
 } from "./legacy-session-surfaces.types.js";
+import { readLoadedLegacySessionSurfaces } from "./loader-channel-runtime.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -95,7 +96,7 @@ export function prepareLegacySessionSurfaces(params: {
   }
 
   const surfacesByPluginId = new Map(
-    registry.legacySessionSurfaces.map((entry) => [entry.pluginId, entry.surface]),
+    readLoadedLegacySessionSurfaces(registry).map((entry) => [entry.pluginId, entry.surface]),
   );
   for (const record of loadableRecords) {
     if (surfacesByPluginId.has(record.id)) {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import type { BundledChannelLegacySessionSurface } from "../plugin-sdk/channel-entry-contract.types.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -17,10 +18,34 @@ import type { PluginRegistrationPlan } from "./loader-registration-plan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { resolveCanonicalDistRuntimeSource } from "./plugin-runtime-artifact-resolution.js";
-import type { createPluginRegistry, PluginRecord } from "./registry.js";
+import type { createPluginRegistry, PluginRecord, PluginRegistry } from "./registry.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
 
 type PluginRegistryBuilder = ReturnType<typeof createPluginRegistry>;
+type LegacySessionSurfaceEntry = {
+  pluginId: string;
+  surface: BundledChannelLegacySessionSurface;
+};
+
+const LEGACY_SESSION_SURFACES = Symbol("legacy-session-surfaces");
+type LegacySessionSurfaceRegistry = PluginRegistry & {
+  [LEGACY_SESSION_SURFACES]?: LegacySessionSurfaceEntry[];
+};
+
+function appendLoadedLegacySessionSurface(
+  registry: PluginRegistry,
+  entry: LegacySessionSurfaceEntry,
+): void {
+  const target = registry as LegacySessionSurfaceRegistry;
+  (target[LEGACY_SESSION_SURFACES] ??= []).push(entry);
+}
+
+/** Reads sidecars collected on a caller-owned setup-only registry. */
+export function readLoadedLegacySessionSurfaces(
+  registry: PluginRegistry,
+): readonly LegacySessionSurfaceEntry[] {
+  return (registry as LegacySessionSurfaceRegistry)[LEGACY_SESSION_SURFACES] ?? [];
+}
 
 /**
  * Handles the setup-entry channel path.
@@ -71,7 +96,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
       params.pushPluginLoadError("setup entry does not export loadLegacySessionSurface");
       return true;
     }
-    registryBuilder.registry.legacySessionSurfaces.push({
+    appendLoadedLegacySessionSurface(registryBuilder.registry, {
       pluginId: record.id,
       surface: registration.surface,
     });
