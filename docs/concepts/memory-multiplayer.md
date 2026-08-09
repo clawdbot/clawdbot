@@ -957,8 +957,13 @@ type MemoryAuthorizationCapabilities = Readonly<{
   egressReceipts: true;
 }>;
 
+type MemoryPluginCapability = Readonly<{
+  authorization?: MemoryAuthorizationCapabilities;
+  runtime?: MemoryPluginRuntime;
+  // Other memory-plugin contributions are omitted.
+}>;
+
 interface AuthorizedMemoryRuntime {
-  authorization: MemoryAuthorizationCapabilities;
   authorize(context: MemoryAccessContext): Promise<AuthorizedMemoryPlan>;
   searchAuthorized(params: {
     context: MemoryAccessContext;
@@ -993,6 +998,15 @@ interface AuthorizedMemoryRuntime {
 }
 ```
 
+The selected `MemoryPluginCapability`, rather than its optional runtime alone,
+declares `authorization`. The declaration is additive during Phase 0 and must
+be complete before a later enforced path can select the backend. Keeping
+`runtime` optional lets Phase 0 inventory a selected runtime-less or legacy
+registration, including a LanceDB-style registration, without pretending that
+it implements `AuthorizedMemoryRuntime`. The declaration and a conformance
+result describe plugin surface shape only; neither can admit a capability,
+construct a trusted context, or make an authorization decision.
+
 The plan is plugin-issued and bound to the context fingerprint, session and
 subject revisions, operation, mounts, policy revision, delivery revision,
 egress audiences, and expiry. No selected or supplemental backend exposes a
@@ -1002,10 +1016,11 @@ plan and resource revision. A returned handle is not a bearer grant.
 
 Every search or exact-read result that exposes content uses the mandatory
 result envelope with both branded receipts, recorded before the content leaves
-the plugin. The capability flags make that requirement discoverable during
-backend admission. Core rejects a missing or invalid exposure receipt before
-prompt assembly, and rejects an egress receipt whose context, delivery,
-registry, policy-set, or `runExposureRevision` no longer matches.
+the plugin. In a later enforced path, the capability flags make that
+requirement discoverable during backend admission. That path rejects a missing
+or invalid exposure receipt before prompt assembly, and rejects an egress
+receipt whose context, delivery, registry, policy-set, or `runExposureRevision`
+no longer matches.
 Sync, export, public-artifact reads, and any future method that emits content
 use the same envelope; a plain content-bearing return type is nonconforming.
 
@@ -1363,12 +1378,13 @@ flowchart TB
   IDP -->|verification material, never final policy| ID
 ```
 
-Core constructs and brands immutable verified access facts, gates every memory-
-capability invocation, enforces generic prompt, egress, and filesystem
-confinement, and rejects missing or nonconforming capabilities. It owns durable
-principal resolution, the write-once session subject, current session mapping,
-Gateway collaboration decisions, and delivery revisions. Core never branches
-on store kinds, ACL schemas, search algorithms, or bundled plugin IDs.
+In the enforced target state, core constructs and brands immutable verified
+access facts, gates every memory-capability invocation, enforces generic prompt,
+egress, and filesystem confinement, and rejects missing or nonconforming
+capabilities. It owns durable principal resolution, the write-once session
+subject, current session mapping, Gateway collaboration decisions, and delivery
+revisions. Core never branches on store kinds, ACL schemas, search algorithms,
+or bundled plugin IDs.
 
 The selected memory plugin owns its logical-store catalog, memory policy,
 resource revisions, lineage, view construction, candidate prefilter,
@@ -1376,6 +1392,14 @@ authoritative postfilter, content reads and writes, exposure records, sync, and
 backend-specific recovery. Its policy evaluator is pure and reusable by its
 conformance tests. Core treats the returned plan, handles, mounts, policy
 receipt, and exposure receipt as versioned opaque capability data.
+
+Phase 0 does not activate this enforcement architecture. It has no trusted-
+context factory, capability-admission path, or policy decision. Its shadow
+surface inspection records only bounded selected-capability and method-shape
+metadata: no memory content, prompts, queries, snippets, paths, or principal
+identifiers. Phase 1A or a later phase must establish trusted-context issuance
+and selected-capability admission before any enforced memory ingress or egress
+can rely on this contract.
 
 `session_members` and the current sharing evaluator remain authoritative only
 for Gateway collaborative-session membership and mode. Native channel and
@@ -1567,20 +1591,22 @@ warns about lost audience metadata, not an automatic fallback.
 Stages are security boundaries, not calendar estimates. A stage is complete
 only when all listed read and write surfaces use the new invariant.
 
-### Stage 0: contracts and shadow decisions
+### Stage 0: contracts and shadow surface inspection
 
 **Deliverables**
 
-- Define core-owned principals, session subjects, delivery facts, and the
-  branded access context; define plugin-owned operations, decisions, plans,
-  mounts, and the pure memory evaluator behind the SDK contract.
+- Define serializable principal, session-subject, delivery, context, operation,
+  plan, mount, and evaluator contract shapes. Stage 0 does not mint a trusted
+  context from caller-provided facts; that core-only issuance path follows the
+  durable identity and subject work in Phase 1A.
 - Add the versioned plugin SDK authorization contract and a reusable backend
   conformance suite.
-- Add lazy additive tables and read-only decision tracing. Do not move content
-  or alter current results.
-- Build core-only context factories for authenticated Gateway calls, channel
-  ingress, autonomous runs, and delegation. Prove that plugin extras and tool
-  JSON cannot override them.
+- Add bounded, content-free, read-only selected-runtime surface inspection. Do
+  not move content, alter current results, create a permanent audit schema, or
+  make a policy decision.
+- Keep the serializable context DTO distinct from a future trusted context:
+  plugin extras, tool JSON, prompt text, and caller-assembled objects cannot
+  opt into an enforced path during Stage 0 because no such path exists yet.
 - Inventory every memory ingress and egress path and fail the stage if any
   context-free manager call remains unclassified.
 
@@ -1588,11 +1614,15 @@ only when all listed read and write surfaces use the new invariant.
 
 - Property tests cover deny precedence, permission implication, view
   intersection, expiry, revision, and lineage.
-- Shadow decisions can be compared with current reads without logging content.
+- Shadow surface metadata is bounded and content-free. It is not a policy
+  decision or a comparison against current reads until Phase 1A supplies a
+  trusted context and a later phase supplies a selected policy backend and
+  admission path.
 - Single-user behavior and latency stay unchanged.
 - No public isolation claim and no public configuration change.
 
-**Rollback:** stop shadow evaluation and ignore the additive tables.
+**Rollback:** remove the shadow invocation and ignore the additive capability
+declaration while the agent remains unenforced.
 
 ### Stage 1: private and channel read isolation
 
@@ -1789,7 +1819,7 @@ Never replace a failed broker with unscoped filesystem or database access.
 
 ```mermaid
 flowchart LR
-  S0[Stage 0: contracts and shadow] --> S1[Stage 1: scoped reads]
+  S0[Stage 0: contracts and shadow surface] --> S1[Stage 1: scoped reads]
   S1 --> S2[Stage 2: writes and derivations]
   S2 --> S3[Stage 3: projections and postbox]
   S2 --> S4[Stage 4: enterprise operations]
