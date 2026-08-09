@@ -352,4 +352,37 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");
     expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   });
+
+  it("bounds thousands of channel prompt-context strings at the model-visible envelope", () => {
+    // Envelope-level regression from review: the canonical ChannelPromptContext
+    // string array reaches the prompt prelude through appendChannelPromptContext,
+    // outside the inbound context assembly budget, so a plugin supplying
+    // thousands of 2,000-char strings flooded the model prompt in full.
+    const sessionCtx = finalizeInboundContext({
+      Body: "status?",
+      BodyStripped: "status?",
+      Provider: "slack",
+      ChatType: "group",
+      ChannelPromptContext: Array.from(
+        { length: 5_000 },
+        (_, index) => `channel-fact-${index}-${"x".repeat(2_000)}`,
+      ),
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "status?",
+      prefixedBody: "status?",
+      hasUserBody: true,
+      inboundUserContext: "Current message:\nchat_id=C123",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.prefixedCommandBody).toContain("…[truncated: context budget exhausted]");
+    expect(envelope.prefixedCommandBody.length).toBeLessThan(51_000);
+    expect(envelope.prefixedCommandBody).not.toContain("channel-fact-100-");
+    expect(envelope.transcriptCommandBody).toBe("status?");
+  });
 });

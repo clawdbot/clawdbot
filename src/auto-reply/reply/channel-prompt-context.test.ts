@@ -2,7 +2,7 @@
 // strings were already capped, but array entry counts and object key counts
 // crossed into the prompt unbounded.
 import { describe, expect, it } from "vitest";
-import { formatContextJsonBlock } from "./channel-prompt-context.js";
+import { appendChannelPromptContext, formatContextJsonBlock } from "./channel-prompt-context.js";
 
 function parseContextJsonBlock(block: string): unknown {
   const json = block.slice(
@@ -140,6 +140,33 @@ describe("formatContextJsonBlock", () => {
     expect(() => parseContextJsonBlock(block)).not.toThrow();
   });
 
+  it("charges escaped keys by their serialized JSON size", () => {
+    // Adversarial shape from review: a key of N raw chars serializes to ~2N
+    // chars once quotes and backslashes are escaped. Charging raw key length
+    // leaves the counter near 50k while the emitted JSON approaches 100k, and
+    // the assembly then accepts that oversized block.
+    const payload = Object.fromEntries(
+      Array.from({ length: 50 }, (_, index) => [
+        `${"\\".repeat(400)}${'"q'.repeat(200)}\n${index}`,
+        `value-${index}`,
+      ]),
+    );
+    const rawKeyChars = Object.keys(payload).reduce((total, key) => total + key.length, 0);
+    const emittedKeyChars = Object.keys(payload).reduce(
+      (total, key) => total + JSON.stringify(key).length,
+      0,
+    );
+    expect(rawKeyChars).toBeLessThan(50_000);
+    expect(emittedKeyChars).toBeGreaterThan(50_000);
+
+    const block = formatContextJsonBlock("Context:", payload);
+    const json = block.slice(block.indexOf("```json\n") + "```json\n".length);
+
+    expect(block).toContain("…[truncated: context budget exhausted]");
+    expect(json.length).toBeLessThan(51_000);
+    expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+
   it("bounds nesting depth and flags the cut", () => {
     let payload: unknown = "leaf";
     for (let level = 0; level < 12; level++) {
@@ -150,5 +177,36 @@ describe("formatContextJsonBlock", () => {
 
     expect(block).toContain("…[truncated: max depth reached]");
     expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+});
+
+describe("appendChannelPromptContext", () => {
+  it("appends small string entries byte-identically to before", () => {
+    expect(appendChannelPromptContext("hello", ["entry one", "entry two"])).toBe(
+      "hello\n\nContext: ⟦openclaw:ctx⟧\nentry one\nentry two",
+    );
+  });
+
+  it("bounds thousands of strings at the shared per-block budget with a marker", () => {
+    // Adversarial shape from review: a plugin supplies thousands of 2,000-char
+    // strings; the array was normalized and appended to the prompt in full.
+    const entries = Array.from(
+      { length: 5_000 },
+      (_, index) => `entry-${index}-${"x".repeat(2_000)}`,
+    );
+
+    const rendered = appendChannelPromptContext("hello", entries);
+
+    expect(rendered).toContain("…[truncated: context budget exhausted]");
+    expect(rendered.length).toBeLessThan(51_000);
+    expect(rendered).not.toContain("entry-100");
+  });
+
+  it("truncates a single oversized string entry instead of appending it whole", () => {
+    const rendered = appendChannelPromptContext("hello", ["x".repeat(500_000)]);
+
+    expect(rendered).toContain("…[truncated]");
+    expect(rendered).toContain("…[truncated: context budget exhausted]");
+    expect(rendered.length).toBeLessThan(51_000);
   });
 });

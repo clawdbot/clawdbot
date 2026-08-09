@@ -19,8 +19,32 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
   if (entries.length === 0) {
     return base;
   }
+  // The string form is one model-visible context block like the fenced JSON
+  // blocks, so it shares their cumulative budget (MAX_CONTEXT_JSON_BLOCK_CHARS):
+  // it reaches the prompt through prompt-prelude.ts, outside the inbound
+  // context assembly budget, so without this bound a plugin supplying thousands
+  // of strings floods the prompt prelude in full. Keep the head like
+  // truncateContextJsonString does, and flag the drop.
+  const kept: string[] = [];
+  let budgetRemaining = MAX_CONTEXT_JSON_BLOCK_CHARS;
+  let budgetExhausted = false;
+  for (const entry of entries) {
+    if (entry.length <= budgetRemaining) {
+      budgetRemaining -= entry.length;
+      kept.push(entry);
+      continue;
+    }
+    kept.push(
+      `${truncateUtf16Safe(entry, Math.max(0, budgetRemaining - 14)).trimEnd()}…[truncated]`,
+    );
+    budgetExhausted = true;
+    break;
+  }
+  if (budgetExhausted) {
+    kept.push(BUDGET_TRUNCATION_MARKER);
+  }
   const header = markInboundContextLabel("Context:");
-  const block = [header, ...entries].join("\n");
+  const block = [header, ...kept].join("\n");
   return [base, block].filter(Boolean).join("\n\n");
 }
 
@@ -38,7 +62,8 @@ const MAX_CONTEXT_JSON_DEPTH = 8;
 // serialized chars (each body already capped at MAX_CONTEXT_JSON_STRING_CHARS);
 // 50k is ~2.6x that while bounding the cumulative fan-out the per-container caps
 // alone allow (50 keys x 20 entries x 2,000 chars would otherwise serialize ~2 MB
-// into a single block).
+// into a single block). The string-form block in appendChannelPromptContext
+// shares this budget: both forms are one model-visible context block each.
 const MAX_CONTEXT_JSON_BLOCK_CHARS = 50_000;
 
 const DEPTH_TRUNCATION_MARKER = "…[truncated: max depth reached]";
@@ -123,7 +148,17 @@ function sanitizeContextJsonValue(
     // charge them to the budget so key fan-out cannot bypass the total.
     const safeKey = neutralizeMarkdownFences(truncateContextJsonString(key));
     const sanitized = sanitizeContextJsonValue(entry, budget, depth + 1);
-    budget.remaining -= safeKey.length + serializedLength(sanitized);
+    // Reserve the property's serialized size before appending: JSON.stringify
+    // emits the key with quotes and escapes (a key of N raw chars can emit ~2N
+    // chars), so charging raw key length would let escaped keys push the block
+    // to nearly twice the budget while the counter stays under it.
+    const propertySize = serializedLength(safeKey) + serializedLength(sanitized);
+    if (propertySize > budget.remaining) {
+      omitted += 1;
+      budgetExhausted = true;
+      continue;
+    }
+    budget.remaining -= propertySize;
     result.push([safeKey, sanitized] as const);
   }
   // Truncation flag mirrors the sibling `history_truncated: true` convention.
