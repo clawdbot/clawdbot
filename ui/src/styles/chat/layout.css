@@ -747,7 +747,7 @@ openclaw-chat-page {
   text-overflow: ellipsis;
 }
 
-.context-usage__model {
+.context-usage__provenance {
   display: block;
   margin-top: 12px;
   overflow: hidden;
@@ -757,11 +757,11 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
-.context-usage__model + .context-usage__model {
-  margin-top: 6px;
+.context-usage__provenance + .context-usage__provenance {
+  margin-top: 3px;
 }
 
-.context-usage__model strong {
+.context-usage__provenance strong {
   color: var(--text);
   font-weight: 650;
 }
