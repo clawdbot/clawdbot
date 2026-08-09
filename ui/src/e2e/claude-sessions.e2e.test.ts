@@ -505,6 +505,11 @@ suite.define(() => {
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
       .toBe(true);
+    await thread.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await gateway.deferNext("sessions.catalog.read");
     await thread.evaluate((element) => {

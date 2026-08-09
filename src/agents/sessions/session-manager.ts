@@ -33,8 +33,6 @@ export type {
   LabelEntry,
   ModelChangeEntry,
   NewSessionOptions,
-  PromptReleasedSessionEntry,
-  PromptReleasedSessionMergeResult,
   ResetEntry,
   ResetReason,
   SessionContext,

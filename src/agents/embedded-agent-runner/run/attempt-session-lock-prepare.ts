@@ -24,7 +24,13 @@ type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise
 export async function prepareEmbeddedAttemptSessionLock(input: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
-    "abortSignal" | "config" | "sessionFile" | "sessionId" | "sessionKey" | "sessionTarget"
+    | "abortSignal"
+    | "config"
+    | "runId"
+    | "sessionFile"
+    | "sessionId"
+    | "sessionKey"
+    | "sessionTarget"
   >;
   externalAbortController: {
     arm: () => void;
@@ -65,27 +71,25 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
   // controller setup or the post-arm abort fence fails.
   input.onSessionFileOwnerAcquired(sessionFileOwner);
 
-  const getSessionManager = (operation: "entry merge" | "file reload") => {
+  const getSessionManager = () => {
     const sessionManager = input.getSessionManager();
     if (!sessionManager) {
-      throw new Error(`session manager unavailable during prompt-released ${operation}`);
+      throw new Error("session manager unavailable during prompt-released file reload");
     }
     return sessionManager;
   };
   const sessionLockController = await createEmbeddedAttemptSessionLockController({
     acquireSessionWriteLock,
     initialAcquireSignal: attempt.abortSignal,
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
     lockOptions: {
       sessionFile: resolveSessionWriteLockTargetKey(sessionTarget),
       targetKind: "session-key",
       ...sessionWriteLockOptions,
     },
-    mergePromptReleasedSessionEntries: (entries) =>
-      getSessionManager("entry merge").mergePromptReleasedSessionEntries(entries, {
-        persistLeaf: true,
-      }),
     reloadPromptReleasedSessionFile: () => {
-      getSessionManager("file reload").reloadPersistedTranscript();
+      getSessionManager().reloadPersistedTranscript();
     },
   });
   input.onSessionLockReleaseReady(() => sessionLockController.dispose());
@@ -94,6 +98,7 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
+    assertOwned: () => sessionLockController.assertOwned(),
     canAdvanceSessionEntryCache: (snapshot) =>
       sessionLockController.canAdvanceSessionEntryCache(snapshot),
     publishSessionFileSnapshot: (snapshot) =>

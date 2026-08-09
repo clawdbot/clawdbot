@@ -159,7 +159,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     }));
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, assertOwned: () => undefined, withSessionWriteLock: withStaleWriteLock },
       async () => {
         scheduleMediaGenerationTaskCompletion({
           lifecycle,

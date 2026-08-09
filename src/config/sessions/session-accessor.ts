@@ -126,7 +126,7 @@ export type {
 } from "./session-accessor.entry-mutation.js";
 export {
   countSessionEntryRowsReadOnly,
-  ensureSqliteSessionEntrySync as ensureSessionEntrySync,
+  ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,

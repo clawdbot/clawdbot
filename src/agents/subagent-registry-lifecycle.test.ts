@@ -581,7 +581,7 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, assertOwned: () => undefined, withSessionWriteLock: withStaleWriteLock },
       async () => {
         expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
       },
@@ -3856,7 +3856,7 @@ describe("requester settle wake trigger", () => {
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, assertOwned: () => undefined, withSessionWriteLock: withStaleWriteLock },
       async () => {
         controller.completeCleanupBookkeeping({
           runId: entry.runId,

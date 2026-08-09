@@ -136,6 +136,8 @@ const bindingServiceMocks = vi.hoisted(() => ({
 
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => managerMocks,
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>
       bindingServiceMocks.listBySession(targetSessionKey),
@@ -176,7 +178,7 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
 }));
 
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
@@ -244,11 +246,6 @@ vi.mock("./dispatch-acp-media.runtime.js", async () => {
     },
   };
 });
-
-vi.mock("./dispatch-acp-session.runtime.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-}));
 
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
