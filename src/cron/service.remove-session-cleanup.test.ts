@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -12,7 +13,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
-import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
@@ -141,8 +142,8 @@ describe("CronService.remove session cleanup", () => {
       { sessionId: "contended-session", updatedAt: Date.now() },
     );
 
-    const writerEntered = createDeferred<void>();
-    const releaseWriter = createDeferred<void>();
+    const writerEntered = createDeferred();
+    const releaseWriter = createDeferred();
     const resolvedSessionScope = resolveSqliteScope({
       agentId: "main",
       sessionKey,
