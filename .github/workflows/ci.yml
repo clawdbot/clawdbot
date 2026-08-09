@@ -1508,6 +1508,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     # Keep Chromium ownership serial within each independently required shard.
     timeout-minutes: 25
+    env:
+      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -1537,6 +1539,46 @@ jobs:
       - name: Test browser copilot end-to-end
         if: matrix.shard == 1
         run: pnpm test:e2e:browser-copilot
+
+  checks-ui-e2e-real-gateway:
+    permissions:
+      contents: read
+    name: checks-ui-e2e-real-gateway
+    needs: [preflight]
+    # Compatibility targets pin a frozen Control UI whose e2e expectations track
+    # that release, not current main.
+    if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    # First-attempt same-repo runs use Blacksmith; manual dispatches, forks, and
+    # same-repo PR retries use GitHub-hosted capacity as an independent fallback.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
+          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
+
+      - name: Install Playwright Chromium
+        run: node --import tsx scripts/ensure-playwright-chromium.mts
+
+      - name: Test MCP app conformance with a real Gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/mcp-app-conformance.e2e.test.ts
+
+      - name: Test Control UI auth transports with a real Gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/control-ui-auth-transports.e2e.test.ts
 
   control-ui-i18n:
     permissions:
@@ -3607,6 +3649,7 @@ jobs:
       - native-i18n
       - checks-ui
       - checks-ui-e2e
+      - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-fast-core
       - qa-smoke-ci-profile
@@ -3639,6 +3682,7 @@ jobs:
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
+            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
@@ -3698,6 +3742,7 @@ jobs:
       - build-artifacts
       - checks-ui
       - checks-ui-e2e
+      - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard

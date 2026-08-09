@@ -264,6 +264,25 @@ struct GatewayTLSKeychainOperations: @unchecked Sendable {
         delete: { SecItemDelete($0) })
 }
 
+struct GatewayTLSKeychainNamespaceState {
+    private(set) var suffix: String?
+    private(set) var used = false
+
+    mutating func configure(suffix: String) -> Bool {
+        if let configured = self.suffix {
+            return configured == suffix
+        }
+        guard !self.used || suffix.isEmpty else { return false }
+        self.suffix = suffix
+        return true
+    }
+
+    mutating func service(base: String) -> String {
+        self.used = true
+        return base + (self.suffix ?? "")
+    }
+}
+
 public enum GatewayTLSStore {
     @TaskLocal static var keychainOperations = GatewayTLSKeychainOperations.live
 
@@ -273,7 +292,19 @@ public enum GatewayTLSStore {
         case unavailable
     }
 
-    private static let keychainService = "ai.openclaw.tls-pinning"
+    private static let baseKeychainService = "ai.openclaw.tls-pinning"
+    private static let keychainServiceLock = NSLock()
+    private nonisolated(unsafe) static var keychainNamespace = GatewayTLSKeychainNamespaceState()
+    private static var keychainService: String {
+        self.keychainServiceLock.withLock {
+            self.keychainNamespace.service(base: self.baseKeychainService)
+        }
+    }
+
+    private static var usesDefaultKeychainService: Bool {
+        self.keychainServiceLock.withLock { (self.keychainNamespace.suffix ?? "").isEmpty }
+    }
+
     private static let keychainAccountPrefix = "fingerprint.v3."
     private static let legacyCanonicalAccountPrefix = "fingerprint.v2."
 
@@ -281,6 +312,19 @@ public enum GatewayTLSStore {
     private static let legacySuiteName = "ai.openclaw.shared"
     private static let legacyKeyPrefix = "gateway.tls."
     private static let firstUseClaims = GatewayTLSFirstUseClaims()
+
+    /// The macOS app profile is immutable for the process lifetime. Configure its
+    /// Keychain namespace before constructing any Gateway connection.
+    @discardableResult
+    public static func configureKeychainServiceSuffix(_ suffix: String) -> Bool {
+        self.keychainServiceLock.withLock {
+            self.keychainNamespace.configure(suffix: suffix)
+        }
+    }
+
+    static func resolvedKeychainService(suffix: String) -> String {
+        self.baseKeychainService + suffix
+    }
 
     public static func loadFingerprint(stableID: String) -> String? {
         guard case let .value(fingerprint) = self.loadFingerprintResult(stableID: stableID) else {
@@ -512,6 +556,7 @@ public enum GatewayTLSStore {
     }
 
     private static func readLegacyDefaultsFingerprint(stableID: String) -> FingerprintRead {
+        guard self.usesDefaultKeychainService else { return .missing }
         guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return .unavailable }
         let key = self.legacyKeyPrefix + stableID
         guard let value = defaults.object(forKey: key) else { return .missing }
@@ -608,8 +653,10 @@ public enum GatewayTLSStore {
         } ?? true
         guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return removedV2 }
         let removedRaw = self.deleteFingerprint(account: stableID)
-        UserDefaults(suiteName: self.legacySuiteName)?
-            .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        if self.usesDefaultKeychainService {
+            UserDefaults(suiteName: self.legacySuiteName)?
+                .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        }
         return removedRaw && removedV2
     }
 
@@ -624,6 +671,7 @@ public enum GatewayTLSStore {
     }
 
     private static func clearAllLegacyFingerprints() {
+        guard self.usesDefaultKeychainService else { return }
         guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(self.legacyKeyPrefix) {
             defaults.removeObject(forKey: key)

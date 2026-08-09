@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import type { GatewayRequestContext } from "./types.js";
 
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;

@@ -605,9 +605,9 @@ describe("createTelegramBot", () => {
     });
     await store.register("default:poll-topic", {
       pollId: "poll-topic",
-      chat: { id: -1001, type: "supergroup", title: "Reviewers", is_forum: true },
+      chat: { id: -1001, type: "supergroup", title: "Reviewers" },
       messageId: 7,
-      messageThreadId: 9,
+      threadSpec: { scope: "forum", id: 9 },
       question: "Ready?",
       options: ["Yes", "No"],
     });

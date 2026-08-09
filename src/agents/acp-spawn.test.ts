@@ -7,8 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "../gateway/agent-turn/agent-job.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
-import { setGatewayDedupeEntry, waitForAgentJob } from "../gateway/server-methods/agent-job.js";
 import type { DedupeEntry } from "../gateway/server-shared.js";
 import {
   testing as sessionBindingServiceTesting,

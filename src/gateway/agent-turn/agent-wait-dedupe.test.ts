@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { agentHandlers } from "../server-methods/agent.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { agentHandlers } from "./agent.js";
 
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },

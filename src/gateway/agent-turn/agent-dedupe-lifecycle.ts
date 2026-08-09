@@ -2,8 +2,15 @@ import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import type { AgentTurnContext, AgentTurnIo } from "../agent-turn/types.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import type { CommittedResetCompletion } from "../server-methods/agent-reset-phase.js";
+import {
+  buildBareSessionResetResponse,
+  buildBareSessionResetResult,
+  sessionResetAckText,
+} from "../server-methods/agent-session-reset.js";
+import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import {
   isAcceptedAgentDedupePayload,
@@ -12,15 +19,8 @@ import {
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
-import type { CommittedResetCompletion } from "./agent-reset-phase.js";
 import { deleteGatewayDedupeEntries } from "./agent-run-dispatch.js";
-import {
-  buildBareSessionResetResponse,
-  buildBareSessionResetResult,
-  sessionResetAckText,
-} from "./agent-session-reset.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export type AgentDedupeLifecycle = ReturnType<typeof createAgentDedupeLifecycle>;
 

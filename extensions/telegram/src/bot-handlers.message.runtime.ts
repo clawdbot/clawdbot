@@ -110,7 +110,7 @@ export function createTelegramHandlerMessageRuntime({
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
-    resolveCachedMessageThreadId,
+    resolveCachedMessageThreadSpec,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,
@@ -478,7 +478,7 @@ export function createTelegramHandlerMessageRuntime({
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
-    resolveCachedMessageThreadId,
+    resolveCachedMessageThreadSpec,
     processMessageWithReplyChain,
   };
 }

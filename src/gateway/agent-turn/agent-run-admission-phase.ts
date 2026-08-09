@@ -22,8 +22,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
-import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import {
+  isConfirmedAcpManualSpawnTaskOwner,
+  registerPluginSubagentRunFromGateway,
+  resolveGatewayAgentTaskTrackingMode,
+  type GatewayAgentTaskTrackingMode,
+} from "../server-methods/agent-task-tracking.js";
+import {
+  resolveGatewayCronCreatorAuthorityAdmission,
+  type GatewayCronCreatorAuthorityAdmission,
+} from "../server-methods/cron-creator-authority-admission.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { formatForLog } from "../ws-log.js";
@@ -34,17 +44,7 @@ import {
 } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
-import {
-  isConfirmedAcpManualSpawnTaskOwner,
-  registerPluginSubagentRunFromGateway,
-  resolveGatewayAgentTaskTrackingMode,
-  type GatewayAgentTaskTrackingMode,
-} from "./agent-task-tracking.js";
-import {
-  resolveGatewayCronCreatorAuthorityAdmission,
-  type GatewayCronCreatorAuthorityAdmission,
-} from "./cron-creator-authority-admission.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type PreparedAgentRunDispatch = {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;

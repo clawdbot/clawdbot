@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
-import { createAgentTurnIo } from "../agent-turn/io.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
+import { createAgentTurnService } from "./agent-turn-service.js";
+import { createAgentTurnIo } from "./io.js";
 
 function runPreflight(
   swarmOutputSchema?: Record<string, unknown>,

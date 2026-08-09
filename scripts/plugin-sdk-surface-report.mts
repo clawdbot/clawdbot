@@ -253,7 +253,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
       // +17: candidate continuation/#666 exports retained through this back-merge.
-      4865,
+      // +1: upstream's native command spec merger through the native-command-registry facade.
+      4866,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -309,7 +310,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: focused agent scope functions for doctor migration enumeration.
       // +3: channel streaming config reader functions and session-agent scope resolver.
       // +5: candidate continuation callable exports retained through this back-merge.
-      2925,
+      // +1: upstream's native command spec merger through the native-command-registry facade.
+      2926,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

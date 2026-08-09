@@ -179,8 +179,10 @@ Gateway responds with `hello-ok`:
 
 `server`, `features`, `snapshot`, `policy`, and `auth` are all required by
 `HelloOkSchema` (`packages/gateway-protocol/src/schema/frames.ts`). `auth`
-reports the negotiated role/scopes even when no device token is issued (shape
-above). `policy.attachments` is optional (older gateways omit it) and advertises
+reports the negotiated role and the current socket's effective authorization
+scopes even when no device token is issued (shape above). `deviceToken`, when
+present, is the primary reusable credential for the same device and role.
+`policy.attachments` is optional (older gateways omit it) and advertises
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
 
@@ -229,7 +231,7 @@ When a device token is issued, `hello-ok.auth` adds it:
   "auth": {
     "deviceToken": "…",
     "role": "operator",
-    "scopes": ["operator.read", "operator.write"]
+    "scopes": ["operator.read"]
   }
 }
 ```
@@ -1115,8 +1117,16 @@ not replay rejected requests after reconnecting.
 - Private-ingress `gateway.auth.mode: "none"` skips shared-secret connect auth
   entirely; do not expose that mode on public/untrusted ingress.
 - After pairing, the gateway issues a device token scoped to the connection
-  role + scopes, returned in `hello-ok.auth.deviceToken`. Clients should
-  persist it after any successful connect.
+  role + approved grant, returned in `hello-ok.auth.deviceToken`. Clients should
+  persist it with `hello-ok.auth.scopes` after a successful connect when the token
+  is new or different from the stored token.
+- `hello-ok.auth.scopes` is the current socket's live authority and matches the
+  scopes enforced by RPC dispatch.
+- When `hello-ok.auth.deviceToken` exactly matches the token already stored for
+  the same gateway, device, client, and role, preserve that record's stored scopes
+  instead of replacing them with a narrower live scope set. A newly issued or
+  rotated token uses `hello-ok.auth.scopes`; its approved grant matches that
+  connection when it is issued.
 - Reconnecting with that stored device token should also reuse the stored
   approved scope set for that token. This preserves read/probe/status access
   already granted and avoids silently collapsing reconnects to a narrower
@@ -1138,6 +1148,8 @@ not replay rejected requests after reconnecting.
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
   includes `operator.talk.secrets` for native Talk configuration reads, but
   excludes pairing-mutation scopes and `operator.admin`.
+- `hello-ok.auth.deviceTokens` contains only additional bootstrap-handoff tokens.
+  Do not use it as metadata for the primary `deviceToken` reconnect record.
 - While a non-baseline setup-code bootstrap waits for approval,
   `PAIRING_REQUIRED` details include `recommendedNextStep: "wait_then_retry"`,
   `retryable: true`, and `pauseReconnect: false`. Keep reconnecting with the
@@ -1146,8 +1158,9 @@ not replay rejected requests after reconnecting.
 - Persist `hello-ok.auth.deviceTokens` only when the connect used bootstrap
   auth on a trusted transport such as `wss://` or loopback/local pairing.
 - If a client supplies an explicit `deviceToken` or explicit `scopes`, that
-  caller-requested scope set remains authoritative; cached scopes are only
-  reused when the client is reusing the stored per-device token.
+  caller-requested scope set remains authoritative for the live connection and
+  is reported in `hello-ok.auth.scopes`; cached token-grant scopes are only reused
+  when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing`). Rotating or revoking a
   node or other non-operator role also requires `operator.admin`.

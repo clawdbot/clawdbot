@@ -5,9 +5,9 @@ import {
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
 import { runWithGatewayRequestEnvelope } from "../server-methods.js";
-import { prepareAgentRequestPreflight } from "../server-methods/agent-request-preflight.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
+import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { captureAgentTurnPrincipal } from "./principal.js";
 import type { AgentTurnFrame, AgentTurnIo } from "./types.js";

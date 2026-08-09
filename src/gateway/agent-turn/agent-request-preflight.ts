@@ -18,18 +18,18 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
-import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
-import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
-} from "./agent-expected-session.js";
+} from "../server-methods/agent-expected-session.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import {
   resolveAllowModelOverrideFromClient,
   resolveCanUseCronRunContinuation,
   resolveCanUseInternalRuntimeHandoff,
 } from "./agent-handler-helpers.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type AgentRequestPreflight = {
   request: AgentRunRequest;

@@ -13,30 +13,27 @@ import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { createAgentAdmissionController } from "../server-methods/agent-admission-controller.js";
-import { prepareAgentContentPhase } from "../server-methods/agent-content-phase.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
-import { createAgentDedupeLifecycle } from "../server-methods/agent-dedupe-lifecycle.js";
-import {
-  isAcceptedAgentDedupePayload,
-  readGatewayDedupeEntry,
-} from "../server-methods/agent-dedupe.js";
-import { resolveAgentDeliveryPhase } from "../server-methods/agent-delivery-phase.js";
-import type { RestoredCronContinuation } from "../server-methods/agent-handler-helpers.js";
-import { waitForAgentJob } from "../server-methods/agent-job.js";
-import type { AgentRequestPreflight } from "../server-methods/agent-request-preflight.js";
-import { prepareAgentRequestRouting } from "../server-methods/agent-request-routing.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
-import { prepareAgentRunDispatch } from "../server-methods/agent-run-admission-phase.js";
-import { startAgentRunExecution } from "../server-methods/agent-run-execution-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
-import { persistAgentSessionPhase } from "../server-methods/agent-session-persist.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import { handleChatAbortRequest } from "../server-methods/chat-abort-handler.js";
 import { resolveAgentRunSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
+import { createAgentAdmissionController } from "./agent-admission-controller.js";
+import { prepareAgentContentPhase } from "./agent-content-phase.js";
+import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
+import { isAcceptedAgentDedupePayload, readGatewayDedupeEntry } from "./agent-dedupe.js";
+import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
+import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
+import { waitForAgentJob } from "./agent-job.js";
+import type { AgentRequestPreflight } from "./agent-request-preflight.js";
+import { prepareAgentRequestRouting } from "./agent-request-routing.js";
+import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
+import { startAgentRunExecution } from "./agent-run-execution-phase.js";
+import { persistAgentSessionPhase } from "./agent-session-persist.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 type AgentTurnStartRequest = {

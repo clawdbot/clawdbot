@@ -4,10 +4,10 @@ import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,

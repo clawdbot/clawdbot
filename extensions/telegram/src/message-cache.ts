@@ -15,6 +15,7 @@ import {
   extractTelegramLocation,
   getTelegramTextParts,
   normalizeForwardedContext,
+  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import {
   isTelegramMessageCacheSourceMessage,
@@ -60,7 +61,7 @@ type TelegramMessageCache = {
     botUserId?: number;
     promptContextProjection?: TelegramPromptContextProjection;
     /** Set only while recording an authenticated provider event or response. */
-    providerObservedThreadId?: number;
+    providerObservedThread?: TelegramThreadSpec;
     threadId?: number;
   }) => Promise<TelegramCachedMessageNode>;
   recordResolvedMedia: (params: {
@@ -214,8 +215,8 @@ function normalizeMessageNode(
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg, params.promptContextProjectionMarker !== undefined);
-  const threadId = parseTelegramMessageThreadId(params.threadId);
-  const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding, threadId);
+  const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
+  const threadId = parseTelegramMessageThreadId(threadBinding?.threadSpec.id ?? params.threadId);
   const timestamp = resolveMessageTimestamp(msg);
   return {
     sourceMessage: msg,
@@ -243,40 +244,47 @@ function normalizeMessageNode(
 
 function normalizeTelegramMessageThreadBinding(
   value: unknown,
-  threadId: unknown,
 ): TelegramMessageThreadBinding | undefined {
   if (!isRecord(value) || value.kind !== "provider-observed-v1") {
     return undefined;
   }
-  const normalizedThreadId = parseTelegramMessageThreadId(threadId);
-  const observedThreadId = parseTelegramMessageThreadId(value.threadId);
-  if (normalizedThreadId === undefined || observedThreadId !== normalizedThreadId) {
+  const threadSpec = value.threadSpec;
+  if (!isRecord(threadSpec)) {
     return undefined;
   }
-  return { kind: "provider-observed-v1", threadId: String(normalizedThreadId) };
+  const id = parseTelegramMessageThreadId(threadSpec.id);
+  if (
+    id === undefined ||
+    (threadSpec.scope !== "direct-messages" &&
+      threadSpec.scope !== "dm" &&
+      threadSpec.scope !== "forum")
+  ) {
+    return undefined;
+  }
+  return { kind: "provider-observed-v1", threadSpec: { scope: threadSpec.scope, id } };
 }
 
 function createTelegramMessageThreadBinding(
-  threadId: unknown,
+  threadSpec: TelegramThreadSpec | undefined,
 ): TelegramMessageThreadBinding | undefined {
-  const normalizedThreadId = parseTelegramMessageThreadId(threadId);
-  return normalizedThreadId === undefined
-    ? undefined
-    : { kind: "provider-observed-v1", threadId: String(normalizedThreadId) };
+  return normalizeTelegramMessageThreadBinding({ kind: "provider-observed-v1", threadSpec });
 }
 
 export function hasProviderObservedTelegramThreadBinding(
   node: TelegramCachedMessageNode | null | undefined,
   threadId: unknown,
 ): boolean {
-  return normalizeTelegramMessageThreadBinding(node?.threadBinding, threadId) !== undefined;
+  const normalizedThreadId = parseTelegramMessageThreadId(threadId);
+  return (
+    normalizedThreadId !== undefined &&
+    resolveProviderObservedTelegramThreadSpec(node)?.id === normalizedThreadId
+  );
 }
 
-export function resolveProviderObservedTelegramThreadId(
+export function resolveProviderObservedTelegramThreadSpec(
   node: TelegramCachedMessageNode | null | undefined,
-): number | undefined {
-  const threadId = parseTelegramMessageThreadId(node?.threadId);
-  return hasProviderObservedTelegramThreadBinding(node, threadId) ? threadId : undefined;
+): TelegramMessageThreadBinding["threadSpec"] | undefined {
+  return normalizeTelegramMessageThreadBinding(node?.threadBinding)?.threadSpec;
 }
 
 function normalizeMessageNodes(
@@ -304,14 +312,18 @@ function normalizeMessageNodes(
       (message as { message_thread_id?: unknown }).message_thread_id,
     );
     const inheritedThread = parseTelegramMessageThreadId(inheritedThreadId);
+    const observedBinding = normalizeTelegramMessageThreadBinding(threadBinding);
+    const threadId =
+      mode === "authoritative"
+        ? (observedBinding?.threadSpec.id ?? inheritedThread ?? embeddedThreadId)
+        : (embeddedThreadId ?? inheritedThread);
+    const matchingBinding =
+      observedBinding?.threadSpec.id === threadId ? observedBinding : undefined;
     const node = normalizeMessageNode(message, {
-      threadId:
-        mode === "authoritative"
-          ? (inheritedThread ?? embeddedThreadId)
-          : (embeddedThreadId ?? inheritedThread),
+      ...(threadId !== undefined ? { threadId } : {}),
       ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
       ...(resolvedMedia ? { resolvedMedia } : {}),
-      ...(threadBinding ? { threadBinding } : {}),
+      ...(matchingBinding ? { threadBinding: matchingBinding } : {}),
     });
     if (visited.has(node.messageId)) {
       return;
@@ -365,7 +377,7 @@ function parsePersistedCacheValue(key: string, value: unknown) {
       : undefined;
   const threadBinding =
     value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION
-      ? normalizeTelegramMessageThreadBinding(value.threadBinding, threadId)
+      ? normalizeTelegramMessageThreadBinding(value.threadBinding)
       : undefined;
   const resolvedMedia = parseTelegramResolvedMedia(value.resolvedMedia);
   return normalizeMessageNodes(value.sourceMessage, {
@@ -423,7 +435,6 @@ function mergeCachedMessageNode(
   incoming: TelegramCachedMessageNode,
   mode: TelegramMessageObservationMode,
 ): TelegramCachedMessageNode {
-  const threadId = parseTelegramMessageThreadId(incoming.threadId ?? existing.threadId);
   const mergedSourceMessage =
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
@@ -439,8 +450,11 @@ function mergeCachedMessageNode(
   const promptContextProjectionMarker =
     incoming.promptContextProjectionMarker ?? existing.promptContextProjectionMarker;
   const threadBinding =
-    normalizeTelegramMessageThreadBinding(incoming.threadBinding, threadId) ??
-    normalizeTelegramMessageThreadBinding(existing.threadBinding, threadId);
+    normalizeTelegramMessageThreadBinding(incoming.threadBinding) ??
+    normalizeTelegramMessageThreadBinding(existing.threadBinding);
+  const threadId = parseTelegramMessageThreadId(
+    threadBinding?.threadSpec.id ?? incoming.threadId ?? existing.threadId,
+  );
   const primaryMedia = resolveTelegramPrimaryMedia(sourceMessage);
   const resolvedMedia =
     existing.resolvedMedia?.fileUniqueId === primaryMedia?.fileRef.file_unique_id
@@ -659,11 +673,11 @@ export function createTelegramMessageCache(params?: {
       chatId,
       msg,
       promptContextProjection,
-      providerObservedThreadId,
+      providerObservedThread,
       threadId,
     }) => {
       await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
-      const threadBinding = createTelegramMessageThreadBinding(providerObservedThreadId);
+      const threadBinding = createTelegramMessageThreadBinding(providerObservedThread);
       const observations = normalizeMessageNodes(msg, {
         threadId,
         ...(promptContextProjection && isTelegramMessageFromCurrentBot(msg, botUserId)
