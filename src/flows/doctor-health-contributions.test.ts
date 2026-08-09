@@ -1764,11 +1764,12 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    const legacySessionSurfaces = (
-      mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as {
-        legacySessionSurfaces?: unknown;
-      }
-    ).legacySessionSurfaces;
+    const detectParams = mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as
+      | {
+          legacySessionSurfaces?: unknown;
+        }
+      | undefined;
+    const legacySessionSurfaces = detectParams?.legacySessionSurfaces;
     expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
@@ -1878,11 +1879,12 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    const legacySessionSurfaces = (
-      mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as {
-        legacySessionSurfaces?: unknown;
-      }
-    ).legacySessionSurfaces;
+    const detectParams = mocks.detectLegacyStateMigrations.mock.calls[0]?.[0] as
+      | {
+          legacySessionSurfaces?: unknown;
+        }
+      | undefined;
+    const legacySessionSurfaces = detectParams?.legacySessionSurfaces;
     expect(legacySessionSurfaces).toMatchObject({ failures: [], surfaces: expect.any(Array) });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
