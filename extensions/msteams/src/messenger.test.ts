@@ -535,6 +535,62 @@ describe("msteams messenger", () => {
       }
     });
 
+    it("tags pre-send upload 5xx failures as prepare-stage (never delivered, not retried)", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-prepare-"));
+      const localFile = path.join(tmpDir, "upload.txt");
+      await writeFile(localFile, "hello");
+
+      try {
+        const attempts: string[] = [];
+        let uploadAttempts = 0;
+        graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
+          uploadAttempts += 1;
+          throw Object.assign(new Error("graph upload 503"), { statusCode: 503 });
+        });
+        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+          eTag: '"{ITEM-123},1"',
+          webDavUrl: "https://sharepoint.example.com/item123",
+          name: "upload.txt",
+        });
+
+        const ctx = {
+          sendActivity: createRecordedSendActivity(attempts),
+        };
+        const err = await sendMSTeamsMessages({
+          replyStyle: "thread",
+          app: createMockApp(),
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
+            },
+          },
+          context: ctx,
+          messages: [{ text: "one", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+          sharePointSiteId: "site-123",
+          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
+        }).catch((error: unknown) => error);
+
+        // A pre-send 5xx is ambiguous-kind but nothing was dispatched: the
+        // platform wrapper says "not dispatched", and the tagged cause keeps
+        // the stage visible so hints can say nothing was delivered.
+        expect(err).toBeInstanceOf(PlatformMessageNotDispatchedError);
+        expect((err as PlatformMessageNotDispatchedError).cause).toMatchObject({
+          statusCode: 503,
+          msteamsSendStage: "prepare",
+        });
+        expect(uploadAttempts).toBe(1);
+        expect(attempts).toEqual([]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("does not retry thread sends on client errors (4xx)", async () => {
       const ctx = {
         sendActivity: async () => {

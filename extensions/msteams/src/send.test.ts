@@ -542,6 +542,39 @@ describe("sendMessageMSTeams", () => {
     ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
     expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
   });
+
+  it("hints nothing-delivered when SharePoint preparation fails before the send", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue(
+      createSharePointSendContext({
+        conversationId: "19:group-id@thread.v2",
+        siteId: "site-456",
+      }),
+    );
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+    mockState.uploadAndShareSharePoint.mockRejectedValue(
+      Object.assign(new Error("graph 503"), { statusCode: 503 }),
+    );
+
+    const err: unknown = await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:group-id@thread.v2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+    }).catch((error: unknown) => error);
+
+    // The Graph/SharePoint failure happens before the activity create, so the
+    // operator guidance must not claim the message may have been delivered.
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("nothing was delivered");
+    expect(message).not.toContain("verify in Teams");
+    expect(mockState.sendMSTeamsActivityWithReference).not.toHaveBeenCalled();
+  });
 });
 
 describe("MSTeams continueConversation failure handling", () => {

@@ -12,6 +12,7 @@ import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
+  markMSTeamsSendErrorStage,
 } from "./errors.js";
 import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
 import { formatMSTeamsMarkdown } from "./format.js";
@@ -284,38 +285,50 @@ export async function sendMessageMSTeams(
         siteId,
       });
 
-      const uploaded = await uploadAndShareSharePoint({
-        buffer: media.buffer,
-        filename: fileName,
-        contentType: media.contentType,
-        tokenProvider,
-        siteId,
-        chatId: conversationId,
-        usePerUserSharing: conversationType === "groupChat",
-      });
+      const { activity, driveItemName } = await (async () => {
+        try {
+          const uploaded = await uploadAndShareSharePoint({
+            buffer: media.buffer,
+            filename: fileName,
+            contentType: media.contentType,
+            tokenProvider,
+            siteId,
+            chatId: conversationId,
+            usePerUserSharing: conversationType === "groupChat",
+          });
 
-      log.debug?.("SharePoint upload complete", {
-        itemId: uploaded.itemId,
-        shareUrl: uploaded.shareUrl,
-      });
+          log.debug?.("SharePoint upload complete", {
+            itemId: uploaded.itemId,
+            shareUrl: uploaded.shareUrl,
+          });
 
-      const driveItem = await getDriveItemProperties({
-        siteId,
-        itemId: uploaded.itemId,
-        tokenProvider,
-      });
+          const driveItem = await getDriveItemProperties({
+            siteId,
+            itemId: uploaded.itemId,
+            tokenProvider,
+          });
 
-      log.debug?.("driveItem properties retrieved", {
-        eTag: driveItem.eTag,
-        webDavUrl: driveItem.webDavUrl,
-      });
+          log.debug?.("driveItem properties retrieved", {
+            eTag: driveItem.eTag,
+            webDavUrl: driveItem.webDavUrl,
+          });
 
-      const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
-      const activity = {
-        type: "message",
-        text: messageText || undefined,
-        attachments: [fileCardAttachment],
-      };
+          const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
+          return {
+            activity: {
+              type: "message" as const,
+              text: messageText || undefined,
+              attachments: [fileCardAttachment],
+            },
+            driveItemName: driveItem.name,
+          };
+        } catch (err) {
+          // Graph/SharePoint preparation runs before the activity create: the
+          // message was definitely NOT delivered — tag the stage so the hint
+          // below does not claim possible delivery.
+          throw markMSTeamsSendErrorStage(err, "prepare");
+        }
+      })();
       const messageId = await sendProactiveActivityRaw({
         ctx,
         activity,
@@ -324,7 +337,7 @@ export async function sendMessageMSTeams(
       log.info("sent native file card", {
         conversationId,
         messageId,
-        fileName: driveItem.name,
+        fileName: driveItemName,
       });
 
       return createMSTeamsSendResult({

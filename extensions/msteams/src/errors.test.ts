@@ -109,6 +109,25 @@ describe("msteams errors", () => {
     }
   });
 
+  it("scopes ambiguous-delivery guidance to the send stage", () => {
+    // Pre-send (Graph/SharePoint preparation) failure: the activity create was
+    // never attempted, so the hint must not claim possible delivery.
+    const prepare = classifyMSTeamsSendError(
+      Object.assign(new Error("graph 503"), { statusCode: 503, msteamsSendStage: "prepare" }),
+    );
+    expect(prepare.kind).toBe("ambiguous");
+    expect(prepare.stage).toBe("prepare");
+    const prepareHint = formatMSTeamsSendErrorHint(prepare);
+    expect(prepareHint).toContain("nothing was delivered");
+    expect(prepareHint).not.toContain("verify in Teams");
+
+    // Send-stage failure: delivery is genuinely ambiguous.
+    const send = classifyMSTeamsSendError({ statusCode: 503 });
+    expect(send.kind).toBe("ambiguous");
+    expect(send.stage).toBeUndefined();
+    expect(formatMSTeamsSendErrorHint(send)).toContain("verify in Teams");
+  });
+
   it("classifies permanent 4xx errors", () => {
     const result = classifyMSTeamsSendError({ statusCode: 400 });
     expect(result.kind).toBe("permanent");

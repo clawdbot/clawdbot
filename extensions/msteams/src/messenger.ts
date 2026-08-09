@@ -15,7 +15,7 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { classifyMSTeamsSendError } from "./errors.js";
+import { classifyMSTeamsSendError, markMSTeamsSendErrorStage } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
@@ -212,9 +212,12 @@ function computeRetryDelayMs(
 }
 
 function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>): boolean {
-  // Only 429 throttling is replayed: Bot Framework activity creates are
-  // non-idempotent, so an ambiguous 408/5xx (the connector may already have
-  // accepted and delivered the activity) is never retried.
+  // Only 429 throttling is replayed — a 429 means the connector rejected the
+  // request before processing it
+  // (https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/rate-limit).
+  // Bot Framework activity creates are non-idempotent, so an ambiguous 408/5xx
+  // (the connector may already have accepted and delivered the activity) is
+  // never retried.
   return classification.kind === "throttled";
 }
 
@@ -474,14 +477,22 @@ export async function sendMSTeamsMessages(params: {
     try {
       response = await sendWithRetry(
         async () => {
-          const activity = await buildActivity(
-            message,
-            params.conversationRef,
-            params.tokenProvider,
-            params.sharePointSiteId,
-            params.mediaMaxBytes,
-            { feedbackLoopEnabled: params.feedbackLoopEnabled },
-          );
+          let activity: MSTeamsActivityLike;
+          try {
+            activity = await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+              { feedbackLoopEnabled: params.feedbackLoopEnabled },
+            );
+          } catch (err) {
+            // Attachment preparation (Graph/SharePoint) runs before the
+            // activity create is attempted: the message was definitely NOT
+            // delivered, so tag the stage to keep the error hint honest.
+            throw markMSTeamsSendErrorStage(err, "prepare");
+          }
 
           // Extract and strip the internal-only pending upload tag before sending.
           pendingUploadId =

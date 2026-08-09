@@ -182,8 +182,33 @@ type MSTeamsSendErrorKind =
   | "network"
   | "unknown";
 
+/**
+ * Send stage an error escaped from. "prepare" means attachment preparation
+ * (Graph/SharePoint) failed before the Bot Framework activity create was
+ * attempted, so the message definitely was NOT delivered.
+ */
+export type MSTeamsSendErrorStage = "prepare";
+
+const MS_TEAMS_SEND_ERROR_STAGE_PROPERTY = "msteamsSendStage";
+
+/** Tags an error with the send stage it escaped from (keeps hints stage-aware). */
+export function markMSTeamsSendErrorStage(err: unknown, stage: MSTeamsSendErrorStage): unknown {
+  if (isRecord(err)) {
+    err[MS_TEAMS_SEND_ERROR_STAGE_PROPERTY] = stage;
+  }
+  return err;
+}
+
+function extractSendStage(err: unknown): MSTeamsSendErrorStage | undefined {
+  if (!isRecord(err)) {
+    return undefined;
+  }
+  return err[MS_TEAMS_SEND_ERROR_STAGE_PROPERTY] === "prepare" ? "prepare" : undefined;
+}
+
 type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
+  stage?: MSTeamsSendErrorStage;
   statusCode?: number;
   retryAfterMs?: number;
   errorCode?: string;
@@ -204,6 +229,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
   const statusCode = extractStatusCode(err);
   const retryAfterMs = extractRetryAfterMs(err);
   const errorCode = extractErrorCode(err) ?? undefined;
+  const stage = extractSendStage(err);
 
   if (statusCode === 401) {
     return { kind: "auth", statusCode, errorCode };
@@ -228,6 +254,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
   if (statusCode === 408 || (statusCode != null && statusCode >= 500)) {
     return {
       kind: "ambiguous",
+      stage,
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
       errorCode,
@@ -289,6 +316,9 @@ export function formatMSTeamsSendErrorHint(
     return "Teams throttled the bot; backing off may help";
   }
   if (classification.kind === "ambiguous") {
+    if (classification.stage === "prepare") {
+      return "attachment preparation (Graph/SharePoint) failed before the Teams message was created; nothing was delivered — safe to retry";
+    }
     return "Teams/Bot Framework may have accepted the message before failing; not retried to avoid duplicate delivery — verify in Teams before resending";
   }
   if (classification.kind === "network") {
