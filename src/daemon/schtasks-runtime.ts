@@ -180,20 +180,12 @@ export async function waitForScheduledTaskRunningEvidence(
 }
 
 export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
-  const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName]);
-  if (res.code === 0) {
-    return true;
-  }
-  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
-  if (detail.includes("cannot find the file")) {
-    return false;
-  }
-  const exists = probeScheduledTaskExists(taskName);
-  if (exists === null) {
-    throw new Error(`Could not verify whether Scheduled Task ${taskName} exists.`);
-  }
-  return exists;
+  const res = await execSchtasks(["/Query", "/TN", resolveTaskName(env)]).catch(() => ({
+    code: 1,
+    stdout: "",
+    stderr: "",
+  }));
+  return res.code === 0;
 }
 
 export async function launchFallbackTaskScript(

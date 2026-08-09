@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
@@ -37,6 +38,7 @@ import {
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   removeStartupEntries,
+  probeScheduledTaskExists,
   resolveFallbackRuntime,
   waitForFallbackTakeoverRuntime,
   waitForScheduledTaskRunningEvidence,
@@ -388,7 +390,18 @@ export async function uninstallScheduledTask({
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env);
-  if (await isRegisteredScheduledTask(env)) {
+  const query = await execSchtasks(["/Query", "/TN", taskName]);
+  const queryDetail = normalizeLowercaseStringOrEmpty(query.stderr || query.stdout);
+  const exists =
+    query.code === 0
+      ? true
+      : queryDetail.includes("cannot find the file")
+        ? false
+        : probeScheduledTaskExists(taskName);
+  if (exists === null) {
+    throw new Error(`Could not verify whether Scheduled Task ${taskName} exists.`);
+  }
+  if (exists) {
     const deletion = await execSchtasks(["/Delete", "/F", "/TN", taskName]);
     if (deletion.code !== 0) {
       const detail = (deletion.stderr || deletion.stdout).trim() || "unknown error";
