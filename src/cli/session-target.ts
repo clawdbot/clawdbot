@@ -26,7 +26,7 @@ export type SessionTargetGateway = {
   tlsFingerprint?: string;
 };
 
-export type ResolvedSessionTarget = {
+type ResolvedSessionTarget = {
   sessionKey: string;
   gateway: SessionTargetGateway;
   parsed: SessionTargetInput;
