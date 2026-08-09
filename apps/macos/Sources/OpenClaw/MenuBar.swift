@@ -395,7 +395,6 @@ private struct SettingsWindowOpenRegistrar: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private static let dashboardURL = URL(string: "openclaw://dashboard")!
     private var state: AppState?
     private var terminationCleanupTask: Task<Void, Never>?
     private var terminationDeadlineTask: Task<Void, Never>?
