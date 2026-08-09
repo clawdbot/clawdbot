@@ -32,6 +32,7 @@ import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../r
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import {
+  ACPX_PROBE_LEASE_SESSION_KEY,
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
   readAcpxProcessLeaseIdentity,
@@ -41,6 +42,7 @@ import {
   type AcpxProcessLeaseStore,
 } from "./process-lease.js";
 import {
+  cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
@@ -69,7 +71,6 @@ type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
-
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
@@ -795,6 +796,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
   private readonly probeDelegate: BaseAcpxRuntime;
+  private readonly probeCommand: string | undefined;
   private readonly delegateOptions: AcpRuntimeOptions;
   private readonly delegateTestOptions: BaseAcpxRuntimeTestOptions;
   private readonly pluginToolsMcpBridgeEnabled: boolean;
@@ -809,6 +811,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly ensureSessionTails = new Map<string, Promise<void>>();
   private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
   private readonly processLeaseOperationCounts = new Map<string, number>();
+  private readonly uncertainProcessLeaseIds = new Set<string>();
   private readonly cwd: string;
 
   constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
@@ -855,6 +858,7 @@ export class AcpxRuntime implements AcpRuntime {
       agentName: normalizeAgentName(options.probeAgent) ?? "codex",
       agentRegistry: this.agentRegistry,
     });
+    this.probeCommand = probeCommand;
     const useBridgeSafeProbe =
       this.managedToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
     this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
@@ -1012,6 +1016,7 @@ export class AcpxRuntime implements AcpRuntime {
     sessionKey: string;
     command: string | undefined;
     reusableCommand?: string;
+    finalizeCompletedProbe?: boolean;
     run: () => Promise<T>;
   }): Promise<T> {
     if (
@@ -1029,7 +1034,15 @@ export class AcpxRuntime implements AcpRuntime {
     const processLeaseStore = this.processLeaseStore;
     const reusableIdentity = readAcpxProcessLeaseIdentity(params.reusableCommand);
     const canReuseLeaseIdentity = reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId;
-    const leaseId = canReuseLeaseIdentity ? reusableIdentity.leaseId : createAcpxProcessLeaseId();
+    // Repeated probes share one uncertainty row per Gateway and wrapper. Unique probe rows could
+    // otherwise evict live session ownership from the bounded lease namespace.
+    const leaseId = canReuseLeaseIdentity
+      ? reusableIdentity.leaseId
+      : params.finalizeCompletedProbe
+        ? `probe-${hashAcpxProcessCommand(
+            `${this.gatewayInstanceId}\0${extractGeneratedWrapperPath(params.command)}`,
+          )}`
+        : createAcpxProcessLeaseId();
     const leasedCommand = withAcpxLeaseEnvironment({
       command: params.command,
       leaseId,
@@ -1068,7 +1081,7 @@ export class AcpxRuntime implements AcpRuntime {
         return;
       }
       // The pending lease is written before acpx can spawn. The session-store
-      // save fills in the PID, or the last owner deletes it on launch failure.
+      // save fills in the PID; uncertain launch failures leave it for recovery.
       await processLeaseStore.save({
         leaseId: launch.leaseId,
         gatewayInstanceId: launch.gatewayInstanceId,
@@ -1083,10 +1096,14 @@ export class AcpxRuntime implements AcpRuntime {
     });
     try {
       const result = await this.launchLeaseScope.run(launch, params.run);
-      await this.finalizeProcessLeaseForSession(params.sessionKey, launch);
+      if (params.finalizeCompletedProbe) {
+        await this.finalizeCompletedProbeLease(launch);
+      } else {
+        await this.finalizeProcessLeaseForSession(params.sessionKey, launch);
+      }
       return result;
     } catch (error) {
-      await this.retirePendingProcessLease(launch);
+      await this.releaseProcessLeaseAfterUncertainFailure(launch);
       throw error;
     }
   }
@@ -1232,9 +1249,13 @@ export class AcpxRuntime implements AcpRuntime {
         return;
       }
       if (lease.rootPid <= 0) {
+        if (this.uncertainProcessLeaseIds.has(identity.leaseId)) {
+          return;
+        }
         await processLeaseStore.markState(identity.leaseId, "lost");
         return;
       }
+      this.uncertainProcessLeaseIds.delete(identity.leaseId);
       try {
         const record = await this.sessionStore.load(sessionId);
         const recordIdentity = readAcpxProcessLeaseIdentity(readAgentCommandFromRecord(record));
@@ -1251,17 +1272,45 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
-  private async retirePendingProcessLease(
-    identity: AcpxProcessLeaseIdentity | undefined,
-  ): Promise<void> {
-    if (!identity || !this.processLeaseStore) {
+  private async finalizeCompletedProbeLease(identity: AcpxLaunchLeaseContext): Promise<void> {
+    if (!this.processLeaseStore) {
       return;
     }
     const processLeaseStore = this.processLeaseStore;
     await this.releaseProcessLeaseOperation(identity, async () => {
       const lease = await processLeaseStore.load(identity.leaseId);
-      if (lease?.gatewayInstanceId === identity.gatewayInstanceId && lease.rootPid <= 0) {
-        await processLeaseStore.markState(identity.leaseId, "lost");
+      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
+        return;
+      }
+      // Upstream probe close is bounded and best-effort. Delegate fulfillment
+      // does not prove the wrapper exited, so verify the exact pending identity.
+      // Keep the lease even when the wrapper is absent: its detached adapter
+      // descendants do not carry lease args and may already be reparented.
+      if (lease.rootPid > 0) {
+        return;
+      }
+      await cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: lease.leaseId,
+        gatewayInstanceId: lease.gatewayInstanceId,
+        wrapperRoot: lease.wrapperRoot,
+        wrapperPath: lease.wrapperPath,
+        deps: this.processCleanupDeps,
+      });
+    });
+  }
+
+  private async releaseProcessLeaseAfterUncertainFailure(
+    identity: AcpxProcessLeaseIdentity | undefined,
+  ): Promise<void> {
+    if (!identity || !this.processLeaseStore) {
+      return;
+    }
+    this.uncertainProcessLeaseIds.add(identity.leaseId);
+    const processLeaseStore = this.processLeaseStore;
+    await this.releaseProcessLeaseOperation(identity, async () => {
+      const lease = await processLeaseStore.load(identity.leaseId);
+      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId || lease.rootPid > 0) {
+        this.uncertainProcessLeaseIds.delete(identity.leaseId);
       }
     });
   }
@@ -1384,7 +1433,8 @@ export class AcpxRuntime implements AcpRuntime {
       });
       await this.processLeaseStore?.markState(
         lease.leaseId,
-        result.skippedReason === "process-list-unavailable"
+        result.skippedReason === "process-list-unavailable" ||
+          result.skippedReason === "unsupported-platform"
           ? "open"
           : result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
             ? "closed"
@@ -1417,12 +1467,22 @@ export class AcpxRuntime implements AcpRuntime {
     return this.probeDelegate.isHealthy();
   }
 
-  probeAvailability(): Promise<void> {
-    return this.probeDelegate.probeAvailability();
+  async probeAvailability(): Promise<void> {
+    await this.runWithLaunchLease({
+      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+      command: this.probeCommand,
+      finalizeCompletedProbe: true,
+      run: () => this.probeDelegate.probeAvailability(),
+    });
   }
 
-  doctor(): Promise<AcpRuntimeDoctorReport> {
-    return this.probeDelegate.doctor();
+  async doctor(): Promise<AcpRuntimeDoctorReport> {
+    return await this.runWithLaunchLease({
+      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+      command: this.probeCommand,
+      finalizeCompletedProbe: true,
+      run: () => this.probeDelegate.doctor(),
+    });
   }
 
   async ensureSession(
@@ -1798,7 +1858,7 @@ export class AcpxRuntime implements AcpRuntime {
       if (cleanupSucceeded) {
         await this.finalizeProcessLeaseForOperation(input.handle, closeLease);
       } else {
-        await this.retirePendingProcessLease(closeLease);
+        await this.releaseProcessLeaseAfterUncertainFailure(closeLease);
       }
     }
   }

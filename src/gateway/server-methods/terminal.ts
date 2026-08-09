@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -20,6 +21,7 @@ import {
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
+import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
@@ -68,11 +70,7 @@ function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknow
   if (!payloadJSON) {
     return payload;
   }
-  try {
-    return JSON.parse(payloadJSON) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(payloadJSON);
 }
 
 async function stageNodeTerminalUpload(
@@ -295,12 +293,16 @@ export const terminalHandlers: GatewayRequestHandlers = {
         });
     }
     const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
-    const terminalEnv = buildTerminalEnv(process.env);
-    if (catalogPlan?.kind === "local" && catalogPlan.pathEnv) {
-      // Preserve the PATH that found a login-shell CLI so env-based shebangs
-      // can resolve their interpreter inside the spawned terminal process.
-      terminalEnv.PATH = catalogPlan.pathEnv;
-    }
+    const terminalEnv =
+      catalogPlan?.kind === "local"
+        ? mergeProcessEnv([
+            buildTerminalEnv(process.env),
+            catalogPlan.env,
+            // Preserve the PATH that found a login-shell CLI so env-based shebangs
+            // can resolve their interpreter inside the spawned terminal process.
+            catalogPlan.pathEnv ? { PATH: catalogPlan.pathEnv } : undefined,
+          ])
+        : buildTerminalEnv(process.env);
     let openingTerminal: ReturnType<typeof manager.open> | undefined;
     let outcome: Awaited<ReturnType<typeof manager.open>>;
     try {

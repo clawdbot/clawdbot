@@ -16,7 +16,7 @@ vi.mock("../schtasks-exec.js", () => ({
   },
 }));
 
-vi.mock("../../infra/ports.js", () => ({
+vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
     inspectPortUsage(port, options),
 }));

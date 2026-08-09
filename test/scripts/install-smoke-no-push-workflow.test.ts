@@ -230,12 +230,16 @@ describe("install smoke no-push root image transport", () => {
       expect(binding.run, jobName).toContain(
         'expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"',
       );
+      expect(binding.run, jobName).toContain('[[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]');
       expect(binding.run, jobName).toContain(
-        "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}",
+        "bash .release-harness/scripts/docker/shared-image-artifact.sh",
       );
-      expect(binding.run, jobName).toContain(
-        "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
-      );
+      expect(binding.run, jobName).toContain('verify-upload "Root image"');
+      expect(binding.run, jobName).toContain('"$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"');
+      expect(binding.run, jobName).not.toContain("gh api");
+      expect(binding.run, jobName).not.toContain("artifact_json=");
+      expect(binding.run, jobName).not.toContain("attempt_json=");
+      expect(binding.run, jobName).not.toContain("<<<");
 
       const download = step(consumer, "Download root Dockerfile image artifact");
       expect(download.if, jobName).toBeUndefined();
@@ -257,6 +261,10 @@ describe("install smoke no-push root image transport", () => {
       expect(requireLocal.if, jobName).toBeUndefined();
       expect(requireLocal.run, jobName).toBe('docker image inspect "$IMAGE_REF" >/dev/null');
     }
+
+    const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
+    expect(text.match(/verify-upload "Root image"/g)).toHaveLength(3);
+    expect(text).not.toContain("gh api");
   });
 
   it("selects the read-only reusable core from release checks", () => {

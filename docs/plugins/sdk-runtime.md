@@ -720,7 +720,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     System-level utilities.
 
     ```typescript
-    await api.runtime.system.enqueueSystemEvent(event);
+    const accepted = api.runtime.system.enqueueSystemEvent(text, options);
     api.runtime.system.requestHeartbeat({
       source: "other",
       intent: "event",

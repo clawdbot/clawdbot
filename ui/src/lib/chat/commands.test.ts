@@ -7,9 +7,11 @@ import {
   buildSlashCommandsFromEntries,
   getRemoteCommandEntries,
   getSkillCommandCompletions,
+  getSlashCommandCompletions,
   parseSlashCommand,
   replaceSlashCommands,
   SLASH_COMMANDS,
+  type SlashCommandDef,
 } from "./commands.ts";
 
 afterEach(() => {
@@ -59,6 +61,149 @@ function expectParsedSlash(input: string, commandFields: Record<string, unknown>
   expectRecordFields(parsed.command, `parsed ${input} command`, commandFields);
   expect(parsed.args).toBe(args);
 }
+
+function completionNames(filter: string, options?: { showAll?: boolean }): string[] {
+  return getSlashCommandCompletions(filter, options).map((command) => command.name);
+}
+
+function slashCommand(
+  name: string,
+  options: Partial<Omit<SlashCommandDef, "key" | "name">> = {},
+): SlashCommandDef {
+  return { key: name, name, description: `${name} command.`, ...options };
+}
+
+describe("getSlashCommandCompletions", () => {
+  it("ranks an exact name above prefixes and description-only matches", () => {
+    replaceSlashCommands([
+      slashCommand("openclaw", {
+        description: "Run the setup and repair helper.",
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("pair-device", {
+        tier: "standard",
+        category: "tools",
+      }),
+      slashCommand("pair", { tier: "power", category: "agents" }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["pair", "pair-device", "openclaw"]);
+  });
+
+  it("ranks exact and prefix alias matches like primary names", () => {
+    replaceSlashCommands([
+      slashCommand("pair-device", {
+        tier: "power",
+        category: "agents",
+      }),
+      slashCommand("connect", {
+        aliases: ["pairing"],
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("handoff", {
+        aliases: ["pair"],
+        tier: "power",
+        category: "agents",
+      }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["handoff", "connect", "pair-device"]);
+  });
+
+  it("ranks name and alias substrings above description-only matches", () => {
+    replaceSlashCommands([
+      slashCommand("helper", {
+        description: "Repair a device.",
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("connect", {
+        aliases: ["repairing"],
+        tier: "standard",
+        category: "tools",
+      }),
+      slashCommand("repair", {
+        tier: "power",
+        category: "agents",
+      }),
+      slashCommand("pairing", {
+        tier: "power",
+        category: "agents",
+      }),
+    ]);
+
+    expect(completionNames("pair")).toEqual(["pairing", "connect", "repair", "helper"]);
+  });
+
+  it("uses tier and category tie-breakers while keeping equal matches stable", () => {
+    replaceSlashCommands([
+      slashCommand("path-first", {
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("path-standard", {
+        tier: "standard",
+        category: "session",
+      }),
+      slashCommand("path-agent", {
+        tier: "essential",
+        category: "agents",
+      }),
+      slashCommand("path-second", {
+        tier: "essential",
+        category: "session",
+      }),
+    ]);
+
+    expect(completionNames("path-")).toEqual([
+      "path-first",
+      "path-second",
+      "path-agent",
+      "path-standard",
+    ]);
+  });
+
+  it("keeps empty-query tier and category ordering unchanged", () => {
+    replaceSlashCommands([
+      slashCommand("standard-agent", {
+        tier: "standard",
+        category: "agents",
+      }),
+      slashCommand("essential-tools", {
+        tier: "essential",
+        category: "tools",
+      }),
+      slashCommand("power-session", {
+        tier: "power",
+        category: "session",
+      }),
+      slashCommand("essential-session", {
+        tier: "essential",
+        category: "session",
+      }),
+      slashCommand("standard-session", {
+        tier: "standard",
+        category: "session",
+      }),
+    ]);
+
+    expect(completionNames("")).toEqual([
+      "essential-session",
+      "essential-tools",
+      "standard-session",
+      "standard-agent",
+    ]);
+    expect(completionNames("", { showAll: true })).toEqual([
+      "essential-session",
+      "essential-tools",
+      "standard-session",
+      "standard-agent",
+      "power-session",
+    ]);
+  });
+});
 
 describe("parseSlashCommand", () => {
   it("parses commands with an optional colon separator", () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
@@ -11,9 +11,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
 describe("managed worktree path state migrations", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  });
+
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
@@ -21,7 +26,7 @@ describe("managed worktree path state migrations", () => {
     });
   });
 
-  it("does not create the worktrees directory during detection", { timeout: 240_000 }, async () => {
+  it("does not create the worktrees directory during detection", async () => {
     const root = tempDirs.make("openclaw-worktree-path-detection-");
     const stateDir = path.join(root, "state");
     const worktreesDir = path.join(stateDir, "worktrees");
@@ -39,8 +44,7 @@ describe("managed worktree path state migrations", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "canonicalizes persisted paths from symlinked state directories",
-    { timeout: 240_000 },
+    "canonicalizes persisted paths when the latest additive worktree column is absent",
     async () => {
       const root = tempDirs.make(
         "openclaw-worktree-path-migration-",
@@ -62,7 +66,8 @@ describe("managed worktree path state migrations", () => {
         live.repoFingerprint,
         "removed",
       );
-      const db = openOpenClawStateDatabase({ env }).db;
+      const database = openOpenClawStateDatabase({ env });
+      const db = database.db;
       db.prepare("UPDATE worktrees SET path = ? WHERE id = ?").run(rawLivePath, live.id);
       const removed = {
         ...live,
@@ -91,7 +96,18 @@ describe("managed worktree path state migrations", () => {
       insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
       insertRegistryWorktree(env, moved, { provisionedPaths: [] });
 
+      closeOpenClawStateDatabaseForTest();
+      const { DatabaseSync } = requireNodeSqlite();
+      const beforeCleanupOutcome = new DatabaseSync(database.path);
+      try {
+        beforeCleanupOutcome.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+      } finally {
+        beforeCleanupOutcome.close();
+      }
+
       const cfg = {} as OpenClawConfig;
+      // Doctor's read-only SELECT * follows the physical columns. Compatibility
+      // validation must allow this additive column to be absent before that query.
       const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
       expect(detected.preview).toContain(
         "- Managed worktrees: canonicalize 2 persisted paths for symlinked state directories",

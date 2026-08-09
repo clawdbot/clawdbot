@@ -324,7 +324,6 @@ async function validateResetAuthChoice(params: {
             workspaceDir: params.workspaceDir,
             mode: "setup",
             includeUntrustedWorkspacePlugins: false,
-            bundledProviderVitestCompat: true,
             providerRefs: [providerAuthChoice.providerId],
             activate: true,
           }),

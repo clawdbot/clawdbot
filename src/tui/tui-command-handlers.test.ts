@@ -342,7 +342,7 @@ describe("tui command handlers", () => {
     ]);
   });
 
-  it("bounds session picker hydration to recent TUI sessions", async () => {
+  it("bounds Ctrl+P hydration to recent non-global TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       sessions: [
         {

@@ -155,6 +155,32 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("Port 18789 is already in use.");
   });
 
+  it("warns when port availability could not be determined", async () => {
+    const params = createBaseParams([]);
+    params.portUsage = { port: 18789, status: "unknown", listeners: [], hints: [] };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 availability could not be determined.");
+    expect(output).not.toContain("Port 18789 is free.");
+  });
+
+  it("does not let attributed listeners override indeterminate availability", async () => {
+    const params = createBaseParams([
+      { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+    ]);
+    params.portUsage!.status = "unknown";
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 availability could not be determined.");
+    expect(output).not.toContain("Detected OpenClaw Gateway listener");
+  });
+
   it("adds direct update restart guidance for failed update sentinels", async () => {
     const params = createBaseParams([]);
     params.sentinel = {

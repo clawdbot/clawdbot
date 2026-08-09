@@ -6,6 +6,8 @@ type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
   sessionTarget?: SessionTranscriptWriteLockTarget;
+  /** Fence each durable mutation at the transaction boundary, not only callback admission. */
+  assertOwned(): void;
   canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
@@ -27,7 +29,7 @@ export type OwnedSessionTranscriptWriteOptions<T> = {
   resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[];
 };
 
-export type OwnedSessionTranscriptPublishedEntry =
+type OwnedSessionTranscriptPublishedEntry =
   | { kind: "id"; id: string }
   | { kind: "header"; serialized: string }
   | { kind: "serialized"; serialized: string };
@@ -113,6 +115,18 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
 ): (...args: TArgs) => TResult {
   // Bind callbacks that will run later but must still see the parent write-lock context.
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
+}
+
+/** Revalidates a matching attempt-owned lease immediately before durable mutation. */
+export function assertOwnedSessionTranscriptWrite(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
+}): void {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (context && contextMatches({ context, ...params })) {
+    context.assertOwned();
+  }
 }
 
 export async function runWithOwnedSessionTranscriptWriteLock<T>(

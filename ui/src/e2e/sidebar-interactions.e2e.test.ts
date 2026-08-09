@@ -246,7 +246,7 @@ suite.define(() => {
       await expect
         .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
         .toContain("data:image/png;base64,");
-      await expect.poll(() => menu.getByText(/^New thread —/).count()).toBe(0);
+      await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);

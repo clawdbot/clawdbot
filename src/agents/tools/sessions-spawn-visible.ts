@@ -13,7 +13,6 @@ import {
 } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
@@ -52,7 +51,7 @@ export type VisibleSessionsSpawnDeps = {
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   agentSessionKey?: string;
   completionOwnerKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;

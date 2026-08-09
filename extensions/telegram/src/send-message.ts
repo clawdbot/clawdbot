@@ -52,7 +52,7 @@ import {
 } from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget } from "./targets.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
@@ -88,6 +88,7 @@ async function sendMessageTelegramWithContext(
   });
   const threadSpec = resolveTelegramSendThreadSpec({
     targetMessageThreadId: target.messageThreadId,
+    targetDirectMessagesTopicId: target.directMessagesTopicId,
     messageThreadId: opts.messageThreadId,
     chatType: target.chatType,
   });

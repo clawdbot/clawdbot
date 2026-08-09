@@ -15,6 +15,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
@@ -39,6 +40,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
@@ -66,6 +68,19 @@ function createInitialStateSchemaShape() {
     delete shape[tableName];
   }
   return shape;
+}
+
+function createOlderV6StateSchemaWithoutWorkerSshFallbackPorts(): string {
+  const startMarker = "CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
+  const endMarker = "\n) STRICT;";
+  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+  if (start < 0 || end < 0) {
+    throw new Error("worker SSH fallback port schema block is missing");
+  }
+  return `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(
+    end + endMarker.length,
+  )}`;
 }
 
 function expectStateSchemaMigrationRequired(
@@ -1120,6 +1135,27 @@ describe("openclaw state database", () => {
     ).toThrow();
   });
 
+  it("keeps the additive worker SSH fallback table compatible with older v6 containment", () => {
+    const database = openMaterializedCurrentStateDatabase();
+    try {
+      expect(
+        database
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get("worker_environment_ssh_fallback_ports"),
+      ).toEqual({ name: "worker_environment_ssh_fallback_ports" });
+      expect(() =>
+        assertSqliteSchemaContains(
+          database,
+          "older v6 state database",
+          createOlderV6StateSchemaWithoutWorkerSshFallbackPorts(),
+          { allowedMissingTables: FIRST_USE_STATE_TABLES },
+        ),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("skips exclusive repair when the automatic schema gate is already current", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -1908,6 +1944,40 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(columns.map((column) => column.name)).toEqual(
       expect.arrayContaining(["bootstrap_source_path", "bootstrap_content_digest"]),
     );
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+        )
+        .all(),
+    ).toEqual([{ task_id: "task-index-repair" }]);
+  });
+
+  it("repairs the same-version worktree cleanup column with physical index drift", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    } finally {
+      shippedSchema.close();
+    }
+    createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+    const reopened = openOpenClawStateDatabase({ env });
+    const columns = reopened.db.prepare("PRAGMA table_info(worktrees)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toContain("run_end_cleanup_json");
     expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });

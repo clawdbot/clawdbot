@@ -201,7 +201,9 @@ export function scheduleCommittedChatScroll(
       manualScroll ||
       effectiveForce ||
       (!host.chatFollowLocked &&
-        (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+        (options.source === "resize" ||
+          host.chatUserNearBottom ||
+          distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
 
     if (!shouldStick) {
       if (contentChanged || (options.source === "resize" && contentGrew)) {

@@ -270,29 +270,6 @@ describe("structured state integrity findings", () => {
   });
 });
 
-async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {},
-      entries: { main: { default: true } },
-    },
-    memory: {
-      backend: "qmd",
-      qmd: {
-        sessions: { enabled },
-      },
-
-      search: { rememberAcrossConversations: false },
-    },
-  };
-  setupSessionState(cfg, process.env, homeDir);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => homeDir);
-  fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-  const confirmRuntimeRepair = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-  return confirmRuntimeRepair;
-}
-
 describe("doctor state integrity oauth dir checks", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
@@ -618,6 +595,10 @@ describe("doctor state integrity oauth dir checks", () => {
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
     await upsertSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      { sessionId: "sqlite-main-session", updatedAt: Date.now() },
+    );
+    await upsertSessionEntry(
       { agentId: "main", sessionKey: "agent:main:sqlite-only", storePath },
       { sessionId: "sqlite-only-session", updatedAt: Date.now() },
     );
@@ -628,6 +609,7 @@ describe("doctor state integrity oauth dir checks", () => {
     });
 
     expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+    expect(stateIntegrityText()).not.toContain("Main session transcript missing");
   });
 
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
@@ -699,24 +681,6 @@ describe("doctor state integrity oauth dir checks", () => {
       }
     },
   );
-
-  it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
-    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
-
-    expect(stateIntegrityText()).not.toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
-    );
-    expect(confirmRuntimeRepair).not.toHaveBeenCalled();
-  });
-
-  it("still detects orphan transcripts when QMD sessions are disabled", async () => {
-    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(false, tempHome);
-
-    expect(stateIntegrityText()).toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
-    );
-    expect(confirmRuntimeRepair).toHaveBeenCalled();
-  });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};

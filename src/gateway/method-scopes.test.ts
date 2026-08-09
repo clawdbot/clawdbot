@@ -61,6 +61,7 @@ describe("method scope resolution", () => {
     ["sessions.reclaim", ["operator.admin"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["sessions.patchMany", ["operator.write"]],
     ["tasks.cancel", ["operator.write"]],
     ["tasks.retry", ["operator.write"]],
     ["tasks.dismiss", ["operator.write"]],
@@ -109,6 +110,7 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.hold", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -466,18 +468,8 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
-  it.each([
-    ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
-    ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
-    ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
-    ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
-    [
-      "completionOwnerSessionKey",
-      { key: "agent:main:ios-1", completionOwnerSessionKey: "agent:main:main" },
-    ],
-    ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
-    ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
-  ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
+  it("delegates effort patches to the admin-scoped session policy", () => {
+    const params = { key: "agent:main:ios-1", thinkingLevel: "high" };
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
       "operator.admin",
     ]);
@@ -490,8 +482,11 @@ describe("method scope resolution", () => {
     });
   });
 
-  it("authorizes write-scoped sessions.patch for chat-organization fields and denies read scope", () => {
-    const params = { key: "agent:main:ios-1", label: "Trip planning", pinned: true };
+  it("delegates model patches to the write-scoped session policy", () => {
+    const params = { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
+      "operator.write",
+    ]);
     expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
       allowed: true,
     });
@@ -499,6 +494,25 @@ describe("method scope resolution", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.admin"], params)).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("delegates sessions.patchMany from its patch fields", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patchMany", {
+        targets: [
+          {
+            key: "agent:main:ios-1",
+            agentId: "main",
+            expectedSessionId: "session-1",
+            expectedLifecycleRevision: "revision-1",
+          },
+        ],
+        patch: { model: "openai/gpt-5.6-luna" },
+      }),
+    ).toEqual(["operator.write"]);
   });
 
   it("lets malformed sessions.patch params through to handler validation at write scope", () => {

@@ -181,8 +181,15 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!scope) {
       return null;
     }
-    const result = await requestSessionList(scope.client, options);
-    return host.connection.isCurrent(scope) ? host.decorate(result ?? null) : null;
+    try {
+      const result = await requestSessionList(scope.client, options);
+      return host.connection.isCurrent(scope) ? host.decorate(result ?? null) : null;
+    } catch (error) {
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
+      throw error;
+    }
   };
 
   const load = async (options: SessionRefreshOptions) => {

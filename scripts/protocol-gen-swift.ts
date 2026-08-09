@@ -114,6 +114,9 @@ function safeName(name: string) {
 // Canonical initializer labels must match stored properties; compatibility initializers
 // declare legacy labels separately.
 function swiftStoredPropertyName(structName: string, key: string): string {
+  if (structName === "SessionCompactionCheckpoint" && key === "tokensVersion") {
+    return "tokensVersion";
+  }
   if (structName === "WizardStartParams" && key === "installDaemon") {
     return "installDaemon";
   }

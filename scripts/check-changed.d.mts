@@ -44,6 +44,7 @@ export function shouldRunPromptSnapshotCheck(paths: string[]): boolean;
 export function shouldRunPromptSnapshotOwnerTest(paths: string[]): boolean;
 export function shouldRunControlUiI18nVerify(paths: string[]): boolean;
 export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]): boolean;
+export function shouldRunDoctorContractOwnerTests(paths: string[]): boolean;
 export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]): boolean;
 export function shouldRunPluginSdkApiBaselineCheck(paths: string[]): boolean;
 export function shouldRunPluginSdkSurfaceChecks(paths: string[]): boolean;

@@ -575,7 +575,7 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.tui.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/tui/gateway-chat.test.ts"],
+        includePatterns: ["src/tui/gateway-chat.connection.test.ts"],
         watchMode: false,
       },
     ]);

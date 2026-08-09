@@ -168,7 +168,24 @@ export async function registerPluginSubagentRunFromGateway(params: {
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
-  const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
+  const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
+    await import("../../agents/subagent-registry.js");
+  // A follow-up aimed at a session paused by sessions_yield continues that run.
+  // Registering a sibling row here would reassign the requester to this agent's
+  // own main session and leave the original requester waiting behind a row that
+  // can no longer announce. A follow-up that names its own requester is opting
+  // into its own delivery, so it registers normally rather than silently
+  // inheriting the paused row's audience.
+  if (
+    !params.requester &&
+    adoptPausedSubagentRunForFollowUp({
+      childSessionKey,
+      runId: params.runId,
+      task: params.task,
+    })
+  ) {
+    return;
+  }
   registerSubagentRun({
     runId: params.runId,
     childSessionKey,

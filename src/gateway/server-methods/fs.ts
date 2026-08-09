@@ -1,6 +1,7 @@
 // Host directory browsing for the new-session folder picker. operator.admin
 // only (see core-descriptors): listing arbitrary host paths carries the same
 // trust as starting a session with an explicit cwd.
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
@@ -14,11 +15,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
   if (payloadJSON) {
-    try {
-      return JSON.parse(payloadJSON) as unknown;
-    } catch {
-      return undefined;
-    }
+    return safeParseJson(payloadJSON);
   }
   return payload;
 }

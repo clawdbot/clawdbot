@@ -22,7 +22,7 @@ scenario:
               - message
   successCriteria:
     - Visible completion output reaches the originating QA DM exactly once.
-    - Exact NO_REPLY completion output produces no channel delivery.
+    - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
     - Genuinely empty completion output is represented intentionally once.
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - Direct fallback strips protected internal metadata before one channel delivery.
@@ -47,8 +47,8 @@ scenario:
           marker: QA-SUBAGENT-TERMINAL-VISIBLE-OK
           expectedSendCount: 1
         - name: silent
-          marker: NO_REPLY
-          expectedSendCount: 0
+          marker: QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED
+          expectedSendCount: 1
         - name: fallback
           marker: QA-SUBAGENT-TERMINAL-FALLBACK-OK
           expectedSendCount: 1
@@ -159,7 +159,7 @@ flow:
                     expr: "`terminal ${terminalCase.name}: task lifecycle did not settle authoritatively; task=${JSON.stringify(terminalTask)}`"
               - set: appendVerdict
                 value:
-                  expr: "verdicts.push({ case: terminalCase.name, conversationId, taskId: terminalTask.taskId, taskDeliveryStatus: terminalTask.deliveryStatus, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'no terminal channel payload' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
+                  expr: "verdicts.push({ case: terminalCase.name, conversationId, taskId: terminalTask.taskId, taskDeliveryStatus: terminalTask.deliveryStatus, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'visible representation of private child silence or missing output' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
         # Every prior task is now terminal and delivery-settled, so restart from
         # the lifecycle boundary rather than waiting an arbitrary grace period.
         - set: preRestartOutbound

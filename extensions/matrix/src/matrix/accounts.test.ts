@@ -8,7 +8,7 @@ import {
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
 } from "./accounts.js";
-import type { MatrixStoredCredentials } from "./credentials-read.js";
+import type { MatrixStoredCredentials } from "./credentials-state.js";
 
 const loadMatrixCredentialsMock = vi.hoisted(() =>
   vi.fn<(env?: NodeJS.ProcessEnv, accountId?: string | null) => MatrixStoredCredentials | null>(

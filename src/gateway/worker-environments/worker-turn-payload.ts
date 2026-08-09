@@ -22,47 +22,84 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
-import { toWorkerTranscriptMessage } from "../../worker/transcript-message.js";
+import {
+  windowWorkerReplayMessages,
+  type WorkerReplayMessageWindowUnavailable,
+} from "../../worker/replay-message-window.js";
+import {
+  toWorkerTranscriptMessage,
+  type WorkerProviderReplayUnavailable,
+} from "../../worker/transcript-message.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
 
-export function windowInitialMessages(messages: AgentMessage[]): WorkerTranscriptMessage[] {
-  const projected = messages.flatMap((message) => {
-    const value = toWorkerTranscriptMessage(message);
-    return value ? [value] : [];
-  });
-  if (projected.length <= WORKER_INFERENCE_MAX_CONTEXT_MESSAGES) {
-    return projected;
+type WorkerInitialMessagePlan =
+  | { kind: "complete"; messages: WorkerTranscriptMessage[] }
+  | {
+      kind: "provider-replay-unavailable";
+      details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
+    };
+
+export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMessagePlan {
+  const windowed = windowWorkerReplayMessages(messages, WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1);
+  if (windowed.kind === "provider-replay-unavailable") {
+    return windowed;
   }
-  const minimumStart = projected.length - WORKER_INFERENCE_MAX_CONTEXT_MESSAGES;
-  const completeTurnStart = projected.findIndex(
-    (message, index) => index >= minimumStart && message.role === "user",
-  );
-  if (completeTurnStart < 0) {
-    throw new Error("Worker turn transcript has no complete context window");
+  const projected: WorkerTranscriptMessage[] = [];
+  for (const message of windowed.messages) {
+    const result = toWorkerTranscriptMessage(message, "inference");
+    if (!result) {
+      continue;
+    }
+    if (result.kind === "provider-replay-unavailable") {
+      return result;
+    }
+    projected.push(result.message);
   }
-  return projected.slice(completeTurnStart);
+  return { kind: "complete", messages: projected };
 }
+
+type WorkerLaunchPlan =
+  | { kind: "launch"; descriptor: WorkerLaunchDescriptor }
+  | {
+      kind: "local-fallback";
+      reason: "provider-replay-launch-payload-limit";
+      bytes: number;
+      limitBytes: number;
+    };
 
 export function fitLaunchDescriptor(
   build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchDescriptor,
   messages: WorkerTranscriptMessage[],
-): WorkerLaunchDescriptor {
+): WorkerLaunchPlan {
   let initialMessages = messages;
   while (true) {
     const descriptor = build(initialMessages);
-    if (
-      Buffer.byteLength(JSON.stringify(descriptor), "utf8") <=
-      WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
-    ) {
-      return descriptor;
+    const bytes = Buffer.byteLength(JSON.stringify(descriptor), "utf8");
+    if (bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
+      return { kind: "launch", descriptor };
+    }
+    const replayIndex = initialMessages.findLastIndex(
+      (message) => message.role === "assistant" && message.providerReplay !== undefined,
+    );
+    if (replayIndex === 0) {
+      return {
+        kind: "local-fallback",
+        reason: "provider-replay-launch-payload-limit",
+        bytes,
+        limitBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+      };
     }
     const nextTurn = initialMessages.findIndex(
       (message, index) => index > 0 && message.role === "user",
     );
-    if (nextTurn < 0) {
+    // A replay owner is a valid context start because its checkpoint replaces
+    // the discarded prefix; never advance past it to reach a later user turn.
+    const nextStart =
+      replayIndex > 0 && (nextTurn < 0 || nextTurn > replayIndex) ? replayIndex : nextTurn;
+    if (nextStart < 0) {
       throw new Error("Worker turn context exceeds the launch descriptor payload limit");
     }
-    initialMessages = initialMessages.slice(nextTurn);
+    initialMessages = initialMessages.slice(nextStart);
   }
 }
 
@@ -133,7 +170,7 @@ export function buildWorkerAgentMeta(params: {
   const lastAssistant = assistants.at(-1);
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator,
-    lastAssistantUsage: lastAssistant?.usage,
+    latestUsage: lastAssistant?.usage,
     lastRunPromptUsage,
   });
   const reportedModelRef = resolveReportedModelRef({

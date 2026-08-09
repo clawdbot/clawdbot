@@ -205,7 +205,7 @@ Write a unit by hand only for a custom setup. Minimal user-unit example
 
 ```ini
 [Unit]
-Description=OpenClaw Gateway (profile: <profile>, v<version>)
+Description=OpenClaw Gateway (profile: <profile>)
 After=network-online.target
 Wants=network-online.target
 StartLimitBurst=5

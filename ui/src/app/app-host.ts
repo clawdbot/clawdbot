@@ -424,7 +424,7 @@ class OpenClawShell
   }
 
   replaceChatWithCurrentSession() {
-    this.shellNavigation.replaceChatWithCurrentSession();
+    return this.shellNavigation.replaceChatWithCurrentSession();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {

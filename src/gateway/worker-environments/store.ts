@@ -17,6 +17,7 @@ import { isValidSecretRef } from "../../secrets/ref-contract.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
+  WorkerEnvironmentSshFallbackPorts,
   WorkerEnvironments,
 } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -73,10 +74,15 @@ export type WorkerEnvironmentTransitionPatch = {
 };
 type WorkerDb = Pick<
   StateDatabase,
-  "worker_environment_credentials" | "worker_environments" | "worker_transcript_commit_heads"
+  | "worker_environment_credentials"
+  | "worker_environment_ssh_fallback_ports"
+  | "worker_environments"
+  | "worker_transcript_commit_heads"
 >;
 type Row = Selectable<WorkerEnvironments>;
+type RowWithFallbackPort = Row & { ssh_fallback_port: number | null };
 type RowUpdate = Updateable<WorkerEnvironments>;
+type SshFallbackPortInsert = Insertable<WorkerEnvironmentSshFallbackPorts>;
 type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
 type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
 type CredentialInput = {
@@ -99,6 +105,18 @@ type TransitionInput = {
 const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
+const MAX_SSH_FALLBACK_PORTS = 10;
+const ensuredWorkerEnvironmentDatabases = new WeakSet<DatabaseSync>();
+const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
+  environment_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
+  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
+  PRIMARY KEY (environment_id, position),
+  UNIQUE (environment_id, port),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+) STRICT;
+`;
 const WORKER_CREDENTIAL_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const OPENSSH_HOST_KEY_TYPE_PATTERN =
   /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
@@ -223,9 +241,37 @@ export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
   if (!isValidSecretRef(value.keyRef)) {
     throw new Error("Worker environment SSH key must be a canonical SecretRef");
   }
-  return { host, port: value.port, user, hostKey, keyRef: { ...value.keyRef } };
+  if (value.fallbackPorts !== undefined && !Array.isArray(value.fallbackPorts)) {
+    throw new Error("Worker environment SSH fallback ports must be an array");
+  }
+  const seen = new Set([value.port]);
+  const fallbackPorts: number[] = [];
+  for (const port of value.fallbackPorts ?? []) {
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(
+        "Worker environment SSH fallback ports must be integers from 1 through 65535",
+      );
+    }
+    if (!seen.has(port)) {
+      seen.add(port);
+      fallbackPorts.push(port);
+    }
+  }
+  if (fallbackPorts.length > MAX_SSH_FALLBACK_PORTS) {
+    throw new Error(
+      `Worker environment SSH fallback ports cannot exceed ${MAX_SSH_FALLBACK_PORTS}`,
+    );
+  }
+  return {
+    host,
+    port: value.port,
+    ...(fallbackPorts.length > 0 ? { fallbackPorts } : {}),
+    user,
+    hostKey,
+    keyRef: { ...value.keyRef },
+  };
 }
-function endpointFrom(row: Row): Ssh | null {
+function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
   const {
     ssh_host: host,
     ssh_port: port,
@@ -239,6 +285,7 @@ function endpointFrom(row: Row): Ssh | null {
   return normalizeWorkerSshEndpoint({
     host,
     port,
+    ...(fallbackPorts.length > 0 ? { fallbackPorts } : {}),
     user,
     hostKey,
     keyRef: JSON.parse(encoded) as Ssh["keyRef"],
@@ -315,7 +362,7 @@ function nextGlobalOwnerEpoch(db: DatabaseSync): number {
     Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
   );
 }
-function fromRow(row: Row): WorkerEnvironmentRecord {
+function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentRecord {
   const record = {
     environmentId: row.environment_id,
     providerId: row.provider_id,
@@ -323,7 +370,7 @@ function fromRow(row: Row): WorkerEnvironmentRecord {
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
     provisionOperationId: row.provision_operation_id,
     leaseId: row.lease_id,
-    sshEndpoint: endpointFrom(row),
+    sshEndpoint: endpointFrom(row, fallbackPorts),
     bootstrapReceipt: bootstrapReceiptFrom(row),
     ownerEpoch: row.owner_epoch,
     teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),
@@ -361,15 +408,42 @@ function credentialFromRow(row: CredentialRow): WorkerCredentialRecord {
 }
 const json = (value: unknown) => JSON.stringify(value) as string;
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
+function environmentRows(db: DatabaseSync) {
+  return query(db)
+    .selectFrom("worker_environments")
+    .leftJoin(
+      "worker_environment_ssh_fallback_ports",
+      "worker_environment_ssh_fallback_ports.environment_id",
+      "worker_environments.environment_id",
+    )
+    .selectAll("worker_environments")
+    .select("worker_environment_ssh_fallback_ports.port as ssh_fallback_port");
+}
+function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmentRecord[] {
+  const grouped = new Map<string, { ports: number[]; row: Row }>();
+  for (const row of rows) {
+    const current = grouped.get(row.environment_id);
+    if (current) {
+      if (row.ssh_fallback_port !== null) {
+        current.ports.push(row.ssh_fallback_port);
+      }
+      continue;
+    }
+    grouped.set(row.environment_id, {
+      ports: row.ssh_fallback_port === null ? [] : [row.ssh_fallback_port],
+      row,
+    });
+  }
+  return Array.from(grouped.values(), ({ row, ports }) => fromRow(row, ports));
+}
 function find(db: DatabaseSync, environmentId: string) {
-  const row = executeSqliteQueryTakeFirstSync(
+  const rows = executeSqliteQuerySync(
     db,
-    query(db)
-      .selectFrom("worker_environments")
-      .selectAll()
-      .where("environment_id", "=", environmentId),
-  );
-  return row ? fromRow(row) : undefined;
+    environmentRows(db)
+      .where("worker_environments.environment_id", "=", environmentId)
+      .orderBy("worker_environment_ssh_fallback_ports.position"),
+  ).rows;
+  return recordsFromRows(rows)[0];
 }
 function findCredential(db: DatabaseSync, environmentId: string) {
   const row = executeSqliteQueryTakeFirstSync(
@@ -398,7 +472,7 @@ function getRequired(db: DatabaseSync, environmentId: string) {
   }
   return record;
 }
-function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, values: RowUpdate) {
+function updateRow(db: DatabaseSync, id: string, state: WorkerEnvironmentState, values: RowUpdate) {
   const result = executeSqliteQuerySync(
     db,
     query(db)
@@ -410,7 +484,34 @@ function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, val
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Worker environment ${id} changed during update`);
   }
+}
+function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, values: RowUpdate) {
+  updateRow(db, id, state, values);
   return getRequired(db, id);
+}
+function replaceSshFallbackPorts(
+  db: DatabaseSync,
+  environmentId: string,
+  ports: readonly number[],
+): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .deleteFrom("worker_environment_ssh_fallback_ports")
+      .where("environment_id", "=", environmentId),
+  );
+  if (ports.length === 0) {
+    return;
+  }
+  const rows: SshFallbackPortInsert[] = ports.map((port, position) => ({
+    environment_id: environmentId,
+    position,
+    port,
+  }));
+  executeSqliteQuerySync(
+    db,
+    query(db).insertInto("worker_environment_ssh_fallback_ports").values(rows),
+  );
 }
 function revokeCredential(db: DatabaseSync, environmentId: string): void {
   executeSqliteQuerySync(
@@ -465,13 +566,19 @@ function credentialInsert(params: {
   };
 }
 function listRows(db: DatabaseSync, reconcile: boolean): WorkerEnvironmentRecord[] {
-  const base = query(db).selectFrom("worker_environments").selectAll();
-  const filtered = reconcile ? base.where("state", "not in", TERMINAL_STATES) : base;
-  const ordered = reconcile ? filtered.orderBy("provider_id") : filtered;
-  return executeSqliteQuerySync(
+  const base = environmentRows(db);
+  const filtered = reconcile
+    ? base.where("worker_environments.state", "not in", TERMINAL_STATES)
+    : base;
+  const ordered = reconcile ? filtered.orderBy("worker_environments.provider_id") : filtered;
+  const rows = executeSqliteQuerySync(
     db,
-    ordered.orderBy("created_at_ms").orderBy("environment_id"),
-  ).rows.map(fromRow);
+    ordered
+      .orderBy("worker_environments.created_at_ms")
+      .orderBy("worker_environments.environment_id")
+      .orderBy("worker_environment_ssh_fallback_ports.position"),
+  ).rows;
+  return recordsFromRows(rows);
 }
 
 function compareAttachmentAuthority(
@@ -528,7 +635,19 @@ function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number): void {
 export function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
-  const path = (options.database ?? openOpenClawStateDatabase()).path;
+  const database = options.database ?? openOpenClawStateDatabase();
+  if (!ensuredWorkerEnvironmentDatabases.has(database.db)) {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        // sqlite-allow-raw -- feature-local additive schema DDL; rows use Kysely below.
+        db.exec(WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL);
+      },
+      { database },
+      { operationLabel: "worker-environments.ssh-fallback-ports.schema.ensure" },
+    );
+    ensuredWorkerEnvironmentDatabases.add(database.db);
+  }
+  const path = database.path;
   const now = options.now ?? Date.now;
   const read = () => openOpenClawStateDatabase({ path }).db;
   const write = <T>(operation: (db: DatabaseSync) => T): T =>
@@ -785,7 +904,7 @@ export function createWorkerEnvironmentStore(
           : acceptsAttachedCredential || ownerEndingTransition
             ? nextGlobalOwnerEpoch(db)
             : current.ownerEpoch;
-        const record = update(db, environmentId, from, {
+        updateRow(db, environmentId, from, {
           lease_id: leaseId,
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,
@@ -805,6 +924,9 @@ export function createWorkerEnvironmentStore(
           idle_since_at_ms: to === "idle" ? updatedAtMs : null,
           last_error: "lastError" in patch ? patch.lastError?.trim() || null : null,
         });
+        if (patch.sshEndpoint !== undefined) {
+          replaceSshFallbackPorts(db, environmentId, sshEndpoint?.fallbackPorts ?? []);
+        }
         if (revokesCredential) {
           revokeCredential(db, environmentId);
         }
@@ -821,7 +943,7 @@ export function createWorkerEnvironmentStore(
             }),
           );
         }
-        return record;
+        return getRequired(db, environmentId);
       });
     },
     renewCredential(

@@ -157,16 +157,11 @@ function normalizeSessionToolOverrides(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-type SessionPatchProjectionEntry = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  entries: readonly SessionPatchProjectionEntry[];
   existingEntry?: SessionEntry;
+  isLabelInUse: (label: string) => boolean;
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
@@ -270,13 +265,8 @@ export async function projectSessionsPatchEntry(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const { sessionKey, entry } of params.entries) {
-        if (sessionKey === storeKey) {
-          continue;
-        }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
+      if (params.isLabelInUse(parsed.label)) {
+        return invalid(`label already in use: ${parsed.label}`);
       }
       next.label = parsed.label;
     }
@@ -724,8 +714,11 @@ export async function applySessionsPatchToStore(params: {
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const projected = await projectSessionsPatchEntry({
     cfg: params.cfg,
-    entries: Object.entries(params.store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
     existingEntry: params.store[params.storeKey],
+    isLabelInUse: (label) =>
+      Object.entries(params.store).some(
+        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
+      ),
     storeKey: params.storeKey,
     agentId: params.agentId,
     patch: params.patch,

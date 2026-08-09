@@ -10,13 +10,13 @@ import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import { renderDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
@@ -76,7 +76,7 @@ export interface ShellViewHost {
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
   refreshControlUi(): void;
-  replaceChatWithCurrentSession(): void;
+  replaceChatWithCurrentSession(): boolean;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
@@ -92,6 +92,9 @@ export function renderApplicationShell(host: ShellViewHost) {
   const gatewaySnapshot = context.gateway.snapshot;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
+  const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
+  const canHoldUpdate =
+    canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
   const storedOutboxes = outboxStoreRuntime
@@ -211,10 +214,15 @@ export function renderApplicationShell(host: ShellViewHost) {
         context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: context.config.current.devGitBranch,
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+      updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
+      heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
       updateRunning: overlaySnapshot.updateRunning,
+      canUpdate,
+      canHoldUpdate,
       onUpdate: () => void context.overlays.runUpdate(),
       refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
       onRefresh: () => host.refreshControlUi(),
+      onHoldUpdate: () => context.overlays.holdUpdate(),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -241,10 +249,15 @@ export function renderApplicationShell(host: ShellViewHost) {
         gatewayVersion:
           context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+        updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
+        heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateRunning: overlaySnapshot.updateRunning,
+        canUpdate,
+        canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
         refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
         onRefresh: () => host.refreshControlUi(),
+        onHoldUpdate: () => context.overlays.holdUpdate(),
         searchQuery: host.settingsSearchQuery,
         searchBlockMatches: settingsSearchBlocks,
         onExit: () => host.exitSettings(),
@@ -430,15 +443,21 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           onboarding,
           updateAvailable: overlaySnapshot.updateAvailable,
+          updateSchedule: overlaySnapshot.updateSchedule,
+          heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateRunning: overlaySnapshot.updateRunning,
+          canUpdate,
+          canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
           refreshRequired: overlaySnapshot.controlUiRefreshRequired,
           onRefresh: () => host.refreshControlUi(),
+          onHoldUpdate: () => context.overlays.holdUpdate(),
         })}
         <openclaw-router-outlet
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
+          .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
       <openclaw-terminal-panel
@@ -490,7 +509,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         onClose: () => context.overlays.closeDevicePairSetup(),
         onManageDevices: () => {
           context.overlays.closeDevicePairSetup();
-          host.navigate("nodes");
+          host.navigate("devices");
         },
         onGetApps: () => {
           context.overlays.closeDevicePairSetup();

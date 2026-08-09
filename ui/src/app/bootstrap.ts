@@ -295,7 +295,6 @@ export function bootstrapApplication(
     documentMode === null &&
     !releasedSessionQuery &&
     firstRunDefaultLanding &&
-    settings.sessionKey.trim() !== "" &&
     !parseAgentSessionKey(settings.sessionKey);
   const initialLocationReady = (
     documentMode

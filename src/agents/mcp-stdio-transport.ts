@@ -10,6 +10,7 @@ import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/s
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
@@ -67,10 +68,7 @@ export class OpenClawStdioClientTransport implements Transport {
     }
 
     await new Promise<void>((resolve, reject) => {
-      const baseEnv = {
-        ...getDefaultEnvironment(),
-        ...this.serverParams.env,
-      };
+      const baseEnv = mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]);
       const preparedSpawn = prepareOomScoreAdjustedSpawn(
         this.serverParams.command,
         this.serverParams.args ?? [],

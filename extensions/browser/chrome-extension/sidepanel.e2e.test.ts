@@ -407,6 +407,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
           type: "pair",
           pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#${relaySecret}`,
           groupColor: "#ff7020",
+          accessMode: "selected",
         }),
       { gatewayPort: gateway.port, relayPort: relay.port, relaySecret: RELAY_SECRET },
     );
@@ -555,7 +556,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     });
   });
 
-  it("isolates two tab sessions, enforces bindings, denies unshared use, and archives on close", async () => {
+  it("isolates two tab sessions, enforces bindings, denies revoked access, and archives on close", async () => {
     const gateway = await createGatewayHarness();
     cleanups.push(gateway.close);
     const relay = await createRelayHarness();
@@ -592,6 +593,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
           type: "pair",
           pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#${relaySecret}`,
           groupColor: "#ff7020",
+          accessMode: "selected",
         }),
       { gatewayPort: gateway.port, relayPort: relay.port, relaySecret: RELAY_SECRET },
     );
@@ -642,11 +644,11 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       )
       .toEqual({
         detail:
-          "Sharing adds this tab to the OpenClaw group. The copilot can act here, but nowhere else.",
-        title: "Keep the boundary visible",
+          "Use the current access mode to allow OpenClaw here. Restricted and incognito tabs remain unavailable.",
+        title: "Allow this tab",
       });
     expect(await alphaPanel.disabled("#message-input")).toBe(true);
-    await alphaPanel.screenshot(path.join(artifactDir, "before-unshared.png"));
+    await alphaPanel.screenshot(path.join(artifactDir, "before-access.png"));
     await alphaPanel.click("#gate-action");
     await expect
       .poll(async () => !(await alphaPanel.disabled("#message-input")), {
@@ -686,9 +688,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       throw new Error("Chrome did not expose the beta tab id");
     }
     await betaTab.goto(`${fixture.baseUrl}/beta`);
-    await expect
-      .poll(async () => await betaPanel.text("#gate-title"))
-      .toBe("Keep the boundary visible");
+    await expect.poll(async () => await betaPanel.text("#gate-title")).toBe("Allow this tab");
     await betaPanel.click("#gate-action");
     await expect
       .poll(async () => !(await betaPanel.disabled("#message-input")), {
@@ -816,7 +816,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     releaseConsentSubscription();
     await expect
       .poll(async () => await reopenedBetaPanel.text("#gate-title"), { timeout: 10_000 })
-      .toBe("Keep the boundary visible");
+      .toBe("Allow this tab");
     expect(gateway.chatSends).toHaveLength(2);
     await reopenedBetaPanel.click("#gate-action");
     await expect

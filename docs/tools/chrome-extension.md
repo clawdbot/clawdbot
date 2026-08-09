@@ -33,15 +33,16 @@ Three parts:
   for same-host and browser-node setups, or through the Gateway's relay-authenticated
   WebSocket route for direct remote setups. It presents a Chrome DevTools
   Protocol endpoint to OpenClaw and speaks to the extension.
-- **OpenClaw Chrome extension** (MV3): attaches to tabs with `chrome.debugger`,
-  forwards CDP traffic, and manages the **OpenClaw tab group**.
+- **OpenClaw Chrome extension** (MV3): owns the access policy, attaches to
+  allowed tabs with `chrome.debugger`, forwards CDP traffic, and manages the
+  **OpenClaw tab group**.
 
-OpenClaw only sees and controls tabs that are in the **OpenClaw tab group**. The
-group is the consent boundary: the relay advertises only grouped tabs, and the
-extension rechecks current group membership before every authority-bearing
-command for an existing tab. Drag a tab in to share it; drag it out (or click
-the toolbar button) to revoke access instantly, even if a relay client still
-has stale tab state.
+Pairing chooses one of two extension-owned access modes. **All tabs** makes
+every eligible ordinary tab in this Chrome profile available and is the
+recommended default for a personal browser. **Selected tabs** exposes only tabs
+in the **OpenClaw tab group**. The extension advertises only currently
+accessible tabs and rechecks eligibility, mode, and revocation state before and
+after authority-bearing commands, so stale relay state cannot restore access.
 
 ## Install and pair
 
@@ -60,19 +61,22 @@ has stale tab state.
    openclaw browser extension pair
    ```
 
-4. Click the OpenClaw toolbar icon and paste the pairing string into the popup.
-   The badge turns **ON** when the extension connects to the relay.
+4. Click the OpenClaw toolbar icon, paste the pairing string, and choose
+   **All tabs** or **Selected tabs**. New pairings default to **All tabs**. The
+   badge turns **ON** when the extension connects to the relay.
 
-The pairing token is a **per-host secret** created on first use and stored
+The pairing key is a **per-host secret** created on first use and stored
 under `credentials/` in the state directory (mode `0600`). Each machine that
 runs a browser — the Gateway host and every browser node host — owns its own
-token, so no credential has to travel between machines. To rotate it, delete the
+key, so no credential has to travel between machines. To rotate it, delete the
 `browser-extension-relay.secret` file and pair again.
 
-The secret stays in the pairing string fragment rather than the WebSocket URL
-sent to the server. During connection, the extension presents it as a
-WebSocket subprotocol credential. This keeps it out of normal proxy request
-URLs and access logs; still treat the complete pairing string as a password.
+The key stays in the pairing string fragment rather than the WebSocket URL sent
+to the server. Browser Relay Authentication v2 uses it only as an HMAC key: the
+extension first verifies the relay's signed, connection-bound challenge, then
+sends a one-time proof. The key is never sent in a URL, header, WebSocket
+subprotocol, or application frame. Still treat the complete pairing string as a
+password.
 
 ## Use it
 
@@ -93,50 +97,111 @@ openclaw config set browser.defaultProfile chrome
 }
 ```
 
-- Share a tab: click the OpenClaw toolbar button on that tab (it joins the
-  OpenClaw tab group), or drag any tab into the group.
-- The agent can also open new tabs; those land in the group automatically.
-- Revoke: click the button again, drag the tab out of the group, or dismiss
-  Chrome's debugging banner. The agent loses access to that tab immediately.
+### Choose tab access
+
+- **All tabs**: OpenClaw can enumerate and control every eligible ordinary tab
+  in this Chrome profile, including signed-in sites. The OpenClaw group is an
+  organizational marker for agent-created tabs; dragging a tab into or out of
+  it does not change access. Use **Pause OpenClaw on this tab** in the toolbar
+  popup to exclude one tab, and **Allow OpenClaw on this tab** to restore it.
+- **Selected tabs**: group membership is the access-control boundary. Click
+  **Share this tab with OpenClaw** or drag a tab into the OpenClaw group to
+  grant access. Click **Stop sharing this tab** or drag it out to revoke access.
+
+Change **Access** in the popup settings at any time. Switching from **All tabs**
+to **Selected tabs** immediately detaches every ungrouped tab, including an
+attach already in flight. Switching back refreshes the available targets.
+Paused tab IDs remain paused for the rest of the browser session and become
+effective again if you return to **All tabs**.
+
+Existing valid pairings created before access modes migrate to **Selected
+tabs**, preserving their original group-only security promise. A malformed
+stored mode is also repaired to **Selected tabs** without discarding the
+pairing. New pairings explicitly choose a mode and default to **All tabs**.
+
+Agent-created tabs enter the OpenClaw group in both modes. Chrome shows its
+dismissible “OpenClaw started debugging this browser” banner while a tab is
+attached. Choosing **Cancel** pauses that tab for the browser session in **All
+tabs** mode; in **Selected tabs** mode it removes the tab from the group.
+
+The extension never exposes incognito tabs, tabs without a current ID or URL,
+or internal pages such as `chrome://`, `chrome-extension://`, `devtools://`,
+and origin-inheriting `about:blank`. It permits ordinary `http://`, `https://`,
+and `data:` documents, `blob:` documents backed by an HTTP(S) origin, and
+`file://` pages when Chrome's **Allow access to file URLs** setting permits
+debugger attachment.
 
 ### Authenticated external CDP clients
 
-The relay supports authenticated external CDP clients such as mcporter,
-chrome-devtools-mcp, and Puppeteer. They use the same paired Chrome and the same
-tab-group consent boundary, without Chrome's "Allow remote debugging?" prompt.
-Print the endpoint and bearer-auth header:
+The relay supports Browser Relay Authentication v2 clients such as mcporter.
+They use the same paired Chrome and the same extension access policy,
+without Chrome's "Allow remote debugging?" prompt. Print the non-secret v2
+endpoint metadata:
 
 ```bash
 openclaw browser extension cdp
 ```
 
-For example, Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
-connects with:
+`openclaw browser extension cdp --json` emits the loopback endpoint, protocol
+version, key ID, and fixed challenge/complete resource metadata. It never emits
+the relay key or an authorization header. A v2 client must keep one raw
+loopback TCP connection from challenge through `/json/version` and the `/cdp`
+WebSocket upgrade; redirects, reconnects, and a second upstream socket are not
+valid relay authentication.
+
+During the migration window, an old external client can request the legacy
+Bearer header explicitly:
 
 ```bash
-npx chrome-devtools-mcp --wsEndpoint ws://127.0.0.1:18799/cdp \
-  --wsHeaders '{"Authorization":"Bearer <token>"}'
+openclaw browser extension cdp --legacy-bearer
 ```
 
-`openclaw browser extension cdp --json` emits `{ browserUrl, wsEndpoint,
-headers }` for scripting. External CDP clients authenticate to the local CDP
-endpoint with this header; the extension authenticates its separate relay
-WebSocket with the subprotocol credential described above. Both derive from
-the same per-host relay secret. Treat it as private, and rotate it by deleting
-`credentials/browser-extension-relay.secret` and pairing again.
+This command warns because it reveals the relay key in a credential header. It
+works only while `browser.extensionRelay.allowLegacyAuth` is `true`; when legacy
+auth is disabled, the command fails without printing a credential.
 
-[mcporter](https://github.com/openclaw/mcporter) is a supported external CDP
-client and needs no extension-side wiring: when a paired relay answers on this
-host, it transparently rewrites
+[mcporter](https://github.com/openclaw/mcporter) is the supported external CDP
+adapter. Use a release that supports Browser Relay Authentication v2; the
+OpenClaw-side upgrade does not update mcporter. When a paired relay answers on
+this host, a compatible mcporter release transparently rewrites
 `chrome-devtools-mcp --autoConnect` server commands to the relay endpoint, so
 agents calling Chrome DevTools through mcporter skip the remote-debugging
 prompt automatically (set `MCPORTER_DISABLE_CHROME_DEVTOOLS_RELAY=1` there to
 opt out).
 
+## Migrate relay authentication
+
+New OpenClaw extensions use Browser Relay Authentication v2 and never retry
+legacy authentication after a bad proof, timeout, unsupported response, or
+connection failure.
+
+- Existing valid pairing strings migrate locally to `authVersion: 2`; you do
+  not need to pair again for the protocol upgrade.
+- Stored direct-Gateway pairings behind a path-prefix proxy are cleared during
+  migration. Re-run `openclaw browser extension pair` with a Gateway URL that
+  has no path prefix; v2 supports the exact `/browser/extension` route only.
+- Upgrade OpenClaw before upgrading the extension. A v2 extension reports an
+  old server as needing an upgrade instead of sending the old token.
+- Old extensions and external CDP clients continue to work for one migration
+  window while `browser.extensionRelay.allowLegacyAuth` keeps its default value
+  of `true`.
+- After every extension and external CDP client uses v2, set
+  `browser.extensionRelay.allowLegacyAuth` to `false` and restart the Gateway or
+  browser node host.
+- Rotating `credentials/browser-extension-relay.secret` changes the key ID,
+  closes authenticated relay sessions, clears pending and replay state, and
+  requires extension re-pairing.
+
+V2 external CDP access requires a client that implements the same-socket HTTP
+challenge, completion, discovery, and WebSocket-upgrade sequence. Generic
+Puppeteer or chrome-devtools-mcp clients do not implement that sequence by
+themselves; use a v2-capable adapter, or the explicitly warned legacy escape
+hatch only during the migration window.
+
 ### Tab copilot side panel
 
 After pairing the extension, click **Open tab copilot** in its toolbar popup.
-OpenClaw configures `sidepanel.html` for that exact Chrome tab; the manifest has
+OpenClaw configures `sidepanel.html` for that exact accessible Chrome tab; the manifest has
 no global side-panel path. Each tab therefore gets a separate panel document,
 Gateway session, message subscription, and typed browser-tool binding.
 
@@ -221,18 +286,20 @@ Chrome does not have to run on the Gateway host. Three topologies work:
   It prints a `wss://…/browser/extension#<secret>` string; load and pair the
   extension on the laptop. The extension connects **straight to the Gateway**
   over `wss://` — no OpenClaw install, Node, CLI, or open inbound port on the
-  laptop. This is the managed-hosting path.
+  laptop. This is the managed-hosting path. The Gateway URL must expose
+  `/browser/extension` without a path-rewriting proxy prefix because v2 binds
+  the exact request path into every proof.
 - **Via a browser node host** (Chrome on a machine already running an OpenClaw
   node): run `pair` on the node and pair locally; the Gateway proxies browser
   actions to the node over its existing authenticated node link.
 
 The pairing secret is per host (the Gateway's, in the direct case), validated by
 the Gateway's `/browser/extension` route. For the direct path, serve the Gateway
-over TLS (`wss://`) so the pairing secret and CDP traffic are encrypted.
-The secret remains in the pairing string's URL fragment and is presented during
-the WebSocket handshake as a subprotocol credential, so normal proxy access
-logs do not receive it in the request URL. Ensure any reverse proxy preserves
-the standard `Sec-WebSocket-Protocol` header.
+over TLS (`wss://`) so the proof exchange and CDP traffic are encrypted. The
+secret remains in the pairing string's URL fragment and is never presented to
+the server. The extension offers only the non-secret
+`openclaw-extension-relay.v2` WebSocket subprotocol. Ensure any reverse proxy
+preserves the standard `Sec-WebSocket-Protocol` header.
 
 ## Diagnostics
 
@@ -242,25 +309,35 @@ openclaw browser doctor --browser-profile chrome
 ```
 
 `doctor` reports the **Chrome extension relay** check as failing until the
-extension popup shows **Connected**.
+extension popup shows **Connected**. `openclaw doctor` also warns while legacy
+relay authentication remains enabled and tells you when to set
+`browser.extensionRelay.allowLegacyAuth=false`.
 
 ## Security model
 
 - Same-host and browser-node relays bind loopback; direct remote pairing uses
-  the Gateway's `wss://` route. Both WebSocket sides authenticate with the
-  per-host secret, and the extension side is origin-checked to
+  the Gateway's `wss://` route. Both use connection-bound HMAC proofs derived
+  from the per-host key, and the extension side is origin-checked to
   `chrome-extension://`.
-- Direct Gateway pairing does not accept the relay token in the request URL;
-  the bundled extension carries it in the WebSocket subprotocol list instead.
-- The relay exposes only tabs in the **OpenClaw tab group**, and the extension
-  independently rechecks group membership before each authority-bearing
-  existing-tab command. Your other tabs stay private.
+- Before verifying the relay's server proof, the client sends only the
+  non-secret key ID and a fresh nonce; it never sends an HMAC proof. Client
+  proofs are short-lived, one-time, and bound to the exact socket, protocol
+  version, role, transport, method, resource, flow, profile, and relay instance.
+- In v2, the per-host key is never transmitted. Failed proof validation does
+  not fall back to legacy Bearer, Basic, or token-subprotocol auth.
+- The relay exposes only tabs allowed by the selected access mode. The
+  extension independently rechecks eligibility and current policy before and
+  after each authority-bearing existing-tab command. In **Selected tabs**, the
+  group is the ACL; in **All tabs**, explicitly paused tabs stay hidden.
 - Side-panel runs are scoped twice: Gateway delivery uses a per-session
   allowlist, and browser tools enforce the Chrome tab/target binding carried
   outside the prompt.
-- Compared with the `user` (Chrome MCP) profile, which exposes your whole
-  signed-in browser once you approve the remote-debugging prompt, the extension
-  keeps the shared surface scoped to a tab group you control at a glance.
+- **All tabs** grants broad authority over eligible signed-in sites in this
+  profile in exchange for the best unattended experience. **Selected tabs**
+  reduces that authority to a visible group but requires deliberate tab
+  management. Compared with the `user` (Chrome MCP) profile, the extension adds
+  this mode choice and per-tab session pauses without a blocking
+  remote-debugging prompt.
 
 See also: [Browser](/tools/browser) for the full profile model and the
 managed `openclaw` and Chrome MCP `user` profiles.

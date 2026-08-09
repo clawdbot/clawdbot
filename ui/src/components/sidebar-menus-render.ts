@@ -45,6 +45,25 @@ function sessionMenuActionDisabledReasons(
     method: "sessions.patch",
     params: { key: session.key, label: null },
   });
+  const batchPatchReason = (patch: Record<string, unknown>) => {
+    if (!batchRows) {
+      return patchReason;
+    }
+    const access = readSessionMethodAccess(snapshot, {
+      method: "sessions.patchMany",
+      params: {
+        targets: batchRows.map((row) => ({ key: row.key })),
+        patch,
+      },
+    });
+    if (access.allowed) {
+      return undefined;
+    }
+    return access.cause === "method-unavailable" ? patchReason : access.reason;
+  };
+  const unreadReason = batchPatchReason({ unread: true });
+  const categoryReason = batchPatchReason({ category: null });
+  const archiveReason = batchPatchReason({ archived: true });
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
@@ -63,13 +82,13 @@ function sessionMenuActionDisabledReasons(
       ? {
           "toggle-pin": patchReason,
           "set-icon": patchReason,
-          "toggle-unread": patchReason,
           rename: patchReason,
-          "move-to-group": patchReason,
-          "toggle-archived": patchReason,
         }
       : {}),
-    ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
+    ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
+    ...(categoryReason ? { "move-to-group": categoryReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(deleteReason ? { delete: deleteReason } : {}),
     ...(batchRows
       ? {}

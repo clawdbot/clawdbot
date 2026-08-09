@@ -302,7 +302,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
   }
 
-  for (const candidate of [manifest.id, dirName]) {
+  for (const candidate of [manifest.id, dirName, ...(manifest.legacyPluginIds ?? [])]) {
     if (typeof candidate !== "string") {
       continue;
     }
@@ -334,6 +334,10 @@ function resolveInstallRoute(packageJson, status) {
     return "source checkout only";
   }
   if (status === "core") {
+    // Explicit bundle ownership describes the current install surface; release flags may stage future publication.
+    if (packageJson.openclaw?.build?.bundledDist === true) {
+      return "included in OpenClaw";
+    }
     const release = packageJson.openclaw?.release;
     if (release?.publishToClawHub === true || release?.publishToNpm === true) {
       return `included in OpenClaw; ${resolveInstallRoute(packageJson, "external")}`;

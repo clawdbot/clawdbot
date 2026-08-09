@@ -111,6 +111,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp login",
       "attach",
       "tui",
+      "resume",
       "update wizard",
     ],
   },

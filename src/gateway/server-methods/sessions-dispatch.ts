@@ -15,6 +15,7 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
 import {
   isWorkerDispatchInputError,
   loadAccessorSessionEntryForGatewayTarget,
@@ -164,9 +165,23 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
     if (
+      existingPlacement?.state === "failed" &&
+      !isFailedWorkerPlacementEnvironmentGone({
+        environmentService: context.workerEnvironmentService,
+        placement: existingPlacement,
+      })
+    ) {
+      respondInvalidWorkerSession(
+        respond,
+        "cloud worker environment must be stopped before redispatch; use Stop cloud worker",
+      );
+      return;
+    }
+    if (
       existingPlacement &&
       existingPlacement.state !== "local" &&
-      existingPlacement.state !== "reclaimed"
+      existingPlacement.state !== "reclaimed" &&
+      existingPlacement.state !== "failed"
     ) {
       respondInvalidWorkerSession(
         respond,

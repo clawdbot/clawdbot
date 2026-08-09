@@ -14,7 +14,7 @@ import {
 } from "./send-context.js";
 import type { TelegramLocationSendOpts, TelegramSendResult } from "./send-message-types.js";
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramSendLocationParams = Parameters<TelegramApiContext["api"]["sendLocation"]>[3];
 type TelegramSendVenueParams = Parameters<TelegramApiContext["api"]["sendVenue"]>[5];

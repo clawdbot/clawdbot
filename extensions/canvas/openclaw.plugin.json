@@ -1,5 +1,8 @@
 {
   "id": "canvas",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },

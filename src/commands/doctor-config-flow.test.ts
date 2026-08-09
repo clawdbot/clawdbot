@@ -167,6 +167,26 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       changes.push("Moved heartbeat to agents.defaults.heartbeat and channels.defaults.heartbeat.");
     }
 
+    const internalHooks = asRecord(asRecord(next.hooks)?.internal);
+    if (internalHooks && "handlers" in internalHooks) {
+      delete internalHooks.handlers;
+      changes.push(
+        "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      );
+      const entries = asRecord(internalHooks.entries);
+      const extraDirs = asRecord(internalHooks.load)?.extraDirs;
+      const hasNamedEntries = Boolean(entries && Object.keys(entries).length > 0);
+      const hasExtraDirs =
+        Array.isArray(extraDirs) &&
+        extraDirs.some((dir) => typeof dir === "string" && dir.trim().length > 0);
+      if (internalHooks.enabled === true && !hasNamedEntries && !hasExtraDirs) {
+        delete internalHooks.enabled;
+        changes.push(
+          "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+        );
+      }
+    }
+
     const gateway = asRecord(next.gateway);
     if (gateway?.bind === "0.0.0.0") {
       gateway.bind = "lan";
@@ -423,6 +443,14 @@ vi.mock("../config/legacy.js", () => {
           issues,
           ["agents", "defaults", "sandbox"],
           'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope. Run "openclaw doctor --fix".',
+        );
+      }
+      const internalHooks = asRecord(asRecord(root.hooks)?.internal);
+      if (internalHooks && "handlers" in internalHooks) {
+        addIssue(
+          issues,
+          ["hooks", "internal", "handlers"],
+          'hooks.internal.handlers is retired. Move each module to a managed/workspace hook directory with HOOK.md + handler file before running "openclaw doctor --fix"; the fix removes retired registrations and does not materialize executable files.',
         );
       }
 
@@ -3459,8 +3487,9 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("tools.web.x_search.apiKey:");
       expect(legacyMessages).toContain("plugins.entries.xai.config.webSearch.apiKey");
       expect(legacyMessages).toContain("hooks.internal.handlers:");
-      expect(legacyMessages).toContain("HOOK.md + handler.js");
-      expect(legacyMessages).toContain("does not rewrite this shape automatically");
+      expect(legacyMessages).toContain("HOOK.md + handler file");
+      expect(legacyMessages).toContain("before running");
+      expect(legacyMessages).toContain("does not materialize executable files");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
       expect(legacyMessages).toContain("session.maintenance.rotateBytes");
@@ -3484,6 +3513,45 @@ describe("doctor config flow", () => {
       noteSpy.mockClear();
     }
   });
+
+  it.each([
+    [false, "Doctor changes preview", false],
+    [true, "Doctor changes", true],
+  ] as const)(
+    "previews and repairs retired internal hook registrations (repair=%s)",
+    async (repair, panelTitle, shouldWriteConfig) => {
+      const noteSpy = resetTerminalNoteMock();
+      try {
+        const result = await runDoctorConfigWithInput({
+          config: {
+            hooks: {
+              internal: {
+                enabled: true,
+                handlers: [{ event: "command:new", module: "hooks/legacy-handler.js" }],
+              },
+            },
+          },
+          repair,
+          run: loadAndMaybeMigrateDoctorConfig,
+        });
+
+        expect(
+          (result.cfg.hooks?.internal as Record<string, unknown> | undefined)?.handlers,
+        ).toBeUndefined();
+        expect(result.cfg.hooks?.internal?.enabled).toBeUndefined();
+        expect(result.shouldWriteConfig).toBe(shouldWriteConfig);
+        expect(
+          noteSpy.mock.calls.some(
+            ([message, title]) =>
+              title === panelTitle &&
+              message.includes("Removed retired hooks.internal.handlers registrations"),
+          ),
+        ).toBe(true);
+      } finally {
+        noteSpy.mockClear();
+      }
+    },
+  );
 
   it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();

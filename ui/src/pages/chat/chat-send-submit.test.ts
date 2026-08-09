@@ -126,3 +126,34 @@ describe("handleSendChat immediate local commands", () => {
     expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(attachmentDataUrl);
   });
 });
+
+describe("handleSendChat session ownership", () => {
+  it("keeps the composer intact when no visible session owns the send", async () => {
+    const attachment = createStagedAttachment("unscoped-att");
+    const request = vi.fn();
+    const host = createImmediateCommandHost("keep this draft", attachment, {
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "",
+      chatReplyTarget: {
+        messageId: "reply-1",
+        sourceMessageId: "source-1",
+        text: "original message",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+    expect(host.chatReplyTarget).toEqual({
+      messageId: "reply-1",
+      sourceMessageId: "source-1",
+      text: "original message",
+    });
+    expect(host.chatQueue).toEqual([]);
+    expect(host.lastError).toBe("The active session is unavailable; refresh and try again.");
+    expect(host.chatError).toBe(host.lastError);
+  });
+});

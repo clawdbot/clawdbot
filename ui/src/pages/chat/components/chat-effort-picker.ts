@@ -162,9 +162,6 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
           ? html`<span class="chat-controls__effort-zap" aria-hidden="true">${icons.zap}</span>`
           : nothing}
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
-        <span class="chat-controls__inline-select-icon" aria-hidden="true">
-          ${icons.chevronDown}
-        </span>
       </summary>
       <div
         class="chat-controls__inline-select-menu chat-controls__effort-menu"

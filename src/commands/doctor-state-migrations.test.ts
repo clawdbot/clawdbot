@@ -46,6 +46,17 @@ let tempRoots: string[] = [];
 const mockedChannelMigrationPlans = vi.hoisted(() => ({
   plans: [] as Array<Record<string, unknown>>,
 }));
+const mockedLegacyMigrationDetectors = vi.hoisted(() => ({
+  entries: [] as Array<{
+    pluginId: string;
+    detector: (params: {
+      cfg: OpenClawConfig;
+      env: NodeJS.ProcessEnv;
+      stateDir: string;
+      oauthDir: string;
+    }) => Array<Record<string, unknown>>;
+  }>,
+}));
 
 vi.mock("../channels/plugins/bundled.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
@@ -83,6 +94,17 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     });
   }
 
+  mockedLegacyMigrationDetectors.entries = [
+    {
+      pluginId: "whatsapp",
+      detector: ({ oauthDir }: { oauthDir: string }) =>
+        detectWhatsAppLegacyStateMigrations({ oauthDir }),
+    },
+    {
+      pluginId: "test-channel",
+      detector: () => mockedChannelMigrationPlans.plans,
+    },
+  ];
   return {
     ...actual,
     listBundledChannelLegacySessionSurfaces: vi.fn(() => [
@@ -94,10 +116,9 @@ vi.mock("../channels/plugins/bundled.js", async () => {
             : null,
       },
     ]),
-    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
-      ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
-      () => mockedChannelMigrationPlans.plans,
-    ]),
+    listBundledChannelLegacyStateMigrationDetectorEntries: vi.fn(
+      () => mockedLegacyMigrationDetectors.entries,
+    ),
   };
 });
 
@@ -132,11 +153,27 @@ vi.mock("../infra/json-files.js", async () => {
   };
 });
 
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
-  collectRelevantDoctorPluginIds: vi.fn(() => []),
-  listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
-  listPluginDoctorStateMigrationEntries: vi.fn(() => []),
-}));
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  const { definePluginDoctorMigrationFromPlans } = await vi.importActual<
+    typeof import("../plugin-sdk/runtime-doctor-migrations.js")
+  >("../plugin-sdk/runtime-doctor-migrations.js");
+  return {
+    ...actual,
+    collectRelevantDoctorPluginIds: vi.fn(() => []),
+    listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
+    listPluginDoctorStateMigrationEntries: vi.fn(() =>
+      mockedLegacyMigrationDetectors.entries.map(({ pluginId, detector }) => ({
+        pluginId,
+        migration: definePluginDoctorMigrationFromPlans({
+          id: `${pluginId}-legacy-channel-state`,
+          label: `${pluginId} legacy channel state`,
+          resolvePlans: detector as never,
+        }),
+      })),
+    ),
+  };
+});
 
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));

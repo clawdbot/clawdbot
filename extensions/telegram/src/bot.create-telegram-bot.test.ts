@@ -43,7 +43,6 @@ const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
-const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
@@ -76,6 +75,7 @@ const {
   setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
+  syncTelegramMenuCommands,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -3471,6 +3471,36 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     }),
     makeMessagePolicyCase({
+      name: "inherits root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["111111111"],
+        groups: {
+          "-100123456789": { allowFrom: ["123456789"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 1,
+    }),
+    makeMessagePolicyCase({
+      name: "enforces root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["123456789"],
+        groups: {
+          "-100123456789": { allowFrom: ["111111111"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 0,
+    }),
+    makeMessagePolicyCase({
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       telegram: {
         groupPolicy: "allowlist",
@@ -4192,7 +4222,7 @@ describe("createTelegramBot", () => {
       { type: "emoji", emoji: EYES_EMOJI },
     ]);
   });
-  it("clears native commands when disabled", () => {
+  it("syncs one empty native command menu when disabled", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({
       commands: { native: false },
@@ -4200,10 +4230,12 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
 
+    expect(syncTelegramMenuCommands).toHaveBeenCalledOnce();
+    expect(syncTelegramMenuCommands).toHaveBeenCalledWith(
+      expect.objectContaining({ commandsToRegister: [] }),
+    );
+    expect(setMyCommandsSpy).toHaveBeenCalledOnce();
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
-    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
-      scope: { type: "all_group_chats" },
-    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [
@@ -5407,15 +5439,14 @@ describe("createTelegramBot", () => {
   it("shows a permanent rejection when model selection is locked", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const patchSessionEntrySpy = vi
-      .spyOn(sessionStoreRuntime, "patchSessionEntry")
-      .mockImplementationOnce(async (params) => {
+    const getSessionEntrySpy = vi
+      .spyOn(telegramBotDepsForTest, "getSessionEntry")
+      .mockImplementationOnce(() => {
         const entry = {
           sessionId: "locked-session",
           updatedAt: Date.now(),
           modelSelectionLocked: true,
         };
-        await params.update(entry, { existingEntry: entry });
         return entry;
       });
     const ctx = makeCallbackRetryContext({
@@ -5427,7 +5458,7 @@ describe("createTelegramBot", () => {
     try {
       await expect(callbackHandler(ctx)).resolves.toBeUndefined();
     } finally {
-      patchSessionEntrySpy.mockRestore();
+      getSessionEntrySpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

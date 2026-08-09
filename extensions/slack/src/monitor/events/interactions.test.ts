@@ -1490,7 +1490,7 @@ describe("registerSlackInteractionEvents", () => {
       approvalKind: "exec",
       decision: "allow-once",
       senderId: "U123",
-      clientDisplayName: "Slack approval (U123)",
+      channel: "slack",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1618,7 +1618,7 @@ describe("registerSlackInteractionEvents", () => {
       approvalKind: "exec",
       decision: "allow-once",
       senderId: "U123",
-      clientDisplayName: "Slack approval (U123)",
+      channel: "slack",
     });
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
@@ -1821,7 +1821,7 @@ describe("registerSlackInteractionEvents", () => {
       approvalKind: "plugin",
       decision: "allow-always",
       senderId: "U123OWNER",
-      clientDisplayName: "Slack approval (U123OWNER)",
+      channel: "slack",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1900,7 +1900,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123OWNER",
       resolveMethod: "plugin",
-      clientDisplayName: "Slack approval (U123OWNER)",
+      channel: "slack",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1973,7 +1973,7 @@ describe("registerSlackInteractionEvents", () => {
       approvalId: "req-legacy",
       decision: "allow-once",
       senderId: "U123OWNER",
-      clientDisplayName: "Slack approval (U123OWNER)",
+      channel: "slack",
     };
     expect(resolveApprovalOverGatewayMock).toHaveBeenNthCalledWith(1, {
       ...expectedCommon,
@@ -2052,7 +2052,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-always",
       senderId: "U999EXEC",
       resolveMethod: "exec",
-      clientDisplayName: "Slack approval (U999EXEC)",
+      channel: "slack",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();

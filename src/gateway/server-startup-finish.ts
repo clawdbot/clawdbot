@@ -14,6 +14,7 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
+import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import { assertGatewayRestartDatabaseReadiness } from "./server-restart-readiness.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
@@ -106,6 +108,7 @@ export async function finishGatewayStartup(params: {
     controlUiDeviceAuthMigration,
     nodeRegistry,
     workerEnvironmentService,
+    workerEnvironmentStartup,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
@@ -257,8 +260,8 @@ export async function finishGatewayStartup(params: {
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
-      ...(workerPlacementRuntime
-        ? { workerSessionPlacementService: workerPlacementRuntime.placements }
+      ...(workerEnvironmentStartup
+        ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
@@ -424,7 +427,8 @@ export async function finishGatewayStartup(params: {
           log,
           isNixMode,
           startupStartedAt: opts.startupStartedAt,
-          broadcast,
+          broadcastToConnIds,
+          getClientConnIds: gatewayRequestContext.getClientConnIds!,
           broadcastPluginEvent,
           tailscaleMode,
           resetOnExit: tailscaleConfig.resetOnExit ?? false,
@@ -520,6 +524,7 @@ export async function finishGatewayStartup(params: {
           startupTrace,
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
+          activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
           providerAuthPrewarm: {
             getConfig: getRuntimeConfig,
           },
@@ -627,6 +632,7 @@ export async function finishGatewayStartup(params: {
     resolveSharedGatewaySessionGenerationForConfig,
     sharedGatewaySessionGenerationState,
     clients,
+    ...(!minimalTestGateway ? { assertRestartReady: assertGatewayRestartDatabaseReadiness } : {}),
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   });

@@ -176,6 +176,9 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.patch") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
+  if (method === "sessions.patchMany") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
   if (method === "sessions.create") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }

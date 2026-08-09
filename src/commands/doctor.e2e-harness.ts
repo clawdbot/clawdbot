@@ -352,10 +352,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       accountIds: {},
       hasLegacy: false,
     },
-    channelPlans: {
-      hasLegacy: false,
-      plans: [],
-    },
     warnings: [],
     notices: [],
     preview: params?.preview ?? [],

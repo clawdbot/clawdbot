@@ -120,7 +120,7 @@ suite.define(() => {
           return element.getAttribute("aria-label");
         }),
       );
-    expect(footerOrder).toEqual(["Reply to message", "Hide message", "Rewind", "name", "time"]);
+    expect(footerOrder).toEqual(["Reply to message", "Rewind", "name", "time"]);
 
     await context.close();
   });

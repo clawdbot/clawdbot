@@ -403,7 +403,10 @@ describe("main session recovery store", () => {
         },
       );
 
-      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease);
+      const onDeferredSuccess = vi.fn();
+      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease, {
+        onDeferredSuccess,
+      });
       const immediateReleaseRejected = expect(immediateRelease).rejects.toThrow(
         "transient session-store failure",
       );
@@ -414,6 +417,11 @@ describe("main session recovery store", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => {
         expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+      expect(onDeferredSuccess).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
       });
     } finally {
       vi.useRealTimers();

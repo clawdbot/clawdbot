@@ -20,6 +20,7 @@ vi.mock("../../agents/model-suppression.js", () => ({
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: mocks.loadModelCatalogSnapshot,
 }));
 

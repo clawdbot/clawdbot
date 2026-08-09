@@ -83,7 +83,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         sessionKey: inboundLastRouteSessionKey,
         deliveryContext: {
           channel: "slack",
-          to: `user:${message.user}`,
+          to: prepared.ctxPayload.OriginatingTo ?? prepared.ctxPayload.To ?? `user:${message.user}`,
           accountId: route.accountId,
           threadId: prepared.ctxPayload.MessageThreadId ?? prepared.ctxPayload.TransportThreadId,
         },

@@ -23,6 +23,7 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
+  applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -31,6 +32,7 @@ import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
+  ensureSessionEntrySync,
   listSessionEntries,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
@@ -47,8 +49,10 @@ import {
   readSessionUpdatedAt,
   recordInboundSessionMeta,
   replaceSessionEntry,
+  replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
+  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -1844,6 +1848,56 @@ describe("session accessor seam", () => {
     ).rejects.toThrow("outside the selected row set");
   });
 
+  it("projects ordered patches against one mutable store view", async () => {
+    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
+    for (const [index, sessionKey] of keys.entries()) {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: `batch-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const snapshots = new Set<object>();
+    const operation = (
+      index: number,
+      label: string,
+      authorize?: () => { ok: false; error: string } | undefined,
+    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
+      resolveTarget: (snapshot) => {
+        snapshots.add(snapshot.store);
+        return { primaryKey: keys[index]! };
+      },
+      project: ({ existingEntry, isLabelInUse }) => {
+        if (isLabelInUse(label)) {
+          return { ok: false as const, error: `duplicate:${label}` };
+        }
+        return { ok: true as const, entry: { ...existingEntry!, label } };
+      },
+      ...(authorize ? { authorize } : {}),
+    });
+
+    const results = await applySessionPatchProjections({
+      storePath,
+      operations: [
+        operation(0, "Shared"),
+        operation(1, "Shared"),
+        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
+        operation(3, "Blocked"),
+      ],
+    });
+
+    expect(snapshots.size).toBe(1);
+    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
+      "Shared",
+      "duplicate:Shared",
+      "authorization changed",
+      "Blocked",
+    ]);
+    expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
+    expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
+  });
+
   it("prepares entry replacements without holding a write transaction", async () => {
     const scope = {
       sessionKey: "agent:main:replacement-prepare",
@@ -3567,6 +3621,7 @@ describe("session accessor seam", () => {
         sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
         sessionTarget: scope,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run, options) => {
           publishOptions.push(options?.publishOwnedWrite);
           const result = await run();
@@ -3595,6 +3650,37 @@ describe("session accessor seam", () => {
     expect(publishOptions).toEqual([undefined]);
     expect(publishedEntryBatches).toEqual([[]]);
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
+  });
+
+  it("fences matching sync transcript and entry writes before SQLite mutation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-owned-fence",
+      sessionKey: "agent:main:owned-fence",
+      storePath,
+    };
+    const stale = new Error("lease lost");
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: scope.sessionKey,
+        sessionKey: scope.sessionKey,
+        sessionTarget: scope,
+        assertOwned: () => {
+          throw stale;
+        },
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        expect(() =>
+          ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 }),
+        ).toThrow(stale);
+        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(stale);
+      },
+    );
+
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
   it("resolves store-backed runtime transcript targets from structured identity", async () => {

@@ -177,6 +177,10 @@ function sanitizeHistoryMessage(message: unknown): {
   const entry = { ...(message as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
+  if ("providerReplay" in entry) {
+    delete entry.providerReplay;
+    redacted = true;
+  }
   // Tool result details often contain very large nested payloads.
   if ("details" in entry) {
     delete entry.details;
